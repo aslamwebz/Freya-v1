@@ -1,0 +1,166 @@
+/* ==========================================================================
+   Presence — the central intelligence and its instrument labels.
+   ========================================================================== */
+
+.column-center {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.presence {
+  position: relative;
+  flex: 1;
+  min-height: 320px;
+  width: 100%;
+}
+
+.presence-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  mix-blend-mode: screen;
+}
+
+/* The wordmark sits in the nucleus, glowing. */
+.presence-mark {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  filter: drop-shadow(0 0 10px #ffd08a) drop-shadow(0 0 26px rgba(255, 170, 80, 0.7));
+  mix-blend-mode: screen;
+  transition: filter var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
+.presence[data-state='idle'] .presence-mark {
+  opacity: 0.72;
+}
+
+.presence[data-state='locked'] .presence-mark,
+.presence[data-state='error'] .presence-mark {
+  filter: grayscale(0.7) drop-shadow(0 0 8px rgba(180, 170, 160, 0.5));
+  opacity: 0.6;
+}
+
+/* HUD labels — the strongest "laboratory equipment" signal in the reference. */
+.hud-label {
+  position: absolute;
+  padding: 3px 9px;
+  border-left: 1px solid rgba(127, 207, 255, 0.7);
+  background: linear-gradient(90deg, rgba(63, 150, 255, 0.16), transparent);
+  pointer-events: none;
+  mix-blend-mode: screen;
+  font: 500 9px/1.3 var(--font);
+  letter-spacing: 0.18em;
+  color: #8fcaff;
+  text-shadow: 0 0 8px rgba(80, 170, 255, 0.8);
+  white-space: nowrap;
+}
+
+.hud-label span {
+  display: block;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  color: #e6f4ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-a {
+  left: 4%;
+  top: 26%;
+}
+
+.hud-b {
+  right: 4%;
+  top: 33%;
+  text-align: right;
+  border-left: 0;
+  border-right: 1px solid rgba(127, 207, 255, 0.7);
+  background: linear-gradient(270deg, rgba(63, 150, 255, 0.16), transparent);
+}
+
+.hud-c {
+  left: 8%;
+  bottom: 24%;
+}
+
+/* ---------------------------------------------------- demo console */
+
+.presence-console {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
+  width: min(520px, 100%);
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: rgba(10, 10, 14, 0.58);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--gold-line);
+}
+
+.presence-console-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 8px;
+}
+
+.presence-console-title {
+  font: var(--label);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.presence-console-state {
+  margin-left: auto;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.presence-console-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.presence-chip {
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+
+.presence-chip:hover {
+  color: var(--ink);
+  border-color: var(--gold-line);
+}
+
+.presence-chip[aria-pressed='true'] {
+  color: var(--gold-hi);
+  border-color: var(--gold);
+  background: var(--gold-soft);
+}
+
+.presence-console-note {
+  margin: 8px 0 0;
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+@media (max-width: 1240px) {
+  .hud-label {
+    display: none;
+  }
+}

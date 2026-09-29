@@ -37,5 +37,9 @@ export default tseslint.config(
     languageOptions: {
       globals: { ...globals.node },
     },
+    rules: {
+      // The e2e runner reports its own progress; it is a CLI, not a library.
+      'no-console': 'off',
+    },
   },
 )

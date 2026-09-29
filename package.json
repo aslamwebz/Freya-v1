@@ -16,7 +16,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "node --experimental-strip-types tests/e2e/run.ts",
+    "test:e2e": "node --experimental-strip-types tests/e2e/desktop.e2e.ts",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:e2e"
   },
   "dependencies": {

@@ -325,4 +325,53 @@ describe('Freya shell', () => {
     expect(screen.getAllByText('Demo data').length).toBe(5)
     expect(screen.getByText('Demo')).toBeInTheDocument()
   })
+
+  it('drives the design lab from the keyboard', async () => {
+    await boot()
+    const atmosphere = document.querySelector('.atmosphere')
+    expect(atmosphere).toHaveAttribute('data-bg', 'space')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /design lab/i }))
+    })
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'b' })
+    })
+    expect(atmosphere).toHaveAttribute('data-bg', 'grid')
+
+    // The brain style row is only offered while the brain is the centrepiece.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Brain' }))
+    })
+    await act(async () => {
+      // Keys 1-4 select the styles in order: current, slices, flow, glass.
+      fireEvent.keyDown(window, { key: '3' })
+    })
+    expect(screen.getByRole('button', { name: 'B · Flow' })).toHaveAttribute('aria-pressed', 'true')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Liquid orb' }))
+    })
+    expect(screen.queryByRole('button', { name: 'B · Flow' })).not.toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'Escape' })
+    })
+    expect(screen.queryByRole('button', { name: 'Deep space' })).not.toBeInTheDocument()
+  })
+
+  it('ignores design lab keys while the user is typing', async () => {
+    await boot()
+    const input = screen.getByLabelText(/command freya/i)
+    const atmosphere = document.querySelector('.atmosphere')
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: 'brainstorm backgrounds' } })
+      fireEvent.keyDown(input, { key: 'b' })
+    })
+
+    expect(atmosphere).toHaveAttribute('data-bg', 'space')
+    expect(input).toHaveValue('brainstorm backgrounds')
+  })
 })

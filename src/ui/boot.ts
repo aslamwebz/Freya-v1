@@ -89,8 +89,6 @@ function installShortcuts(): void {
   window.addEventListener('keydown', (event) => {
     const manager = surfaceManager()
     if (!manager) return
-    const target = event.target as HTMLElement | null
-    const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA'
 
     if (event.key === 'Escape') {
       const focused = manager.focused

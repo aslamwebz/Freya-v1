@@ -13,7 +13,7 @@
     radial-gradient(ellipse 24% 40% at 50% 34%, rgba(70, 140, 255, 0.13), transparent 70%),
     linear-gradient(to top, rgba(120, 80, 30, 0.2), transparent 26%),
     linear-gradient(180deg, rgba(5, 6, 9, 0.62) 0%, rgba(5, 6, 9, 0.5) 46%, rgba(8, 6, 4, 0.72) 100%),
-    url('../../assets/atmosphere-city.jpg') center 62% / cover,
+    url('../assets/atmosphere-city.jpg') center 62% / cover,
     #07090d;
 }
 

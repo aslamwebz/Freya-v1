@@ -45,12 +45,13 @@ function makeNoise(rand: () => number) {
   const size = 16
   const table = new Float32Array(size * size * size)
   for (let i = 0; i < table.length; i += 1) table[i] = rand()
+  // Indices are wrapped into range, so the read is always in bounds.
   const at = (x: number, y: number, z: number) =>
     table[
       (((x % size) + size) % size) * size * size +
         (((y % size) + size) % size) * size +
         (((z % size) + size) % size)
-    ]
+    ] ?? 0
   const fade = (t: number) => t * t * (3 - 2 * t)
   return (x: number, y: number, z: number): number => {
     const xi = Math.floor(x)

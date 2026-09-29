@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useShell } from '../store'
+import { useShell } from './store'
 import { startShell } from './boot'
 import { CommandBar } from './shell/CommandBar'
 import { StatusArea } from './shell/StatusArea'

@@ -293,7 +293,6 @@ export class PresenceRenderer {
   private drawBeam(ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number, v: PresenceVisual): void {
     const top = cy - s * 3.4
     const bottom = cy + s * 1.9
-    const height = bottom - top
     const gradient = ctx.createLinearGradient(0, top, 0, bottom)
     gradient.addColorStop(0, rgba(v.accent, 0))
     gradient.addColorStop(0.22, rgba(v.accent, 0.1 * v.glow))

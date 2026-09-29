@@ -38,9 +38,6 @@ export interface SurfaceManagerOptions {
   makeId?: (type: SurfaceType, sequence: number) => string
 }
 
-const DEFAULT_MIN = { width: 320, height: 240 }
-
-let sequenceCounter = 0
 function defaultId(type: SurfaceType, sequence: number): string {
   return `${type}-${sequence}`
 }
@@ -115,7 +112,7 @@ export class SurfaceManager {
     for (const surface of this.items) {
       const next = this.clamp(surface)
       if (!sameLayout(next.layout, surface.layout)) {
-        this.replace(surface, { layout: next })
+        this.replace(surface, { layout: next.layout })
         changed = true
       }
     }

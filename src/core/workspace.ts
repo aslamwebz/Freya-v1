@@ -1,4 +1,4 @@
-import { SURFACE_TYPES, type SurfaceLayout, type SurfaceType } from './types'
+import { SURFACE_TYPES, type SurfaceLayout, type SurfaceType } from './surfaces/types'
 import type { PersistedSurface } from './surfaces/manager'
 import { isPresenceState, type PresenceState } from './presence'
 

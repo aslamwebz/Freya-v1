@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
@@ -154,5 +154,5 @@ app.on('before-quit', () => {
 // Microphone permission is intentionally NOT granted in Phase 0: the voice
 // control is a UI state transition, not a recording.
 app.on('web-contents-created', (_event, contents) => {
-  contents.session.setPermissionRequestHandler((_wc, permission, callback) => callback(false))
+  contents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
 })

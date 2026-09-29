@@ -1,4 +1,4 @@
-import type { Surface, SurfaceLayout } from './types'
+import type { SurfaceLayout } from './types'
 
 export interface Frame {
   width: number

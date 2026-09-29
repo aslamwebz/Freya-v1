@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { surfaceManager } from '../surfaceActions'
+import { manager } from '../boot'
 import { Icon, type IconName } from '../icons'
 import type { SurfaceType } from '../../core/surfaces/types'
 import { surfaceTypes } from '../../core/surfaces/types'
@@ -21,12 +21,8 @@ const DOCK: { type: SurfaceType; icon: IconName }[] = [
 ]
 
 export function SurfaceDock({ onToggle }: { onToggle: (type: SurfaceType) => void }) {
-  const manager = surfaceManager()
-  const surfaces = useSyncExternalStore(
-    (listener) => manager?.subscribe(listener) ?? (() => {}),
-    () => manager?.surfaces ?? [],
-  )
-  const focusedId = manager?.focused?.id
+  const surfaces = useSyncExternalStore(manager.subscribe, () => manager.surfaces)
+  const focusedId = manager.focused?.id
 
   return (
     <div className="dock" role="toolbar" aria-label="Work surfaces">

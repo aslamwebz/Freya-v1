@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { surfaceManager } from '../surfaceActions'
+import { manager } from '../boot'
 import type { Surface } from '../../core/surfaces/types'
 import { SurfaceWindow } from './SurfaceWindow'
 import { SurfaceBody } from './registry'
@@ -9,12 +9,8 @@ import { SurfaceBody } from './registry'
  * surface state of its own — it reads the manager and renders it.
  */
 export function SurfaceLayer() {
-  const manager = surfaceManager()
-  const surfaces = useSyncExternalStore(
-    (listener) => manager?.subscribe(listener) ?? (() => {}),
-    () => manager?.surfaces ?? [],
-  )
-  const focusedId = manager?.focused?.id
+  const surfaces = useSyncExternalStore(manager.subscribe, () => manager.surfaces)
+  const focusedId = manager.focused?.id
 
   return (
     <div className="surface-layer" aria-label="Work surfaces">

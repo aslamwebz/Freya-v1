@@ -1,5 +1,5 @@
 import { cascadePosition, clampLayout, clampPosition, clampSize, round, type Frame } from './geometry'
-import { surfaceTypes, type Bounds, type Surface, type SurfaceLayout, type SurfaceType } from './types'
+import { surfaceTypes, type Bounds, type Surface, type SurfaceLayout, type SurfaceType, type SurfaceTypeDescriptor } from './types'
 
 export type SurfaceEventName =
   | 'surface.opened'
@@ -40,6 +40,11 @@ export interface SurfaceManagerOptions {
 
 function defaultId(type: SurfaceType, sequence: number): string {
   return `${type}-${sequence}`
+}
+
+/** The descriptor's *minimum* size, which is not the same as its default size. */
+function minSizeOf(descriptor: SurfaceTypeDescriptor): { width: number; height: number } {
+  return { width: descriptor.minWidth, height: descriptor.minHeight }
 }
 
 /**
@@ -123,7 +128,7 @@ export class SurfaceManager {
     const descriptor = surfaceTypes[surface.type]
     return {
       ...surface,
-      layout: clampLayout(surface.layout, descriptor, this.frame),
+      layout: clampLayout(surface.layout, minSizeOf(descriptor), this.frame),
     }
   }
 
@@ -131,10 +136,14 @@ export class SurfaceManager {
     for (const listener of this.listeners) listener()
   }
 
+  /**
+   * Copy-on-write. The surfaces array gets a new identity on every mutation so
+   * that `useSyncExternalStore` sees a changed snapshot — mutating in place
+   * would leave React with an identical reference and silently never re-render.
+   */
   private replace(surface: Surface, patch: Partial<Surface>): Surface {
     const next = { ...surface, ...patch }
-    const index = this.items.indexOf(surface)
-    this.items[index] = next
+    this.items = this.items.map((item) => (item === surface ? next : item))
     return next
   }
 
@@ -152,7 +161,11 @@ export class SurfaceManager {
     }
 
     const descriptor = surfaceTypes[spec.type]
-    const size = clampSize(descriptor, descriptor, this.frame)
+    const size = clampSize(
+      { width: descriptor.width, height: descriptor.height },
+      minSizeOf(descriptor),
+      this.frame,
+    )
     const position = cascadePosition(this.items.length, size, this.frame)
     this.sequence += 1
     const id = spec.id ?? this.makeId(spec.type, this.sequence)
@@ -176,7 +189,7 @@ export class SurfaceManager {
       },
     }
 
-    this.items.push(surface)
+    this.items = [...this.items, surface]
     this.commit('surface.opened', id, surface)
     this.onEvent({ type: 'surface.focused', id, surface })
     return surface
@@ -209,14 +222,20 @@ export class SurfaceManager {
     return true
   }
 
-  /** Raise the next or previous surface — the keyboard equivalent of clicking chrome. */
+  /**
+   * Move focus one step up or down the stack, wrapping. Always moves: a cycle
+   * that lands back on the current surface is not a cycle.
+   *
+   * The traversal order is insertion order, not z-order — z changes every time
+   * a surface is focused, so sorting by it would make the cycle rotate under
+   * itself and never reach every surface.
+   */
   cycle(direction: 1 | -1 = 1): string | null {
-    const candidates = this.items
-      .filter((s) => !s.layout.minimized)
-      .sort((a, b) => a.layout.z - b.layout.z)
+    const candidates = this.items.filter((s) => !s.layout.minimized)
     if (candidates.length < 2) return null
-    const ordered = direction === 1 ? candidates : [...candidates].reverse()
-    const next = ordered[0]
+    const current = this.focused
+    const index = current ? candidates.findIndex((s) => s.id === current.id) : candidates.length - 1
+    const next = candidates[(index + direction + candidates.length) % candidates.length]
     if (!next) return null
     this.focus(next.id)
     return next.id
@@ -246,7 +265,7 @@ export class SurfaceManager {
     const current = this.get(id)
     if (!current) return false
     const descriptor = this.descriptorOf(current)
-    const size = clampSize({ width, height }, descriptor, this.frame)
+    const size = clampSize({ width, height }, minSizeOf(descriptor), this.frame)
     const position = clampPosition(
       { x: current.layout.x, y: current.layout.y },
       size,
@@ -318,7 +337,7 @@ export class SurfaceManager {
       height: this.descriptorOf(surface).height,
     }
     const descriptor = this.descriptorOf(surface)
-    const size = clampSize(bounds, descriptor, this.frame)
+    const size = clampSize(bounds, minSizeOf(descriptor), this.frame)
     const position = clampPosition({ x: bounds.x, y: bounds.y }, size, this.frame)
     const next = this.replace(surface, {
       state: 'open',
@@ -368,7 +387,7 @@ export class SurfaceManager {
     for (const entry of persisted) {
       this.topZ += 1
       const descriptor = surfaceTypes[entry.type]
-      const size = clampSize(entry.layout, descriptor, this.frame)
+      const size = clampSize(entry.layout, minSizeOf(descriptor), this.frame)
       const position = clampPosition({ x: entry.layout.x, y: entry.layout.y }, size, this.frame)
       this.items.push({
         id: entry.id,

@@ -1,5 +1,6 @@
 import { surfaceTypes, type Surface, type SurfaceType } from '../core/surfaces/types'
 import type { SurfaceManager } from '../core/surfaces/manager'
+import { manager } from './boot'
 
 /**
  * The seam between the shell chrome and the Surface Manager.
@@ -9,18 +10,11 @@ import type { SurfaceManager } from '../core/surfaces/manager'
  * calls: the manager is the single owner, and this module is the only way in.
  */
 
-let manager: SurfaceManager | null = null
-
-export function bindSurfaceManager(next: SurfaceManager): void {
-  manager = next
-}
-
-export function surfaceManager(): SurfaceManager | null {
+export function surfaceManager(): SurfaceManager {
   return manager
 }
 
-export function openSurface(type: SurfaceType, title?: string): Surface | null {
-  if (!manager) return null
+export function openSurface(type: SurfaceType, title?: string): Surface {
   return manager.open({ type, ...(title ? { title } : {}) })
 }
 
@@ -30,8 +24,7 @@ export function openSurface(type: SurfaceType, title?: string): Surface | null {
  * expected toggle and keeps the dock honest about what is on screen.
  */
 export function toggleSurface(type: SurfaceType): void {
-  if (!manager) return
-  const existing = manager.surfaces.find((s) => s.type === type && s.state !== 'closed')
+  const existing = manager.surfaces.find((s) => s.type === type)
   if (!existing) {
     openSurface(type)
     return
@@ -40,17 +33,19 @@ export function toggleSurface(type: SurfaceType): void {
     manager.focus(existing.id)
     return
   }
-  const focused = manager.focused
-  if (focused?.id === existing.id) manager.minimize(existing.id)
-  else manager.focus(existing.id)
+  if (manager.focused?.id === existing.id) {
+    manager.minimize(existing.id)
+  } else {
+    manager.focus(existing.id)
+  }
 }
 
 export function closeSurface(id: string): void {
-  manager?.close(id)
+  manager.close(id)
 }
 
 export function isSurfaceOpen(type: SurfaceType): boolean {
-  return manager?.surfaces.some((s) => s.type === type) ?? false
+  return manager.surfaces.some((s) => s.type === type)
 }
 
 export function surfaceTitle(type: SurfaceType): string {

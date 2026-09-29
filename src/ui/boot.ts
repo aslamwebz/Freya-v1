@@ -1,6 +1,5 @@
 import { SurfaceManager } from '../core/surfaces/manager'
 import { WORKSPACE_SCHEMA } from '../core/workspace'
-import { bindSurfaceManager, surfaceManager } from './surfaceActions'
 import { shellStore } from './store'
 import { createWorkspaceStore, readRuntimeInfo } from '../platform/workspaceStore'
 
@@ -8,25 +7,37 @@ const SAVE_DEBOUNCE = 400
 const MIN_WIDTH = 1024
 const MIN_HEIGHT = 680
 
-let started = false
+/**
+ * The Surface Manager exists before React does.
+ *
+ * It is client-side state with no dependency on the desktop host, so creating
+ * it lazily inside an async boot would leave the first render subscribed to
+ * nothing. Modules import this instance directly; there is no lookup and no
+ * nullable "not bound yet" state.
+ */
+export const manager = new SurfaceManager({
+  frame: { width: window.innerWidth, height: window.innerHeight },
+})
+
+let started: Promise<{ manager: SurfaceManager; host: 'desktop' | 'browser' }> | null = null
 
 /**
- * Wires the shell together exactly once.
+ * Wires the shell to its environment exactly once: workspace frame, persisted
+ * layout, runtime identity, persistence and shell shortcuts.
  *
- * Everything the renderer needs from outside itself arrives here: the workspace
- * frame, the persisted layout, and the runtime identity. Nothing below this
- * function knows that Electron exists.
+ * Nothing below this function knows that Electron exists.
+ *
+ * Idempotent by design: React's StrictMode mounts effects twice in
+ * development, and a reload must never produce a second surface manager.
  */
-export async function startShell(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'browser' }> {
-  if (started) throw new Error('startShell called twice')
-  started = true
+export function startShell(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'browser' }> {
+  started ??= boot()
+  return started
+}
 
+async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'browser' }> {
   const store = createWorkspaceStore()
-  const manager = new SurfaceManager({
-    frame: { width: window.innerWidth, height: window.innerHeight },
-  })
-  bindSurfaceManager(manager)
-
+  manager.setFrame({ width: window.innerWidth, height: window.innerHeight })
   // Surface events reach the rest of the shell through the same bus as
   // everything else. This is the only wiring point.
   shellStore.onSurfaceEvent((event) => {
@@ -87,9 +98,6 @@ export async function startShell(): Promise<{ manager: SurfaceManager; host: 'de
  */
 function installShortcuts(): void {
   window.addEventListener('keydown', (event) => {
-    const manager = surfaceManager()
-    if (!manager) return
-
     if (event.key === 'Escape') {
       const focused = manager.focused
       if (focused) {

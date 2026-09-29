@@ -264,14 +264,17 @@
 }
 
 .attention-row b {
+  display: block;
   font-weight: 500;
   font-size: 13.5px;
 }
 
 .attention-row small {
+  display: block;
   grid-column: 2;
   color: var(--ink-2);
   font-size: 12px;
+  line-height: 1.45;
 }
 
 .attention-row time {

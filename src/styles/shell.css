@@ -343,7 +343,9 @@
 
 .nav-foot-note {
   margin: 8px 0 0;
+  padding-right: 14px;
   font-size: 10.5px;
+  line-height: 1.35;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-3);
@@ -365,7 +367,9 @@
 
 .column-center {
   position: relative;
-  z-index: 5;
+  /* Deliberately no z-index: the presence and its controls must be able to sit
+     on either side of the surface layer, so this must not be a stacking
+     context. Panels in the flanking columns keep theirs. */
   align-items: stretch;
   overflow: visible;
   padding: 0;

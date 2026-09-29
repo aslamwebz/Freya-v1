@@ -31,7 +31,8 @@
 
 /* Inactive surfaces recede without becoming unreadable. */
 .surface[data-focused='false'] {
-  opacity: 0.82;
+  /* Inactive windows recede, but their text must stay readable. */
+  opacity: 0.9;
   border-color: rgba(226, 172, 92, 0.16);
   box-shadow: var(--glass-inset), 0 14px 34px rgba(0, 0, 0, 0.42);
 }

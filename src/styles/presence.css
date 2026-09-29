@@ -1,18 +1,32 @@
 /* ==========================================================================
-   Presence — the central intelligence and its instrument labels.
+   Presence — the stage, its HUD labels, the design lab and the state control.
    ========================================================================== */
 
-.column-center {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+.presence-rings {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  mix-blend-mode: screen;
 }
 
 .presence {
   position: relative;
+  display: flex;
+  flex-direction: column;
   flex: 1;
-  min-height: 320px;
+  min-height: 340px;
   width: 100%;
+}
+
+.presence-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  z-index: 1;
 }
 
 .presence-canvas {
@@ -22,28 +36,31 @@
   height: 100%;
   display: block;
   mix-blend-mode: screen;
+  -webkit-mask-image:
+    linear-gradient(90deg, transparent, #000 9%, #000 91%, transparent),
+    linear-gradient(transparent, #000 5%, #000 95%, transparent);
+  mask-image:
+    linear-gradient(90deg, transparent, #000 9%, #000 91%, transparent),
+    linear-gradient(transparent, #000 5%, #000 95%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
 }
 
-/* The wordmark sits in the nucleus, glowing. */
-.presence-mark {
+.presence-fallback {
   position: absolute;
-  left: 50%;
-  top: 46%;
-  transform: translate(-50%, -50%);
+  inset: 22% 14% auto;
+  margin: 0;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.hud-labels {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
   pointer-events: none;
-  filter: drop-shadow(0 0 10px #ffd08a) drop-shadow(0 0 26px rgba(255, 170, 80, 0.7));
-  mix-blend-mode: screen;
-  transition: filter var(--dur) var(--ease), opacity var(--dur) var(--ease);
-}
-
-.presence[data-state='idle'] .presence-mark {
-  opacity: 0.72;
-}
-
-.presence[data-state='locked'] .presence-mark,
-.presence[data-state='error'] .presence-mark {
-  filter: grayscale(0.7) drop-shadow(0 0 8px rgba(180, 170, 160, 0.5));
-  opacity: 0.6;
 }
 
 /* HUD labels — the strongest "laboratory equipment" signal in the reference. */
@@ -70,13 +87,13 @@
 }
 
 .hud-a {
-  left: 4%;
-  top: 26%;
+  left: 3%;
+  top: 24%;
 }
 
 .hud-b {
-  right: 4%;
-  top: 33%;
+  right: 3%;
+  top: 31%;
   text-align: right;
   border-left: 0;
   border-right: 1px solid rgba(127, 207, 255, 0.7);
@@ -84,54 +101,69 @@
 }
 
 .hud-c {
-  left: 8%;
-  bottom: 24%;
+  left: 7%;
+  bottom: 27%;
 }
 
-/* ---------------------------------------------------- demo console */
+/* ------------------------------------------------------------- controls */
 
-.presence-console {
-  position: absolute;
-  left: 50%;
-  bottom: 6px;
-  transform: translateX(-50%);
-  width: min(520px, 100%);
+/* Above the surface layer: the design lab and the state control have to stay
+   reachable while windows are open. */
+.presence-controls {
+  position: relative;
+  z-index: 70;
+  flex: none;
+  align-self: center;
+  margin-top: 10px;
+  margin-bottom: 2px;
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+.presence-states,
+.lab-panel {
+  width: 100%;
   padding: 10px 12px;
   border-radius: var(--radius);
-  background: rgba(10, 10, 14, 0.58);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: rgba(8, 8, 12, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--gold-line);
 }
 
-.presence-console-head {
+.presence-states-head {
   display: flex;
   align-items: center;
   gap: 9px;
   margin-bottom: 8px;
 }
 
-.presence-console-title {
+.presence-states-title {
   font: var(--label);
   letter-spacing: var(--label-tracking);
   text-transform: uppercase;
   color: var(--ink-2);
 }
 
-.presence-console-state {
+.presence-states-value {
   margin-left: auto;
   font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-.presence-console-body {
+.presence-states-body {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
-.presence-chip {
+.presence-chip,
+.lab-toggle,
+.opt {
   padding: 5px 10px;
   border-radius: 8px;
   font-size: 11.5px;
@@ -142,25 +174,116 @@
     background var(--dur) var(--ease);
 }
 
-.presence-chip:hover {
+.presence-chip:hover,
+.lab-toggle:hover,
+.opt:hover {
   color: var(--ink);
   border-color: var(--gold-line);
 }
 
-.presence-chip[aria-pressed='true'] {
+.presence-chip[aria-pressed='true'],
+.opt[aria-pressed='true'] {
   color: var(--gold-hi);
   border-color: var(--gold);
   background: var(--gold-soft);
 }
 
-.presence-console-note {
-  margin: 8px 0 0;
+/* --------------------------------------------------------- design lab */
+
+.lab {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.lab-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 10px;
+  background: rgba(8, 8, 12, 0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--gold-line);
+}
+
+.lab-toggle[aria-expanded='true'] {
+  color: var(--gold-hi);
+  border-color: var(--gold);
+}
+
+.lab-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.lab-panel {
+  width: 100%;
+  display: grid;
+  gap: 10px;
+  max-height: 38vh;
+  overflow-y: auto;
+}
+
+.lab-panel[hidden] {
+  display: none;
+}
+
+.lab-note {
+  margin: 0;
   font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.lab-row {
+  display: grid;
+  gap: 5px;
+}
+
+.lab-row[hidden] {
+  display: none;
+}
+
+.lab-row > span {
+  font: 500 9.5px/1 var(--font);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.lab-row > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.lab-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.lab-foot small {
+  font-size: 10px;
   color: var(--ink-3);
 }
 
 @media (max-width: 1240px) {
   .hud-label {
     display: none;
+  }
+  .presence-controls {
+    width: min(420px, 100%);
   }
 }

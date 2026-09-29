@@ -100,12 +100,15 @@ textarea {
 }
 
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(226, 172, 92, 0.22);
-  border-radius: 8px;
+  background: rgba(226, 172, 92, 0.16);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(226, 172, 92, 0.3);
 }
 ::-webkit-scrollbar-track {
   background: transparent;

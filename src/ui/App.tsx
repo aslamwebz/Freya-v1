@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useShell } from './store'
 import { startShell } from './boot'
 import { CommandBar } from './shell/CommandBar'
@@ -13,13 +13,18 @@ import {
   WorkforcePanel,
   WorkPanel,
 } from './dashboard/Panels'
-import { Presence } from './presence/Presence'
+import { Presence } from '../presence/Presence'
 import { SurfaceLayer } from './surfaces/SurfaceLayer'
 import { toggleSurface } from './surfaceActions'
 import { FreyaMark } from './icons'
+import { loadLabState, onLabChange } from '../presence/labState'
 
 export function App() {
   const [ready, setReady] = useState(false)
+  const ringCanvas = useRef<HTMLCanvasElement | null>(null)
+  const [background, setBackground] = useState(() => loadLabState().bg)
+
+  useEffect(() => onLabChange((lab) => setBackground(lab.bg)), [])
   const [failure, setFailure] = useState<string | null>(null)
 
   useEffect(() => {
@@ -47,7 +52,8 @@ export function App() {
 
   return (
     <div className="app" data-ready={ready}>
-      <div className="atmosphere" aria-hidden="true" />
+      <canvas ref={ringCanvas} className="presence-rings" aria-hidden="true" />
+      <div className="atmosphere" data-bg={background} aria-hidden="true" />
       <div className="atmosphere-veil" aria-hidden="true" />
 
       <div className="shell">
@@ -72,7 +78,7 @@ export function App() {
         </div>
 
         <main className="column column-center">
-          <Presence />
+          <Presence ringCanvas={ringCanvas} />
           <SurfaceDock onToggle={toggleSurface} />
         </main>
 

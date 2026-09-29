@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { GOLD_HI, U, pointMaterial, rand, smooth } from '../stage/primitives'
+import { GOLD_HI, U, pointCloud, rand, smooth, tickPoints, type PointSeed } from '../stage/primitives'
 import type { Centerpiece, BuildContext } from './types'
 
 const STARS = 26000
@@ -87,42 +87,24 @@ export function buildGalaxy(ctx: BuildContext): Centerpiece {
   })
   disc.add(new THREE.Points(geometry, material))
 
-  const core = pointMaterial(0.1, pixelRatio)
-  disc.add(
-    new THREE.Points(
-      (() => {
-        const g = new THREE.BufferGeometry()
-        g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3))
-        g.setAttribute('aColor', new THREE.Float32BufferAttribute([1, 0.81, 0.54], 3))
-        g.setAttribute('size', new THREE.Float32BufferAttribute([70], 1))
-        g.setAttribute('phase', new THREE.Float32BufferAttribute([0], 1))
-        g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1)
-        return g
-      })(),
-      core,
-    ),
-  )
+  // The bright nucleus, and a scatter of named stars. Both are ordinary point
+  // clouds; the only special case is one very large point at the origin.
+  const core = pointCloud([{ x: 0, y: 0, z: 0, c: new THREE.Color('#ffcf8a').multiplyScalar(0.8), s: 70 }], 0.1, pixelRatio)
+  disc.add(core)
 
-  const stars = pointMaterial(1, pixelRatio)
-  const starSeeds: number[] = []
+  const starSeeds: PointSeed[] = []
   for (let i = 0; i < 140; i += 1) {
     const r = rand(random, 0.4, 2.0)
     const a = random() * 6.28
-    starSeeds.push(Math.cos(a) * r, (random() - 0.5) * 0.05, Math.sin(a) * r)
+    starSeeds.push({
+      x: Math.cos(a) * r,
+      y: (random() - 0.5) * 0.05,
+      z: Math.sin(a) * r,
+      c: GOLD_HI.clone().multiplyScalar(0.8),
+      s: rand(random, 2.5, 5),
+    })
   }
-  const starGeometry = new THREE.BufferGeometry()
-  starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starSeeds, 3))
-  starGeometry.setAttribute(
-    'aColor',
-    new THREE.Float32BufferAttribute(
-      Array.from({ length: 140 }, () => [GOLD_HI.r * 0.8, GOLD_HI.g * 0.8, GOLD_HI.b * 0.8]).flat(),
-      3,
-    ),
-  )
-  starGeometry.setAttribute('size', new THREE.Float32BufferAttribute(Array.from({ length: 140 }, () => rand(random, 2.5, 5)), 1))
-  starGeometry.setAttribute('phase', new THREE.Float32BufferAttribute(Array.from({ length: 140 }, () => random() * 6.28), 1))
-  starGeometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 3)
-  const starCloud = new THREE.Points(starGeometry, stars)
+  const starCloud = pointCloud(starSeeds, 1, pixelRatio)
   disc.add(starCloud)
 
   return {
@@ -135,8 +117,7 @@ export function buildGalaxy(ctx: BuildContext): Centerpiece {
     ],
     update(t, _dt, _voice, activity) {
       U(material).uTime!.value = t
-      U(stars).uTime!.value = t
-      U(core).uTime!.value = t
+      tickPoints(core, t)
       starCloud.rotation.y = t * 0.05
       group.rotation.y = Math.sin(t * 0.1) * 0.25
       group.scale.setScalar(1 + smooth(0, 1, activity) * 0.03)

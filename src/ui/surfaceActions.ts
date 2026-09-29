@@ -1,4 +1,4 @@
-import { surfaceTypes, type Surface, type SurfaceType } from '../core/surfaces/types'
+import type { Surface, SurfaceType } from '../core/surfaces/types'
 import type { SurfaceManager } from '../core/surfaces/manager'
 import { manager } from './boot'
 
@@ -40,14 +40,3 @@ export function toggleSurface(type: SurfaceType): void {
   }
 }
 
-export function closeSurface(id: string): void {
-  manager.close(id)
-}
-
-export function isSurfaceOpen(type: SurfaceType): boolean {
-  return manager.surfaces.some((s) => s.type === type)
-}
-
-export function surfaceTitle(type: SurfaceType): string {
-  return surfaceTypes[type].title
-}

@@ -137,7 +137,7 @@ export function buildReactor(ctx: BuildContext): Centerpiece {
       ['FIELD STABILITY', (t) => `${(98.2 + Math.sin(t * 0.4) * 1.1).toFixed(1)}%`],
       ['CORE TEMP', (t) => `${Math.round(3200 + Math.sin(t * 0.6) * 60)} K`],
     ],
-    update(t, dt, levels) {
+    update(t, _delta, levels) {
       U(coreMaterial).uTime!.value = t
       U(coreMaterial).uLevel!.value = Math.max(levels.user, levels.ai, 0.25)
       group.rotation.y = Math.sin(t * 0.3) * 0.5
@@ -150,7 +150,6 @@ export function buildReactor(ctx: BuildContext): Centerpiece {
       gyros[1]!.rotation.set(Math.PI / 2 + t * 0.25, 0, t * 0.3)
       gyros[2]!.rotation.set(t * 0.15, Math.PI / 3, -t * 0.35)
       if (t > nextArc) strike(t)
-      void dt
     },
   }
 }

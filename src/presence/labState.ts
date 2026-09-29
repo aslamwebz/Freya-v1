@@ -76,9 +76,6 @@ export function saveLabState(state: LabState): void {
   }
 }
 
-export function isLabKey<K extends keyof LabState>(key: string): key is K {
-  return key in LAB_OPTIONS
-}
 
 export function cycleLab<K extends keyof LabState>(state: LabState, key: K): LabState {
   const options: readonly LabState[K][] = LAB_OPTIONS[key] as unknown as readonly LabState[K][]

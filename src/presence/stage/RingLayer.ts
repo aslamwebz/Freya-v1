@@ -42,7 +42,7 @@ export class RingLayer {
     this.scene.add(this.rings)
 
     this.buildRing1()
-    this.buildRing2(pixelRatio)
+    this.buildRing2()
     this.buildRing3(pixelRatio)
     this.resize()
   }
@@ -125,8 +125,7 @@ export class RingLayer {
   }
 
   /** 2 — broken light-blue arcs with a faint gradient band. */
-  private buildRing2(pixelRatio: number): void {
-    void pixelRatio
+  private buildRing2(): void {
     const radius = 2.42
     const width = 0.045
     const random = makeRandom(0x21ab)

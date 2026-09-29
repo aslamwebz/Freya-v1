@@ -180,3 +180,8 @@ export function lineSegments(points: number[], material: THREE.Material) {
  */
 export const U = (material: THREE.ShaderMaterial): Record<string, THREE.IUniform> =>
   material.uniforms as Record<string, THREE.IUniform>
+
+/** Advance a point cloud's own clock. `pointCloud` owns the material, not us. */
+export function tickPoints(points: THREE.Points, time: number): void {
+  U(points.material as THREE.ShaderMaterial).uTime!.value = time
+}

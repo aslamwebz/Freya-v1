@@ -4,8 +4,6 @@ import { shellStore } from './store'
 import { createWorkspaceStore, readRuntimeInfo } from '../platform/workspaceStore'
 
 const SAVE_DEBOUNCE = 400
-const MIN_WIDTH = 1024
-const MIN_HEIGHT = 680
 
 /**
  * The Surface Manager exists before React does.
@@ -130,5 +128,3 @@ function installShortcuts(): void {
     }
   })
 }
-
-export { MIN_WIDTH, MIN_HEIGHT }

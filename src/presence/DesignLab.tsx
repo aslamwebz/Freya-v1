@@ -6,7 +6,6 @@ import {
   LAB_OPTIONS,
   PIECES,
   cycleLab,
-  isLabKey,
   loadLabState,
   publishLab,
   saveLabState,
@@ -207,5 +206,3 @@ const LAB_LABELS: Record<keyof LabState, string> = {
 function pick<T>(values: readonly T[]): T {
   return values[Math.floor(Math.random() * values.length)] as T
 }
-
-export { isLabKey }

@@ -49,6 +49,7 @@ export class PresenceStage {
 
   private readonly hud = new THREE.Group()
   private readonly hudSpin: { object: THREE.Object3D; speed: number }[] = []
+  private readonly gyro = new THREE.Group()
   private readonly scanner = new THREE.Group()
   private scannerTicks: THREE.Object3D | null = null
   private readonly beacons: THREE.Points
@@ -179,16 +180,13 @@ export class PresenceStage {
     equator.add(arcD)
     this.hudSpin.push({ object: arcD, speed: 0.03 })
 
-    const gyro = new THREE.Group()
-    this.hud.add(gyro)
+    this.hud.add(this.gyro)
     const g1 = this.circle(2.0, '#4fa6ff', 0.25)
     g1.rotation.set(Math.PI / 2, 0, 0.5)
-    gyro.add(g1)
+    this.gyro.add(g1)
     const g2 = this.tickRing(1.9, 96, 0.035, '#ffc46b', 0.3)
     g2.rotation.set(Math.PI / 2 - 0.4, 0.3, 0)
-    gyro.add(g2)
-    this.hud.add(gyro)
-    this.hud.add(gyro)
+    this.gyro.add(g2)
 
     this.scanner.add(this.arcRing(1.7, 0.012, [[0, Math.PI * 2]], '#9fe4ff', 0.8))
     this.scannerTicks = this.tickRing(1.72, 72, 0.05, '#9fe4ff', 0.6)
@@ -257,7 +255,6 @@ export class PresenceStage {
             gl_FragColor = vec4(uColor * a * uGain, a);
           }`,
       })
-    void height
     const outer = new THREE.Mesh(
       new THREE.CylinderGeometry(0.34, 0.62, height, 40, 1, true),
       beamMaterial(new THREE.Color('#3f8dff').multiplyScalar(0.28), 2.5),
@@ -563,19 +560,13 @@ export class PresenceStage {
       if (U(material).uTime) U(material).uTime!.value = time
     }
 
-    this.brain.hud.group.rotation.y = time * 0.2
-    this.brain.hud.group.position.y = CENTRE_Y + Math.sin(time * 0.8) * 0.04
-
     const scanY = Math.sin(time * 0.6) * 1.05
     this.scanner.position.y = scanY
     this.scanner.scale.setScalar(0.75 + 0.25 * Math.cos((scanY / 1.05) * (Math.PI / 2)))
     if (this.scannerTicks) this.scannerTicks.rotation.y = time * 0.4
-    const cortex = this.brain.hud
-    void cortex
 
     for (const { object, speed } of this.hudSpin) object.rotation.y += speed * delta
-    const gyro = this.hud.children.find((child) => child.children.some((c) => c.type === 'Line' && c.rotation.x !== 0))
-    if (gyro) gyro.rotation.y = time * 0.15
+    this.gyro.rotation.y = time * 0.15
     for (let i = 0; i < 3; i += 1) {
       const a = time * (0.5 + i * 0.17) + i * 2.1
       const r = 2.08 + i * 0.2

@@ -28,7 +28,7 @@ export interface StageOptions {
    */
   onFrame?: (time: number, delta: number) => void
   /** Sampled once per frame, so the voice envelope advances with the clock. */
-  voice?: (time: number) => VoiceLevels
+  voice?: () => VoiceLevels
 }
 
 /**
@@ -554,7 +554,7 @@ export class PresenceStage {
     const t = this.clock.elapsedTime
     if (delta > 0) this.elapsed = t
     const time = this.elapsed
-    if (this.voiceSource) this.voice = this.voiceSource(time)
+    if (this.voiceSource) this.voice = this.voiceSource()
 
     for (const material of this.materials) {
       if (U(material).uTime) U(material).uTime!.value = time

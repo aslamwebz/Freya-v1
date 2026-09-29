@@ -79,10 +79,10 @@ export function PresenceView({ activity, ringCanvas, onLabels, onReady }: Props)
           canvas,
           reducedMotion: reducedMotion,
           onLabels: (labels) => labelsRef.current(labels),
-          voice: (time) => voiceEnvelope.sample(time),
+          voice: () => voiceEnvelope.sample(),
           onFrame: (time, delta) => {
             if (!rings) return
-            const voice = voiceEnvelope.sample(time)
+            const voice = voiceEnvelope.sample()
             rings.update(time, delta, voice.user, voice.ai, voice.morph)
             rings.render()
           },

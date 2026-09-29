@@ -9,9 +9,13 @@ import type { VoiceLevels } from './pieces/types'
  * smoothing, the ring erosion, the orb's response bars, the state machine that
  * treats "you stopped talking" as "Freya answers" — is real and is exercised
  * now, so that wiring a real analyser later changes one function.
+ *
+ * The envelope owns its clock. Taking the time from the caller meant the phrase
+ * start and the sample had to agree on which clock they were on, and a single
+ * disagreement means the reaction silently never fires.
  */
 
-const now = () => performance.now() / 1000
+const defaultNow = () => performance.now() / 1000
 
 /** Syllables inside words inside phrases. */
 function speech(x: number): number {
@@ -27,22 +31,49 @@ function speech(x: number): number {
   )
 }
 
-class VoiceEnvelope {
-  private phrase: { kind: 'user' | 'ai'; start: number; duration: number; said: boolean } | null = null
+interface Phrase {
+  kind: 'user' | 'ai'
+  start: number
+  duration: number
+}
+
+/**
+ * Smoothing rates, per second.
+ *
+ * These are time-based rather than per-frame: a level that rises at a different
+ * speed on a 30 Hz display than on a 144 Hz one is not a voice, it is a frame
+ * counter.
+ */
+const RATE = {
+  userAttack: 24,
+  userRelease: 6,
+  aiAttack: 16,
+  aiRelease: 4.4,
+  morphAttack: 6,
+  morphRelease: 1.05,
+}
+
+const step = (perSecond: number, dt: number) => 1 - Math.exp(-perSecond * dt)
+
+export class VoiceEnvelope {
+  private phrase: Phrase | null = null
   private user = 0
   private ai = 0
   private morph = 0
   private quietSince = 0
   private spoke = false
+  private lastSample: number | null = null
+
+  constructor(private readonly now: () => number = defaultNow) {}
 
   /** You are speaking. */
   simulateUser(): void {
-    this.phrase = { kind: 'user', start: now(), duration: 2.6, said: false }
+    this.phrase = { kind: 'user', start: this.now(), duration: 2.6 }
   }
 
-  /** Freya is answering. Starts with a beat of silence, the way a pause reads. */
+  /** Freya is answering. Starts after a beat, the way a pause reads. */
   simulateReply(): void {
-    this.phrase = { kind: 'ai', start: now() + 0.7, duration: 3.4, said: false }
+    this.phrase = { kind: 'ai', start: this.now() + 0.7, duration: 3.4 }
   }
 
   get active(): boolean {
@@ -50,26 +81,36 @@ class VoiceEnvelope {
   }
 
   /**
-   * Advance the envelope and return the levels for this frame.
+   * Advance the envelope and return this frame's levels.
    * Fast attack, slow release, so a level reads as a voice rather than a meter.
    */
-  sample(time: number): VoiceLevels {
+  sample(): VoiceLevels {
+    const time = this.now()
+    // A long gap — a backgrounded tab, a stalled frame — must not make the
+    // level jump; clamp it and let the smoothing catch up.
+    const dt = this.lastSample === null ? 1 / 60 : Math.min(time - this.lastSample, 0.25)
+    const attackUser = step(RATE.userAttack, dt)
+    const releaseUser = step(RATE.userRelease, dt)
+    const attackAi = step(RATE.aiAttack, dt)
+    const releaseAi = step(RATE.aiRelease, dt)
+    const attackMorph = step(RATE.morphAttack, dt)
+    const releaseMorph = step(RATE.morphRelease, dt)
+
     let user = 0
     let ai = 0
 
     if (this.phrase) {
-      const elapsed = time - this.phrase.start
-      const k = elapsed / this.phrase.duration
+      const k = (time - this.phrase.start) / this.phrase.duration
       if (this.phrase.kind === 'user') {
         if (k >= 1) {
-          this.phrase = null
-          // You stopped talking. Freya answers.
+          // You stopped talking. Freya answers — once.
+          this.spoke = false
           this.simulateReply()
         } else if (k >= 0) {
-          user = Math.max(user, speech(time * 1.3) * Math.sqrt(Math.sin(k * Math.PI)))
+          user = speech(time * 1.3) * Math.sqrt(Math.sin(k * Math.PI))
         }
       } else if (k < 0) {
-        ai = 0.12 + 0.08 * Math.sin(time * 14) // thinking shimmer
+        ai = 0.12 + 0.08 * Math.sin(time * 14) // the shimmer of thinking
       } else if (k >= 1) {
         this.phrase = null
       } else {
@@ -78,7 +119,9 @@ class VoiceEnvelope {
     }
 
     // Speech detection without a device: a sustained level counts as speaking,
-    // and a pause longer than the tail means the turn has ended.
+    // and a pause longer than the tail ends the turn. `spoke` is cleared when
+    // the turn is handed over, so a single utterance can never start an
+    // unbounded chain of replies.
     if (user > 0.12) {
       this.spoke = true
       this.quietSince = time
@@ -87,13 +130,14 @@ class VoiceEnvelope {
       this.simulateReply()
     }
 
-    this.user += (user - this.user) * (user > this.user ? 0.5 : 0.12)
-    this.ai += (ai - this.ai) * (ai > this.ai ? 0.4 : 0.1)
+    this.user += (user - this.user) * (user > this.user ? attackUser : releaseUser)
+    this.ai += (ai - this.ai) * (ai > this.ai ? attackAi : releaseAi)
 
     const level = Math.max(this.user, this.ai)
     const target = Math.min(1, Math.max(0, (level - 0.04) / 0.24))
-    this.morph += (target - this.morph) * (target > this.morph ? 0.2 : 0.045)
+    this.morph += (target - this.morph) * (target > this.morph ? attackMorph : releaseMorph)
 
+    this.lastSample = time
     return { user: this.user, ai: this.ai, morph: this.morph }
   }
 }

@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { SurfaceManager, type SurfaceEvent } from '../../src/core/surfaces/manager'
 import { surfaceTypes } from '../../src/core/surfaces/types'
 
-const FRAME = { width: 1600, height: 1000 }
+/** Header and navigation rail are reserved, exactly as the shell reserves them. */
+const FRAME = { x: 186, y: 88, width: 1414, height: 912 }
 
 function makeManager() {
   const events: SurfaceEvent[] = []
@@ -24,8 +25,8 @@ describe('SurfaceManager — lifecycle', () => {
     expect(surface.title).toBe(surfaceTypes.search.title)
     expect(surface.layout.width).toBe(surfaceTypes.search.width)
     expect(surface.layout.height).toBe(surfaceTypes.search.height)
-    expect(surface.layout.x).toBeGreaterThanOrEqual(0)
-    expect(surface.layout.y).toBeGreaterThanOrEqual(0)
+    expect(surface.layout.x).toBeGreaterThanOrEqual(FRAME.x)
+    expect(surface.layout.y).toBeGreaterThanOrEqual(FRAME.y)
   })
 
   it('assigns a unique id per surface and cascades new ones so they do not stack', () => {
@@ -124,8 +125,8 @@ describe('SurfaceManager — geometry', () => {
 
     manager.move(surface.id, 99_999, -50)
     const moved = manager.get(surface.id)
-    expect(moved?.layout.x).toBeLessThanOrEqual(FRAME.width)
-    expect(moved?.layout.y).toBe(0)
+    expect(moved?.layout.x).toBeLessThanOrEqual(FRAME.x + FRAME.width)
+    expect(moved?.layout.y).toBe(FRAME.y)
   })
 
   it('resizes within the type minimum and never below it', () => {
@@ -148,11 +149,11 @@ describe('SurfaceManager — geometry', () => {
     const b = manager.open({ type: 'search' })
     manager.move(a.id, 1200, 700)
 
-    manager.setFrame({ width: 1000, height: 700 })
+    manager.setFrame({ x: 186, y: 88, width: 814, height: 612 })
 
     for (const surface of manager.surfaces) {
-      expect(surface.layout.x).toBeLessThanOrEqual(1000 - 96)
-      expect(surface.layout.y).toBeLessThanOrEqual(700 - 96)
+      expect(surface.layout.x).toBeLessThanOrEqual(186 + 814 - 96)
+      expect(surface.layout.y).toBeLessThanOrEqual(88 + 612 - 96)
     }
     expect(manager.get(b.id)).toBeDefined()
   })
@@ -194,8 +195,8 @@ describe('SurfaceManager — window state', () => {
     manager.maximize(surface.id)
 
     expect(manager.get(surface.id)?.layout).toMatchObject({
-      x: 0,
-      y: 0,
+      x: FRAME.x,
+      y: FRAME.y,
       width: FRAME.width,
       height: FRAME.height,
       maximized: true,
@@ -247,13 +248,13 @@ describe('SurfaceManager — serialisation', () => {
     manager.resize(surface.id, 900, 700)
     const saved = manager.serialize()
 
-    const restored = new SurfaceManager({ frame: { width: 1024, height: 680 } })
+    const restored = new SurfaceManager({ frame: { x: 186, y: 88, width: 838, height: 592 } })
     restored.restore(saved)
 
     const layout = restored.get(surface.id)?.layout
-    expect(layout?.x).toBeLessThanOrEqual(1024 - 96)
-    expect(layout?.y).toBeLessThanOrEqual(680 - 96)
-    expect(layout?.width).toBeLessThanOrEqual(1024)
+    expect(layout?.x).toBeLessThanOrEqual(186 + 838 - 96)
+    expect(layout?.y).toBeLessThanOrEqual(88 + 592 - 96)
+    expect(layout?.width).toBeLessThanOrEqual(838)
   })
 
   it('notifies subscribers on every mutation and stops after unsubscribe', () => {

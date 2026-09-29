@@ -139,14 +139,35 @@ Consequences that matter:
 Surface **types** are declared as data (`surfaceTypes.ts`): id, title, icon,
 default size, minimum size. Adding Vault-as-a-surface is one entry.
 
-### 3.3 Presence (`src/ui/presence/`)
+### 3.3 Presence (`src/presence/`)
 
-One canvas, one `requestAnimationFrame` loop, no React re-render per frame.
-React owns *which state* the presence is in; the renderer owns *how it looks*
+One scene, one `requestAnimationFrame` loop, no React re-render per frame.
+React owns *which state* the presence is in; the stage owns *how it looks*
 given that state, interpolated.
 
-The presence is deliberately the only component that owns an animation loop,
-and it hard-stops when the window is hidden or `prefers-reduced-motion` is set.
+```
+Presence.tsx        binds store state + voice envelope + design lab
+  ├── PresenceView.tsx  the two canvases, one clock, lazy import
+  │     ├── stage/PresenceStage.ts   scene, pieces, HUD, beam, pedestal, loop
+  │     └── stage/RingLayer.ts       the full-window background rings
+  ├── pieces/*      one module per centrepiece; brain.ts carries four styles
+  ├── voiceEnvelope.ts  the level signal (simulated in Phase 0)
+  └── DesignLab.tsx   background / centrepiece / style / extras / rings
+```
+
+Three properties matter:
+
+- **One loop.** The stage's clock drives the ring layer through an `onFrame`
+  hook. Two rAF loops would drift.
+- **It hard-stops.** Hidden window or `prefers-reduced-motion` means no loop at
+  all; reduced motion paints one static frame.
+- **It is code-split.** three.js is behind a dynamic import, so a shell that
+  never reaches the presence does not pay for it. A failed WebGL context
+  degrades to a stated still frame.
+
+Presentation preferences (the design lab) live in their own module and their own
+`localStorage` namespace, separate from the workspace file, because they are
+local, disposable, and not workspace state.
 
 ### 3.4 Platform adapters (`src/platform/`)
 
@@ -180,9 +201,12 @@ Rules:
 - Read once at boot, before first paint of the surface layer.
 - `schema` is checked. Unknown or corrupt input falls back to defaults; a
   corrupt file is never allowed to prevent launch.
-- Rehydration re-clamps every surface into the current viewport, so restoring a
-  layout saved on a 4K display onto a 1280 window still produces a usable
-  workspace.
+- Rehydration re-clamps every surface into the current workspace frame, so
+  restoring a layout saved on a 4K display onto a 1280 window still produces a
+  usable workspace.
+- The workspace frame excludes the header and the navigation rail, measured
+  from the DOM, so surfaces can never be dragged under the command bar or over
+  the systems list.
 
 **Not persisted:** dashboard demo fixtures, the presence canvas, transient
 animation values. They are derived, not stored.

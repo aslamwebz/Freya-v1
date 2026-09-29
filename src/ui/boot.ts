@@ -15,9 +15,26 @@ const MIN_HEIGHT = 680
  * nothing. Modules import this instance directly; there is no lookup and no
  * nullable "not bound yet" state.
  */
-export const manager = new SurfaceManager({
-  frame: { width: window.innerWidth, height: window.innerHeight },
-})
+export const manager = new SurfaceManager({ frame: workspaceFrame() })
+
+/**
+ * The region surfaces are allowed to occupy: everything except the header and
+ * the navigation rail. Measured rather than hard-coded, so it stays correct
+ * across the responsive breakpoints.
+ */
+export function workspaceFrame() {
+  const header = document.querySelector<HTMLElement>('.header')
+  const nav = document.querySelector<HTMLElement>('.nav')
+  // `||` not `??`: a measured zero is not an absent element.
+  const top = header?.offsetHeight || 88
+  const left = nav?.offsetWidth || 186
+  return {
+    x: left,
+    y: top,
+    width: Math.max(320, window.innerWidth - left),
+    height: Math.max(240, window.innerHeight - top),
+  }
+}
 
 let started: Promise<{ manager: SurfaceManager; host: 'desktop' | 'browser' }> | null = null
 
@@ -37,7 +54,7 @@ export function startShell(): Promise<{ manager: SurfaceManager; host: 'desktop'
 
 async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'browser' }> {
   const store = createWorkspaceStore()
-  manager.setFrame({ width: window.innerWidth, height: window.innerHeight })
+  manager.setFrame(workspaceFrame())
   // Surface events reach the rest of the shell through the same bus as
   // everything else. This is the only wiring point.
   shellStore.onSurfaceEvent((event) => {
@@ -84,7 +101,7 @@ async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'bro
   window.addEventListener('resize', onResize)
 
   function onResize(): void {
-    manager.setFrame({ width: window.innerWidth, height: window.innerHeight })
+    manager.setFrame(workspaceFrame())
   }
 
   installShortcuts()

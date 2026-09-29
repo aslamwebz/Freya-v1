@@ -141,7 +141,7 @@ describe('workspace file parsing', () => {
   })
 
   it('produces an empty workspace that the manager can boot from', () => {
-    const manager = new SurfaceManager({ frame: { width: 1200, height: 800 } })
+    const manager = new SurfaceManager({ frame: { x: 186, y: 88, width: 1014, height: 712 } })
     manager.restore(parseWorkspace(emptyWorkspace())?.surfaces ?? [])
     expect(manager.surfaces).toHaveLength(0)
   })

@@ -1,6 +1,16 @@
 import type { SurfaceLayout } from './types'
 
+/**
+ * The workspace region available to surfaces.
+ *
+ * `x`/`y` are the top-left of that region in page coordinates, not of the
+ * window. The shell reserves the header and the navigation rail, so a surface
+ * can never be dragged under the command bar or over the systems list: chrome
+ * stays reachable no matter how the workspace is arranged.
+ */
 export interface Frame {
+  x: number
+  y: number
   width: number
   height: number
 }
@@ -17,7 +27,7 @@ export function clampSize(
   }
 }
 
-/** A surface must keep at least this much of itself reachable on screen. */
+/** A surface must keep at least this much of itself reachable. */
 const KEEP_VISIBLE = 96
 
 export function clampPosition(
@@ -26,8 +36,10 @@ export function clampPosition(
   frame: Frame,
 ): { x: number; y: number } {
   return {
-    x: round(Math.min(Math.max(position.x, KEEP_VISIBLE - size.width), frame.width - KEEP_VISIBLE)),
-    y: round(Math.min(Math.max(position.y, 0), frame.height - KEEP_VISIBLE)),
+    x: round(
+      Math.min(Math.max(position.x, frame.x + KEEP_VISIBLE - size.width), frame.x + frame.width - KEEP_VISIBLE),
+    ),
+    y: round(Math.min(Math.max(position.y, frame.y), frame.y + frame.height - KEEP_VISIBLE)),
   }
 }
 
@@ -50,9 +62,13 @@ export function cascadePosition(
   size: { width: number; height: number },
   frame: Frame,
 ): { x: number; y: number } {
-  const step = 34
-  const base = { x: 96 + (index % 6) * step, y: 84 + (index % 6) * step }
-  return clampPosition(base, size, frame)
+  const step = 46
+  const slot = index % 6
+  return clampPosition(
+    { x: frame.x + 24 + slot * step, y: frame.y + 20 + slot * 34 },
+    size,
+    frame,
+  )
 }
 
 export function round(value: number): number {

@@ -305,8 +305,8 @@ export class SurfaceManager {
       state: 'open',
       layout: {
         ...surface.layout,
-        x: 0,
-        y: 0,
+        x: this.frame.x,
+        y: this.frame.y,
         width: this.frame.width,
         height: this.frame.height,
         minimized: false,

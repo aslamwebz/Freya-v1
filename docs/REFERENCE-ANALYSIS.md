@@ -70,7 +70,7 @@ bar on the leading edge. Used for nav, dock, and dock buttons alike.
 
 ## 3. Central intelligence
 
-The prototype renders one of five WebGL centrepieces. The render references
+The reference renders one of five WebGL centrepieces. The render references
 (`ChatGPT Image…png`, `Screenshot…png`) show a **luminous neural sphere**: a
 dense point lattice with visible edges, a warm gold core, blue/cyan structure,
 a few gold vertices, and *two or three thin instrument rings* around it with
@@ -80,17 +80,23 @@ A second reference (`Screenshot…png`) shows a sparser, colder variant: a force
 graph with 2–3 concentric tick/arc rings, labels pushed to the outside on
 hairline leaders, and everything in `#7fcfff`.
 
-Reusable idea, not reusable code: **presence is a luminous point field with
+**All five centrepieces ship, and the design lab's full option set works.** The
+reusable idea, not reusable code: **presence is a luminous point field with
 instrument rings, and it is the only saturated thing on screen.**
 
-Supporting devices to keep:
+Supporting devices, all kept:
 
 - **HUD labels** — uppercase 9.5px micro-labels with a live numeric value,
   anchored to the presence on 1px leaders, `mix-blend-mode: screen`. The single
   strongest "this is equipment" signal.
 - **Beam / pedestal** — a vertical light column and stacked floor rings that
   ground the presence and give the composition a floor.
-- **The wordmark sits *inside* the core**, glowing, as if it is the nucleus.
+- **The background ring layer** — three full-window rings behind every panel,
+  pinned to the centrepiece's screen position, whose outermost ring erodes into
+  particles while anyone is speaking. This is what makes the presence feel like
+  it is *in* a room rather than pasted onto a page.
+- **The design lab** — background, centrepiece, brain style, extras and outer
+  rings, persisted locally, with its keyboard shortcuts.
 
 ---
 
@@ -151,25 +157,27 @@ The command bar is the primary control, not a search box.
 
 | Question | Decision |
 | --- | --- |
-| Is the photo background part of the identity or decoration? | Atmosphere. Ship one (blurred night city), heavily darkened. The grid/aurora/space/obsidian variants are a settings affordance, not four assets. |
-| Reference shows a sculpted brain mesh. Reuse Three.js? | **No.** Re-express the *idea* (luminous neural lattice + instrument rings + beam + pedestal) in a purpose-built Canvas 2D renderer. Ownable, ~zero dependency, and far cheaper per frame. |
+| Is the photo background part of the identity or decoration? | Atmosphere, but not as a photograph. All five treatments ship as pure CSS gradient stacks; the city is drawn as light, not captured. Deep space is the default. |
+| Reference shows a sculpted brain mesh and four brain styles. | Used. five centrepieces and four brain styles, ported into `src/presence/pieces/` with three.js rather than copied as one file. |
 | Agent avatars are stock photos of named people. | **No.** Freya's workforce is not five stock humans. Use deterministic monogram discs with the gold ring the reference already uses. |
 | Globe / "World state" card. | Dropped. "World" is a Freya system that does not exist in Phase 0; a spinning globe would be exactly the kind of fake functionality to avoid. |
-| Wordmark is "ATHENA". | Freya gets its own mark and wordmark, same typographic treatment. |
+| Wordmark is "ATHENA". | Freya gets its own mark — an aperture — and its own wordmark, same typographic treatment. |
 | Reference has no detached windows at all. | The glass panel is Freya's **work surface**. Reuse the panel material verbatim for a real windowing system. |
+| The reference's icons. | **No.** Drawn in house on a shared grammar. See DECISIONS D3. |
 
 ---
 
 ## 8. Explicitly not copied into production architecture
 
-- One 1,900-line `index.html` containing markup, CSS, and three.js together.
-- Five interchangeable 3D centrepieces. Freya ships **one** presence with
-  thirteen states, not five showpieces.
-- A "Design lab" that mutates the scene graph. Freya's equivalent is a small,
-  explicit **presence state control** in the shell.
-- Duplicated `window.athena = …` assignment (the prototype has it twice) —
-  a reminder that prototype code accumulates defects and is not a safe base.
-- `localStorage` as the source of truth for layout. In a desktop app the main
-  process owns the file.
-- Blurred photograph referenced directly by the prototype. Kept, but vendored
-  into the app and treated as an asset we own.
+- One 1,900-line `index.html` containing markup, CSS, and three.js together. The
+  port is split by concern: lab state, shader primitives, one module per
+  centrepiece, the stage, the ring layer, the React binding.
+- The reference's `window.athena` export being assigned twice — a reminder that
+  prototype code accumulates defects and is not a safe base.
+- The reference's `localStorage` as the source of truth for layout. In a
+  desktop app the main process owns the file. (The design lab's *presentation*
+  preferences do live in `localStorage`, which is correct: they are local,
+  disposable, and not workspace state.)
+- The reference's backdrop photograph and icon sprite.
+- Global keystrokes bound without checking for a text field. Freya ignores
+  B/P/1-4/C/R while an input has focus.

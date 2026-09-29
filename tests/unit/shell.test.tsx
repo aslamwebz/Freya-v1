@@ -141,6 +141,7 @@ describe('Freya shell', () => {
 
     const surface = manager.surfaces[0]
     expect(surface).toBeDefined()
+    const start = { ...(manager.get(surface?.id ?? '')?.layout ?? {}) }
     const title = screen.getByRole('dialog', { name: 'Search' }).querySelector('.surface-title') as HTMLElement
 
     await act(async () => {
@@ -150,7 +151,8 @@ describe('Freya shell', () => {
     })
 
     const moved = manager.get(surface?.id ?? '')
-    expect(moved?.layout).toMatchObject({ x: 96 + 260, y: 84 + 180 })
+    expect((moved?.layout.x ?? 0) - (start?.x ?? 0)).toBe(260)
+    expect((moved?.layout.y ?? 0) - (start?.y ?? 0)).toBe(180)
   })
 
   it('resizes a surface from its corner handle', async () => {
@@ -232,7 +234,7 @@ describe('Freya shell', () => {
       fireEvent.click(screen.getByRole('button', { name: /maximize search/i }))
     })
 
-    expect(manager.get(id)?.layout).toMatchObject({ x: 0, y: 0, width: 1600, height: 1000 })
+    expect(manager.get(id)?.layout).toMatchObject({ x: 186, y: 88, width: 1414, height: 912 })
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /restore search/i }))

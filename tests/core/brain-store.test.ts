@@ -220,6 +220,28 @@ describe('encrypted Brain store', () => {
 })
 
 describe('chain integrity', () => {
+  it('preserves authenticated records but refuses appends after a truncated final newline', async () => {
+    const store = await openStore()
+    await store.write({ kind: 'world-entity', entity: entity('before', 'Before') })
+    await store.close()
+    const path = join(dir, 'brain.enc')
+    const truncated = (await readFile(path, 'utf8')).slice(0, -1)
+    await writeFile(path, truncated, 'utf8')
+
+    const reopened = await openStore()
+    expect(reopened.state().entities.has('before')).toBe(true)
+    expect(reopened.health()).toMatchObject({ health: 'degraded' })
+    expect(reopened.health().reason).toMatch(/unterminated/)
+    await expect(
+      reopened.write({ kind: 'world-entity', entity: entity('after', 'After') }),
+    ).rejects.toMatchObject({ code: 'read-only' })
+    await reopened.close()
+    expect(await readFile(path, 'utf8')).toBe(truncated)
+    const again = await openStore()
+    expect(again.state().entities.has('before')).toBe(true)
+    await again.close()
+  })
+
   it('detects an edited record and refuses to read past the break', async () => {
     const store = await openStore()
     await store.write({ kind: 'world-entity', entity: entity('e1', 'Project Alpha') })

@@ -235,6 +235,11 @@ export class EncryptedBrainStore implements BrainStore {
       }
       applyRecord(this.brain, checked.record)
     }
+    // A complete authenticated final record remains readable, but an append
+    // would concatenate JSON objects if its delimiter was truncated.
+    if (raw.length > 0 && !raw.endsWith('\n')) {
+      this.degrade('the Brain log has an unterminated final record')
+    }
   }
 
   /**

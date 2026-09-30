@@ -311,7 +311,3 @@ function describeDomain(domain: KeyDomain): string {
     ? 'the Brain'
     : 'conversation history'
 }
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : 'unknown error'
-}

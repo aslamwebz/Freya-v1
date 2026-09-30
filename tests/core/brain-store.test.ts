@@ -20,16 +20,10 @@ import { testBrainKey, testConversationKey } from './testKey'
  * **1. What Freya learned is never on disk in the clear.** Encryption, unique
  * nonces, per-record authentication and header binding.
  *
- * **2. What Freya learned cannot be quietly removed.** A tag proves a record was
- * not edited; only the chain proves none was deleted, duplicated or reordered. So
- * the tests below do something a per-record authenticated log cannot defend against:
- * they edit the file directly, and they check that the Brain says so instead of
- * carrying on as though nothing happened.
- *
- * That second property is not paranoia about attackers. "Delete the memory I was
- * told to forget" and "someone removed the evidence" are otherwise the same
- * observable act, and a Brain that cannot tell them apart cannot claim its memory is
- * trustworthy.
+ * **2. Interior changes are reported.** The sequence and chain detect an interior
+ * deletion, duplication or reorder. The tests edit the file directly and require
+ * degradation rather than silently reading beyond a break. A complete valid tail
+ * removal cannot be detected without an independently trusted head.
  */
 
 let dir = ''

@@ -28,12 +28,10 @@ import { BRAIN_RECORD_VERSION, applyRecord, assertRecordSize, validateRecord } f
  *   prev(N)  =  sha256(line N-1, exactly as written)
  * ```
  *
- * A tag proves *this line* was not edited. A chain proves the log is the log that
- * was written: deleting, duplicating or reordering a line breaks `prev`, and there
- * is no way to re-derive the head without the key. That matters for a Brain
- * specifically — "delete the memory I was told to forget" and "an attacker deleted
- * the evidence" are otherwise indistinguishable, and a system that cannot tell
- * them apart cannot claim its memory is trustworthy.
+ * A tag authenticates a record; the sequence and chain detect an interior
+ * deletion, duplication or reorder. Removing a complete valid suffix is not
+ * detectable without an independently trusted head. This log has no such anchor.
+ * Archiving keeps an explicit record of owner-requested withdrawal.
  *
  * Everything else follows the conversation store's discipline deliberately, and for
  * the same reasons: a unique nonce per record from the CSPRNG (GCM nonce reuse
@@ -401,4 +399,3 @@ function isNotFound(error: unknown): boolean {
     (error as { code?: string }).code === 'ENOENT'
   )
 }
-

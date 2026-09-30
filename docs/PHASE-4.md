@@ -35,12 +35,9 @@ ways to act on it.
 | value | the most private text Freya holds | the most valuable long-term state |
 | integrity | per-record authentication | per-record **and** hash chain |
 
-The last row is the one that decided the design. A tag proves *this line* was not
-edited. Only a chain proves no line was removed, duplicated or reordered.
-
-That matters for a Brain specifically. "Delete the memory I was told to forget"
-and "an attacker deleted the evidence" are otherwise the same observable act. A
-system that cannot tell them apart cannot claim its memory is trustworthy.
+A tag authenticates a record. The sequence and chain detect interior deletions,
+duplications and reordering. They cannot detect removal of a complete valid suffix
+without an independently trusted head; the current log has no such anchor.
 
 So there is no delete. Withdrawing a memory archives it: the record stays, its
 status changes, and retrieval stops returning it.
@@ -57,6 +54,12 @@ A broken sequence or chain is **reported and reading stops there**, rather than
 skipping the line and carrying on. Skipping would let an attacker delete one
 record and have Freya quietly believe the rest as though nothing were wrong.
 Everything after the break is not read, because the chain cannot vouch for it.
+
+A degraded log is read-only: Freya can still answer, but refuses durable Brain
+writes beyond a break. An authenticated final record with a missing newline stays
+readable while further appends are refused. Accepted writes are flushed before
+advancing the in-memory chain; a failed append degrades the store. Queued admissions
+are serialized as whole operations, and close drains accepted admissions and writes.
 
 ### What a Brain fault means
 

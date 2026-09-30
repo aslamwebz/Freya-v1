@@ -412,15 +412,21 @@ including the previous line's digest — is authenticated as additional data:
   prev(N)  =  sha256(line N-1, exactly as written)
 ```
 
-A tag proves *this line* was not edited. Only a chain proves no line was removed,
-duplicated or reordered — which is what makes it distinguishable from a person
-being told to forget something and an attacker removing evidence. The security
-journal does **not** need this: it is append-only by construction and its integrity
-requirement is different (see §6.1).
+A tag authenticates a record. The sequence and chain detect interior deletions,
+duplications and reordering. Removing a complete valid suffix cannot be detected
+without an independently trusted head; the current log has no such anchor.
+Owner-requested withdrawal instead appends an archive record. The security
+journal has separate recovery and integrity requirements (see §6.1).
 
 A broken sequence or chain is reported and **reading stops there** rather than
 skipping the line, because continuing would let a deleted record look like it was
 never there.
+
+A degraded log is read-only: Freya can still answer, but refuses durable Brain
+writes beyond a break. An authenticated final record with a missing newline stays
+readable while further appends are refused. Accepted writes are flushed before
+advancing the in-memory chain; a failed append degrades the store. Queued admissions
+are serialized as whole operations, and close drains accepted admissions and writes.
 
 **A Brain fault is never a security event.** It cannot grant cognition or clear a
 stop, and it does not *lose* authority either — unreadable long-term knowledge is

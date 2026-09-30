@@ -50,6 +50,23 @@ export function accumulateAttempt(current: ModelUsage): ModelUsage {
   return { ...current, calls: current.calls + 1 }
 }
 
+/**
+ * Take back one attempt that turned out never to have reached a provider.
+ *
+ * A `model.request.started` is written immediately before a provider is asked,
+ * which leaves a window in which an owner stop lands: the start is already
+ * durable and the call is still refused. The start counted itself, so the
+ * `cancelled` that says the provider was never contacted withdraws it here.
+ *
+ * The net effect is zero, which is the honest answer: no provider was reached,
+ * so no call happened and nothing was spent. The reservation taken from a grant
+ * is a separate matter and is *not* withdrawn — authorisation is not refunded
+ * because a stop arrived first.
+ */
+export function withdrawAttempt(current: ModelUsage): ModelUsage {
+  return { ...current, calls: Math.max(0, current.calls - 1) }
+}
+
 export function accumulateUsage(
   current: ModelUsage,
   reported: { inputTokens: number | null; outputTokens: number | null },

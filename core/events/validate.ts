@@ -360,4 +360,59 @@ const PAYLOAD_RULES: {
     isNonNegativeInt(p.transcriptLength),
   'voice.capture.cancelled': (p) =>
     isEventId(p.sessionId) && isNonNegativeInt(p.byteLength) && isNonEmptyString(p.reason),
+
+  /* --------------------------------------------------------------- brain */
+
+  // Metadata only, and the rules below are the list of what that means. They read
+  // named fields rather than passing the object through, so a hand-edited line
+  // cannot smuggle a field the schema does not name — which for the Brain is the
+  // difference between a journal that measures what was learned and one that
+  // quietly starts retaining it.
+  'brain.seeded': (p) =>
+    isNonEmptyString(p.identityName) &&
+    isNonNegativeInt(p.identityClaimCount) &&
+    isNonNegativeInt(p.capabilityCount) &&
+    isNonNegativeInt(p.limitationCount),
+
+  'brain.memory.admitted': (p) =>
+    isEventId(p.memoryId) &&
+    isNonEmptyString(p.kind) &&
+    isNonEmptyString(p.source) &&
+    isNonEmptyString(p.confidence) &&
+    isNonEmptyString(p.status) &&
+    isNonNegativeInt(p.conflictsWith) &&
+    isNonNegativeInt(p.contentLength),
+
+  'brain.memory.reviewed': (p) =>
+    isEventId(p.candidateId) &&
+    (p.decision === 'rejected' || p.decision === 'deferred') &&
+    isNonEmptyString(p.reason),
+
+  'brain.memory.archived': (p) => isEventId(p.memoryId) && isNonEmptyString(p.reason),
+
+  'brain.world.entity_noted': (p) =>
+    isEventId(p.entityId) &&
+    isNonEmptyString(p.entityType) &&
+    isNonNegativeInt(p.nameLength) &&
+    isNonEmptyString(p.sourceType),
+
+  'brain.world.related': (p) =>
+    isEventId(p.subjectEntityId) &&
+    isNonEmptyString(p.predicate) &&
+    isNonNegativeInt(p.conflictingRelations),
+
+  'brain.world.observed': (p) =>
+    isEventId(p.observationId) &&
+    isNonEmptyString(p.sourceType) &&
+    isNonNegativeInt(p.statedLength),
+
+  'brain.experience.recorded': (p) =>
+    isEventId(p.experienceId) &&
+    isNonEmptyString(p.result) &&
+    isNonNegativeInt(p.modelsUsed) &&
+    typeof p.providerContacted === 'boolean' &&
+    (p.conversationId === null || isEventId(p.conversationId)) &&
+    (p.turnId === null || isEventId(p.turnId)),
+
+  'brain.degraded': (p) => isNonEmptyString(p.reason),
 }

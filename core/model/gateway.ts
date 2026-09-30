@@ -1,5 +1,5 @@
 import type { ModelProvider, ModelRequest, ModelResult } from './provider'
-import { accumulateAttempt, accumulateUsage, emptyUsage } from './usage'
+import { accumulateAttempt, accumulateReported, accumulateUsage, emptyUsage } from './usage'
 import type { ModelUsage, ProviderStatus } from '../protocol/core-protocol'
 
 /**
@@ -156,6 +156,16 @@ export class ModelGateway {
       })
       return result
     } catch (error) {
+      // A provider that was reached and then failed has almost certainly
+      // consumed inference before the error — a timeout is not free work, and a
+      // stream that dies after the first hundred tokens is not nothing. The only
+      // honest record of that is `unknown`, so the call stays counted and its
+      // usage is declared a gap rather than left looking like zero.
+      this.sessionUsage = accumulateReported(this.sessionUsage, {
+        inputTokens: null,
+        outputTokens: null,
+      })
+
       // Contained: the Core stays alive, the failure is durable, and there is
       // exactly one attempt.
       const reason = error instanceof Error ? error.message : 'unknown provider failure'

@@ -131,7 +131,8 @@ Everything in the table below is built, wired and verified.
 | --- | --- | --- |
 | Event fabric | done | `core/events/` |
 | Event validation + recovery | done | `core/events/validate.ts`, `core/events/jsonl-store.ts` |
-| Journal integrity gate | done | corruption denies all cognition; `CoreStatus.integrity` |
+| Journal integrity gate | done | corruption denies all cognition, and stays denied across restarts |
+| Integrity quarantine | done | damaged bytes preserved; `core.integrity_fault` recorded |
 | State + projection | done | `core/state.ts`, `core/projections/` |
 | Guard | done | `core/security/guard.ts` |
 | Authority boundary | done | `core/authority.ts`, `core/testing.ts` |
@@ -183,6 +184,19 @@ The final correction pass found two more:
   distinguished from an ordinary torn tail, the fault is reported in
   `CoreStatus.integrity`, and the Governor denies every request with
   `journal-not-trustworthy` — above the replayed latch itself.
+- **A corrupt journal came back healthy on the second start.** Recovery
+  truncated the damage, which left a clean file, so the restart after the
+  degraded one replayed a prefix that said "not stopped" and reported `ready`.
+  Fixed by preserving the damaged bytes in a quarantine file and writing a
+  `core.integrity_fault` event into the trusted prefix, so the fault is durable
+  and only removing or replacing the journal clears it. A degraded start writes
+  `core.degraded`, never `core.ready`.
+- **A provider that failed was recorded as free.** Reaching a provider and then
+  failing may well have been paid for, but `calls` incremented while
+  `unknownUsageCalls` did not, so a timeout looked like it cost nothing. A
+  failure now declares an explicit gap — while a request that never reached a
+  provider counts nothing at all, told apart by the `model.request.started`
+  event rather than by any provider convention.
 - **Reported usage was replaced rather than accumulated.** Each call's figures
   overwrote the running total, so two calls reporting 12 tokens each showed 12,
   and a call that reported nothing nulled everything accounted for before it.

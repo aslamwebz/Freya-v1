@@ -1,4 +1,7 @@
-import { open, mkdir, readFile, truncate, type FileHandle } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+
+const EOL = String.fromCharCode(10)
+import { copyFile, open, mkdir, readFile, truncate, writeFile, type FileHandle } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { EventStore } from './store'
 import { CORE_EVENT_SCHEMA_VERSION, type AnyCoreEvent } from './envelope'
@@ -125,11 +128,23 @@ export class JsonlEventStore implements EventStore {
       cursor = newline + 1
     }
 
+    let quarantinePath: string | null = null
+
+    if (corruption !== null) {
+      // The original file is preserved whole before anything is discarded.
+      //
+      // Truncation is still necessary — appends land at the end of the file, and
+      // a reader that stops at the first bad line would never see them again —
+      // but discarding the bytes is not. The quarantine keeps the evidence,
+      // including any event that came *after* the damage, which is exactly what
+      // somebody needs in order to decide what was really in this journal.
+      quarantinePath = await this.quarantine()
+    }
+
     if (goodBytes !== raw.length) {
       // Drop everything from the first unusable byte onward, including valid
       // events that followed it. A gap in a security journal cannot be replayed
-      // safely, so the safe reading of a damaged log is the prefix plus a record
-      // that it was damaged.
+      // safely, so the safe reading of a damaged log is the trusted prefix.
       await truncate(this.file, goodBytes)
     }
 
@@ -140,10 +155,44 @@ export class JsonlEventStore implements EventStore {
       corruption,
       eventsRead,
       bytesDiscarded: raw.length - goodBytes,
+      quarantinePath,
       // A torn tail is ordinary. Corruption is not, and nothing above may treat
       // it as though it were.
       trustworthy: corruption === null,
     }
+  }
+
+  /**
+   * Copy the journal aside before recovery modifies it.
+   *
+   * Uses a fresh filename rather than overwriting, so a second corruption does
+   * not destroy the evidence from the first. Bounded: after a handful the oldest
+   * are left alone and the newest wins, because an unbounded pile of journals is
+   * its own problem and this is a safety net, not an archive.
+   */
+  private async quarantine(): Promise<string> {
+    const base = `${this.file}.quarantine`
+    let target = base
+    for (let n = 2; n <= 8; n += 1) {
+      if (!existsSync(target)) break
+      target = `${base}.${n}`
+    }
+    await copyFile(this.file, target)
+    // A note beside it, so the file is not just an unexplained blob on disk.
+    await writeFile(
+      `${target}.txt`,
+      [
+        'Freya Core event log, set aside during recovery.',
+        `Original: ${this.file}`,
+        'This journal contained at least one complete event that did not validate.',
+        'It was preserved rather than deleted. The trusted prefix was kept in the',
+        'original file and a core.integrity_fault event was written into it, so',
+        'Core stays degraded until this is dealt with deliberately.',
+        '',
+      ].join(EOL),
+      'utf8',
+    )
+    return target
   }
 
   async append(event: AnyCoreEvent): Promise<void> {

@@ -90,13 +90,29 @@ describe('a corrupt journal does not come up healthy', () => {
     expect(status.lifecycle).toBe('degraded')
   })
 
-  it('does not hide the warning in a generic fault list', async () => {
+  it('reports integrity on its own surface, not only inside the fault list', async () => {
     await seedHealthyLogWithStopAfterwards()
     const status = (await start()).status()
-    // The integrity block is the surface; it is not folded into `faults`, because
-    // a fault list is advisory and this is a gate.
-    expect(status.faults).toEqual([])
+    // A degraded lifecycle may be noted in `faults`, but that list is advisory.
+    // The gate has to be readable on its own, because a caller deciding whether
+    // it may reach a provider must not have to parse prose.
     expect(status.integrity.integrity).toBe('corrupt')
+    expect(status.integrity.reason).toBeTypeOf('string')
+    expect(status.integrity.line).toBe(3)
+
+    // Contrast: a torn tail adds nothing to `faults` at all, and is still
+    // reported. Integrity is a separate surface, not a line in a list.
+    await core?.stop('test')
+    await rm(file, { force: true })
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(
+      file,
+      line(1, 'core.started', { version: '0.1.0', storeKind: 'jsonl', recoveredSequence: 0 }) +
+        '{"eventId":"evt-torn","sequence":2,"type":"core.rea',
+    )
+    const torn = (await start()).status()
+    expect(torn.faults).toEqual([])
+    expect(torn.integrity.integrity).toBe('torn')
   })
 
   it('cannot restart as a healthy unstopped Core when a STOP ALL followed the damage', async () => {
@@ -150,19 +166,144 @@ describe('a corrupt journal does not come up healthy', () => {
     expect(c.status().integrity.integrity).toBe('corrupt')
   })
 
-  it('recovers to ready once a trusted log is in place', async () => {
+  it('stays degraded across a second restart, when the file on disk is clean', async () => {
     await seedHealthyLogWithStopAfterwards()
     await start()
     await core?.stop('test')
 
-    // The store truncated on recovery, so the second start reads a clean prefix.
+    // The file really is clean now. Recovery truncated it, so a naive Core
+    // would read this prefix and conclude everything was fine — and would be
+    // wrong, because the STOP ALL that came after the damage is gone and the
+    // remaining prefix says "not stopped".
+    const raw = await readFile(file, 'utf8')
+    expect(raw).not.toContain('evt-bad')
+    expect(raw).not.toContain('stop_all')
+
     const second = createCore({ dataPath: file, providers: [fake] })
     await second.start()
     core = second
     const status = second.status()
 
-    expect(status.integrity.integrity, `${status.integrity.reason} | ${JSON.stringify(status.faults)}`).toBe('ok')
-    expect(status.lifecycle).toBe('ready')
+    expect(status.integrity.integrity).toBe('corrupt')
+    expect(status.lifecycle).toBe('degraded')
+    // And it is denied for the right reason, not merely un-stopped.
+    expect(
+      evaluateCognition(
+        {
+          cognitionRequestId: 'req-1',
+          origin: 'user',
+          cause: 'user_message',
+          actor: 'owner',
+          correlationId: 'corr-1',
+          maxOutputTokens: 10,
+          authorization: { grantId: null, userInitiated: true },
+          background: false,
+        },
+        {
+          stopAllActive: false,
+          grants: [],
+          journalTrustworthy: false,
+          now: new Date(),
+        },
+      ).reason,
+    ).toBe('journal-not-trustworthy')
+  })
+
+  it('stays degraded across a third restart too', async () => {
+    await seedHealthyLogWithStopAfterwards()
+    for (let start_ = 0; start_ < 3; start_ += 1) {
+      const c = await start()
+      expect(c.status().lifecycle, `start ${start_ + 1}`).toBe('degraded')
+      expect(c.status().integrity.integrity, `start ${start_ + 1}`).toBe('corrupt')
+      await core?.stop('test')
+    }
+  })
+
+  it('never reaches a provider, however many times it is started', async () => {
+    await seedHealthyLogWithStopAfterwards()
+    for (let start_ = 0; start_ < 3; start_ += 1) {
+      await start()
+      expect(fake.calls, `start ${start_ + 1}`).toBe(0)
+      await core?.stop('test')
+    }
+  })
+
+  it('does not write core.ready for an integrity-degraded start', async () => {
+    await seedHealthyLogWithStopAfterwards()
+    await start()
+    await core?.stop('test')
+
+    const log = await readFile(file, 'utf8')
+    const events = log
+      .split(String.fromCharCode(10))
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as { type: string })
+
+    // The seeded log contains one `core.ready`, from before the damage. Every
+    // start after it must say what is actually true.
+    const afterDamage = events.slice(2)
+    expect(afterDamage.length).toBeGreaterThan(0)
+    for (const event of afterDamage) {
+      expect(event.type, JSON.stringify(event)).not.toBe('core.ready')
+    }
+    expect(afterDamage.filter((e) => e.type === 'core.degraded').length).toBeGreaterThanOrEqual(1)
+    expect(afterDamage.filter((e) => e.type === 'core.integrity_fault').length).toBe(1)
+  })
+
+  it('records the fault in the journal, and keeps the damaged bytes', async () => {
+    await seedHealthyLogWithStopAfterwards()
+    const status = (await start()).status()
+
+    const faultLine = (await readFile(file, 'utf8'))
+      .split(String.fromCharCode(10))
+      .filter((l) => l.includes('core.integrity_fault'))
+      .map((l) => JSON.parse(l) as { payload: Record<string, unknown> })[0]
+    expect(faultLine).toBeDefined()
+    if (faultLine === undefined) throw new Error('no integrity fault was recorded')
+    expect(faultLine.payload.reason).toBe(status.integrity.reason)
+    expect(faultLine.payload.line).toBe(3)
+
+    // The evidence is on disk, not deleted: the discarded STOP ALL is still
+    // there to be read by whoever deals with this.
+    const quarantine = String(faultLine.payload.quarantinePath)
+    const preserved = await readFile(quarantine, 'utf8')
+    expect(preserved).toContain('evt-bad')
+    expect(preserved).toContain('stop_all')
+  })
+
+  it('recovers only when the log is deliberately replaced', async () => {
+    await seedHealthyLogWithStopAfterwards()
+    await start()
+    expect((await start()).status().integrity.integrity).toBe('corrupt')
+
+    // The documented Phase 1 remedy: no recovery UI, so recovery is removing
+    // the journal. That is a deliberate act, not something a restart can do.
+    await core?.stop('test')
+    await rm(file, { force: true })
+
+    const fresh = await start()
+    expect(fresh.status().integrity.integrity).toBe('ok')
+    expect(fresh.status().lifecycle).toBe('ready')
+  })
+
+  it('still recovers a torn unfinished tail normally', async () => {
+    // No corruption here — just a crash part-way through the last write.
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(
+      file,
+      line(1, 'core.started', { version: '0.1.0', storeKind: 'jsonl', recoveredSequence: 0 }) +
+        line(2, 'core.ready', {}) +
+        line(3, 'core.ready', {}) +
+        '{"eventId":"evt-torn","sequence":4,"type":"core.rea',
+    )
+
+    const status = (await start()).status()
+    expect(status.integrity.integrity).toBe('torn')
+    expect(status.lifecycle, status.integrity.reason).toBe('ready')
+    expect(status.stopAll.active).toBe(false)
+
+    // No quarantine, because there was nothing corrupt to preserve.
+    expect(status.integrity.bytesDiscarded).toBeGreaterThan(0)
   })
 })
 

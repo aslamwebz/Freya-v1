@@ -31,6 +31,40 @@ export interface CoreState {
   /** Metadata about the last command. Never its content: that is not here. */
   lastCommand: { commandId: string; contentLength: number; at: string } | null
   faults: string[]
+  /**
+   * The most recent integrity fault recorded in the journal itself.
+   *
+   * Persisted rather than reported once and forgotten, because the alternative
+   * is the failure this exists to prevent: recovery truncates the damaged
+   * segment, so the *next* start reads a clean prefix that no longer contains
+   * any evidence of the damage. A fault held in memory would vanish with the
+   * process and the second restart would come up healthy.
+   */
+  integrityFault: IntegrityFaultRecord | null
+  /**
+   * Requests that reached a provider and have not yet finished.
+   *
+   * This is how "was a provider contacted?" is answered during replay, and it
+   * is answered from the events rather than from anything about the provider.
+   *
+   * `model.request.failed` is recorded both when a provider was reached and
+   * failed *and* when no provider could be reached at all. The two have opposite
+   * usage consequences — the first may well have been paid for, the second
+   * certainly was not — and the difference between them is exactly whether a
+   * `model.request.started` was written first. Inferring it any other way would
+   * be a guess.
+   */
+  pendingRequests: string[]
+}
+
+/** A `core.integrity_fault` as recovered from the journal. */
+export interface IntegrityFaultRecord {
+  reason: string
+  line: number
+  quarantinePath: string
+  trustedPrefixEvents: number
+  trustedPrefixBytes: number
+  damagedBytes: number
 }
 
 export function initialCoreState(): CoreState {
@@ -41,7 +75,18 @@ export function initialCoreState(): CoreState {
     commandCount: 0,
     lastCommand: null,
     faults: [],
+    integrityFault: null,
+    pendingRequests: [],
   }
+}
+
+function without(ids: readonly string[], id: string): string[] {
+  return ids.filter((candidate) => candidate !== id)
+}
+
+/** True when the journal itself records that it was found corrupt. */
+export function journalRecordsCorruption(state: CoreState): boolean {
+  return state.integrityFault !== null
 }
 
 export function isStopAllActive(state: CoreState): boolean {
@@ -144,7 +189,14 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
     // call count. It contributes no token figures and records no gap in
     // reporting, because the matching `completed` event carries both.
     case 'model.request.started':
-      return { ...state, durableUsage: accumulateAttempt(state.durableUsage) }
+      return {
+        ...state,
+        durableUsage: accumulateAttempt(state.durableUsage),
+        // Reached. Whatever happens next, this call has to be accounted for.
+        pendingRequests: state.pendingRequests.includes(event.payload.requestId)
+          ? state.pendingRequests
+          : [...state.pendingRequests, event.payload.requestId],
+      }
 
     // Reported usage is added to the running total. A call that reported nothing
     // increments `unknownUsageCalls` instead of contributing a zero, so the
@@ -156,10 +208,52 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
           inputTokens: event.payload.inputTokens,
           outputTokens: event.payload.outputTokens,
         }),
+        pendingRequests: without(state.pendingRequests, event.payload.requestId),
+      }
+
+    case 'model.request.failed':
+      // Only a call that actually reached a provider has unknown usage.
+      //
+      // The gateway also records a failure when no provider could be selected at
+      // all, and nothing was spent then. Whether this failure is one of those is
+      // decided by the absence of the matching `model.request.started`, not by
+      // the provider's name or kind.
+      if (!state.pendingRequests.includes(event.payload.requestId)) {
+        // Never contacted, so it was never a call and never cost anything.
+        return state
+      }
+      return {
+        ...state,
+        // Reaching a provider and then failing is not free: a timeout is billed,
+        // and a stream that dies mid-answer was billed. The only truthful record
+        // of that is an explicit gap, not an absence.
+        durableUsage: accumulateReported(state.durableUsage, {
+          inputTokens: null,
+          outputTokens: null,
+        }),
+        pendingRequests: without(state.pendingRequests, event.payload.requestId),
       }
 
     case 'core.degraded':
       return { ...state, faults: [...state.faults, event.payload.reason] }
+
+    case 'core.integrity_fault': {
+      const p = event.payload
+      const record: IntegrityFaultRecord = {
+        reason: p.reason,
+        line: p.line,
+        quarantinePath: p.quarantinePath,
+        trustedPrefixEvents: p.trustedPrefixEvents,
+        trustedPrefixBytes: p.trustedPrefixBytes,
+        damagedBytes: p.damagedBytes,
+      }
+      // Deliberately *not* added to `faults`. That list is advisory — it records
+      // what happened — and a fault that reads the same as a transient warning
+      // would be easier to miss than a dedicated field nobody can confuse with
+      // it. The gate lives in `integrityFault`, and `CoreStatus.integrity`
+      // carries it to callers.
+      return { ...state, integrityFault: record }
+    }
 
     default:
       return state

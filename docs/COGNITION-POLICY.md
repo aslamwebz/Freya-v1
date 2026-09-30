@@ -169,6 +169,36 @@ is ever estimated.
 This is entirely independent of the authorisation budget: a provider reporting
 one token does not buy back the 300 it was authorised to use.
 
+### Reaching a provider and failing is not free
+
+A provider that was reached and then failed has almost certainly consumed
+inference. A timeout is billed, and a stream that dies mid-answer was billed for
+every token it emitted. Recording nothing for such a call would report a paid
+request as a free one — the same error as treating an unreported *success* as
+zero.
+
+So the outcomes are:
+
+| Outcome | `calls` | reported totals | `unknownUsageCalls` |
+| --- | --- | --- | --- |
+| no provider selected or contacted | 0 | — | 0 |
+| reached, completed, fully reported | +1 | accumulate | unchanged |
+| reached, completed, not fully reported | +1 | accumulate what is known | +1 |
+| **reached, then failed** | **+1** | **unchanged** | **+1** |
+
+The distinction between the first and last rows is the one that is easy to get
+wrong, and it is not carried by a provider's name. The gateway writes
+`model.request.started` when it reaches a provider, and also writes
+`model.request.failed` when it cannot reach one at all; the durable accounting
+tells them apart by whether that `started` was ever recorded. Nothing is
+inferred from `providerId`, `kind`, or whether the name sounds live.
+
+This holds in all three places that count: the gateway's session usage, the
+durable usage recovered by replaying the journal, and the grant's reported
+usage. The reservation is untouched by all of it — a failed call's authorised
+output allowance stays spent, because authorisation is not refunded because the
+provider misbehaved.
+
 ### Authorisation and reservation are one indivisible step
 
 They used to be two, and that was a hole in the budget. Ten concurrent requests

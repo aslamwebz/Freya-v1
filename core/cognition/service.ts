@@ -376,6 +376,16 @@ export class CognitionService {
         model: result.model,
       }
     } catch (error) {
+      // The grant still needs to hear about this attempt.
+      //
+      // A request that was authorised and then failed was almost certainly
+      // paid for — a timeout is not free — so the grant's reported usage records
+      // an explicit `unknown` rather than being left to look untouched. The
+      // reservation stays spent either way: authorisation is not refunded
+      // because the provider misbehaved.
+      if (decision.grantId !== null) {
+        await this.reportProviderUsage(decision.grantId, requestId, null, null)
+      }
       return {
         status: 'failed',
         requestId,

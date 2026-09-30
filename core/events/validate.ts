@@ -54,6 +54,11 @@ export interface RecoveryReport {
   eventsRead: number
   /** Bytes discarded, including the discarded lines and any torn bytes. */
   bytesDiscarded: number
+  /**
+   * Where the damaged bytes were preserved, or null when there was no corruption
+   * to set aside. The file exists after recovery; nothing is thrown away.
+   */
+  quarantinePath: string | null
   /** True when the journal can be replayed as the whole truth. */
   trustworthy: boolean
 }
@@ -63,6 +68,7 @@ export const HEALTHY_RECOVERY: RecoveryReport = {
   corruption: null,
   eventsRead: 0,
   bytesDiscarded: 0,
+  quarantinePath: null,
   trustworthy: true,
 }
 
@@ -128,6 +134,13 @@ const PAYLOAD_RULES: {
     isNonEmptyString(p.version) && isNonEmptyString(p.storeKind) && isNonNegativeInt(p.recoveredSequence),
   'core.ready': (p) => Object.keys(p).length === 0,
   'core.degraded': (p) => isNonEmptyString(p.reason),
+  'core.integrity_fault': (p) =>
+    isNonEmptyString(p.reason) &&
+    isPositiveInt(p.line) &&
+    isNonEmptyString(p.quarantinePath) &&
+    isNonNegativeInt(p.trustedPrefixEvents) &&
+    isNonNegativeInt(p.trustedPrefixBytes) &&
+    isNonNegativeInt(p.damagedBytes),
   'core.stopping': (p) => isNonEmptyString(p.reason),
   'core.stopped': (p) => isNonNegativeInt(p.durationMs),
 

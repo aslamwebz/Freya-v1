@@ -109,6 +109,19 @@ class FreyaCore implements Core {
    * cannot be quietly forgotten after start-up.
    */
   private integrity: JournalFault = HEALTHY_JOURNAL
+  /**
+   * Set when *this* start found corruption, so it can be written into the
+   * journal. Distinct from `integrity`, which is what a caller sees: on a later
+   * start the damage is already in the log and there is nothing new to write.
+   */
+  private freshIntegrityFault: {
+    reason: string
+    line: number
+    quarantinePath: string
+    trustedPrefixEvents: number
+    trustedPrefixBytes: number
+    damagedBytes: number
+  } | null = null
   private readonly listeners = new Set<(status: CoreStatus) => void>()
   private readonly newId: () => string
   private disposeState: () => void = () => {}
@@ -169,6 +182,35 @@ class FreyaCore implements Core {
     this.fabric = await EventFabric.open({ store, now: this.options.now, newId: this.options.newId })
     this.state = await this.fabric.replay(initialCoreState(), reduceCoreState)
 
+    // Corruption found by *this* start, against corruption already recorded in
+    // the journal. The second is what makes the fault survive: after recovery
+    // truncated the damaged segment the file is clean, so only the durable
+    // record distinguishes a repaired prefix from a prefix with a hole in it.
+    if (this.integrity.integrity === 'corrupt') {
+      const report = store instanceof JsonlEventStore ? store.recoveryReport() : null
+      const reason = this.integrity.reason
+      this.freshIntegrityFault = {
+        reason,
+        line: this.integrity.line ?? 1,
+        quarantinePath:
+          report?.quarantinePath ?? `${this.fabric.describe()}.quarantine-unrecorded`,
+        trustedPrefixEvents: report?.eventsRead ?? 0,
+        trustedPrefixBytes: this.fabric.lastSequence === 0 ? 0 : (report?.eventsRead ?? 0),
+        damagedBytes: report?.bytesDiscarded ?? 0,
+      }
+    }
+
+    if (this.state.integrityFault !== null) {
+      const recorded = this.state.integrityFault
+      this.integrity = {
+        integrity: 'corrupt',
+        reason: `${recorded.reason} (recorded in the journal; the damaged bytes are at ${recorded.quarantinePath})`,
+        line: recorded.line,
+        eventsRead: recorded.trustedPrefixEvents,
+        bytesDiscarded: recorded.damagedBytes,
+      }
+    }
+
     this.guard = this.buildGuard()
 
     this.gateway = new ModelGateway({
@@ -217,7 +259,33 @@ class FreyaCore implements Core {
       },
       { actor: 'system' },
     )
-    await this.fabric.append('core.ready', {}, { actor: 'system' })
+
+    // Fresh corruption is written into the trusted prefix before anything else,
+    // so the damage is part of the journal rather than a fact that existed only
+    // until this process exited. Recovery has already truncated the damaged
+    // segment; without this the next start would read a clean file and come up
+    // ready, with whatever followed the damage already discarded.
+    if (this.freshIntegrityFault !== null) {
+      await this.fabric.append(
+        'core.integrity_fault',
+        this.freshIntegrityFault,
+        { actor: 'system' },
+      )
+      this.freshIntegrityFault = null
+    }
+
+    if (this.currentLifecycle === 'ready') {
+      await this.fabric.append('core.ready', {}, { actor: 'system' })
+    } else {
+      // A `core.ready` here would be a lie in the durable record: this Core
+      // cannot vouch for its own security state, and the journal has to say the
+      // same thing a reader of the log will find.
+      await this.fabric.append(
+        'core.degraded',
+        { reason: 'the event journal was found corrupt; see the preceding integrity fault' },
+        { actor: 'system' },
+      )
+    }
 
     return this.status()
   }

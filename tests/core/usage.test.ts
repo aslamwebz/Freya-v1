@@ -6,7 +6,12 @@ import { join } from 'node:path'
 import { createCore, type Core, type CoreOptions } from '../../core/index'
 import { ownerAuthority, workerAuthority } from '../../core/testing'
 import { accumulateUsage, accumulateReported, emptyUsage } from '../../core/model/usage'
-import { FakeModelProvider, SilentModelProvider } from '../../core/model/fake-provider'
+import {
+  FailingModelProvider,
+  FakeModelProvider,
+  FaultedModelProvider,
+  SilentModelProvider,
+} from '../../core/model/fake-provider'
 import type { ModelProvider, ModelRequest, ModelResult } from '../../core/model/provider'
 import type { ProviderStatus } from '../../core/protocol/core-protocol'
 
@@ -284,4 +289,194 @@ describe('the budget is independent of what a provider reports', () => {
     // 400 left, so a second 600 does not fit.
     expect((await workerAuthority(c).request(step('b', 600))).status).toBe('denied')
   })
+
+describe('a failed provider attempt has unknown usage', () => {
+  /**
+   * The rule this covers: reaching a provider may cost money whether or not it
+   * answers. `calls` alone said one thing happened, and `unknownUsageCalls` said
+   * nothing had been left unaccounted — so a timeout was recorded as free.
+   *
+   * The distinction that matters is *contacted* versus *never contacted*, and it
+   * is carried explicitly by the provider events. Nothing here infers it from
+   * a provider's name.
+   */
+  it('counts nothing at all when no provider was ever selected', async () => {
+    // Reports itself unusable, so the gateway declines to route to it. The
+    // provider is never contacted, so nothing was spent.
+    const faulted = new FaultedModelProvider()
+    const c = await started({ providers: [faulted] })
+    // A grant, so the request is authorised and genuinely reaches the gateway —
+    // otherwise it would be denied before a provider was ever considered.
+    await withGrant(c)
+
+    const outcome = await workerAuthority(c).request(step('a', 100))
+    expect(outcome.status).toBe('failed')
+
+    expect(c.status().sessionUsage.calls).toBe(0)
+    expect(c.status().sessionUsage.unknownUsageCalls).toBe(0)
+    expect(c.status().durableUsage.calls).toBe(0)
+    expect(c.status().durableUsage.unknownUsageCalls).toBe(0)
+    // Never actually called.
+    expect(faulted.calls).toBe(0)
+  })
+
+  it('counts a call and an unknown when the provider throws', async () => {
+    const failing = new FailingModelProvider()
+    const c = await started({ providers: [failing] })
+    await withGrant(c)
+
+    const outcome = await workerAuthority(c).request(step('a', 100))
+    expect(outcome.status).toBe('failed')
+    expect(failing.calls).toBe(1)
+
+    // Reached, then failed. One call, and its usage is a declared gap.
+    expect(c.status().sessionUsage.calls).toBe(1)
+    expect(c.status().sessionUsage.unknownUsageCalls).toBe(1)
+    expect(c.status().durableUsage.calls).toBe(1)
+    expect(c.status().durableUsage.unknownUsageCalls).toBe(1)
+  })
+
+  it('counts a call and an unknown when the provider fails after starting work', async () => {
+    // A provider that consumed inference and then died mid-stream: the worst
+    // case, because work definitely happened and definitely cannot be counted.
+    class DiedMidStreamProvider implements ModelProvider {
+      readonly id = 'died-mid-stream'
+      readonly kind = 'fake' as const
+      readonly live = false
+      calls = 0
+
+      status(): ProviderStatus {
+        return {
+          id: this.id,
+          kind: this.kind,
+          status: 'configured',
+          model: 'died-mid-stream-model',
+          detail: 'Fails after beginning to answer.',
+          liveEnabled: false,
+        }
+      }
+
+      async complete(): Promise<ModelResult> {
+        this.calls += 1
+        throw new Error('connection reset after the first tokens')
+      }
+    }
+
+    const provider = new DiedMidStreamProvider()
+    const c = await started({ providers: [provider] })
+    await withGrant(c)
+
+    expect((await workerAuthority(c).request(step('a', 100))).status).toBe('failed')
+
+    expect(c.status().sessionUsage.calls).toBe(1)
+    expect(c.status().sessionUsage.unknownUsageCalls).toBe(1)
+    expect(c.status().durableUsage.calls).toBe(1)
+    expect(c.status().durableUsage.unknownUsageCalls).toBe(1)
+  })
+
+  it('records unknown usage against the grant, without refunding the budget', async () => {
+    const failing = new FailingModelProvider()
+    const c = await started({ providers: [failing] })
+    await withGrant(c)
+
+    expect((await workerAuthority(c).request(step('a', 200))).status).toBe('failed')
+
+    const grant = ownerAuthority(c).grants().find((g) => g.id === 'g1')
+    expect(grant?.usage.calls).toBe(1)
+    expect(grant?.usage.unknownUsageCalls).toBe(1)
+    expect(grant?.usage.inputTokens).toBeNull()
+    expect(grant?.usage.outputTokens).toBeNull()
+    // The reservation is authorisation, and it stays spent whatever the
+    // provider did. A failure does not hand the allowance back.
+    expect(grant?.usage.outputTokenBudgetReserved).toBe(200)
+  })
+
+  it('survives a restart, so the unknown usage is not forgotten', async () => {
+    const failing = new FailingModelProvider()
+    const c = await started({ providers: [failing] })
+    await withGrant(c)
+    expect((await workerAuthority(c).request(step('a', 200))).status).toBe('failed')
+    await c.stop('test')
+
+    const fresh = createCore(options({ providers: [new FakeModelProvider()] }))
+    await fresh.start()
+    core = fresh
+
+    const usage = fresh.status().durableUsage
+    expect(usage.calls).toBe(1)
+    expect(usage.unknownUsageCalls).toBe(1)
+
+    // The grant's declared gap is durable too.
+    const grant = ownerAuthority(fresh).grants().find((g) => g.id === 'g1')
+    expect(grant?.usage.calls).toBe(1)
+    expect(grant?.usage.unknownUsageCalls).toBe(1)
+  })
+
+  it('adds known totals and an unknown when one call succeeds and one fails', async () => {
+    class MixedProvider implements ModelProvider {
+      readonly id = 'mixed'
+      readonly kind = 'fake' as const
+      readonly live = false
+      calls = 0
+
+      status(): ProviderStatus {
+        return {
+          id: this.id,
+          kind: this.kind,
+          status: 'configured',
+          model: 'mixed-model',
+          detail: 'Answers once, then fails.',
+          liveEnabled: false,
+        }
+      }
+
+      async complete(request: ModelRequest): Promise<ModelResult> {
+        this.calls += 1
+        if (this.calls === 1) {
+          return {
+            requestId: request.requestId,
+            providerId: this.id,
+            model: 'mixed-model',
+            text: 'ok',
+            inputTokens: 10,
+            outputTokens: 20,
+          }
+        }
+        throw new Error('timeout')
+      }
+    }
+
+    const provider = new MixedProvider()
+    const c = await started({ providers: [provider] })
+    await withGrant(c)
+
+    expect((await workerAuthority(c).request(step('a', 100))).status).toBe('allowed')
+    expect((await workerAuthority(c).request(step('b', 100))).status).toBe('failed')
+
+    // Two calls. One accounted for, one not.
+    expect(c.status().sessionUsage.calls).toBe(2)
+    expect(c.status().sessionUsage.inputTokens).toBe(10)
+    expect(c.status().sessionUsage.outputTokens).toBe(20)
+    expect(c.status().sessionUsage.unknownUsageCalls).toBe(1)
+
+    const grant = ownerAuthority(c).grants().find((g) => g.id === 'g1')
+    expect(grant?.usage.calls).toBe(2)
+    expect(grant?.usage.outputTokens).toBe(20)
+    expect(grant?.usage.unknownUsageCalls).toBe(1)
+    // Both reservations spent, whatever the second one did.
+    expect(grant?.usage.outputTokenBudgetReserved).toBe(200)
+  })
+
+  it('keeps a fully reported call free of unknowns', async () => {
+    const c = await started({ providers: [new ScriptedProvider([10, 20])] })
+    await withGrant(c)
+    await workerAuthority(c).request(step('a', 100))
+    await workerAuthority(c).request(step('b', 100))
+
+    expect(c.status().sessionUsage.calls).toBe(2)
+    expect(c.status().sessionUsage.inputTokens).toBe(30)
+    expect(c.status().sessionUsage.outputTokens).toBe(30)
+    expect(c.status().sessionUsage.unknownUsageCalls).toBe(0)
+  })
+})
 })

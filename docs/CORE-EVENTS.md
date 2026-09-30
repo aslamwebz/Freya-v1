@@ -108,10 +108,50 @@ latch itself. A Core that cannot vouch for its log denies every request with
 `journal-not-trustworthy`, and the projection reports `governor.status` as
 `deny_all` regardless of what the latch says.
 
-The remedy is to repair or remove the log. Recovery truncates the damaged
-segment on disk, so a subsequent start reads a clean prefix and comes up `ready`.
-A *running* Core does not upgrade itself, because it cannot know the file changed
-underneath it.
+### Why it survives a restart
+
+Truncation leaves a **clean** file. On its own that is the whole bug: the next
+start would read the prefix, find no damage, and come up `ready` and unstopped —
+having silently lost the latch that came after the damage. Recovery fixing the
+file is what makes the damage disappear, so the record cannot live in the
+recovery report either, because that dies with the process.
+
+Two things make the fault durable:
+
+1. **The damaged bytes are preserved, not discarded.** Before the file is
+   truncated it is copied to `core-events.jsonl.quarantine`, with a `.txt` note
+   beside it. Nothing is thrown away — including any event that followed the
+   damage, which is what somebody needs in order to decide what was really in
+   this journal. A second corruption does not overwrite the first.
+2. **The fault is written into the trusted prefix** as a `core.integrity_fault`
+   event, naming the line, the reason and the quarantine path. Appends land at
+   the end of the file, and a reader stops at the first bad line, so it could not
+   be appended *after* the damage; putting it in the prefix is what makes it
+   readable and durable.
+
+Every subsequent start replays that event, so the Core stays `degraded` and every
+request stays denied, indefinitely. `CoreStatus.integrity` reports the recorded
+fault on those starts, with the quarantine path in the reason.
+
+A `degraded` start writes **`core.degraded`, not `core.ready`.** A `core.ready`
+in the journal would be a claim a reader of the log cannot check, and the one
+thing this state must not do is assert something untrue about its own readiness.
+
+### The remedy
+
+There is no recovery UI in Phase 1, so recovery is deliberately manual:
+
+> Stop Freya. Read `core-events.jsonl.quarantine` and its `.txt` note. Decide
+> what was actually in the journal — in particular whether anything that
+> followed the damage should have taken effect. Then either restore a known-good
+> journal, or delete `core-events.jsonl` to start from empty.
+
+Only removing or replacing the journal clears the fault. There is deliberately
+no way to do it by restarting.
+
+A *running* Core does not re-read the log either: it cannot know the file changed
+underneath it, and the state it derived would shift without an event explaining
+why.
 
 ### Reading the report
 
@@ -204,9 +244,16 @@ Two separate events, because conflating them is what made the accounting wrong:
   said for that one call, with nulls when it said nothing. The reducer adds
   those figures to the grant's reported totals.
 
-`model.request.started` counts a call and nothing else — it is the only record
-that a provider was reached — and `model.request.completed` accumulates what was
-reported. See [COGNITION-POLICY.md](COGNITION-POLICY.md#4-the-token-budget-is-reserved-before-the-call-and-never-refunded).
+`model.request.started` is the explicit record that a provider was **reached**.
+That word is load-bearing: the gateway also records `model.request.failed` when
+*no* provider could be selected at all, and the two have opposite usage
+consequences. During replay the two are told apart by whether a matching
+`started` was written first — never by looking at a provider's name or kind.
+
+An attempt is counted at `started` and records no gap, because the provider had
+not declined to report; it had not answered yet. See
+[COGNITION-POLICY.md](COGNITION-POLICY.md#reported-usage-accumulates-and-is-never-a-total-on-its-own)
+for what each outcome contributes. See [COGNITION-POLICY.md](COGNITION-POLICY.md#4-the-token-budget-is-reserved-before-the-call-and-never-refunded).
 
 `cognition.allowed` does not name a provider: authorisation happens before one is
 chosen.

@@ -204,7 +204,7 @@ export class NanoGptProvider implements ModelProvider {
       // A provider timeout is a provider failure, not an owner cancellation.
       // Modern fetch implementations may reject with AbortSignal.reason, so the
       // timeout reason itself must not be a ModelRequestCancelled instance.
-      if (timedOut) throw new Error('nanogpt request timed out')
+      if (timedOut) throw new Error('nanogpt request timed out', { cause: error })
       throw error
     } finally {
       clearTimeout(timer)

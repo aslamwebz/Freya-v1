@@ -128,14 +128,16 @@ every Core push:
 
 ```
 CoreStatus.integrity / lifecycle / stopAll / governor
+CoreStatus.activeProviderCalls      ← the Model Gateway's live registry
         + listening (local)
-        + inFlightProviderCalls (durable events)
         ↓
    derivePresence()  →  PresenceState
 ```
 
 Ordered by how much the condition matters: a corrupt journal outranks an open
-microphone, which is fail-closed arriving in the UI layer.
+microphone, which is fail-closed arriving in the UI layer. Running model work
+outranks the microphone, because a request that is executing is spending money
+whether or not anyone is speaking.
 
 Consequences, all of them tested:
 
@@ -149,8 +151,10 @@ Consequences, all of them tested:
   locked, degraded or journal-faulted Core refuses the toggle outright, so
   `state.listening` is never true while the window says `locked`.
 - **`working` requires real work.** It has exactly one door:
-  `inFlightProviderCalls > 0`, counted from durable provider events. `thinking`
-  has none.
+  `CoreStatus.activeProviderCalls > 0`, read from the Model Gateway's active
+  request registry. `thinking` has none. The count is not reconstructed from the
+  journal — a journal is history, and a request it records as started may have
+  been abandoned by a process that died. See §6.1.
 - **A workspace restores layout, not presence.** `ShellStore.hydrate` is narrowed
   to the runtime identity alone so it cannot smuggle state in at boot.
 
@@ -432,6 +436,55 @@ Three properties worth stating, because they are enforced rather than intended:
 The bridge declares its whole surface once, in `src/platform/host.ts`. Adding a
 function to `electron/preload.ts` without adding it there is a type error, which
 is the point: the bridge should not be able to grow unnoticed.
+
+### 6.1 Cancellation, and where live work is known
+
+The Model Gateway is the only path to a provider, and it is also the only place
+that can stop one. `ModelProvider.complete` takes a required
+`ModelCallOptions.signal`, so a provider that cannot be aborted does not typecheck
+rather than merely being discouraged.
+
+```
+Core / Security
+      │  cancelAll(reason) · resume()
+      ▼
+  ModelGateway
+      ├── contact gate + cognition epoch
+      ├── active registry ──► activeProviderCalls (CoreStatus)
+      └── AbortControllers ──► ModelCallOptions.signal
+```
+
+Four properties, each of which is load-bearing:
+
+- **The gate is closed before the latch is written.** `security.stopAll` closes
+  the gateway and only then appends `security.stop_all.activated`, in the same
+  synchronous turn as the decision to stop. The other order leaves a window where
+  a request was authorised, the stop was on its way to disk, and a provider could
+  still be contacted. A latch replayed from the journal also closes the gate at
+  start-up, so a restarted, stopped Core is not one field away from spending.
+- **The race is closed by a generation, not by timing.** A request captures the
+  cognition generation it was authorised under and may contact a provider only
+  while that is still current. Two refusal points bracket the single `await` in
+  the window, and there is deliberately no `await` between marking the contact
+  and making the call.
+- **Live work is a process fact.** `activeProviderCalls` is the size of the
+  gateway's registry. It is the only in-process record of live provider work, and
+  the journal is not a substitute for it.
+- **Only the owner reopens the gate.** `resume()` restarts nothing and returns
+  nothing; it changes whether a *new* request may begin. No provider, model or
+  model-written agent can reach `cancelAll` or `resume`.
+
+Cancellation is journalled as `model.request.cancelled` with `providerContacted`
+stated, never inferred: a request refused at the door is not a call and any start
+already written is withdrawn, while one aborted with the provider working stays
+an explicit unknown so the totals remain a lower bound. A cancelled request's
+grant reservation is not returned.
+
+`Core.stop()` refuses new work, aborts what is running, waits up to a second for
+those requests to write their terminal events, and only then closes the fabric.
+The wait is bounded because a provider that ignores its signal must not be able to
+hang the application; past the bound the journal is left with a start and no
+finish, which is what a crash would have left too.
 
 ---
 

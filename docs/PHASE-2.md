@@ -79,12 +79,12 @@ caveat behind a hover is not present at that moment.
 ## Core-aware Presence
 
 ```
-CoreStatus.integrity  ──┐
-CoreStatus.lifecycle  ──┤
-CoreStatus.stopAll    ──┼──► derivePresence ──► PresenceState
-Governor.status       ──┤
-listening (local)     ──┤
-inFlightProviderCalls ──┘
+CoreStatus.integrity          ──┐
+CoreStatus.lifecycle          ──┤
+CoreStatus.stopAll            ──┤
+CoreStatus.governor.status    ──┼──► derivePresence ──► PresenceState
+CoreStatus.activeProviderCalls┤
+listening (local)             ──┘
 ```
 
 Ordered by how much the condition matters, not by how likely it is:
@@ -96,8 +96,8 @@ Ordered by how much the condition matters, not by how likely it is:
 | STOP ALL latched | `locked` |
 | Governor refusing everything | `locked` |
 | Core booting | `idle`, "Core is starting." |
-| local microphone open | `listening` |
 | a provider call genuinely in flight | `working` |
+| local microphone open | `listening` |
 | otherwise | `idle` |
 
 A journal that cannot be trusted outranks a microphone that is switched on. That
@@ -105,14 +105,32 @@ ordering is the fail-closed property arriving in the UI layer: the same rule Cor
 applies before it will reach a provider is applied before the shell will show a
 listening indicator.
 
+Running model work sits **above** the microphone. A request that is executing is
+spending money whether or not anyone is speaking, and it is the one fact a person
+cannot otherwise see. Reporting it as merely "listening" would understate it.
+
 **`thinking` and `working` have one door each.** `working` requires
-`inFlightProviderCalls > 0`, counted from durable `model.request.started` and
-completion events. There is no other input that can produce it. `thinking` has no
-door at all, and a test enumerates the reachable states to prove it.
+`CoreStatus.activeProviderCalls > 0`, and nothing else. `thinking` has no door at
+all, and a test enumerates the reachable states to prove it.
 
 So a submitted command cannot make Freya look busy. That invariant existed in
 Phase 1 and is now structural rather than a matter of which components dispatch
 what.
+
+### Live provider work is counted, not inferred
+
+`activeProviderCalls` comes from the Model Gateway's active request registry — an
+in-process count of requests executing this instant. It is not reconstructed from
+the journal.
+
+This replaced a string-prefix replay of the activity feed, which counted
+`model.request.started` against `completed`/`failed`. That was a history, not a
+process registry, and it failed in both directions: a Core that died mid-call
+leaves a start with no finish in the log forever, so an idle Freya claimed to be
+working indefinitely, and a completion with no matching start drove the counter
+negative. The activity feed is still there, and is still what it is for — audit
+and history. There is now one source of live truth rather than two competing
+ones.
 
 ### The microphone is refused, not overridden
 
@@ -169,6 +187,111 @@ state and activity from the same events in the same order, and a subscriber
 receives the whole feed on attach. A window that opens on day seven sees what a
 window that never left would have seen. There is no renderer-side activity
 database; dropping the panel loses nothing.
+
+---
+
+## STOP ALL cancels what is already running
+
+The durable latch stops the **next** request. On its own that is not enough: a
+provider call that has already gone out keeps going, and keeps costing, until it
+finishes. So the Model Gateway owns cancellation as well as routing.
+
+```
+Core / Security
+      │
+      ▼
+  ModelGateway
+      ├── contact gate + cognition epoch
+      ├── active registry  ──► activeProviderCalls
+      └── AbortControllers
+              │
+              ▼
+          Providers
+```
+
+Only the gateway holds the controllers. Core can ask for everything to stop and
+Core can ask for it to start again; no provider, no model and no model-written
+agent can reach either.
+
+### Every call is abortable
+
+`ModelProvider.complete` takes a required `ModelCallOptions` carrying an
+`AbortSignal`. It is required rather than optional because a provider that cannot
+be aborted is a provider that keeps spending after the owner has said stop, and
+leaving that to whoever forgets is not a design.
+
+`NanoGptProvider` composes that signal with its own timeout onto one internal
+controller, so `fetch` sees a single cancellation and the reason reported is
+whichever arrived first. It checks the signal before anything that costs money.
+There is no retry above or below: an aborted request is finished, and a second
+attempt would be a second paid call nobody asked for.
+
+### The authorisation → contact race is closed
+
+```
+cognition authorised
+      ↓
+model.request.started written      ← the only await in the window
+      ↓
+gate checked again, then the provider is called   ← no await between
+```
+
+A request captures the **cognition generation** it was authorised under. `STOP
+ALL` closes the gate and moves the generation on, so a request that has been
+allowed but has not yet reached a provider finds a moved generation and is
+refused. There are two refusal points, one on each side of the single await, and
+marking the contact and making the call happen in the same turn means the gateway
+can never be wrong about whether a provider was asked.
+
+The provider checks the signal again at its own door. That is a second,
+independent line: the first two belong to the gateway and protect the window, the
+third belongs to the provider and protects the last statement before the request
+leaves the process.
+
+### Cancellation is not failure
+
+`model.request.cancelled` joins the journal with `providerContacted` stated
+explicitly, because the difference is the whole accounting question:
+
+| | `providerContacted` | Durable effect |
+| --- | --- | --- |
+| refused before contact | `false` | no call; any start already written is withdrawn |
+| aborted with the provider working | `true` | call counted, usage recorded as an explicit unknown |
+
+A start is written immediately before the provider is asked, which leaves the one
+window where a start exists with no call behind it. The cancellation is the only
+thing that can take it back, so a request that cost nothing is not left on the
+books as a call that happened. The reservation a grant already made is **not**
+returned: authorisation is not refunded because the owner stopped it.
+
+### Cancelled work does not come back
+
+`gateway.cancelAll(reason)` aborts everything and closes the gate.
+`gateway.resume()` re-opens it and does nothing else — it restarts no request,
+returns no reservation and replays no result. Only an explicit owner `resume`
+reaches it. Resume never restarts a cancelled request; only a new one may begin.
+
+### Shutdown is ordered, and bounded
+
+```
+refuse new cognition
+      ↓
+abort active cognition
+      ↓
+wait (bounded) for terminal events
+      ↓
+append core.stopping / core.stopped
+      ↓
+close the Event Fabric
+```
+
+The wait is the part that is easy to get wrong. A cancelled request still owes
+the journal an outcome, and closing the fabric first leaves it writing into a
+closed store — recording a cancellation, then recording a failure for having
+failed to record the cancellation. The wait is bounded at one second, because a
+provider that ignores its signal must not be able to hang the application. Past
+that bound shutdown continues, and the journal is left with a start and no finish,
+which is exactly what a crash mid-call would have produced.
 
 ---
 
@@ -301,3 +424,9 @@ Recorded, not implemented. See [BROWSER-ROADMAP.md](BROWSER-ROADMAP.md).
 
 `npm run verify`: typecheck, lint, unit, build, e2e. The live NanoGPT probe is not
 part of it and is never run by CI.
+
+The cancellation guarantees are in `tests/core/cancellation.test.ts`, with fake
+and blocking providers only. One of those tests puts a real NanoGPT provider
+behind a transport counter and asserts the counter never moves, on the stop, the
+cancel and the shutdown path alike — so "tests never contact a provider" is
+asserted rather than assumed.

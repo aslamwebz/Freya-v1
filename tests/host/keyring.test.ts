@@ -47,6 +47,7 @@ const secure = {
   available: true,
   backend: 'gnome_libsecret' as string,
   account: 'user-a',
+  throwingSecret: '',
 }
 
 vi.mock('electron', () => ({
@@ -57,6 +58,9 @@ vi.mock('electron', () => ({
       Buffer.from(`${secure.account}:${Buffer.from(plaintext, 'utf8').toString('base64')}`, 'utf8'),
     decryptString: (wrapped: Buffer) => {
       const text = Buffer.from(wrapped).toString('utf8')
+      if (secure.throwingSecret && text.includes(secure.throwingSecret)) {
+        throw new Error(`cannot decrypt ${secure.throwingSecret}`)
+      }
       const separator = text.indexOf(':')
       if (separator === -1) return ''
       // A different OS account cannot open it, which is the property that makes a
@@ -80,6 +84,7 @@ beforeEach(async () => {
   secure.available = true
   secure.backend = 'gnome_libsecret'
   secure.account = 'user-a'
+  secure.throwingSecret = ''
   setPlatform('linux')
 })
 
@@ -249,6 +254,23 @@ describe('when the OS says no', () => {
 })
 
 describe('a keyring it cannot trust', () => {
+  it('isolates thrown OS decrypt failures and never reports key material', async () => {
+    const conversation = Buffer.alloc(32, 0x61)
+    const brain = Buffer.alloc(32, 0x62)
+    await writeFile(`${dataPath()}.keyring.json`, JSON.stringify({
+      version: KEYRING_VERSION,
+      protection: 'gnome_libsecret',
+      keys: { conversation: wrapField(conversation.toString('base64')), brain: wrapField(brain.toString('base64')) },
+    }))
+    secure.throwingSecret = Buffer.from(brain.toString('base64')).toString('base64')
+    const result = await loadKeyring(dataPath())
+    expect(result.conversation.key).not.toBeNull()
+    expect(Buffer.from(result.conversation.key!)).toEqual(conversation)
+    expect(result.brain.key).toBeNull()
+    expect(result.brain.reason).not.toContain(secure.throwingSecret)
+    expect(result.brain.reason).not.toContain(brain.toString('base64'))
+  })
+
   it('refuses a malformed keyring rather than overwriting it', async () => {
     const path = `${dataPath()}.keyring.json`
     await writeFile(path, 'not json at all', 'utf8')

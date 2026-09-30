@@ -247,7 +247,14 @@ function unwrapDomain(file: KeyringFile, domain: KeyDomain): DomainKeyResult {
   }
   // `decryptString` returns '' for input it cannot open, so a truncated, tampered or
   // foreign keyring is treated as unusable rather than as an empty secret.
-  const plaintext = safeStorage.decryptString(Buffer.from(wrapped, 'base64'))
+  let plaintext: string
+  try {
+    plaintext = safeStorage.decryptString(Buffer.from(wrapped, 'base64'))
+  } catch {
+    // OS errors can contain the value being decrypted. Report only this domain's
+    // fixed failure; another domain may still be readable.
+    return { key: null, reason: `the stored ${domain} key could not be decrypted` }
+  }
   if (plaintext.length === 0) {
     return {
       key: null,

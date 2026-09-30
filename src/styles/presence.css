@@ -13,14 +13,22 @@
   mix-blend-mode: screen;
 }
 
+.presence-overlay {
+  position: absolute;
+  inset: 88px 0 92px;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
 .presence {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  flex: 1;
-  min-height: 340px;
   width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 /*
@@ -48,7 +56,7 @@
   flex: 0 0 auto;
   width: clamp(520px, 42vw, 680px);
   height: clamp(420px, 56vh, 580px);
-  align-self: center;
+  margin: auto;
 }
 
 .presence-canvas {
@@ -394,6 +402,12 @@
 .lab-foot small {
   font-size: 10px;
   color: var(--ink-3);
+}
+
+@media (max-height: 760px) {
+  .presence-overlay {
+    inset: 76px 0 82px;
+  }
 }
 
 @media (max-width: 1240px) {

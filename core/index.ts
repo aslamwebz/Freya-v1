@@ -481,6 +481,18 @@ class FreyaCore implements Core {
       return reject(envelope, 'malformed request id')
     }
 
+    // Once shutdown has started, no command is allowed to reopen execution or
+    // mutate durable state. Status is still readable so the shell can report
+    // what is happening while the process is winding down.
+    if (
+      (this.lifecycle === 'stopping' || this.lifecycle === 'stopped') &&
+      command !== 'core.status.read' &&
+      command !== 'security.status.read' &&
+      command !== 'cognition.status.read'
+    ) {
+      return reject(envelope, `core is ${this.lifecycle} and cannot accept mutating commands`)
+    }
+
     try {
       switch (command) {
         case 'core.status.read':
@@ -608,12 +620,9 @@ class FreyaCore implements Core {
             return { requestId, ok: false, refusal: { reason: decision.reason } }
           }
           if (!this.state.stopAll.active) {
-            // The gate is reopened even when there was no latch, because this is
-            // the only command that can legitimately open it and an already-open
-            // gate is not a capability worth withholding. It restores permission
-            // and does nothing else: no cancelled request is restarted, no
-            // reservation is returned, and no result is replayed.
-            this.gateway?.resume()
+            // No durable STOP latch means there is nothing for this command to
+            // clear. In particular, do not reopen the gateway here: it may be
+            // closed for an independent reason such as Core shutdown.
             return { requestId, ok: true, status: this.status() }
           }
           const event = await this.fabric.append(

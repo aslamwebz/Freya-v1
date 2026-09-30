@@ -27,7 +27,8 @@ export class FakeModelProvider implements ModelProvider {
       kind: this.kind,
       status: 'configured',
       model: this.model,
-      detail: 'Deterministic local provider. No network, no cost.',
+      detail:
+        'Developer echo provider. Returns your prompt back. Not intelligence, and never a production provider.',
       liveEnabled: false,
     }
   }
@@ -42,7 +43,7 @@ export class FakeModelProvider implements ModelProvider {
       providerId: this.id,
       model: this.model,
       // Deterministic: the same prompt always yields the same answer.
-      text: `fake-echo: ${request.prompt}`,
+      text: `[developer echo provider — not intelligence] ${request.prompt}`,
       inputTokens,
       outputTokens,
     }

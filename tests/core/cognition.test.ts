@@ -38,8 +38,12 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
+/**
+ * Tests inject their provider explicitly. There is no implicit echo provider
+ * to fall back on, so every test that wants one has to ask for it by name.
+ */
 function options(overrides: Partial<CoreOptions> = {}): CoreOptions {
-  return { dataPath: join(dir, 'events.jsonl'), useFakeProviderOnly: true, ...overrides }
+  return { dataPath: join(dir, 'events.jsonl'), providers: [new FakeModelProvider()], ...overrides }
 }
 
 /**
@@ -359,8 +363,8 @@ describe('command surface', () => {
 })
 
 describe('providers', () => {
-  it('reports a fake provider as live and a nanogpt provider as unconfigured', async () => {
-    core = createCore(options({ useFakeProviderOnly: false, env: {} }))
+  it('reports the echo provider honestly when a developer opts in', async () => {
+    core = createCore(options({ providers: undefined, developerEchoProvider: true, env: {} }))
     await core.start()
     const providers = core.status().providers
     const fake = providers.find((p) => p.id === 'fake')
@@ -375,7 +379,7 @@ describe('providers', () => {
   it('keeps a configured nanogpt provider disabled without the explicit live flag', async () => {
     core = createCore(
       options({
-        useFakeProviderOnly: false,
+        providers: undefined,
         env: {
           NANOGPT_API_KEY: 'secret-value',
           NANOGPT_BASE_URL: 'https://example.invalid',
@@ -388,6 +392,33 @@ describe('providers', () => {
     expect(nano?.status).toBe('disabled')
     expect(nano?.model).toBe('some-model')
     expect(JSON.stringify(core.status())).not.toContain('secret-value')
+  })
+
+  it('registers no provider at all when nothing is configured', async () => {
+    // The production default with no credentials: NanoGPT, unconfigured, and
+    // no echo provider waiting behind it.
+    core = createCore(options({ providers: undefined, env: {} }))
+    await core.start()
+    const providers = core.status().providers
+    expect(providers.map((p) => p.id)).toEqual(['nanogpt'])
+    expect(providers[0]?.status).toBe('unconfigured')
+    expect(providers.some((p) => p.id === 'fake')).toBe(false)
+  })
+
+  it('reports an unserviceable request rather than falling back to an echo', async () => {
+    core = createCore(options({ providers: undefined, env: {} }))
+    await core.start()
+
+    const outcome = await ownerAuthority(core).request(call())
+
+    // An owner turn is authorised without a grant, so the refusal here is not a
+    // policy one: there is simply nothing configured that could answer. Saying
+    // "denied" would blame the wrong thing, and returning the prompt back would
+    // be worse.
+    expect(outcome.status).toBe('failed')
+    expect(outcome.status === 'failed' && outcome.reason).toMatch(/no configured provider/i)
+    // No provider was constructed, let alone called.
+    expect(core.status().sessionUsage.calls).toBe(0)
   })
 
   it('does not call a live provider during start, replay or status reads', async () => {

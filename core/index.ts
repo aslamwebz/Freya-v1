@@ -45,10 +45,20 @@ export interface CoreOptions {
   env?: NanoGptEnv
   now?: () => Date
   newId?: () => string
-  /** Test seam: replaces the local provider set. */
-  useFakeProviderOnly?: boolean
-  /** Test seam: supply providers directly, e.g. to inject a failing one. */
+  /**
+   * Test seam: supply providers directly, e.g. to inject a failing one.
+   * When set, it is the *entire* provider set — production providers are not
+   * added alongside it, so a test cannot accidentally exercise a real one.
+   */
   providers?: ModelProvider[]
+  /**
+   * Developer seam: add the local echo provider to the production set.
+   *
+   * Named for what it is and opt-in, because the failure mode it guards against
+   * is a build that appears to work while answering from a canned string. It is
+   * never inferred from a debug flag, a test runner, or an absent credential.
+   */
+  developerEchoProvider?: boolean
 }
 
 /**
@@ -381,11 +391,23 @@ class FreyaCore implements Core {
     return new DefaultGuard()
   }
 
+  /**
+   * The provider set for a normal runtime.
+   *
+   * NanoGPT and nothing else. If it is absent or disabled, there is no
+   * configured provider, and a cognition request is refused for want of one.
+   * That is the honest outcome: a refusal the user can see beats an echo of
+   * their own words presented as an answer.
+   *
+   * The echo provider is opt-in and explicitly named, and it is listed last so
+   * it never shadows a real provider when both are present.
+   */
   private buildProviders(): ModelProvider[] {
     if (this.options.providers) return [...this.options.providers]
-    if (this.options.useFakeProviderOnly) return [new FakeModelProvider()]
     const env = this.options.env ?? {}
-    return [new FakeModelProvider(), new NanoGptProvider({ config: readNanoGptConfig(env) })]
+    const providers: ModelProvider[] = [new NanoGptProvider({ config: readNanoGptConfig(env) })]
+    if (this.options.developerEchoProvider === true) providers.push(new FakeModelProvider())
+    return providers
   }
 
   /** Gateway audit events land on the durable fabric, not on a side channel. */

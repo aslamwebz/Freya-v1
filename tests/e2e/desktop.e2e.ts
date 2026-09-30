@@ -38,8 +38,30 @@ async function launch(
     env: { ...process.env, NODE_ENV: 'production', ...env },
   })
   const page = await app.firstWindow()
-  await page.waitForSelector('.app[data-ready="true"]', { timeout: 20_000 })
-  await page.waitForSelector('.presence', { timeout: 20_000 })
+  const diagnostics: string[] = []
+  page.on('pageerror', (error) => diagnostics.push(`pageerror: ${error.message}`))
+  page.on('console', (message) => {
+    if (message.type() === 'error') diagnostics.push(`console: ${message.text()}`)
+  })
+  try {
+    await page.waitForSelector('.app[data-ready="true"]', { timeout: 20_000 })
+    await page.waitForSelector('.presence', { timeout: 20_000 })
+  } catch (error) {
+    const snapshot = await page
+      .evaluate(() => ({
+        url: location.href,
+        ready: document.querySelector('.app')?.getAttribute('data-ready') ?? null,
+        bootError: document.querySelector('.boot-error')?.textContent ?? null,
+        body: document.body?.innerText?.slice(0, 1200) ?? '',
+      }))
+      .catch(() => ({ url: 'unavailable', ready: null, bootError: null, body: '' }))
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n` +
+        `boot snapshot: ${JSON.stringify(snapshot)}\n` +
+        `renderer diagnostics: ${diagnostics.join(' | ') || 'none'}`,
+      { cause: error },
+    )
+  }
   return { app, page }
 }
 

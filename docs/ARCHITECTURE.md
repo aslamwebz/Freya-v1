@@ -633,6 +633,15 @@ grant it spends is built from constants, issued through owner authority, and
 bounded at one call, foreground only, with a short expiry. Full detail in
 [PHASE-3.md](PHASE-3.md).
 
+Recalled memory enters the same packet, and the rule about it is worth stating
+here rather than only in the phase document: it goes in **below the transcript, as
+its own labelled message**, never appended to the system message. Anything in a
+system message is instruction by construction, and a remembered fact is not an
+instruction. Each item carries its source class and confidence *in the rendered
+text*, because a note from a web page and a note from the owner are otherwise
+indistinguishable by the time they are flattened into "notes". Full detail in
+[PHASE-4.md](PHASE-4.md).
+
 ### 6.3 Conversation bodies are not journal events
 
 Two stores with opposite rules, in separate modules, and nothing in
@@ -648,16 +657,16 @@ never guessed at, never turned into a message that was never said.
 There is no field a body could hide in, so adding one is a visible change to the
 audit schema rather than something that quietly starts retaining text.
 
-The key lives in the main process (`electron/conversationKey.ts`), wrapped by the
-OS secure storage, and is injected into Core as bytes. It never enters the
+The keys live in the main process (`electron/keyring.ts`), wrapped by the OS
+secure storage, and are injected into Core as bytes. Neither ever enters the
 renderer, a model request, the journal, a log line, or a projection. No secure
-storage means **no key**, which means an ephemeral in-memory store that labels
-itself — never a plaintext file and never a key stored beside the data it
-protects.
+storage means **no key for either domain**, which means ephemeral in-memory stores
+that label themselves — never a plaintext file and never a key stored beside the
+data it protects. See §4.2 for why there are two.
 
 Corrupt conversation data is a **conversation-data fault**. It cannot grant
 cognition, clear a stop, or widen a budget, and it does not lock Freya either:
-unreadable history is neither.
+unreadable history is neither. The same is true of a corrupt Brain — see §4.3.
 
 ### 6.4 Local voice is a surface, not a second intelligence
 

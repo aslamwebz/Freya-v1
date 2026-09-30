@@ -63,6 +63,11 @@ const SHUTDOWN_DRAIN_MS = 1_000
 export interface CoreOptions {
   /** Where the durable log lives. */
   dataPath: string
+  /**
+   * Test seam for deterministic persistence-failure tests.
+   * Production leaves this unset and opens the JSONL store from dataPath.
+   */
+  eventStore?: EventStore
   env?: NanoGptEnv
   now?: () => Date
   newId?: () => string
@@ -190,7 +195,7 @@ class FreyaCore implements Core {
 
     let store: EventStore
     try {
-      store = await JsonlEventStore.open(this.options.dataPath)
+      store = this.options.eventStore ?? (await JsonlEventStore.open(this.options.dataPath))
     } catch (error) {
       // Durability unavailable is a degraded Core, not a Core that silently
       // continues without a log.
@@ -602,11 +607,12 @@ class FreyaCore implements Core {
             )
             return { requestId, ok: true, status: this.status(), durableSequence: event.sequence }
           } catch (error) {
-            // No latch was written, so there is no stop to keep. Leaving the
-            // gate shut would refuse everything with nothing durable to explain
-            // it, and nothing would ever open it again — so the gate goes back to
-            // how it was and the failure is reported.
-            this.gateway?.resume()
+            // Fail closed. The owner's stop decision already closed the contact
+            // gate and aborted anything in flight. If the durable latch cannot
+            // be written, cognition stays refused rather than silently reopening
+            // after a persistence failure. CoreStatus exposes that closed gate
+            // as deny_all, and only an explicit owner resume may reopen it.
+            this.notify()
             throw error
           }
         }
@@ -620,9 +626,12 @@ class FreyaCore implements Core {
             return { requestId, ok: false, refusal: { reason: decision.reason } }
           }
           if (!this.state.stopAll.active) {
-            // No durable STOP latch means there is nothing for this command to
-            // clear. In particular, do not reopen the gateway here: it may be
-            // closed for an independent reason such as Core shutdown.
+            // A failed STOP append has no durable latch, but the gateway remains
+            // deliberately fail-closed. This explicit owner command is the only
+            // authority allowed to reopen it. Shutdown cannot be reopened here:
+            // mutating commands are rejected above once lifecycle is stopping or
+            // stopped, and degraded Core is rejected before command dispatch.
+            this.gateway?.resume()
             return { requestId, ok: true, status: this.status() }
           }
           const event = await this.fabric.append(

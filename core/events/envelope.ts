@@ -148,7 +148,16 @@ export interface CoreEventPayloads {
   }
 }
 
-export type AnyCoreEvent = CoreEventEnvelope<CoreEventType>
+/**
+ * Every Core event, as a discriminated union.
+ *
+ * The mapping matters: it is what lets `Extract<Event, { type: T }>['payload']`
+ * resolve to the payload of one specific event type rather than to a union of
+ * every payload in the system.
+ */
+export type AnyCoreEvent = {
+  [K in CoreEventType]: CoreEventEnvelope<K>
+}[CoreEventType]
 
 /** Events that change durable security or governance state. */
 export const SECURITY_EVENT_TYPES: readonly CoreEventType[] = [

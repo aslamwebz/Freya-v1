@@ -1,57 +1,61 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
-import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
-import { join, dirname } from 'node:path'
+import { join } from 'node:path'
+import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
 const DEV_SERVER = process.env.FREYA_DEV_SERVER
 const WORKSPACE_FILE = 'workspace.json'
-const MAX_WORKSPACE_BYTES = 512 * 1024
 
 let mainWindow: BrowserWindow | null = null
-let writeTimer: NodeJS.Timeout | null = null
-let pendingWrite: unknown = null
+/** Null until the app is ready; every handler that needs it is registered after. */
+let workspace: WorkspaceFile | null = null
+/** Resolves when the renderer has answered the closing-time request. */
+let pendingCollect: (() => void) | null = null
+let quitting = false
 
-/* ------------------------------------------------------------------ *
- * Workspace file — the only durable state the shell owns in Phase 0.
- * Written atomically (temp + rename) so a crash mid-write cannot leave
- * a truncated file that would block the next launch.
- * ------------------------------------------------------------------ */
+/** Long enough for a round trip, short enough that a wedged renderer still quits. */
+const COLLECT_TIMEOUT_MS = 750
 
-function workspacePath(): string {
-  return join(app.getPath('userData'), WORKSPACE_FILE)
+function requireWorkspace(): WorkspaceFile {
+  if (!workspace) throw new Error('workspace file used before the app was ready')
+  return workspace
 }
 
-async function loadWorkspace(): Promise<unknown> {
-  try {
-    const raw = await readFile(workspacePath(), 'utf8')
-    if (raw.length > MAX_WORKSPACE_BYTES) return null
-    return JSON.parse(raw)
-  } catch {
-    // Missing or unreadable workspace is normal on first launch. Never fatal.
-    return null
+/**
+ * A closing window cannot be trusted to have pushed its last layout.
+ *
+ * An IPC sent during teardown is dropped, so the renderer has to be asked while
+ * it is still alive and the answer written synchronously. Both the window's
+ * close event and `app.quit()` route through here, because a quit does not
+ * necessarily close a window first.
+ *
+ * The timeout exists so a wedged renderer can never make the app unquittable.
+ */
+function collectAndThen(finish: () => void): void {
+  const answered = new Promise<void>((resolve) => {
+    pendingCollect = resolve
+  })
+  const timer = setTimeout(() => {
+    pendingCollect?.()
+    pendingCollect = null
+  }, COLLECT_TIMEOUT_MS)
+
+  const target = mainWindow
+  if (target && !target.isDestroyed()) {
+    target.webContents.send('freya:workspace:collect')
+  } else {
+    pendingCollect?.()
+    pendingCollect = null
   }
-}
 
-async function persistNow(payload: unknown): Promise<void> {
-  const target = workspacePath()
-  const temp = `${target}.tmp`
-  try {
-    await mkdir(dirname(target), { recursive: true })
-    await writeFile(temp, JSON.stringify(payload), 'utf8')
-    await rename(temp, target)
-  } catch (error) {
-    console.error('[freya] workspace save failed', error)
-  }
-}
-
-function scheduleSave(payload: unknown): void {
-  pendingWrite = payload
-  if (writeTimer) clearTimeout(writeTimer)
-  writeTimer = setTimeout(() => {
-    writeTimer = null
-    void persistNow(pendingWrite)
-  }, 400)
+  void answered.finally(() => {
+    clearTimeout(timer)
+    pendingCollect = null
+    workspace?.flushSync()
+    quitting = true
+    finish()
+  })
 }
 
 /* ------------------------------------------------------------------ *
@@ -104,6 +108,16 @@ function createWindow(): BrowserWindow {
     if (mainWindow === window) mainWindow = null
   })
 
+  /**
+   * The user closed the window. Hold it open just long enough to collect the
+   * layout, then let it go.
+   */
+  window.on('close', (event) => {
+    if (quitting || !workspace) return
+    event.preventDefault()
+    collectAndThen(() => window.destroy())
+  })
+
   return window
 }
 
@@ -118,18 +132,29 @@ function registerIpc(): void {
     platform: process.platform,
     arch: process.arch,
     userData: app.getPath('userData'),
-    workspaceFile: workspacePath(),
+    workspaceFile: requireWorkspace().path,
     dev: Boolean(DEV_SERVER),
   }))
 
-  ipcMain.handle('freya:workspace:load', () => loadWorkspace())
+  ipcMain.handle('freya:workspace:load', () => requireWorkspace().load())
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
-    scheduleSave(payload)
-    return true
+    const accepted = requireWorkspace().schedule(payload)
+    if (!accepted) {
+      console.warn(
+        `[freya] workspace rejected: not serialisable, or larger than ${DEFAULT_MAX_BYTES} bytes`,
+      )
+    }
+    // The renderer has answered the closing-time request, if there was one.
+    pendingCollect?.()
+    pendingCollect = null
+    return accepted
   })
 }
 
 app.whenReady().then(() => {
+  workspace = new WorkspaceFile({
+    path: join(app.getPath('userData'), WORKSPACE_FILE),
+  })
   registerIpc()
   mainWindow = createWindow()
 
@@ -142,12 +167,12 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
-  if (writeTimer) {
-    clearTimeout(writeTimer)
-    writeTimer = null
-    if (pendingWrite !== null) void persistNow(pendingWrite)
-  }
+app.on('before-quit', (event) => {
+  if (quitting || !workspace) return
+  // A quit can arrive without the window's close event ever firing, so this
+  // hook has to do the collect itself and then re-enter the quit.
+  event.preventDefault()
+  collectAndThen(() => app.quit())
 })
 
 // Refuse any renderer request for a capability Freya has not granted.

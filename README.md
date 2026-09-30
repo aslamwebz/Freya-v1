@@ -35,11 +35,12 @@ Other scripts:
   focus, move, resize, minimise, maximise, pin, cycle. `SurfaceWindow` is
   written once; every surface type gets all of it for free.
 - **Local persistence** — `workspace.json` in the OS app-data directory, written
-  atomically by the main process. No cloud, no account.
+  atomically by the main process, size-limited before it is written, and
+  flushed synchronously when the window closes. No cloud, no account.
 - **A typed event model** — one event union, one reducer, one store.
 - **A sealed renderer** — `contextIsolation: true`, `sandbox: true`, no Node in
-  the renderer, a four-function preload bridge, and every permission request
-  denied.
+  the renderer, a five-function preload bridge, and every permission request
+  denied, and five functions of preload bridge.
 
 ## Documentation
 

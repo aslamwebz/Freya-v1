@@ -219,6 +219,153 @@ describe('SurfaceManager — window state', () => {
   })
 })
 
+describe('SurfaceManager — focus fallback', () => {
+  it('focuses the surface underneath when the focused one is minimised', () => {
+    const { manager } = makeManager()
+    const chat = manager.open({ type: 'chat' })
+    const search = manager.open({ type: 'search' })
+    expect(manager.focused?.id).toBe(search.id)
+
+    manager.minimize(search.id)
+
+    expect(manager.focused?.id).toBe(chat.id)
+    expect(manager.get(search.id)?.layout.minimized).toBe(true)
+  })
+
+  it('focuses the surface underneath when the focused one is closed', () => {
+    const { manager } = makeManager()
+    const chat = manager.open({ type: 'chat' })
+    const search = manager.open({ type: 'search' })
+
+    manager.close(search.id)
+
+    expect(manager.focused?.id).toBe(chat.id)
+  })
+
+  it('falls back down the stack when several are minimised in turn', () => {
+    const { manager } = makeManager()
+    const a = manager.open({ type: 'chat' })
+    const b = manager.open({ type: 'search' })
+    const c = manager.open({ type: 'harness' })
+
+    manager.minimize(c.id)
+    expect(manager.focused?.id).toBe(b.id)
+    manager.minimize(b.id)
+    expect(manager.focused?.id).toBe(a.id)
+  })
+
+  it('reports no focus once every surface is minimised', () => {
+    const { manager } = makeManager()
+    manager.open({ type: 'chat' })
+    manager.open({ type: 'search' })
+    manager.minimize(manager.surfaces[0]!.id)
+    manager.minimize(manager.surfaces[1]!.id)
+
+    expect(manager.focused).toBeUndefined()
+  })
+
+  it('reports no focus once the last surface is closed', () => {
+    const { manager } = makeManager()
+    const only = manager.open({ type: 'chat' })
+    manager.close(only.id)
+    expect(manager.focused).toBeUndefined()
+  })
+
+  it('raises the fallback so it is genuinely on top, not merely topmost', () => {
+    const { manager } = makeManager()
+    const chat = manager.open({ type: 'chat' })
+    const search = manager.open({ type: 'search' })
+    const harness = manager.open({ type: 'harness' })
+
+    manager.minimize(harness.id)
+
+    const focusZ = manager.get(search.id)?.layout.z ?? 0
+    expect(focusZ).toBeGreaterThan(manager.get(chat.id)?.layout.z ?? 0)
+  })
+
+  it('does not disturb focus when a background surface is minimised', () => {
+    const { manager } = makeManager()
+    const chat = manager.open({ type: 'chat' })
+    const search = manager.open({ type: 'search' })
+    expect(manager.focused?.id).toBe(search.id)
+
+    manager.minimize(chat.id)
+
+    expect(manager.focused?.id).toBe(search.id)
+  })
+
+  it('leaves focus alone when closing a background surface', () => {
+    const { manager } = makeManager()
+    const chat = manager.open({ type: 'chat' })
+    const search = manager.open({ type: 'search' })
+
+    manager.close(chat.id)
+
+    expect(manager.focused?.id).toBe(search.id)
+  })
+})
+
+describe('SurfaceManager — the event summary', () => {
+  it('reports open, minimised and focused counts on every event', () => {
+    const { manager, events } = makeManager()
+    const chat = manager.open({ type: 'chat' })
+    manager.open({ type: 'search' })
+
+    expect(events[0]?.summary).toEqual({ open: 1, minimized: 0, focused: 'chat-1' })
+    expect(manager.summary()).toEqual({ open: 2, minimized: 0, focused: 'search-2' })
+
+    manager.minimize('search-2')
+    const latest = events[events.length - 1]
+    expect(latest?.summary).toEqual({ open: 2, minimized: 1, focused: 'chat-1' })
+
+    manager.close(chat.id)
+    expect(events[events.length - 1]?.summary).toEqual({ open: 1, minimized: 1, focused: null })
+  })
+
+  it('reports the summary after a fallback handover', () => {
+    const { manager, events } = makeManager()
+    manager.open({ type: 'chat' })
+    manager.open({ type: 'search' })
+    manager.minimize('search-2')
+
+    const handover = events.filter((e) => e.type === 'surface.focused')
+    expect(handover[handover.length - 1]?.summary).toEqual({
+      open: 2,
+      minimized: 1,
+      focused: 'chat-1',
+    })
+  })
+
+  it('carries the summary on geometry events too, so nothing needs a second subscription', () => {
+    const { manager, events } = makeManager()
+    const surface = manager.open({ type: 'chat' })
+    manager.move(surface.id, 300, 200)
+
+    const moved = events.find((e) => e.type === 'surface.moved')
+    expect(moved?.summary).toEqual({ open: 1, minimized: 0, focused: surface.id })
+  })
+  it('announces a restored list so the shell cannot keep a stale summary', () => {
+    const { manager, events } = makeManager()
+    manager.open({ type: 'chat' })
+    const saved = manager.serialize()
+    events.length = 0
+
+    const restored = new SurfaceManager({ frame: FRAME, onEvent: (e) => events.push(e) })
+    restored.restore(saved)
+
+    const announcement = events.filter((e) => e.type === 'surface.restored')
+    expect(announcement).toHaveLength(1)
+    expect(announcement[0]?.summary).toEqual({ open: 1, minimized: 0, focused: 'chat-1' })
+  })
+
+  it('reports an emptied workspace when restored from an empty snapshot', () => {
+    const { manager } = makeManager()
+    manager.open({ type: 'chat' })
+    manager.restore([])
+    expect(manager.summary()).toEqual({ open: 0, minimized: 0, focused: null })
+  })
+})
+
 describe('SurfaceManager — serialisation', () => {
   it('round-trips a workspace, preserving ids, geometry and pinned state', () => {
     const { manager } = makeManager()

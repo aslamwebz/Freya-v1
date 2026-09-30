@@ -214,7 +214,30 @@ async function main(): Promise<void> {
     await restored.waitForSelector('[role="dialog"][aria-label="Harness"]', { state: 'detached' })
     check('closes a surface', (await restored.locator('[role="dialog"]').count()) === 1)
 
+    // --- an immediate quit must not lose the last change -----------------
+    // Move a window and quit at once, with no time for the debounce. The
+    // final flush has to land or this layout is gone.
+    const quitTitle = restored.locator('[role="dialog"][aria-label="Search"] .surface-title')
+    const quitBox = (await quitTitle.boundingBox())!
+    await restored.mouse.move(quitBox.x + 40, quitBox.y + 20)
+    await restored.mouse.down()
+    await restored.mouse.move(quitBox.x + 260, quitBox.y + 150, { steps: 8 })
+    await restored.mouse.up()
+
+    const beforeImmediateQuit = await boxOf(restored, 'Search')
     await second.close()
+    first = null
+
+    const { app: third, page: afterImmediateQuit } = await launch(userData)
+    first = third
+    const recovered = await boxOf(afterImmediateQuit, 'Search')
+    check(
+      'an immediate quit still persists the last layout change',
+      Math.abs(recovered.x - beforeImmediateQuit.x) < 2 && Math.abs(recovered.y - beforeImmediateQuit.y) < 2,
+      `expected ${Math.round(beforeImmediateQuit.x)},${Math.round(beforeImmediateQuit.y)} got ${Math.round(recovered.x)},${Math.round(recovered.y)}`,
+    )
+
+    await third.close()
     first = null
   } catch (error) {
     check('e2e run completed', false, error instanceof Error ? error.message : String(error))

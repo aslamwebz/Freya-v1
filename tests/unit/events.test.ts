@@ -81,17 +81,112 @@ describe('event reducer', () => {
     expect(state.presence.state).toBe('working')
   })
 
-  it('routes surface events out rather than duplicating them into the snapshot', () => {
-    const before = initialState()
+  it('projects a surface summary onto the shell state', () => {
+    const opened = apply([
+      {
+        type: 'surface.opened',
+        id: 'chat-1',
+        surface: null,
+        summary: { open: 1, minimized: 0, focused: 'chat-1' },
+      },
+    ])
+    expect(opened.surfaces).toEqual({ open: 1, minimized: 0, focused: 'chat-1' })
+
+    const minimized = apply(
+      [
+        {
+          type: 'surface.state.changed',
+          id: 'chat-1',
+          surface: null,
+          summary: { open: 1, minimized: 1, focused: null },
+        },
+      ],
+      opened,
+    )
+    expect(minimized.surfaces).toEqual({ open: 1, minimized: 1, focused: null })
+  })
+
+  it('does not churn state when a surface event carries an unchanged summary', () => {
+    const before = apply([
+      {
+        type: 'surface.opened',
+        id: 'chat-1',
+        surface: null,
+        summary: { open: 1, minimized: 0, focused: 'chat-1' },
+      },
+    ])
     const after = reduce(before, {
-      type: 'surface.opened',
+      type: 'surface.moved',
       id: 'chat-1',
       surface: null,
+      summary: { open: 1, minimized: 0, focused: 'chat-1' },
     })
     expect(after).toBe(before)
   })
 
   it('marks every dashboard fixture as demo data', () => {
     expect(initialState().dashboard.demo).toBe(true)
+  })
+
+  it('starts with an empty surface projection', () => {
+    expect(initialState().surfaces).toEqual({ open: 0, minimized: 0, focused: null })
+  })
+})
+
+describe('every presence change goes through transition validation', () => {
+  it('a submitted command cannot unlock a locked Freya', () => {
+    const locked = apply([{ type: 'presence.set', state: 'locked' }])
+    const after = reduce(locked, { type: 'command.submit', text: 'open the vault' })
+
+    expect(after.presence.state).toBe('locked')
+    // The command itself is still recorded; only the presence is refused.
+    expect(after.lastCommand).toBe('open the vault')
+  })
+
+  it('the microphone cannot listen while locked', () => {
+    const locked = apply([{ type: 'presence.set', state: 'locked' }])
+    const after = reduce(locked, { type: 'voice.toggle', listening: true })
+
+    expect(after.presence.state).toBe('locked')
+    expect(after.listening).toBe(false)
+  })
+
+  it('the microphone cannot listen while errored', () => {
+    const errored = apply([{ type: 'presence.set', state: 'error' }])
+    const after = reduce(errored, { type: 'voice.toggle', listening: true })
+
+    expect(after.presence.state).toBe('error')
+    expect(after.listening).toBe(false)
+  })
+
+  it('a restored workspace cannot clear an error', () => {
+    const errored = apply([{ type: 'presence.set', state: 'error' }])
+    const after = reduce(errored, {
+      type: 'workspace.restored',
+      nav: 'vault',
+      presence: 'working',
+    })
+
+    expect(after.presence.state).toBe('error')
+    // The navigation half of the restore still applies.
+    expect(after.nav).toBe('vault')
+  })
+
+  it('a restored workspace may restore the state it legitimately saved', () => {
+    const working = apply([{ type: 'presence.set', state: 'working' }])
+    const after = reduce(working, {
+      type: 'workspace.restored',
+      nav: 'work',
+      presence: 'working',
+    })
+    expect(after.presence.state).toBe('working')
+    expect(after.nav).toBe('work')
+  })
+
+  it('turning the microphone off always returns to idle when that is legal', () => {
+    const listening = apply([{ type: 'voice.toggle', listening: true }])
+    const after = reduce(listening, { type: 'voice.toggle', listening: false })
+    expect(after.presence.state).toBe('idle')
+    expect(after.listening).toBe(false)
   })
 })

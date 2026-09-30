@@ -1,7 +1,7 @@
 import type { Presence, PresenceState } from './presence'
 import { PRESENCE_DETAIL, canTransition } from './presence'
 import { demoDashboard, type Dashboard } from '../demo/fixtures'
-import type { SurfaceEvent } from './surfaces/manager'
+import type { SurfaceEvent, SurfaceSummary } from './surfaces/manager'
 
 /**
  * The shell's event log.
@@ -27,6 +27,11 @@ export interface ShellState {
   listening: boolean
   commandDraft: string
   lastCommand: string | null
+  /**
+   * A projection of the Surface Manager's list, carried on every surface event.
+   * The manager owns surfaces; the shell reads a summary of them, never a copy.
+   */
+  surfaces: SurfaceSummary
   dashboard: Dashboard
   runtime: { version: string; platform: string; userData: string; workspaceFile: string; dev: boolean }
   attention: { requested: number; lastNote: string | null }
@@ -47,6 +52,7 @@ export function initialState(): ShellState {
     listening: false,
     commandDraft: '',
     lastCommand: null,
+    surfaces: { open: 0, minimized: 0, focused: null },
     dashboard: demoDashboard(),
     runtime: { version: '0.1.0', platform: 'browser', userData: '', workspaceFile: '', dev: true },
     attention: { requested: 0, lastNote: null },
@@ -62,21 +68,36 @@ function notice(state: ShellState, text: string, tone: Notice['tone']): Notice[]
   return [{ id: noticeSeq, text, tone, at: Date.now() }, ...state.notices].slice(0, MAX_NOTICES)
 }
 
+/**
+ * The only way presence is allowed to change.
+ *
+ * Every event that wants a new presence goes through here, so the transition
+ * table is enforced in exactly one place. A voice toggle, a submitted command
+ * and a restored workspace can all request 'working', and none of them can
+ * talk their way out of 'locked' or 'error'.
+ */
+function withPresence(
+  state: ShellState,
+  next: PresenceState,
+  detail?: string | null,
+): ShellState {
+  if (!canTransition(state.presence.state, next)) return state
+  if (state.presence.state === next) return state
+  return {
+    ...state,
+    presence: {
+      state: next,
+      since: Date.now(),
+      activity: state.presence.activity,
+      detail: detail ?? PRESENCE_DETAIL[next],
+    },
+  }
+}
+
 export function reduce(state: ShellState, event: ShellEvent): ShellState {
   switch (event.type) {
-    case 'presence.set': {
-      if (!canTransition(state.presence.state, event.state)) return state
-      if (state.presence.state === event.state) return state
-      return {
-        ...state,
-        presence: {
-          state: event.state,
-          since: Date.now(),
-          activity: state.presence.activity,
-          detail: event.detail ?? PRESENCE_DETAIL[event.state],
-        },
-      }
-    }
+    case 'presence.set':
+      return withPresence(state, event.state, event.detail ?? null)
 
     case 'presence.activity':
       return { ...state, presence: { ...state.presence, activity: clamp01(event.value) } }
@@ -84,23 +105,28 @@ export function reduce(state: ShellState, event: ShellEvent): ShellState {
     case 'nav.select':
       return state.nav === event.section ? state : { ...state, nav: event.section }
 
-    case 'voice.toggle':
-      return {
-        ...state,
-        listening: event.listening,
-        presence: event.listening
-          ? { ...state.presence, state: 'listening', since: Date.now(), detail: 'Listening.' }
-          : { ...state.presence, state: 'idle', since: Date.now(), detail: PRESENCE_DETAIL.idle },
+    case 'voice.toggle': {
+      if (event.listening) {
+        // A refused transition refuses the whole toggle. A live microphone
+        // beside a locked Freya is a contradiction the shell must not be able
+        // to represent, let alone show.
+        const next = withPresence(state, 'listening')
+        if (next === state) return state
+        return { ...next, listening: true }
       }
+      // Turning the microphone off is always allowed: it is how you stop.
+      return { ...withPresence(state, 'idle'), listening: false }
+    }
 
     case 'command.submit': {
       const text = event.text.trim()
       if (!text) return state
+      // Submitting work must not unlock a locked Freya.
+      const next = withPresence(state, 'working')
       return {
-        ...state,
+        ...next,
         commandDraft: '',
         lastCommand: text,
-        presence: { ...state.presence, state: 'working', since: Date.now(), detail: 'Working.' },
         notices: notice(state, `Queued locally: “${text.slice(0, 48)}” — no model is attached in Phase 0.`, 'neutral'),
       }
     }
@@ -115,28 +141,29 @@ export function reduce(state: ShellState, event: ShellEvent): ShellState {
       return { ...state, attention: { ...state.attention, lastNote: event.note } }
 
     case 'workspace.restored': {
-      const presence: Presence = {
-        state: event.presence,
-        since: Date.now(),
-        activity: 0,
-        detail: PRESENCE_DETAIL[event.presence],
-      }
-      return { ...state, nav: event.nav, presence }
+      const withNav = state.nav === event.nav ? state : { ...state, nav: event.nav }
+      return withPresence(withNav, event.presence)
     }
 
-    // Surface events are projected by the store owner, not reduced here —
-    // the SurfaceManager is the single source of truth for surface state.
+    // The manager owns surfaces and ships a summary; the store keeps it.
+    case 'surface.restored':
     case 'surface.opened':
     case 'surface.closed':
     case 'surface.focused':
     case 'surface.moved':
     case 'surface.resized':
     case 'surface.state.changed':
-      return state
+      return sameSummary(state.surfaces, event.summary)
+        ? state
+        : { ...state, surfaces: event.summary }
 
     default:
       return state
   }
+}
+
+function sameSummary(a: SurfaceSummary, b: SurfaceSummary): boolean {
+  return a.open === b.open && a.minimized === b.minimized && a.focused === b.focused
 }
 
 function clamp01(value: number): number {

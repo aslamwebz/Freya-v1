@@ -1,7 +1,7 @@
 import { SurfaceManager } from '../core/surfaces/manager'
 import { WORKSPACE_SCHEMA } from '../core/workspace'
 import { shellStore } from './store'
-import { createWorkspaceStore, readRuntimeInfo } from '../platform/workspaceStore'
+import { createWorkspaceStore, collectFrom, readRuntimeInfo } from '../platform/workspaceStore'
 
 const SAVE_DEBOUNCE = 400
 
@@ -13,7 +13,13 @@ const SAVE_DEBOUNCE = 400
  * nothing. Modules import this instance directly; there is no lookup and no
  * nullable "not bound yet" state.
  */
-export const manager = new SurfaceManager({ frame: workspaceFrame() })
+export const manager = new SurfaceManager({
+  frame: workspaceFrame(),
+  // The one wiring point between the windowing system and the rest of the
+  // shell. Every lifecycle change becomes an event on the same bus as
+  // everything else, carrying a summary the reducer can store as-is.
+  onEvent: (event) => shellStore.dispatch(event),
+})
 
 /**
  * The region surfaces are allowed to occupy: everything except the header and
@@ -53,15 +59,8 @@ export function startShell(): Promise<{ manager: SurfaceManager; host: 'desktop'
 async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'browser' }> {
   const store = createWorkspaceStore()
   manager.setFrame(workspaceFrame())
-  // Surface events reach the rest of the shell through the same bus as
-  // everything else. This is the only wiring point.
-  shellStore.onSurfaceEvent((event) => {
-    if (event.type === 'surface.closed') {
-      shellStore.dispatch({ type: 'work.updated', note: `closed ${event.id}` })
-    }
-  })
 
-  shellStore.hydrate({ runtime: await readRuntimeInfo() })
+  shellStore.hydrateRuntime(await readRuntimeInfo())
 
   const snapshot = await store.load()
   if (snapshot) {
@@ -93,10 +92,21 @@ async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'bro
     }, SAVE_DEBOUNCE)
   }
 
-  manager.subscribe(schedule)
+  // One subscription, not two. Surface changes now reach the store through the
+  // event path, so the store alone tells us that anything worth saving moved.
   shellStore.subscribe(schedule)
   window.addEventListener('beforeunload', persist)
   window.addEventListener('resize', onResize)
+
+  // The host cannot reach us while the window is being torn down, so it asks.
+  // This is the handler that answers that question with the current layout.
+  collectFrom(() => ({
+    schema: WORKSPACE_SCHEMA,
+    surfaces: manager.serialize(),
+    presence: shellStore.getState().presence.state,
+    nav: shellStore.getState().nav,
+    savedAt: Date.now(),
+  }))
 
   function onResize(): void {
     manager.setFrame(workspaceFrame())

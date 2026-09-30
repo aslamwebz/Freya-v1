@@ -58,8 +58,8 @@ interface.
 - can be thrown away and rebuilt without touching long-running work.
 
 `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`. The preload
-script exposes exactly four functions (`getRuntimeInfo`, `loadWorkspace`,
-`saveWorkspace`, `onWorkspaceExternal`) and nothing else. No remote module, no
+script exposes exactly five functions (`getRuntimeInfo`, `loadWorkspace`,
+`saveWorkspace`, `onCollect`) and nothing else. No remote module, no
 `ipcRenderer` passthrough, no eval.
 
 **Why the UI can be disposable.** Long-running Freya work (missions, agent
@@ -93,8 +93,8 @@ State shape (`src/core/events.ts`):
 
 ```ts
 ShellState = {
-  presence:   { state, since, activity }
-  surfaces:   Surface[]                 // ordered by z
+  presence:   { state, since, activity, detail }
+  surfaces:   { open, minimized, focused }   // a summary, not a second copy
   viewport:   { width, height }
   nav:        { active, section }
   dashboard:  { focus, work[], attention[], workforce[], activity[] }
@@ -103,8 +103,30 @@ ShellState = {
 }
 ```
 
+Ownership is disjoint and explicit. The **Surface Manager owns surfaces**; the
+store owns everything else. Every manager lifecycle change is dispatched onto
+the same bus as every other event and carries a `SurfaceSummary` — the three
+facts the shell needs — computed by the manager at commit time. The reducer is
+pure, so it stores the summary without needing to reach into the manager.
+
+That single path is what the shell subscribes to. There is no second
+subscription on the manager, and no component calls another.
+
 The dashboard collections are **demo fixtures**, marked `demo: true` in state and
 rendered with a visible DEMO marker. They are not pretending to be live data.
+
+### 3.1b Presence changes are validated in one place
+
+Every event that wants a new presence — `presence.set`, `voice.toggle`,
+`command.submit`, `workspace.restored` — goes through a single
+`withPresence` helper that consults the transition table. There is no second
+assignment path, and `ShellStore.hydrate` is narrowed to the runtime identity
+alone so that it cannot be used to smuggle state in at boot.
+
+The consequence that matters: a locked or errored Freya cannot be talked out of
+it. The microphone button does not go live, a submitted command is recorded but
+does not start work, and a restored workspace applies its navigation but not its
+presence.
 
 ### 3.2 Surface Manager (`src/core/surfaces/`)
 
@@ -196,8 +218,8 @@ screenshotted in a plain browser without weakening the desktop boundary.
 
 Rules:
 
-- Written on a debounce (400ms) after any layout-changing event, and on
-  `before-quit`. Not on every pointer-move.
+- Written on a debounce (400ms) after any state-changing event, and once more on
+  quit. Not on every pointer-move.
 - Read once at boot, before first paint of the surface layer.
 - `schema` is checked. Unknown or corrupt input falls back to defaults; a
   corrupt file is never allowed to prevent launch.
@@ -205,11 +227,38 @@ Rules:
   restoring a layout saved on a 4K display onto a 1280 window still produces a
   usable workspace.
 - The workspace frame excludes the header and the navigation rail, measured
-  from the DOM, so surfaces can never be dragged under the command bar or over
-  the systems list.
+  from the DOM, so surfaces can never be dragged under the command bar or
+  over the systems list.
+- **The size limit is enforced before writing, not only on read.** A limit
+  checked when loading protects the next launch but still lets an unbounded
+  payload reach the disk. The measurement is in UTF-8 bytes, not string
+  length, because a layout with non-ASCII titles is larger on disk than
+  `.length` suggests.
+- Writes are atomic (temp file + rename) and serialised through a promise
+  chain, so two overlapping debounced writes cannot publish each other's
+  half-written file.
 
 **Not persisted:** dashboard demo fixtures, the presence canvas, transient
 animation values. They are derived, not stored.
+
+### 4.1 Surviving an immediate quit
+
+A renderer cannot push its final layout at quit time — an IPC sent during
+teardown is dropped. This is not theoretical; it was measured before the fix.
+
+So the host asks. Both the window's `close` event and `app.quit()` route
+through one `collectAndThen`, which:
+
+1. holds the close (`event.preventDefault()`),
+2. sends `freya:workspace:collect` to the still-live renderer,
+3. waits for the renderer's reply, which arrives as an ordinary
+   `workspace:save` call,
+4. writes the payload **synchronously**,
+5. releases the close.
+
+A 750ms timeout guarantees the app can always be quit even if the renderer is
+wedged. The five preload functions are the whole of it: the host can ask, and
+the renderer can answer with something only it knows.
 
 ---
 

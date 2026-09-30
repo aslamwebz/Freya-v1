@@ -319,6 +319,61 @@ describe('Freya shell', () => {
     expect(manager.get(id)?.layout.minimized).toBe(true)
   })
 
+  it('routes surface lifecycle into the shell store', async () => {
+    await boot()
+    // The manager is the only producer; the store is the only consumer.
+    expect(shellStore.getState().surfaces).toEqual({ open: 0, minimized: 0, focused: null })
+
+    await act(async () => {
+      fireEvent.click(dockButton(/chat/i))
+    })
+    const chatId = manager.surfaces[0]?.id ?? ''
+    expect(shellStore.getState().surfaces).toEqual({ open: 1, minimized: 0, focused: chatId })
+
+    await act(async () => {
+      fireEvent.click(dockButton(/search/i))
+    })
+    const searchId = manager.surfaces[1]?.id ?? ''
+    expect(shellStore.getState().surfaces).toEqual({ open: 2, minimized: 0, focused: searchId })
+
+    // Minimising the focused window must hand focus back through the same path.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /minimize search/i }))
+    })
+    expect(shellStore.getState().surfaces).toEqual({ open: 2, minimized: 1, focused: chatId })
+    expect(screen.getByRole('dialog', { name: 'Chat' })).toHaveAttribute('data-focused', 'true')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /close chat/i }))
+    })
+    expect(shellStore.getState().surfaces).toEqual({ open: 1, minimized: 1, focused: null })
+  })
+
+  it('notifies store subscribers when a surface moves, with no second subscription', async () => {
+    await boot()
+    await act(async () => {
+      fireEvent.click(dockButton(/search/i))
+    })
+    const id = manager.surfaces[0]?.id ?? ''
+    const listener = vi.fn()
+    const unsubscribe = shellStore.subscribe(listener)
+
+    const title = screen.getByRole('dialog', { name: 'Search' }).querySelector('.surface-title') as HTMLElement
+    await act(async () => {
+      fireEvent(title, pointer('pointerdown', 260, 200))
+      fireEvent(window, pointer('pointermove', 420, 320))
+    })
+
+    // A move does not change the summary, so the store correctly stays quiet.
+    expect(listener).not.toHaveBeenCalled()
+
+    await act(async () => {
+      fireEvent(window, pointer('pointerup', 420, 320))
+    })
+    unsubscribe()
+    expect(manager.get(id)?.layout.x).toBeGreaterThan(0)
+  })
+
   it('labels every dashboard panel as demo data', async () => {
     await boot()
     // Every dashboard panel plus the presence console declares its data as demo.

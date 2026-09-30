@@ -30,9 +30,9 @@ browser surfaces, local-first operation.
    surfaces will embed browser views. A pinned Chromium means the visual
    design and backdrop-filter behaviour are identical on every machine, which
    a system webview cannot promise.
-3. **It is replaceable.** The renderer reaches main through a four-function
-   preload bridge. If binary size ever matters more, the same renderer moves to
-   Tauri by rewriting one file.
+3. **It is replaceable.** The renderer reaches main through a five-function
+   preload bridge. If binary size ever matters more, the same renderer
+   moves to Tauri by rewriting one file.
 
 Cost: ~180 MB of disk and higher idle RAM than a native toolkit. Accepted for
 Phase 0, recorded so it stays a decision rather than an accident.

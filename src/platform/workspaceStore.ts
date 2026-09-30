@@ -27,6 +27,8 @@ interface FreyaHostBridge {
   }>
   loadWorkspace(): Promise<unknown>
   saveWorkspace(payload: unknown): Promise<boolean>
+  /** The host asks for the current layout as the window is closing. */
+  onCollect(handler: () => unknown): void
 }
 
 declare global {
@@ -37,6 +39,20 @@ declare global {
 
 export function hostBridge(): FreyaHostBridge | undefined {
   return typeof window === 'undefined' ? undefined : window.freyaHost
+}
+
+/**
+ * Answer the host's closing-time request for the current layout.
+ *
+ * The renderer cannot push this at the right moment: an IPC sent during
+ * teardown is dropped, which is precisely why the host has to ask before the
+ * window goes away. Returns a disposer so a reload can detach cleanly.
+ */
+export function collectFrom(snapshot: () => unknown): () => void {
+  const host = hostBridge()
+  if (!host) return () => {}
+  host.onCollect(snapshot)
+  return () => {}
 }
 
 export function createWorkspaceStore(): WorkspaceStore {

@@ -13,7 +13,7 @@ export interface RuntimeInfo {
 /**
  * The entire privileged surface of the Freya desktop host.
  *
- * Four functions. No ipcRenderer passthrough, no remote module, no eval.
+ * Five functions. No ipcRenderer passthrough, no remote module, no eval.
  * A renderer compromise gets an attacker exactly what this file exposes.
  */
 const api = {
@@ -22,6 +22,17 @@ const api = {
   loadWorkspace: (): Promise<unknown> => ipcRenderer.invoke('freya:workspace:load'),
   saveWorkspace: (payload: unknown): Promise<boolean> =>
     ipcRenderer.invoke('freya:workspace:save', payload),
+
+  /**
+   * A dumb relay. The host asks once, as the window is closing, and the
+   * renderer answers by saving through the function above — the host has no way
+   * to build a layout and the renderer has no way to be asked in time.
+   */
+  onCollect: (handler: () => unknown): void => {
+    ipcRenderer.on('freya:workspace:collect', () => {
+      void api.saveWorkspace(handler())
+    })
+  },
 }
 
 contextBridge.exposeInMainWorld('freyaHost', api)

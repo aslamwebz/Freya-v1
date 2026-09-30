@@ -31,10 +31,22 @@ export class RingLayer {
   private pixelsPerUnit = 80
   private disposed = false
 
-  constructor(canvas: HTMLCanvasElement, pixelRatio: number) {
+  /**
+   * The ratio this layer renders and sizes its dust at.
+   *
+   * Held in one place because three things have to agree on it — the renderer's
+   * drawing buffer, the canvas' CSS box and the `uPR` point-size uniform — and
+   * when they disagree the dust is drawn at one resolution and scaled as if it
+   * belonged to another. Capped lower than the stage's: a thousand points get
+   * expensive fast and the rings are behind everything anyway.
+   */
+  private ratio(): number {
+    return Math.min(window.devicePixelRatio || 1, 1.5)
+  }
+
+  constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' })
     this.renderer.setClearColor(0x000000, 0)
-    this.renderer.setPixelRatio(pixelRatio)
 
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 50)
     this.camera.position.z = 10
@@ -43,7 +55,7 @@ export class RingLayer {
 
     this.buildRing1()
     this.buildRing2()
-    this.buildRing3(pixelRatio)
+    this.buildRing3(this.ratio())
     this.resize()
   }
 
@@ -258,7 +270,15 @@ export class RingLayer {
   }
 
   resize(): void {
+    // Re-read the ratio here for the same reason the stage does: this canvas is
+    // window-sized, so it is the one most obviously stretched when the window
+    // moves to a screen with a different scale factor. `uPR` sizes the dust
+    // points in the same units, so it has to move with it or the dust is drawn
+    // at the previous screen's resolution.
+    const ratio = this.ratio()
+    this.renderer.setPixelRatio(ratio)
     this.renderer.setSize(window.innerWidth, window.innerHeight, false)
+    if (this.dust) U(this.dust).uPR!.value = ratio
   }
 
   setVisible(visible: boolean): void {

@@ -17,6 +17,25 @@ const SCENE_H = 6.6
 const SCENE_CY = 0.45
 const CENTRE_Y = 0.95
 
+/**
+ * The device pixel ratio to render at, capped at 2.
+ *
+ * Read at every resize rather than once at construction. `devicePixelRatio` is a
+ * property of the *screen*, not the window: dragging the window from a 125%
+ * laptop panel to a 100% desktop changes it under us, and a renderer still
+ * holding the old ratio sizes its drawing buffer for the old screen. The
+ * canvas is then stretched by CSS across a box whose true backing store is a
+ * different size — a soft, blurry orb, and a layout that is subtly wrong rather
+ * than obviously broken.
+ *
+ * The cap is not a rounding concern. A 3x phone panel at full ratio is nine
+ * times the fragments of a 1x desktop for a piece of ambient art, and nobody
+ * can see the difference past 2x.
+ */
+function renderPixelRatio(): number {
+  return Math.min(window.devicePixelRatio || 1, 2)
+}
+
 export interface StageOptions {
   canvas: HTMLCanvasElement
   reducedMotion: boolean
@@ -95,7 +114,7 @@ export class PresenceStage {
       alpha: true,
     })
     this.renderer.setClearColor(0x000000, 0)
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    this.renderer.setPixelRatio(renderPixelRatio())
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.1
 
@@ -278,6 +297,9 @@ export class PresenceStage {
 
   resize(width: number, height: number): void {
     if (!width || !height) return
+    // Before `setSize`, because the size is interpreted in CSS pixels and the
+    // renderer multiplies by whatever ratio it is holding.
+    this.renderer.setPixelRatio(renderPixelRatio())
     this.renderer.setSize(width, height, false)
     this.composer.setPixelRatio(this.renderer.getPixelRatio())
     this.composer.setSize(width, height)

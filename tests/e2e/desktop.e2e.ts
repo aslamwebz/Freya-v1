@@ -99,6 +99,74 @@ async function main(): Promise<void> {
       )
     } else {
       check('presence stage is live', presence !== null && presence.webgl)
+
+      /**
+       * The canvas backing store must track its CSS box.
+       *
+       * A stale framebuffer is not visible as a wrong number anywhere — it shows
+       * up as a stretched orb, because the browser scales a drawing buffer that
+       * no longer matches the box it is stretched across. Asserting the ratio is
+       * what makes that failure legible.
+       */
+      const backingMatchesBox = (p: Page) =>
+        p.evaluate(() => {
+          const canvas = document.querySelector('.presence-canvas') as HTMLCanvasElement | null
+          if (!canvas) return null
+          const box = canvas.getBoundingClientRect()
+          if (box.width === 0 || box.height === 0) return null
+          const ratio = window.devicePixelRatio || 1
+          return {
+            widthError: Math.abs(canvas.width - box.width * ratio) / (box.width * ratio),
+            heightError: Math.abs(canvas.height - box.height * ratio) / (box.height * ratio),
+          }
+        })
+
+      const initialFit = await backingMatchesBox(page)
+      check(
+        'presence backing store matches its box before anything moves',
+        initialFit !== null && initialFit.widthError < 0.02 && initialFit.heightError < 0.02,
+        JSON.stringify(initialFit),
+      )
+
+      // Folding the systems rail re-flows the columns without resizing the
+      // window. A window-resize listener alone never sees this, which is how the
+      // orb ends up drawn at the old size and stretched into the new one.
+      const railToggle = page.getByRole('button', { name: /systems rail|collapse|fold/i }).first()
+      if ((await railToggle.count()) > 0) {
+        await railToggle.click()
+        await page.waitForTimeout(400)
+        const foldedFit = await backingMatchesBox(page)
+        check(
+          'presence backing store still matches its box after the rail folds',
+          foldedFit !== null && foldedFit.widthError < 0.02 && foldedFit.heightError < 0.02,
+          JSON.stringify(foldedFit),
+        )
+        await railToggle.click()
+        await page.waitForTimeout(300)
+      }
+
+      // And after a real window resize, which also has to move the pinned rings.
+      //
+      // The size is restored afterwards, to the size it was actually found at
+      // rather than to a hard-coded one. Later checks in this file are about
+      // window geometry, and a leftover smaller window makes them measure a
+      // surface that has nowhere to grow — which reads as a resize regression
+      // when the resize is fine. A test that changes global state owes the rest
+      // of the run the state it found.
+      const foundViewport = await page.evaluate(() => ({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      }))
+      await page.setViewportSize({ width: 1280, height: 800 })
+      await page.waitForTimeout(500)
+      const resizedFit = await backingMatchesBox(page)
+      check(
+        'presence backing store still matches its box after a window resize',
+        resizedFit !== null && resizedFit.widthError < 0.02 && resizedFit.heightError < 0.02,
+        JSON.stringify(resizedFit),
+      )
+      await page.setViewportSize(foundViewport)
+      await page.waitForTimeout(400)
       check(
         'presence stage is sized to its host, not left at the default',
         presence !== null && presence.stageWidth > 320 && presence.stageHeight > 200,

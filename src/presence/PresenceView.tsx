@@ -87,11 +87,43 @@ export function PresenceView({ activity, ringCanvas, onLabels, onReady }: Props)
             rings.render()
           },
         })
-        rings = new Rings(ring, Math.min(window.devicePixelRatio || 1, 1.5))
+        rings = new Rings(ring)
 
+        let lastWidth = 0
+        let lastHeight = 0
+        let lastRatio = 0
+
+        /**
+         * Re-fit the stage and re-pin the background rings.
+         *
+         * Reads the host's *current* box every time. Anything that moves or
+         * resizes it has to reach here, which is what the observer below is for:
+         * the window resize listener alone misses every layout change that does
+         * not resize the window — folding the systems rail, a panel gaining or
+         * losing rows, a breakpoint changing the column widths.
+         *
+         * When that happens the canvas keeps its old backing-store size while CSS
+         * gives it a different one, and the browser scales the mismatch. That is
+         * the stretched orb: not a camera problem, a stale framebuffer.
+         *
+         * The ratio is part of the guard for the same reason the size is.
+         * Dragging the window to a second, differently-scaled monitor can leave
+         * every CSS dimension untouched while `devicePixelRatio` changes, and a
+         * size-only guard would happily skip the one call that needed making.
+         */
         const sync = () => {
           const rect = element.getBoundingClientRect()
-          stage?.resize(rect.width, rect.height)
+          const width = Math.round(rect.width)
+          const height = Math.round(rect.height)
+          const ratio = window.devicePixelRatio || 1
+          // Ignore sub-pixel noise, which a layout animation would otherwise
+          // turn into a resize storm.
+          if (width !== lastWidth || height !== lastHeight || ratio !== lastRatio) {
+            lastWidth = width
+            lastHeight = height
+            lastRatio = ratio
+            stage?.resize(width, height)
+          }
           rings?.resize()
           if (stage && rings) {
             const centre = stage.centreOnScreen(rect)
@@ -121,10 +153,23 @@ export function PresenceView({ activity, ringCanvas, onLabels, onReady }: Props)
           stage?.setVisible(!hidden)
           rings?.setVisible(!hidden)
         }
+
+        // The observer is the real fix; the window listener stays because a
+        // window resize also moves the rings' canvas, which the host's box does
+        // not describe.
+        const observer =
+          typeof ResizeObserver === 'undefined'
+            ? null
+            : new ResizeObserver(() => {
+                onResize()
+              })
+        observer?.observe(element)
+
         window.addEventListener('resize', onResize)
         document.addEventListener('visibilitychange', onVisibility)
 
         cleanup.current = () => {
+          observer?.disconnect()
           window.removeEventListener('resize', onResize)
           document.removeEventListener('visibilitychange', onVisibility)
           stage?.dispose()

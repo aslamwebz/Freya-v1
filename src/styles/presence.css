@@ -223,20 +223,12 @@
 }
 
 /*
- * The panel is fixed and large, which is the whole point of the redesign.
- *
- * It used to sit inside the presence column, so folding the rail narrowed it and
- * opening a window covered it. Sized against the viewport and lifted above the
- * surface layer, it is the same size whatever else is on screen — the two things
- * that made it unusable were both about it inheriting somebody else's layout.
- */
-/*
  * Non-modal on purpose.
  *
- * A blocking scrim would have made this requirement untestable: you cannot fold
- * the rail or open a window while one is in the way, so you could never see that
- * the panel is unaffected by them. The scrim dims the page and does not catch
- * clicks; the panel catches its own.
+ * A blocking scrim would make the lab's defining property untestable: you cannot
+ * fold the rail or open a window while one is in the way, so you could never see
+ * that the panel is unaffected by them. The scrim dims the page and does not
+ * catch clicks; the panel catches its own.
  */
 .lab-scrim {
   position: fixed;
@@ -257,19 +249,26 @@
   pointer-events: none;
 }
 
-.lab-panel {
-  pointer-events: auto;
-}
-
 /*
- * The lab keeps the look it always had — the same radius, the same border, the
- * same material — and only its size and position changed. The one deliberate
- * departure is a more opaque backdrop, because a fixed panel with a window
- * behind it has to stay readable.
+ * One rule, and the panel is exactly as big as its content.
+ *
+ * It was a fixed 1360x700, which is a great deal of empty panel wrapped around
+ * five rows of buttons. It hugs its content now, with a *cap* rather than a
+ * size: a long option row can still use the available width, and tall content
+ * scrolls instead of running off the bottom of a short window.
+ *
+ * Everything else about it is the look it has always had — same radius, same
+ * border, same material. The backdrop is more opaque than the original because
+ * a window can be behind it, and text has to stay readable.
  */
 .lab-panel {
-  width: min(1360px, 92vw);
-  height: min(700px, 76vh);
+  pointer-events: auto;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  width: max-content;
+  max-width: min(1360px, 92vw);
+  max-height: 78vh;
   overflow-y: auto;
   padding: 16px 18px 18px;
   border-radius: var(--radius);
@@ -335,13 +334,6 @@
   border-radius: 50%;
   background: currentColor;
   box-shadow: 0 0 8px currentColor;
-}
-
-/* The scrim carries the grid; the panel only fills it. */
-.lab-panel {
-  display: grid;
-  gap: 10px;
-  align-content: start;
 }
 
 .lab-scrim[hidden] {

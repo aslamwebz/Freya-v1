@@ -355,7 +355,7 @@ describe('concurrent appends', () => {
     const persisted = onDisk.map((e) => e.sequence)
     expect(persisted).toEqual(assigned)
     for (let i = 1; i < persisted.length; i += 1) {
-      expect(persisted[i]).toBe(persisted[i - 1] + 1)
+      expect(persisted[i]).toBe((persisted[i - 1] ?? 0) + 1)
     }
     await fabric.close()
   })

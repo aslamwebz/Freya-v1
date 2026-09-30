@@ -288,10 +288,25 @@ export class ModelGateway {
     return aborted
   }
 
-  /** Whether a request id is currently executing. For Mind's bookkeeping only. */
+  /** Whether a request id is currently tracked by the gateway. */
   hasActiveRequest(requestId: string): boolean {
     for (const call of this.active.values()) {
       if (call.requestId === requestId) return true
+    }
+    return false
+  }
+
+  /**
+   * Whether this exact request is currently inside provider.complete().
+   *
+   * Deliberately narrower than activeCallCount(): a conversation projection must
+   * not become "generating" because some other conversation happens to be using a
+   * provider, and a request waiting at the pre-contact gate is not paid provider
+   * execution yet.
+   */
+  isProviderRequestInFlight(requestId: string): boolean {
+    for (const call of this.active.values()) {
+      if (call.requestId === requestId) return call.providerInFlight
     }
     return false
   }

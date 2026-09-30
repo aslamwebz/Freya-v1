@@ -13,8 +13,10 @@ export interface RuntimeInfo {
 /**
  * The entire privileged surface of the Freya desktop host.
  *
- * Five functions. No ipcRenderer passthrough, no remote module, no eval.
- * A renderer compromise gets an attacker exactly what this file exposes.
+ * Four functions and one flag: `getRuntimeInfo`, `loadWorkspace`,
+ * `saveWorkspace`, `onCollect`, and `isDesktop`. No ipcRenderer passthrough,
+ * no remote module, no eval. A renderer compromise gets an attacker exactly
+ * what this file exposes.
  */
 const api = {
   isDesktop: true as const,

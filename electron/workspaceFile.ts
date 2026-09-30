@@ -1,4 +1,4 @@
-import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, rm } from 'node:fs/promises'
 import { writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
@@ -12,6 +12,12 @@ import { dirname } from 'node:path'
  * Writes are atomic (temp file + rename), so a crash or a power cut mid-write
  * leaves the previous layout intact rather than a truncated file that would
  * block the next launch.
+ *
+ * Every write carries a generation. A write may only publish if it is still the
+ * newest one, and the check and the rename happen together, synchronously, with
+ * nothing between them. That is what stops an older debounced write — one that
+ * was already in flight when the user quit — from landing on top of the final
+ * flush and resurrecting a layout the user had already moved past.
  */
 
 export const DEFAULT_MAX_BYTES = 512 * 1024
@@ -30,10 +36,12 @@ export class WorkspaceFile {
   private timer: NodeJS.Timeout | null = null
   /** The serialised text waiting to be written, or null if nothing is queued. */
   private pending: string | null = null
+  /** Bumped by every accepted write, and by every flush or dispose. */
+  private generation = 0
   /**
-   * Writes are chained. Two overlapping debounced writes would share one temp
-   * path, and whichever renamed last would publish the other's half-written
-   * file. One writer at a time is cheaper than per-write temp names.
+   * Writes are chained. Two overlapping debounced writes would otherwise race
+   * for the same temp file; the generation check decides which one is allowed
+   * to publish, and the chain keeps them from fighting over the directory.
    */
   private queue: Promise<void> = Promise.resolve()
 
@@ -41,6 +49,11 @@ export class WorkspaceFile {
     this.path = options.path
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
     this.writeDelayMs = options.writeDelayMs ?? DEFAULT_WRITE_DELAY_MS
+  }
+
+  /** A temp path unique to one write, so no two writers can share a file. */
+  private tempFor(generation: number): string {
+    return `${this.path}.${generation}.tmp`
   }
 
   /**
@@ -60,16 +73,22 @@ export class WorkspaceFile {
       // Cyclic or otherwise unserialisable: refuse rather than truncate.
       return null
     }
-    // Byte length, not string length — a layout with non-ASCII titles is
-    // larger on disk than `.length` suggests.
-    if (Buffer.byteLength(text, 'utf8') > this.maxBytes) return null
-    return text
+    return this.exceedsLimit(text) ? null : text
+  }
+
+  /** The limit is in UTF-8 bytes, everywhere it is applied. */
+  private exceedsLimit(text: string): boolean {
+    // Not `text.length`: a layout with non-ASCII titles is far larger on disk
+    // than its UTF-16 code-unit count suggests, and measuring the two
+    // differently means a file can pass the check on the way in and be
+    // rejected on the way out.
+    return Buffer.byteLength(text, 'utf8') > this.maxBytes
   }
 
   async load(): Promise<unknown> {
     try {
       const raw = await readFile(this.path, 'utf8')
-      if (raw.length > this.maxBytes) return null
+      if (this.exceedsLimit(raw)) return null
       return JSON.parse(raw)
     } catch {
       // Missing or unreadable is normal on first launch. Never fatal.
@@ -81,26 +100,44 @@ export class WorkspaceFile {
   schedule(payload: unknown): boolean {
     const text = this.serialise(payload)
     if (text === null) return false
+    this.generation += 1
     this.pending = text
     if (this.timer) clearTimeout(this.timer)
     this.timer = setTimeout(() => {
       this.timer = null
       const queued = this.pending
-      if (queued !== null) this.enqueue(queued)
+      if (queued !== null) this.enqueue(queued, this.generation)
     }, this.writeDelayMs)
     return true
   }
 
-  private enqueue(text: string): void {
-    this.queue = this.queue.then(() => this.writeAsync(text)).catch(() => {})
+  private enqueue(text: string, generation: number): void {
+    this.queue = this.queue.then(() => this.writeAsync(text, generation)).catch(() => {})
   }
 
-  private async writeAsync(text: string): Promise<void> {
-    const temp = `${this.path}.tmp`
+  private async writeAsync(text: string, generation: number): Promise<void> {
+    const temp = this.tempFor(generation)
     try {
       await mkdir(dirname(this.path), { recursive: true })
       await writeFile(temp, text, 'utf8')
-      await rename(temp, this.path)
+    } catch (error) {
+      console.error('[freya] workspace save failed', error)
+      return
+    }
+    // Publishing is synchronous and immediately follows the check. If the
+    // rename were awaited, a flush landing in that window would let this
+    // stale write rename over it.
+    this.publish(temp, generation)
+  }
+
+  /** Move a finished temp file into place, if it is still the newest write. */
+  private publish(temp: string, generation: number): void {
+    if (generation !== this.generation) {
+      void rm(temp, { force: true }).catch(() => {})
+      return
+    }
+    try {
+      renameSync(temp, this.path)
     } catch (error) {
       console.error('[freya] workspace save failed', error)
     }
@@ -114,8 +151,9 @@ export class WorkspaceFile {
    * persistence exists for. This either lands or the process was never going
    * to get the chance.
    *
-   * It also takes ownership of the temp file, so anything already queued is
-   * abandoned rather than allowed to race the final write.
+   * Bumping the generation first is what guarantees the last word: anything
+   * already in flight is now stale and will abandon its temp file instead of
+   * publishing over this.
    */
   flushSync(): void {
     if (this.timer) {
@@ -125,7 +163,9 @@ export class WorkspaceFile {
     const text = this.pending
     if (text === null) return
     this.pending = null
-    const temp = `${this.path}.tmp`
+    this.generation += 1
+
+    const temp = this.tempFor(this.generation)
     try {
       mkdirSync(dirname(this.path), { recursive: true })
       writeFileSync(temp, text, 'utf8')
@@ -135,12 +175,13 @@ export class WorkspaceFile {
     }
   }
 
-  /** Cancel a queued write without writing it. */
+  /** Cancel a queued write without writing it, and abandon anything in flight. */
   dispose(): void {
     if (this.timer) {
       clearTimeout(this.timer)
       this.timer = null
     }
     this.pending = null
+    this.generation += 1
   }
 }

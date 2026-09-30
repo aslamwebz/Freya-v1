@@ -13,7 +13,7 @@
  * platform.
  *
  * Uses human display numbering: 1 is primary, 2 is the first secondary, 3 is
- * the next secondary, and so on. This matches `--display=N` in
+ * the next secondary, and so on. This matches `--freya-display=N` in
  * `electron/main.ts`.
  */
 
@@ -41,7 +41,7 @@ try {
 }
 
 const args = [join(process.cwd(), '.'), ...process.argv.slice(3)]
-if (DISPLAY !== '') args.push(`--display=${DISPLAY}`)
+if (DISPLAY !== '') args.push(`--freya-display=${DISPLAY}`)
 
 const child = spawn(electronPath, args, {
   stdio: 'inherit',

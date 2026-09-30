@@ -119,9 +119,11 @@ what.
 
 ### Live provider work is counted, not inferred
 
-`activeProviderCalls` comes from the Model Gateway's active request registry — an
-in-process count of requests executing this instant. It is not reconstructed from
-the journal.
+`activeProviderCalls` comes from the Model Gateway's active request registry,
+but counts only entries whose provider call is actually unresolved. A request can
+exist in the registry before provider contact for race-safe cancellation without
+making Presence claim paid work is already running. The value is not reconstructed
+from the journal.
 
 This replaced a string-prefix replay of the activity feed, which counted
 `model.request.started` against `completed`/`failed`. That was a history, not a
@@ -212,6 +214,13 @@ Core / Security
 Only the gateway holds the controllers. Core can ask for everything to stop and
 Core can ask for it to start again; no provider, no model and no model-written
 agent can reach either.
+
+The contact gate is closed **before** the durable STOP event is appended. If that
+append itself fails, Freya remains fail-closed: the gate stays shut, Core projects
+the Governor as `deny_all`, and the Cognition Service refuses new work before
+provider selection. A persistence failure therefore cannot turn an owner's STOP
+into an automatic resume. Only a later explicit owner `security.resume` can
+reopen that session gate; shutdown and degraded Core reject that path.
 
 ### Every call is abortable
 

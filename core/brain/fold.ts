@@ -69,9 +69,14 @@ export function applyRecord(state: BrainState, record: BrainRecord): void {
         state.candidates.set(record.candidate.candidateId, record.candidate)
       }
       return
-    case 'memory-record':
+    case 'memory-record': {
+      const replaced = record.memory.supersedes === null ? undefined : state.memories.get(record.memory.supersedes)
+      if (replaced !== undefined && replaced.memoryId !== record.memory.memoryId && replaced.status !== 'archived') {
+        state.memories.set(replaced.memoryId, { ...replaced, status: 'superseded' })
+      }
       state.memories.set(record.memory.memoryId, record.memory)
       return
+    }
     case 'memory-review':
       if (!state.reviews.has(record.review.candidateId)) {
         state.reviews.set(record.review.candidateId, record.review)

@@ -288,7 +288,7 @@ function collectConflicts(
   for (const item of memories) {
     const memory = state.memories.get(item.memoryId)
     if (memory === undefined) continue
-    const against = memory.conflictsWith.filter((id) => selected.has(id) || state.memories.has(id))
+    const against = memory.conflictsWith.filter((id) => RECALLABLE_STATUSES.includes(state.memories.get(id)?.status ?? 'archived'))
     if (against.length === 0) continue
     out.push({
       memoryId: item.memoryId,
@@ -336,7 +336,7 @@ export function brainConflicts(
     .sort((a, b) => a.memoryId.localeCompare(b.memoryId))
 
   for (const memory of memories) {
-    const against = memory.conflictsWith.filter((id) => state.memories.has(id))
+    const against = memory.conflictsWith.filter((id) => RECALLABLE_STATUSES.includes(state.memories.get(id)?.status ?? 'archived'))
     if (against.length === 0) continue
     out.push({
       memoryId: memory.memoryId,

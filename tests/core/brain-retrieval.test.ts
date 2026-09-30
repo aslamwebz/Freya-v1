@@ -290,6 +290,25 @@ describe('entities', () => {
   })
 })
 
+describe('memory lifecycle', () => {
+  it('excludes the record replaced by a superseding memory from current recall', () => {
+    const state = stateWith(
+      { kind: 'memory-record', memory: memory('old', { content: 'coffee is preferred' }) },
+      { kind: 'memory-record', memory: memory('new', { content: 'tea is preferred', supersedes: 'old' }) },
+    )
+    expect(recall(state, { text: 'preferred' }).memories.map((item) => item.memoryId)).toEqual(['new'])
+    expect(state.memories.get('old')?.status).toBe('superseded')
+  })
+
+  it('does not disclose archived contradictions as current conflicts', () => {
+    const state = stateWith(
+      { kind: 'memory-record', memory: memory('current', { conflictsWith: ['old'] }) },
+      { kind: 'memory-record', memory: memory('old', { status: 'archived' }) },
+    )
+    expect(recall(state, { text: 'owner' }).conflicts).toEqual([])
+  })
+})
+
 describe('bounds', () => {
   const many = stateWith(
     ...Array.from({ length: 40 }, (_u, i) => ({

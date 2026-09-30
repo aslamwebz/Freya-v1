@@ -235,14 +235,33 @@ describe('conflicts are disclosed, not resolved', () => {
     expect(pack.conflicts.length).toBeGreaterThan(0)
   })
 
-  it('reports relations that contradict each other for the same subject and predicate', () => {
+  it('reports relation conflicts only when recalled knowledge references that entity', () => {
     const state = stateWith(
+      {
+        kind: 'memory-record',
+        memory: memory('alpha-memory', {
+          content: 'Project Alpha status changed',
+          entityRefs: ['alpha'],
+        }),
+      },
       { kind: 'world-entity', entity: entity('alpha', 'Project Alpha') },
       { kind: 'world-relation', relation: relation('r1', 'alpha', 'status', 'delayed') },
       { kind: 'world-relation', relation: relation('r2', 'alpha', 'status', 'shipped') },
     )
-    const pack = recall(state, { text: 'alpha' }, { maxEstimatedTokens: 800, maxItems: 12 })
+    const pack = recall(state, { text: 'alpha status' }, { maxEstimatedTokens: 800, maxItems: 12 })
     expect(pack.conflicts.some((conflict) => conflict.memoryId.startsWith('r'))).toBe(true)
+  })
+
+  it('does not leak unrelated world conflicts into a recall pack', () => {
+    const state = stateWith(
+      { kind: 'memory-record', memory: memory('coffee', { content: 'the office coffee machine is broken' }) },
+      { kind: 'world-entity', entity: entity('alpha', 'Project Alpha') },
+      { kind: 'world-relation', relation: relation('r1', 'alpha', 'status', 'delayed') },
+      { kind: 'world-relation', relation: relation('r2', 'alpha', 'status', 'shipped') },
+    )
+    const pack = recall(state, { text: 'coffee machine' }, { maxEstimatedTokens: 800, maxItems: 12 })
+    expect(pack.memories.map((item) => item.memoryId)).toEqual(['coffee'])
+    expect(pack.conflicts.some((conflict) => conflict.memoryId.startsWith('r'))).toBe(false)
   })
 })
 

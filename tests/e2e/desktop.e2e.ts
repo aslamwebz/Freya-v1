@@ -57,6 +57,22 @@ async function main(): Promise<void> {
     check('presence canvas is present', (await page.locator('.presence-canvas').count()) === 1)
 
     // --- the presence ----------------------------------------------------
+    // Presence boots lazily. On a machine with WebGL the canvases are resized
+    // away from their HTML defaults; on a machine without WebGL the component
+    // deliberately renders an explicit fallback. CI must wait for one of those
+    // two settled states instead of sampling the 300x150 canvases mid-boot.
+    await page.waitForFunction(
+      () => {
+        const stage = document.querySelector('.presence-canvas') as HTMLCanvasElement | null
+        const rings = document.querySelector('.presence-rings') as HTMLCanvasElement | null
+        const fallback = document.querySelector('.presence-fallback')
+        return Boolean(fallback) ||
+          Boolean(stage && rings && stage.width > 320 && stage.height > 200 && rings.width > 800)
+      },
+      undefined,
+      { timeout: 20_000 },
+    )
+
     const presence = await page.evaluate(() => {
       const stage = document.querySelector('.presence-canvas') as HTMLCanvasElement | null
       const rings = document.querySelector('.presence-rings') as HTMLCanvasElement | null
@@ -70,45 +86,58 @@ async function main(): Promise<void> {
         fallback: Boolean(document.querySelector('.presence-fallback')),
       }
     })
-    check('presence stage is live', presence !== null && presence.webgl && !presence.fallback)
+
     check(
-      'presence stage is sized to its host, not left at the default',
-      presence !== null && presence.stageWidth > 320 && presence.stageHeight > 200,
-      `stage ${presence?.stageWidth}x${presence?.stageHeight}`,
-    )
-    check(
-      'background ring layer covers the window',
-      presence !== null && presence.ringWidth > 800,
-      `rings ${presence?.ringWidth}px wide`,
+      'presence settles as WebGL or an explicit fallback',
+      presence !== null && (presence.fallback || presence.webgl),
     )
 
-    // Readouts come from the stage's own clock, not from React state.
-    await page.waitForFunction(
-      () => {
-        const label = document.querySelector('.hud-b span')
-        return label !== null && label.textContent !== null && /Hz|%/.test(label.textContent)
-      },
-      undefined,
-      { timeout: 15_000 },
-    )
-    check('presence readouts are live', true)
+    if (presence?.fallback) {
+      check(
+        'presence fallback is explicit when WebGL is unavailable',
+        await page.locator('.presence-fallback').isVisible(),
+      )
+    } else {
+      check('presence stage is live', presence !== null && presence.webgl)
+      check(
+        'presence stage is sized to its host, not left at the default',
+        presence !== null && presence.stageWidth > 320 && presence.stageHeight > 200,
+        `stage ${presence?.stageWidth}x${presence?.stageHeight}`,
+      )
+      check(
+        'background ring layer covers the window',
+        presence !== null && presence.ringWidth > 800,
+        `rings ${presence?.ringWidth}px wide`,
+      )
 
-    // The design lab is presentation only, and every option is wired.
-    await page.getByRole('button', { name: /design lab/i }).click()
-    await page.getByRole('button', { name: 'Galaxy', exact: true }).click()
-    await page.waitForTimeout(500)
-    check('design lab switches the centrepiece', (await page.locator('.hud-a b').textContent()) === 'STARS')
+      // Readouts come from the stage's own clock, not from React state.
+      await page.waitForFunction(
+        () => {
+          const label = document.querySelector('.hud-b span')
+          return label !== null && label.textContent !== null && /Hz|%/.test(label.textContent)
+        },
+        undefined,
+        { timeout: 15_000 },
+      )
+      check('presence readouts are live', true)
 
-    await page.getByRole('button', { name: 'Grid lab', exact: true }).click()
-    await page.waitForTimeout(250)
-    check(
-      'design lab switches the background',
-      (await page.locator('.atmosphere').getAttribute('data-bg')) === 'grid',
-    )
+      // The design lab is presentation only, and every option is wired.
+      await page.getByRole('button', { name: /design lab/i }).click()
+      await page.getByRole('button', { name: 'Galaxy', exact: true }).click()
+      await page.waitForTimeout(500)
+      check('design lab switches the centrepiece', (await page.locator('.hud-a b').textContent()) === 'STARS')
 
-    await page.getByRole('button', { name: 'Deep space', exact: true }).click()
-    await page.getByRole('button', { name: 'Liquid orb', exact: true }).click()
-    await page.keyboard.press('Escape')
+      await page.getByRole('button', { name: 'Grid lab', exact: true }).click()
+      await page.waitForTimeout(250)
+      check(
+        'design lab switches the background',
+        (await page.locator('.atmosphere').getAttribute('data-bg')) === 'grid',
+      )
+
+      await page.getByRole('button', { name: 'Deep space', exact: true }).click()
+      await page.getByRole('button', { name: 'Liquid orb', exact: true }).click()
+      await page.keyboard.press('Escape')
+    }
 
     // --- command bar and presence -----------------------------------------
     // Checked before any surface is opened: surfaces float above the shell by

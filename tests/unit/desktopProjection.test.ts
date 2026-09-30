@@ -166,6 +166,16 @@ describe('in-flight provider counting', () => {
   it('never goes negative on a feed that started mid-stream', () => {
     expect(countInFlightProviderCalls([activity('model.request.completed:9')])).toBe(0)
   })
+
+  it('does not call a crashed request live after a new Core session starts', () => {
+    expect(
+      countInFlightProviderCalls([
+        activity('model.request.started:7'),
+        activity('core.started:8'),
+        activity('core.ready:9'),
+      ]),
+    ).toBe(0)
+  })
 })
 
 describe('usage presentation', () => {

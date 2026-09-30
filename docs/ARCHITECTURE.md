@@ -104,9 +104,16 @@ ShellState = {
   desktop:    DesktopProjection          // everything derived, computed below
   runtime:    { version, platform, userData, workspaceFile, dev }
   attention:  { requested, lastNote }
-  notices:    Notice[]
+  runtime:   { version, platform, userData, workspaceFile, dev }
+  attention: { requested, lastNote }
+  notices:   Notice[]
 }
 ```
+
+The conversation transcript itself is **not** in this state. It lives in Core's
+conversation projection, reaches the renderer over its own channel, and the store
+holds only which pane was open — an id, which is not authority, because Core
+re-reads the transcript from its own store and a stale one resolves to nothing.
 
 `dashboard` is gone. The `demo: true` fixtures it carried were removed in Phase 2
 rather than relabelled — see §3.5.
@@ -388,7 +395,7 @@ The intended shape, stated so the seams can be checked against it:
 
 | System | Attaches by | Does **not** require |
 | --- | --- | --- |
-| Mind (conversation) | surfaces of type `chat` + a `chat.*` event family | any change to the window model |
+| Mind (conversation) | **built in Phase 3** — a `conversation.*` event family + a `chat` surface | any change to the window model |
 | Searcher | a `searcher.*` event family + a surface registry entry | a second window implementation |
 | Work / Missions | `work.updated` / `mission.*` events + surface context | the store to know what a "mission" is |
 | Workforce | `workforce.*` events | agents running in the renderer |
@@ -416,6 +423,10 @@ electron/main.ts          owns one Core, for the life of the process
       security/guard.ts   the policy. It judges a principal; it mints none.
       cognition/          grants, the Governor, the service that owns both
       model/              the provider contract, NanoGPT, the gateway
+      mind/               the Mind, and the deterministic context compiler
+      conversation/       conversation entities, stores, and the service
+      identity/           the Identity Kernel: who Freya is, outside any model
+      voice/              local-only voice abstractions and bounds
       projections/        Core's account of itself, derived from the log
 ```
 
@@ -494,27 +505,151 @@ The wait is bounded because a provider that ignores its signal must not be able 
 hang the application; past the bound the journal is left with a start and no
 finish, which is what a crash would have left too.
 
+`gateway.cancelRequest(requestId, reason)` is the *scoped* path, and it is
+deliberately nothing like `cancelAll`: the contact gate stays open, the cognition
+generation does not move, nothing durable is latched, no other request is touched,
+and an already-spent reservation stays spent. STOP ALL stops Freya's authority to
+think; this stops one answer. A button that latched a security stop would make the
+security control unusable, and one that refunded the call would make it dishonest.
+
+### 6.2 The Mind, and why the model is not Freya
+
+```
+  Renderer
+     ↓  conversation.turn.submit        text, and nothing else
+  Core command surface
+     ↓
+  ConversationService                    commands + projection
+     ↓
+  Mind                                   one turn, one grant, one call
+     ↓
+  Context Compiler                       identity + history + this turn
+     ↓
+  Governor → Model Gateway → Provider    exactly one request
+     ↓
+  Mind                                   stores the answer
+     ↓
+  Conversation Store (encrypted) ──► projection ──► Renderer
+```
+
+The renderer has no line to the Model Gateway. It cannot name a grant, choose a
+model, raise a token ceiling, pick a turn id or select a provider, and
+`cognition.request` is not a name the preload bridge will accept. The only route
+from a window to a model is a conversation turn.
+
+"Model ≠ Freya" is two independent mechanisms, because either alone would be a
+promise rather than a property:
+
+- **The Identity Kernel** (`core/identity/identity.ts`) is typed, frozen data in
+  Core. The Context Compiler *serialises* it for a provider; the provider receives
+  a rendering of it rather than being the thing that defines it.
+- **The Mind never imports a provider.** It reaches cognition only through an
+  `OwnerAuthority` it is handed, so `Mind → NanoGptProvider` is not a line in this
+  codebase.
+
+No security authority is encoded in the kernel. Guard, the Governor, the contact
+gate and STOP ALL are code, and a prompt that described a real boundary would be a
+lie about where that boundary lives.
+
+Prompts are therefore a **serialisation**, not the definition:
+
+```
+canonical Freya state → Context Compiler → provider-specific shape → model
+```
+
+`ModelRequest.messages` is canonical; `prompt` is the flattened form the gateway
+derives from it, so the two cannot drift.
+
+A turn performs **at most one** provider request — no retry, no critic, no
+planner, no summarisation, no follow-up — and that is structural rather than a
+convention: `runTurn` contains exactly one call into the cognition service. The
+grant it spends is built from constants, issued through owner authority, and
+bounded at one call, foreground only, with a short expiry. Full detail in
+[PHASE-3.md](PHASE-3.md).
+
+### 6.3 Conversation bodies are not journal events
+
+Two stores with opposite rules, in separate modules, and nothing in
+`core/events/` imports from `core/conversation/`.
+
+**The Conversation Store** holds what was said, encrypted at rest with
+AES-256-GCM: unique nonce per record, the record header authenticated as AAD so a
+record cannot be re-labelled between kinds, a per-store context id, versioned
+records. A decryption failure is reported and the record skipped — never accepted,
+never guessed at, never turned into a message that was never said.
+
+**The Event Fabric** holds metadata only: ids, sizes, provider, model, outcome.
+There is no field a body could hide in, so adding one is a visible change to the
+audit schema rather than something that quietly starts retaining text.
+
+The key lives in the main process (`electron/conversationKey.ts`), wrapped by the
+OS secure storage, and is injected into Core as bytes. It never enters the
+renderer, a model request, the journal, a log line, or a projection. No secure
+storage means **no key**, which means an ephemeral in-memory store that labels
+itself — never a plaintext file and never a key stored beside the data it
+protects.
+
+Corrupt conversation data is a **conversation-data fault**. It cannot grant
+cognition, clear a stop, or widen a budget, and it does not lock Freya either:
+unreadable history is neither.
+
+### 6.4 Local voice is a surface, not a second intelligence
+
+`VoiceTranscriber` and `VoiceSynthesizer` declare `local: true` as a **literal
+type**, so a remote engine does not compile. There is no cloud endpoint, no
+fallback, and no automatic download.
+
+A capture becomes **text in a composer**, not a turn. There is no call to the
+Governor, the Gateway or a provider anywhere in `core/voice/`, and the Send that
+follows is the only thing that authorises cognition. Speech recognition and
+thinking are different systems, and that boundary is where an automatic send would
+end up.
+
+Capture is explicit: the device opens on a press and releases on the lift, on every
+path including errors and unmount. The microphone permission is granted only while
+Core reports a capture open, only for audio, and only in answer to the button —
+the host follows Core's verdict rather than the renderer's claim. Audio is dropped
+after transcription and never becomes memory.
+
+The level is a mutable number outside React, read by the presence's existing
+animation loop, so a frame of audio cannot cause a re-render. The envelope prefers
+a real level when a device is open and does not simulate a reply from it.
+
 ---
 
 ## 7. Deliberately absent
 
-Neither Phase 1 nor Phase 2 implements: chat or conversation, streaming, speech
-transcription, Searcher, web research, browser automation, Browser Relay, Vault,
-Missions execution, Work, the Run engine, agents, swarms, PTYs, terminal,
-Foundry, connectors/MCP, 3D Office, learning, or self-modification. There are no
-stub classes for them, and no panel that implies one is running.
+Phase 3 implements a conversation, a Mind, an Identity Kernel, encrypted
+conversation storage, a local voice seam and push-to-talk capture.
+
+Neither Phase 1, 2 nor 3 implements: streaming, automatic summarisation, a
+persistent Self Model, semantic or episodic memory, embeddings, vector retrieval,
+the World graph, Experience, relationship graphs, the SQLCipher Brain, Searcher,
+web research, browser automation, Browser Relay, Vault, Missions execution, Work,
+the Run engine, agents, swarms, PTYs, terminal, Foundry, Relay, connectors/MCP,
+3D Office, learning, self-modification, or a local speech-engine binary adapter.
+There are no stub classes for them, and no panel that implies one is running.
+
+A surface type may exist with `status: 'placeholder'`, in which case its window is
+real — movable, resizable, persisted — and its body says which system is missing
+and why. That is a declared boundary, not a fake.
 
 A surface type may exist with `status: 'placeholder'`, in which case its window
 is real — movable, resizable, persisted — and its body says which system is
 missing and why. That is a declared boundary, not a fake.
 
-A submitted command reaches Core, is made durable, and stops there. The
+A submitted **command** reaches Core, is made durable, and stops there. The
 acknowledgement says so explicitly, because a user told a command was received
-will otherwise wait for a reply that is not coming.
+will otherwise wait for a reply that is not coming. A conversation **message** is
+the other thing: it becomes a turn, and a turn is the only path from a window to a
+model. The two are separate, explicit modes in the shell, because a sentence must
+never become a privileged command by accident.
 
 **Idle Freya spends nothing.** No automatic model call exists anywhere in the
-shell, and the e2e checks the call counters after boot, after a command, after a
-renderer reload and after a relaunch.
+shell. There is no always-on microphone, no wake word, and no path from captured
+audio to cognition without an explicit Send. The e2e checks the call counters
+after boot, after a command, after a conversation, after a renderer reload and
+after a relaunch.
 
 Browser work is documented as direction only, in
 [BROWSER-ROADMAP.md](BROWSER-ROADMAP.md).

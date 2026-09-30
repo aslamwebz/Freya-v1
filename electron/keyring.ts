@@ -75,6 +75,9 @@ import { dirname } from 'node:path'
 
 const KEY_BYTES = 32
 
+/** Only fixed format diagnostics may cross the main-process boundary. */
+class KeyringFormatError extends Error {}
+
 /** Bumped only when the wrapping scheme changes incompatibly. */
 export const KEYRING_VERSION = 1
 
@@ -159,7 +162,9 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       brain: { key: new Uint8Array(generated.brain), reason: null },
     }
   } catch (error) {
-    const reason = `the keyring could not be prepared: ${describe(error)}`
+    const reason = error instanceof KeyringFormatError
+      ? `the keyring could not be prepared: ${error.message}`
+      : 'the keyring could not be prepared by OS secure storage or the filesystem'
     return {
       keyringPath,
       conversation: { key: null, reason },
@@ -205,16 +210,17 @@ async function readKeyring(path: string): Promise<KeyringFile | null> {
     // A malformed keyring is not an empty one. Falling back to generating fresh
     // keys would produce a Brain that silently cannot read its own history, which
     // is far harder to notice than an outright failure.
-    throw new Error('the keyring file is not valid JSON and was not overwritten')
+    throw new KeyringFormatError('the keyring file is not valid JSON and was not overwritten')
   }
   if (typeof parsed !== 'object' || parsed === null) {
-    throw new Error('the keyring file is not an object and was not overwritten')
+    throw new KeyringFormatError('the keyring file is not an object and was not overwritten')
   }
   const file = parsed as Partial<KeyringFile>
   if (file.version !== KEYRING_VERSION) {
     // Reported, not upgraded. A future version must be opened by code that knows
     // how, and guessing would risk reusing one domain's secret for another.
-    throw new Error(`the keyring is version ${String(file.version)} and this version reads ${KEYRING_VERSION}`)
+    const version = Number.isSafeInteger(file.version) ? String(file.version) : 'unrecognised'
+    throw new KeyringFormatError(`the keyring is version ${version} and this version reads ${KEYRING_VERSION}`)
   }
   return file as KeyringFile
 }

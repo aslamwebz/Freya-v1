@@ -48,14 +48,21 @@ const secure = {
   backend: 'gnome_libsecret' as string,
   account: 'user-a',
   throwingSecret: '',
+  throwingEncrypt: false,
+  attemptedPlaintext: '',
 }
 
 vi.mock('electron', () => ({
   safeStorage: {
     isEncryptionAvailable: () => secure.available,
     getSelectedStorageBackend: () => secure.backend,
-    encryptString: (plaintext: string) =>
-      Buffer.from(`${secure.account}:${Buffer.from(plaintext, 'utf8').toString('base64')}`, 'utf8'),
+    encryptString: (plaintext: string) => {
+      if (secure.throwingEncrypt) {
+        secure.attemptedPlaintext = plaintext
+        throw new Error(`cannot encrypt ${plaintext}`)
+      }
+      return Buffer.from(`${secure.account}:${Buffer.from(plaintext, 'utf8').toString('base64')}`, 'utf8')
+    },
     decryptString: (wrapped: Buffer) => {
       const text = Buffer.from(wrapped).toString('utf8')
       if (secure.throwingSecret && text.includes(secure.throwingSecret)) {
@@ -85,6 +92,8 @@ beforeEach(async () => {
   secure.backend = 'gnome_libsecret'
   secure.account = 'user-a'
   secure.throwingSecret = ''
+  secure.throwingEncrypt = false
+  secure.attemptedPlaintext = ''
   setPlatform('linux')
 })
 
@@ -125,6 +134,26 @@ async function writeLegacyKey(secret: Uint8Array): Promise<string> {
 }
 
 describe('one secret per domain', () => {
+  it('does not echo arbitrary keyring field content in format errors', async () => {
+    const sensitive = 'private-content-in-version'
+    await writeFile(`${dataPath()}.keyring.json`, JSON.stringify({ version: sensitive, keys: {} }))
+    const result = await loadKeyring(dataPath())
+    expect(result.brain.key).toBeNull()
+    expect(result.brain.reason).toMatch(/unrecognised/)
+    expect(result.brain.reason).not.toContain(sensitive)
+  })
+
+  it('never includes plaintext keys from thrown OS encryption errors in public reasons', async () => {
+    secure.throwingEncrypt = true
+    const result = await loadKeyring(dataPath())
+    expect(secure.attemptedPlaintext).not.toBe('')
+    for (const domain of [result.conversation, result.brain]) {
+      expect(domain.key).toBeNull()
+      expect(domain.reason).not.toContain(secure.attemptedPlaintext)
+    }
+    expect(existsSync(`${dataPath()}.keyring.json`)).toBe(false)
+  })
+
   it('gives conversation and brain different secrets', async () => {
     const keyring = await loadKeyring(dataPath())
     expect(keyring.conversation.key).not.toBeNull()

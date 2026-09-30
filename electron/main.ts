@@ -24,6 +24,24 @@ let quitting = false
 const COLLECT_TIMEOUT_MS = 750
 
 /**
+ * A deterministic key seam for the real Electron E2E process.
+ *
+ * The CI runner intentionally has no desktop keyring. Production must therefore
+ * fall back to ephemeral conversation storage there, which is the correct
+ * security behaviour but makes a restart-persistence E2E impossible to exercise.
+ * The test harness may inject a non-secret 32-byte key only when both explicit
+ * E2E variables are present. Normal application launches never read this path.
+ */
+function e2eConversationKey(): Uint8Array | null {
+  if (process.env.FREYA_E2E !== '1') return null
+  const encoded = process.env.FREYA_E2E_CONVERSATION_KEY
+  if (!encoded) return null
+  const bytes = Buffer.from(encoded, 'base64')
+  if (bytes.length !== 32) throw new Error('FREYA_E2E_CONVERSATION_KEY must decode to 32 bytes')
+  return new Uint8Array(bytes)
+}
+
+/**
  * The developer echo provider, if one was explicitly asked for.
  *
  * Read from the environment by name and validated against a closed set, so a
@@ -312,7 +330,15 @@ app.whenReady().then(() => {
   // this process handles. A machine with no OS secure storage gets `null`, which
   // makes Core fall back to an ephemeral conversation store that labels itself —
   // never to a plaintext file and never to a key stored beside the data.
-  void loadConversationKey(join(app.getPath('userData'), CORE_LOG_FILE)).then((result) => {
+  //
+  // CI has no desktop keyring, so the explicit E2E harness injects a deterministic
+  // non-secret test key. This is not a production fallback and is unreachable
+  // unless FREYA_E2E=1 was deliberately supplied to the process.
+  const testKey = e2eConversationKey()
+  const keyResult = testKey
+    ? Promise.resolve({ key: testKey, reason: null })
+    : loadConversationKey(join(app.getPath('userData'), CORE_LOG_FILE))
+  void keyResult.then((result) => {
     if (result.key === null) {
       // A warning, with a reason and no value. The conversation still works for the
       // session; it just will not survive a restart, and the UI says so.

@@ -159,12 +159,15 @@ function shutdownCoreAndThen(finish: () => void): void {
  *
  * Electron does not expose the labels Windows draws in Display Settings, so
  * beyond the primary display we use a stable geometric order. The important
- * case is the ordinary two-monitor desk: `--display=2` always means the one
+ * case is the ordinary two-monitor desk: `--freya-display=2` always means the one
  * display that is not primary.
  */
 function requestedDisplayNumber(): number | null {
-  const flag = process.argv.find((arg) => arg.startsWith('--display='))
-  const raw = flag?.slice('--display='.length) ?? process.env.FREYA_DISPLAY
+  // Chromium owns --display on Linux and interprets it as an X server address.
+  // Freya therefore uses a namespaced switch so monitor selection can never
+  // override DISPLAY and break Electron before our code even starts.
+  const flag = process.argv.find((arg) => arg.startsWith('--freya-display='))
+  const raw = flag?.slice('--freya-display='.length) ?? process.env.FREYA_DISPLAY
   if (raw === undefined || raw === '') return null
   const parsed = Number(raw)
   if (!Number.isInteger(parsed) || parsed < 1) return null

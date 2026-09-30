@@ -1,6 +1,7 @@
 import { createCore, type Core } from '../core/index'
 import type { CoreCommandEnvelope, CoreCommandResult, CoreStatus } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
+import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 
 /**
@@ -45,7 +46,23 @@ export interface CoreHost {
   onActivity(send: (activity: CoreActivityEvent[]) => void): () => void
   activity(): CoreActivityEvent[]
   status(): CoreStatus
+  /** Attach to the conversation projection. Returns a disposer. */
+  onConversation(send: (projection: ConversationProjection) => void): () => void
+  conversation(): Promise<ConversationProjection | null>
+  voice(): VoiceProjection | null
   stop(reason?: string): Promise<void>
+}
+
+export interface CoreHostOptions {
+  /**
+   * The conversation master key, from the OS secure storage.
+   *
+   * Injected rather than constructed here so that the host is testable without
+   * Electron's credential store, and so that "no key" is a real, reachable state
+   * rather than a branch nobody exercises. Null means Core falls back to an
+   * ephemeral conversation store and says so.
+   */
+  conversationKey?: Uint8Array | null
 }
 
 export class ElectronCoreHost implements CoreHost {
@@ -53,22 +70,33 @@ export class ElectronCoreHost implements CoreHost {
   private starting: Promise<void> | null = null
   private readonly windows = new Set<(status: CoreStatus) => void>()
   private readonly activityWindows = new Set<(activity: CoreActivityEvent[]) => void>()
+  private readonly conversationWindows = new Set<(projection: ConversationProjection) => void>()
 
   constructor(
     private readonly dataPath: string,
     private readonly env: NanoGptEnv = {},
+    private readonly options: CoreHostOptions = {},
   ) {}
 
   async start(): Promise<void> {
     if (this.core) return
     if (this.starting) return this.starting
     this.starting = (async () => {
-      const core = createCore({ dataPath: this.dataPath, env: this.env })
+      const core = createCore({
+        dataPath: this.dataPath,
+        env: this.env,
+        // Bytes in, and nowhere else. Core does not persist it, journal it, log it
+        // or put it in a projection, so there is nothing for it to leak through.
+        ...(this.options.conversationKey
+          ? { conversationKey: this.options.conversationKey }
+          : {}),
+      })
       await core.start()
       this.core = core
       // Any window attached later still gets every subsequent change.
       core.subscribe((status) => this.broadcast(status))
       core.onActivity((activity) => this.broadcastActivity(activity))
+      core.onConversation((projection) => this.broadcastConversation(projection))
     })()
     try {
       await this.starting
@@ -112,6 +140,42 @@ export class ElectronCoreHost implements CoreHost {
     }
   }
 
+  /**
+   * Attach to the conversation projection.
+   *
+   * Its own channel, for the same reason status and activity are separate: a long
+   * transcript is a much larger payload than a status, and a window that only
+   * renders a security panel should not pay to receive one.
+   */
+  onConversation(send: (projection: ConversationProjection) => void): () => void {
+    this.conversationWindows.add(send)
+    const core = this.core
+    if (core) {
+      void core
+        .conversation()
+        .then((projection) => {
+          try {
+            send(projection)
+          } catch (error) {
+            console.error('[freya.core] window conversation push threw', error)
+          }
+        })
+        .catch(() => {})
+    }
+    return () => {
+      this.conversationWindows.delete(send)
+    }
+  }
+
+  async conversation(): Promise<ConversationProjection | null> {
+    if (!this.core) return null
+    return this.core.conversation()
+  }
+
+  voice(): VoiceProjection | null {
+    return this.core?.voice() ?? null
+  }
+
   activity(): CoreActivityEvent[] {
     return this.core?.activity() ?? []
   }
@@ -125,7 +189,19 @@ export class ElectronCoreHost implements CoreHost {
     this.core = null
     this.windows.clear()
     this.activityWindows.clear()
+    this.conversationWindows.clear()
     await core?.stop(reason)
+  }
+
+  private broadcastConversation(projection: ConversationProjection): void {
+    for (const send of [...this.conversationWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window conversation push threw', error)
+        this.conversationWindows.delete(send)
+      }
+    }
   }
 
   private broadcastActivity(activity: CoreActivityEvent[]): void {

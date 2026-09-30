@@ -63,16 +63,45 @@ export class VoiceEnvelope {
   private quietSince = 0
   private spoke = false
   private lastSample: number | null = null
+  /**
+   * A real microphone level, when one is open.
+   *
+   * `null` means no device, and the simulated generator below runs — which is the
+   * Phase 0 behaviour, retained for the Design Lab and for a window with no
+   * microphone. A number means a device *is* open, and the level is the device's
+   * own: nothing here invents speech when someone is actually speaking, and
+   * nothing simulates a reply, because a real microphone does not imply that
+   * Freya is about to answer.
+   */
+  private realLevel: number | null = null
 
   constructor(private readonly now: () => number = defaultNow) {}
 
-  /** You are speaking. */
+  /** Feed a real level, or `null` when the microphone has closed. */
+  setRealLevel(level: number | null): void {
+    this.realLevel = level
+    if (level === null) {
+      // Release any simulated phrase, so closing the microphone cannot leave the
+      // orb mid-way through an invented sentence.
+      this.phrase = null
+      this.spoke = false
+    }
+  }
+
+  /** True when a real microphone is driving the level. */
+  get usingRealLevel(): boolean {
+    return this.realLevel !== null
+  }
+
+  /** You are speaking. Simulated, for a window with no microphone. */
   simulateUser(): void {
+    if (this.realLevel !== null) return
     this.phrase = { kind: 'user', start: this.now(), duration: 2.6 }
   }
 
   /** Freya is answering. Starts after a beat, the way a pause reads. */
   simulateReply(): void {
+    if (this.realLevel !== null) return
     this.phrase = { kind: 'ai', start: this.now() + 0.7, duration: 3.4 }
   }
 
@@ -99,7 +128,12 @@ export class VoiceEnvelope {
     let user = 0
     let ai = 0
 
-    if (this.phrase) {
+    if (this.realLevel !== null) {
+      // A real device. The level *is* the level — smoothed by the same envelope,
+      // never simulated, and with no phrase machine behind it. Room tone becomes
+      // silence rather than a convincing impression of someone speaking.
+      user = this.realLevel
+    } else if (this.phrase) {
       const k = (time - this.phrase.start) / this.phrase.duration
       if (this.phrase.kind === 'user') {
         if (k >= 1) {
@@ -122,12 +156,18 @@ export class VoiceEnvelope {
     // and a pause longer than the tail ends the turn. `spoke` is cleared when
     // the turn is handed over, so a single utterance can never start an
     // unbounded chain of replies.
-    if (user > 0.12) {
-      this.spoke = true
-      this.quietSince = time
-    } else if (this.spoke && time - this.quietSince > 1.3 && !this.phrase) {
-      this.spoke = false
-      this.simulateReply()
+    //
+    // Simulation only. With a real microphone open, ending a capture is an
+    // explicit act by the user and this machine has no business deciding that
+    // silence means "now Freya replies".
+    if (this.realLevel === null) {
+      if (user > 0.12) {
+        this.spoke = true
+        this.quietSince = time
+      } else if (this.spoke && time - this.quietSince > 1.3 && !this.phrase) {
+        this.spoke = false
+        this.simulateReply()
+      }
     }
 
     this.user += (user - this.user) * (user > this.user ? attackUser : releaseUser)

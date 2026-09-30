@@ -226,9 +226,110 @@
 /* ------------------------------------------------------------- chat */
 
 .chat {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  height: 100%;
+  min-height: 0;
+}
+
+/* The conversation list. A real picker, because history that cannot be reopened
+   is not continuity. */
+.chat-side {
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  gap: 10px;
+  padding: 12px;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.chat-new {
+  flex: none;
+  border: 1px solid var(--gold-line);
+  background: var(--gold-soft);
+  color: var(--gold-hi);
+  border-radius: 9px;
+  padding: 7px 10px;
+  font: var(--label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.chat-new:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.chat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+
+.chat-list-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 8px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chat-list-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.chat-list-item[data-active] {
+  border-color: var(--gold-line);
+  background: var(--gold-soft);
+}
+
+.chat-list-title {
+  font-size: 12.5px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-list-meta {
+  font: var(--label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-size: 9.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Durability, stated. A person is entitled to know their conversation is not
+   being saved before they say something they would rather not lose. */
+.chat-persistence {
+  flex: none;
+  margin: 0;
+  font: var(--label);
+  letter-spacing: 0.06em;
+  color: var(--amber);
+  line-height: 1.5;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 8px;
+}
+
+.chat-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
 }
 
@@ -285,7 +386,8 @@
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.chat-compose input {
+.chat-compose input,
+.chat-compose textarea {
   flex: 1;
   min-width: 0;
   background: rgba(255, 255, 255, 0.03);
@@ -294,11 +396,88 @@
   padding: 9px 12px;
   outline: none;
   font-size: 13.5px;
+  font-family: inherit;
+  line-height: 1.45;
+  resize: none;
   user-select: text;
 }
 
-.chat-compose input:focus {
+.chat-compose input:focus,
+.chat-compose textarea:focus {
   border-color: var(--gold);
+}
+
+.chat-compose textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Stop this response. Deliberately not styled like the security stop in
+   Security: this one stops an answer, and latching nothing. */
+.chat-stop {
+  flex: none;
+  border-radius: 10px;
+  border: 1px solid var(--gold-line-strong);
+  background: rgba(255, 90, 82, 0.1);
+  color: var(--red);
+  padding: 8px 12px;
+  font: var(--label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chat-stop:hover {
+  background: rgba(255, 90, 82, 0.18);
+}
+
+/* ------------------------------------------------------- microphone */
+
+.mic {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+
+.mic-button {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--gold-line);
+  background: var(--gold-soft);
+  color: var(--gold-hi);
+  display: grid;
+  place-items: center;
+  /* Press and hold, so a finger can lift off to stop. */
+  touch-action: none;
+  user-select: none;
+}
+
+.mic-button[data-capturing] {
+  border-color: var(--red);
+  background: rgba(255, 90, 82, 0.18);
+  color: var(--red);
+}
+
+/* A real level, from a real device. Four steps rather than a continuous bar,
+   because a continuous element animated per frame is a repaint per frame. */
+.mic-live {
+  position: absolute;
+  inset: -3px;
+  border-radius: 13px;
+  border: 1px solid var(--red);
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.mic-detail {
+  font: var(--label);
+  letter-spacing: 0.06em;
+  color: var(--amber);
+  max-width: 220px;
+  line-height: 1.4;
 }
 
 .chat-send {
@@ -977,4 +1156,49 @@
 
 .chatbar-input::placeholder {
   color: var(--ink-3);
+}
+
+/* --------------------------------------------------- chat bar: modes */
+
+.chatbar-modes {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--gold-line);
+  border-radius: 9px;
+  flex: none;
+}
+
+.chatbar-mode {
+  border: none;
+  background: transparent;
+  color: var(--ink-3);
+  border-radius: 7px;
+  padding: 4px 8px;
+  font: var(--label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chatbar-mode[aria-pressed='true'] {
+  background: var(--gold-soft);
+  color: var(--gold-hi);
+}
+
+/* Command acknowledgements are Core's reply, not a turn, and are not a message
+   in a conversation. They are labelled so the two cannot be confused. */
+.chatbar-line[data-role='command'] .chatbar-who {
+  color: var(--ink-3);
+}
+
+.chatbar-stop {
+  flex: none;
+  border: 1px solid var(--gold-line-strong);
+  background: rgba(255, 90, 82, 0.12);
+  color: var(--red);
+  border-radius: 9px;
+  padding: 6px 10px;
+  font: var(--label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }

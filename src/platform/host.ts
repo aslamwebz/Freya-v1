@@ -4,6 +4,7 @@ import type {
   CoreStatus,
 } from '../../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../../core/protocol/activity'
+import type { ConversationProjection, VoiceProjection } from '../../core/protocol/conversation'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -60,6 +61,18 @@ export interface FreyaHostBridge {
    */
   coreActivity(): Promise<CoreActivityEvent[]>
   onCoreActivity(handler: (activity: CoreActivityEvent[]) => void): () => void
+
+  /**
+   * The conversation projection, and the voice status.
+   *
+   * Content crosses here because a transcript has to be rendered. Nothing that
+   * *protects* it crosses: no key, no store, no path, no way to name a provider.
+   * There is also no function here that configures a speech service, because voice
+   * is local-only and there is no service to configure.
+   */
+  coreConversation(): Promise<ConversationProjection | null>
+  onCoreConversation(handler: (projection: ConversationProjection) => void): () => void
+  coreVoice(): Promise<VoiceProjection | null>
 }
 
 declare global {

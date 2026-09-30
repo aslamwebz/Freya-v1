@@ -6,6 +6,7 @@ import type {
   CoreStatus,
 } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
+import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
 
 export interface RuntimeInfo {
   version: string
@@ -90,6 +91,36 @@ const api = {
   },
 
   /**
+   * The conversation projection: the transcript, the conversation list, and
+   * whether Freya can currently think.
+   *
+   * Content crosses here, because a transcript has to be rendered somewhere. What
+   * does *not* cross is the store, the key, the filesystem path, or any way to ask
+   * for a conversation that is not the one on screen. A window can read a
+   * conversation; it cannot decrypt one itself, and it holds no key to do so with.
+   */
+  coreConversation: (): Promise<ConversationProjection | null> =>
+    ipcRenderer.invoke('freya:core:conversation'),
+
+  onCoreConversation: (handler: (projection: ConversationProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: ConversationProjection): void => handler(projection)
+    ipcRenderer.on('freya:core:conversation', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:conversation', listener)
+    }
+  },
+
+  /**
+   * Voice status: whether a local speech engine exists, and the capture bounds.
+   *
+   * A read, never a configuration surface. There is no function here that points
+   * Freya at a speech service, because there is no speech service to point it at:
+   * voice is local-only, and this exists so the UI can say so rather than showing
+   * a microphone button that quietly does nothing.
+   */
+  coreVoice: (): Promise<VoiceProjection | null> => ipcRenderer.invoke('freya:core:voice'),
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -111,6 +142,13 @@ const api = {
  * renderer has no path to grant governance even though the command exists in
  * Core. Adding a name here is a decision to hand a window a capability, and it
  * should read like one.
+ *
+ * The conversation names are here because chat is the product. Note what is *not*
+ * reachable through them: a window may submit text and ask for a conversation, and
+ * that is all. It cannot name a grant, choose a model, raise a token ceiling,
+ * pick a turn id, or select a provider — and it cannot name `cognition.request`
+ * directly, so the only route from a window to a model is a conversation turn,
+ * which the Mind shapes and the Governor checks.
  */
 const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'core.status.read',
@@ -119,6 +157,15 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'security.status.read',
   'security.stopAll',
   'security.resume',
+  'conversation.create',
+  'conversation.list',
+  'conversation.read',
+  'conversation.turn.submit',
+  'conversation.turn.cancel',
+  'voice.status.read',
+  'voice.capture.start',
+  'voice.capture.end',
+  'voice.capture.cancel',
 ])
 
 /** A request id the renderer cannot choose, so it cannot collide or replay. */

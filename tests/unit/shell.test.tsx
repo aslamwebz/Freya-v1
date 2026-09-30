@@ -153,7 +153,7 @@ describe('Freya shell', () => {
     expect(screen.getByRole('navigation', { name: /freya systems/i })).toBeInTheDocument()
     expect(screen.getByRole('toolbar', { name: /work surfaces/i })).toBeInTheDocument()
     expect(screen.getByText('Current focus')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /start listening/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /hold to record/i })).toBeInTheDocument()
   })
 
   it('opens a surface from the dock and renders its body', async () => {
@@ -429,22 +429,23 @@ describe('Freya shell', () => {
     expect(shellStore.getState().notices[0]?.tone).toBe('urgent')
   })
 
-  it('moves the mic control between idle and listening', async () => {
+  it('offers a press-and-hold microphone, not an always-on toggle', async () => {
     await boot()
-    const mic = screen.getByRole('button', { name: /start listening/i })
+    const mic = screen.getByRole('button', { name: /hold to record/i })
 
+    // No Core and no device in this environment, so the press is refused and the
+    // window says so. What matters here is that the control is *press and hold*:
+    // there is no way to leave a microphone open by clicking once and walking away.
+    expect(mic).toHaveAttribute('aria-pressed', 'false')
+    expect(mic).toHaveAttribute('title', expect.stringMatching(/hold to record/i))
+
+    // And it is not a toggle dressed up as a push-to-talk: a click alone does
+    // nothing, because `pointerdown` is what opens a device.
     await act(async () => {
       fireEvent.click(mic)
     })
-    expect(screen.getByRole('button', { name: /stop listening/i })).toBeInTheDocument()
-    expect(shellStore.getState().listening).toBe(true)
-    expect(shellStore.getState().presence.state).toBe('listening')
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /stop listening/i }))
-    })
     expect(shellStore.getState().listening).toBe(false)
-    expect(shellStore.getState().presence.state).toBe('idle')
+    expect(shellStore.getState().presence.state).not.toBe('listening')
   })
 
   it('switches the presence state from the demo control', async () => {

@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'
 import { join } from 'node:path'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
 import { ElectronCoreHost } from './coreHost'
+import { loadConversationKey } from './conversationKey'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 
 const HERE = __dirname
@@ -197,9 +198,17 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:activity', activity)
   })
 
+  // The transcript, on its own channel. A conversation projection is a much larger
+  // payload than a status and changes on a different schedule, so shipping it with
+  // either of the others would make a busy transcript force a status rebuild.
+  const detachConversation = coreHost?.onConversation((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:conversation', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
+    detachConversation?.()
   })
 
   if (DEV_SERVER) {
@@ -257,11 +266,17 @@ function registerIpc(): void {
   }))
 
   ipcMain.handle('freya:workspace:load', () => requireWorkspace().load())
-  ipcMain.handle('freya:core:submit', (_event, envelope: CoreCommandEnvelope) =>
-    requireCore().submit(envelope),
-  )
+  ipcMain.handle('freya:core:submit', (_event, envelope: CoreCommandEnvelope) => {
+    const result = requireCore().submit(envelope)
+    // The microphone gate follows Core's verdict rather than the request, so a
+    // refused capture never opens the device.
+    void result.then((settled) => trackVoiceCapture(envelope, settled))
+    return result
+  })
   ipcMain.handle('freya:core:status', () => requireCore().status())
   ipcMain.handle('freya:core:activity', () => requireCore().activity())
+  ipcMain.handle('freya:core:conversation', () => requireCore().conversation())
+  ipcMain.handle('freya:core:voice', () => requireCore().voice())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)
@@ -281,20 +296,35 @@ app.whenReady().then(() => {
   workspace = new WorkspaceFile({
     path: join(app.getPath('userData'), WORKSPACE_FILE),
   })
-  coreHost = new ElectronCoreHost(join(app.getPath('userData'), CORE_LOG_FILE), {
-    NANOGPT_API_KEY: process.env.NANOGPT_API_KEY,
-    NANOGPT_BASE_URL: process.env.NANOGPT_BASE_URL,
-    NANOGPT_MODEL: process.env.NANOGPT_MODEL,
-    FREYA_ALLOW_LIVE_MODEL: process.env.FREYA_ALLOW_LIVE_MODEL,
-  })
-  registerIpc()
-  mainWindow = createWindow()
+  // The key is fetched before the Core is constructed, and it is the only secret
+  // this process handles. A machine with no OS secure storage gets `null`, which
+  // makes Core fall back to an ephemeral conversation store that labels itself —
+  // never to a plaintext file and never to a key stored beside the data.
+  void loadConversationKey(join(app.getPath('userData'), CORE_LOG_FILE)).then((result) => {
+    if (result.key === null) {
+      // A warning, with a reason and no value. The conversation still works for the
+      // session; it just will not survive a restart, and the UI says so.
+      console.warn(`[freya] conversation history is not being saved — ${result.reason}`)
+    }
+    coreHost = new ElectronCoreHost(
+      join(app.getPath('userData'), CORE_LOG_FILE),
+      {
+        NANOGPT_API_KEY: process.env.NANOGPT_API_KEY,
+        NANOGPT_BASE_URL: process.env.NANOGPT_BASE_URL,
+        NANOGPT_MODEL: process.env.NANOGPT_MODEL,
+        FREYA_ALLOW_LIVE_MODEL: process.env.FREYA_ALLOW_LIVE_MODEL,
+      },
+      { conversationKey: result.key },
+    )
+    registerIpc()
+    mainWindow = createWindow()
 
-  // Deliberately not awaited before the window opens: a slow or unwritable log
-  // should degrade Core, not hold the app off the screen. A window created
-  // before Core is ready attaches and simply receives the status when it lands.
-  void coreHost.start().catch((error: unknown) => {
-    console.error('[freya] core failed to start', error)
+    // Deliberately not awaited before the window opens: a slow or unwritable log
+    // should degrade Core, not hold the app off the screen. A window created
+    // before Core is ready attaches and simply receives the status when it lands.
+    void coreHost.start().catch((error: unknown) => {
+      console.error('[freya] core failed to start', error)
+    })
   })
 
   app.on('activate', () => {
@@ -314,9 +344,52 @@ app.on('before-quit', (event) => {
   shutdownCoreAndThen(() => app.quit())
 })
 
-// Refuse any renderer request for a capability Freya has not granted.
-// Microphone permission is intentionally NOT granted in Phase 0: the voice
-// control is a UI state transition, not a recording.
+/**
+ * Permissions.
+ *
+ * Everything is denied by default, which is the posture the rest of the security
+ * story rests on. The single exception is the microphone, and it is granted only
+ * when all three of these hold:
+ *
+ *   - a voice capture is actually open, as Core reported it;
+ *   - the request is for audio only, never a camera;
+ *   - the browser raised it as a direct result of the user pressing the
+ *     microphone control, which is the only code path that calls `getUserMedia`.
+ *
+ * That is what explicit push-to-talk means at this layer: no ambient recording,
+ * no always-on stream, and no way for a window to hold a microphone open between
+ * captures. A request at any other time, or for anything other than audio, is
+ * refused.
+ */
 app.on('web-contents-created', (_event, contents) => {
-  contents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+  contents.session.setPermissionRequestHandler((_wc, permission, callback, details) => {
+    // Electron exposes the requested media kinds on newer versions only, so this
+    // reads defensively. When they are not reported, the request is refused: an
+    // unknown request is not one we have granted.
+    const mediaTypes = (details as { mediaTypes?: readonly string[] } | undefined)?.mediaTypes
+    const audioOnly = Array.isArray(mediaTypes) && mediaTypes.length > 0 &&
+      mediaTypes.every((kind) => kind === 'audio')
+    callback(permission === 'media' && voiceCaptureOpen && audioOnly)
+  })
 })
+
+/**
+ * Whether a capture is currently open.
+ *
+ * Set from **Core's answer**, not from a renderer claim. The renderer opens and
+ * closes the device itself — that is where the Web Audio API is — but the host
+ * only relaxes the permission gate once the trusted half has agreed a capture is
+ * running, so a compromised window cannot open a stream by asking nicely.
+ */
+let voiceCaptureOpen = false
+
+/** Follow Core's verdict on a voice capture command. */
+function trackVoiceCapture(envelope: CoreCommandEnvelope, result: { ok: boolean }): void {
+  if (envelope.command === 'voice.capture.start') {
+    voiceCaptureOpen = result.ok
+    return
+  }
+  if (envelope.command === 'voice.capture.end' || envelope.command === 'voice.capture.cancel') {
+    voiceCaptureOpen = false
+  }
+}

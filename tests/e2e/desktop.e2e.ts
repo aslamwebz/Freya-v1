@@ -52,7 +52,7 @@ async function launch(
   env: Record<string, string> = {},
 ): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
-    // `--display=2`, so the suite drives Freya on the second monitor rather than on
+    // `--freya-display=2`, so the suite drives Freya on the second monitor rather than on
     // the primary. The usual reason is that the primary is busy — an IDE, a video
     // call, or the very window someone is watching — and a run that takes the
     // foreground from them is a run they will close.
@@ -61,7 +61,7 @@ async function launch(
     // (primary first, then secondaries left to right) and falls back to the
     // platform's choice when the requested display does not exist, so this is
     // harmless on a single-monitor machine.
-    args: [ROOT, `--user-data-dir=${userData}`, `--display=${E2E_DISPLAY}`],
+    args: [ROOT, `--user-data-dir=${userData}`, `--freya-display=${E2E_DISPLAY}`],
     env: {
       ...process.env,
       NODE_ENV: 'production',

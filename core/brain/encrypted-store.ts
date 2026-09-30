@@ -129,10 +129,10 @@ export class EncryptedBrainStore implements BrainStore {
 
     try {
       await mkdir(dirname(options.path), { recursive: true })
-    } catch (error) {
+    } catch {
       throw new BrainStoreError(
         'store-unavailable',
-        `the Brain store directory could not be created: ${describe(error)}`,
+        'the Brain store directory could not be created',
       )
     }
 
@@ -141,10 +141,14 @@ export class EncryptedBrainStore implements BrainStore {
       raw = await readFile(options.path, 'utf8')
     } catch (error) {
       if (isNotFound(error)) {
-        await writeFile(options.path, '', { encoding: 'utf8', flag: 'a' })
+        try {
+          await writeFile(options.path, '', { encoding: 'utf8', flag: 'a' })
+        } catch {
+          throw new BrainStoreError('store-unavailable', 'the Brain store could not be created')
+        }
         return store
       }
-      throw new BrainStoreError('store-unavailable', `the Brain store could not be read: ${describe(error)}`)
+      throw new BrainStoreError('store-unavailable', 'the Brain store could not be read')
     }
 
     store.replay(raw)
@@ -322,11 +326,11 @@ export class EncryptedBrainStore implements BrainStore {
 
     try {
       await appendFile(this.path, serialised, { encoding: 'utf8', flush: true })
-    } catch (error) {
+    } catch {
       // An OS append may have written only part of the line. Do not extend an
       // uncertain tail or claim later memories will survive a restart.
       this.degrade('a Brain append failed; the log must be reopened before writing')
-      throw new BrainStoreError('write-failed', `a Brain record could not be written: ${describe(error)}`)
+      throw new BrainStoreError('write-failed', 'a Brain record could not be written')
     }
 
     // The chain advances only once its bytes are durable, so a failed append cannot
@@ -398,6 +402,3 @@ function isNotFound(error: unknown): boolean {
   )
 }
 
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : 'unknown error'
-}

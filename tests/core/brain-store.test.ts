@@ -110,6 +110,16 @@ async function editLine(index: number, transform: (line: string) => string): Pro
 }
 
 describe('encrypted Brain store', () => {
+  it('keeps storage paths out of directory and read failure messages', async () => {
+    const parentFile = join(dir, 'parent-file')
+    await writeFile(parentFile, '', 'utf8')
+    for (const path of [join(parentFile, 'brain.enc'), dir]) {
+      const result = await EncryptedBrainStore.open({ path, key }).catch((error: unknown) => error)
+      expect(result).toBeInstanceOf(BrainStoreError)
+      expect(String(result)).not.toContain(dir)
+    }
+  })
+
   it('drains accepted writes on close and persists the validated snapshot', async () => {
     const store = await openStore()
     const record: BrainRecord = { kind: 'memory-record', memory: memory('snapshot', 'original') }
@@ -133,6 +143,9 @@ describe('encrypted Brain store', () => {
     const second = store.write({ kind: 'memory-record', memory: memory('queued', 'second') })
     const settled = await Promise.allSettled([first, second])
     expect(settled.map((result) => result.status)).toEqual(['rejected', 'rejected'])
+    for (const result of settled) {
+      if (result.status === 'rejected') expect(String(result.reason)).not.toContain(dir)
+    }
     expect(store.health().health).toBe('degraded')
     expect(store.state().sequence).toBe(0)
     await store.close()

@@ -141,6 +141,7 @@ async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'bro
     surfaces: manager.serialize(),
     presence: shellStore.getState().presence.state,
     nav: shellStore.getState().nav,
+    navCollapsed: shellStore.getState().navCollapsed,
     savedAt: Date.now(),
   }))
 

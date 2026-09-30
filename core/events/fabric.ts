@@ -11,11 +11,20 @@ import type { PrincipalId } from '../protocol/core-protocol'
  * no code path that publishes first and persists later, because that is the
  * failure mode where a crash loses an event somebody already reacted to.
  *
+ * Appends are serialised. Sequence assignment, the durable write and
+ * publication happen one at a time, in call order, so concurrent callers cannot
+ * be handed the same sequence number. See `enqueue`.
+ *
  * Replay is deliberately separate from publication. `replay` reduces history
  * into a value and returns it; it never publishes, never appends, and never
  * invokes a subscriber. A reducer is a pure function of its input, so "replay
  * has no side effects" is enforced by the type of the thing rather than by
  * everyone remembering.
+ *
+ * One constraint follows from publishing inside the append queue: a subscriber
+ * must not `await` an append. It would wait behind itself. No subscriber in
+ * Core does, and the alternative — publishing outside the queue — would let two
+ * events reach subscribers in the opposite order to their sequences.
  */
 
 export interface AppendOptions {
@@ -40,6 +49,8 @@ export class EventFabric {
   private readonly newId: () => string
   private readonly listeners = new Set<FabricListener>()
   private sequence: number
+  /** Serialises appends. Never rejects; see `enqueue`. */
+  private tail: Promise<unknown> = Promise.resolve()
 
   private constructor(options: FabricOptions, recoveredSequence: number) {
     this.store = options.store
@@ -69,34 +80,62 @@ export class EventFabric {
    * The store is awaited before a single subscriber is called. If the append
    * throws, nothing is published and the caller's promise rejects — the
    * sequence number is not consumed either, so the next event takes it.
+   *
+   * The whole body runs inside the append queue, so sequence assignment, the
+   * durable write and publication are one indivisible step. Without that, two
+   * concurrent callers both read `sequence + 1` before either has written, and
+   * the log ends up with a duplicate — which the store then rejects, having
+   * already written one of the two lines.
    */
-  async append<T extends CoreEventType>(
+  append<T extends CoreEventType>(
     type: T,
     payload: Extract<AnyCoreEvent, { type: T }>['payload'],
     options: AppendOptions = {},
   ): Promise<AnyCoreEvent> {
-    const sequence = this.sequence + 1
-    const event = {
-      eventId: this.newId(),
-      sequence,
-      type,
-      schemaVersion: CORE_EVENT_SCHEMA_VERSION,
-      occurredAt: this.now().toISOString(),
-      source: options.source ?? 'core',
-      actor: options.actor ?? 'system',
-      correlationId: options.correlationId ?? this.newId(),
-      causationId: options.causationId ?? null,
-      payload,
-    } as AnyCoreEvent
+    return this.enqueue(async () => {
+      const sequence = this.sequence + 1
+      const event = {
+        eventId: this.newId(),
+        sequence,
+        type,
+        schemaVersion: CORE_EVENT_SCHEMA_VERSION,
+        occurredAt: this.now().toISOString(),
+        source: options.source ?? 'core',
+        actor: options.actor ?? 'system',
+        correlationId: options.correlationId ?? this.newId(),
+        causationId: options.causationId ?? null,
+        payload,
+      } as AnyCoreEvent
 
-    // Durable first.
-    await this.store.append(event)
-    this.sequence = sequence
-    this.lastId = event.eventId
+      // Durable first.
+      await this.store.append(event)
+      this.sequence = sequence
+      this.lastId = event.eventId
 
-    // Visible second.
-    this.publish(event)
-    return event
+      // Visible second. Still inside the queue, so publication order matches
+      // sequence order.
+      this.publish(event)
+      return event
+    })
+  }
+
+  /**
+   * Run one task at a time, in call order.
+   *
+   * Two properties matter and are easy to lose:
+   *
+   *   - a rejected task does not poison the queue. The next task runs whether
+   *     this one resolved or threw, so one failed append cannot wedge Core.
+   *   - the queue itself never rejects, so a caller that ignores its result
+   *     cannot produce an unhandled rejection here.
+   */
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(task, task)
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
   }
 
   private publish(event: AnyCoreEvent): void {

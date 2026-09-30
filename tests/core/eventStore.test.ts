@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { JsonlEventStore } from '../../core/events/jsonl-store'
+import type { EventStore } from '../../core/events/store'
 import { CORE_EVENT_SCHEMA_VERSION, type AnyCoreEvent } from '../../core/events/envelope'
 import { EventFabric } from '../../core/events/fabric'
 
@@ -325,5 +326,90 @@ describe('EventFabric — replay has no side effects', () => {
 
     expect(replayed).toHaveLength(2)
     await second.close()
+  })
+})
+
+describe('concurrent appends', () => {
+  it('assigns strictly unique monotonic sequences under 200 simultaneous appends', async () => {
+    const store = await JsonlEventStore.open(file)
+    const fabric = await EventFabric.open({ store })
+
+    // All 200 are in flight together. Without a serialised append queue every
+    // one of them reads `sequence + 1` before any of them has written.
+    const appended = await Promise.all(
+      Array.from({ length: 200 }, (_unused, i) =>
+        fabric.append('cognition.denied', {
+          requestId: `req-${i}`,
+          reason: 'concurrency probe',
+          grantId: null,
+        }),
+      ),
+    )
+
+    const assigned = appended.map((e) => e.sequence)
+    expect(new Set(assigned).size).toBe(200)
+    expect([...assigned].sort((a, b) => a - b)).toEqual(assigned)
+
+    // The durable log, not just the returned values, must agree.
+    const onDisk = await store.readAll()
+    const persisted = onDisk.map((e) => e.sequence)
+    expect(persisted).toEqual(assigned)
+    for (let i = 1; i < persisted.length; i += 1) {
+      expect(persisted[i]).toBe(persisted[i - 1] + 1)
+    }
+    await fabric.close()
+  })
+
+  it('publishes in sequence order, not completion order', async () => {
+    const store = await JsonlEventStore.open(file)
+    const fabric = await EventFabric.open({ store })
+    const published: number[] = []
+    fabric.subscribe((e) => published.push(e.sequence))
+
+    await Promise.all(
+      Array.from({ length: 50 }, () => fabric.append('core.stopping', { reason: 'probe' })),
+    )
+
+    expect(published).toEqual([...published].sort((a, b) => a - b))
+    await fabric.close()
+  })
+
+  it('does not let one failed append poison the queue', async () => {
+    const backing = await JsonlEventStore.open(file)
+    // A store that fails exactly the second append, the way a full disk or a
+    // transient IO error would.
+    let seen = 0
+    const store: EventStore = {
+      append: async (e) => {
+        seen += 1
+        if (seen === 2) throw new Error('simulated write failure')
+        await backing.append(e)
+      },
+      readAll: () => backing.readAll(),
+      readAfter: (n) => backing.readAfter(n),
+      lastSequence: () => backing.lastSequence(),
+      describe: () => backing.describe(),
+      close: () => backing.close(),
+    }
+    const fabric = await EventFabric.open({ store })
+
+    const results = await Promise.allSettled([
+      fabric.append('core.stopping', { reason: 'ok-1' }),
+      fabric.append('core.stopping', { reason: 'this one fails' }),
+      fabric.append('core.stopping', { reason: 'ok-2' }),
+    ])
+
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected', 'fulfilled'])
+
+    // The queue survived. The failed append gave its sequence back rather than
+    // leaving a hole, and the append behind it still landed.
+    const onDisk = await backing.readAll()
+    expect(onDisk.map((e) => e.sequence)).toEqual([1, 2])
+    expect(onDisk.every((e) => e.type === 'core.stopping')).toBe(true)
+
+    // And Core is not wedged afterwards.
+    const next = await fabric.append('core.stopping', { reason: 'ok-3' })
+    expect(next.sequence).toBe(3)
+    await fabric.close()
   })
 })

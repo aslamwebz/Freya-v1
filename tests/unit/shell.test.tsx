@@ -221,7 +221,13 @@ describe('Freya shell', () => {
 
     const resized = manager.get(surface?.id ?? '')
     const original = surface?.layout
-    expect(resized?.layout.width).toBe((original?.width ?? 0) + 200)
+
+    // A window opens at the laptop floor, which is most of the frame, so a big
+    // drag runs it into the edge of the region rather than clearing it. Both
+    // halves of that are worth pinning: it grew, and it stopped at the frame.
+    expect(resized?.layout.width).toBeGreaterThan(original?.width ?? 0)
+    const frame = manager.workspaceFrame
+    expect(resized?.layout.width).toBeLessThanOrEqual(frame.x + frame.width)
     expect(resized?.layout.height).toBe((original?.height ?? 0) + 120)
   })
 

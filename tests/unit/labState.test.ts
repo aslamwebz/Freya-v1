@@ -17,12 +17,11 @@ describe('design lab state', () => {
     window.localStorage.clear()
   })
 
-  it('ships with the liquid orb on deep space, full extras and rings on', () => {
+  it('ships with the liquid orb on deep space, rings on', () => {
     expect(DEFAULT_LAB).toEqual({
       bg: 'space',
       piece: 'orb',
       style: 'current',
-      clean: '0',
       rings: '1',
     })
     expect(loadLabState()).toEqual(DEFAULT_LAB)
@@ -32,11 +31,13 @@ describe('design lab state', () => {
     expect([...BACKGROUNDS]).toEqual(['city', 'space', 'grid', 'aurora', 'obsidian'])
     expect([...PIECES]).toEqual(['brain', 'reactor', 'orb', 'tesseract', 'galaxy'])
     expect([...BRAIN_STYLES]).toEqual(['current', 'slices', 'flow', 'glass'])
-    expect(Object.keys(LAB_OPTIONS).sort()).toEqual(['bg', 'clean', 'piece', 'rings', 'style'])
+    // No 'extras' toggle: it used to hide the beam furniture, and with the pedestal
+    // and the beam removed it would have been a control that did nothing.
+    expect(Object.keys(LAB_OPTIONS).sort()).toEqual(['bg', 'piece', 'rings', 'style'])
   })
 
   it('round-trips every choice through local storage', () => {
-    const chosen = { bg: 'grid', piece: 'galaxy', style: 'flow', clean: '1', rings: '0' } as const
+    const chosen = { bg: 'grid', piece: 'galaxy', style: 'flow', rings: '0' } as const
     saveLabState(chosen)
     expect(loadLabState()).toEqual(chosen)
   })

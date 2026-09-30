@@ -13,7 +13,9 @@
   position: relative; /* no z-index: children must share the root stacking context */
   height: 100%;
   display: grid;
-  grid-template-columns: 186px minmax(330px, 420px) minmax(340px, 1fr) minmax(320px, 430px);
+  /* The rail track collapses with the rail; the three dashboard columns do not
+     move, so folding it shifts the whole grid rather than reflowing the panels. */
+  grid-template-columns: var(--rail, 186px) minmax(330px, 420px) minmax(340px, 1fr) minmax(320px, 430px);
   grid-template-rows: 88px minmax(0, 1fr);
   column-gap: var(--gutter);
   padding: 0 var(--gutter) 18px 0;
@@ -52,7 +54,7 @@
   z-index: 70; /* the command bar must stay reachable above every surface */
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 1fr minmax(320px, 620px) 1fr;
+  grid-template-columns: 1fr minmax(320px, 620px) auto auto;
   align-items: center;
   gap: 18px;
   /* Room for the window drag region and the macOS traffic lights. */
@@ -274,6 +276,9 @@
   flex-direction: column;
   min-height: 0;
   padding-top: 18px;
+  /* Overridable so the collapsed rail can be narrower than the grid track. */
+  width: 100%;
+  overflow: hidden;
 }
 
 .nav-list {
@@ -351,6 +356,84 @@
   color: var(--ink-3);
 }
 
+/* ------------------------------------------------------- the folded rail */
+
+/*
+ * Collapsed, the rail is a strip of icons. Each system keeps its own mark, so
+ * the folded rail is still readable rather than a column of identical shapes.
+ */
+.nav-fold {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 12px 12px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border: 1px solid transparent;
+}
+
+.nav-fold:hover {
+  color: var(--ink);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.nav-fold .icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.nav[data-collapsed='true'] {
+  padding-top: 10px;
+}
+
+.nav[data-collapsed='true'] .nav-fold {
+  justify-content: center;
+  padding: 7px 0;
+  margin: 0 0 12px;
+}
+
+.nav[data-collapsed='true'] .nav-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.nav[data-collapsed='true'] .nav-item {
+  justify-content: center;
+  width: 44px;
+  height: 40px;
+  padding-left: 0;
+  gap: 0;
+  border-radius: 10px;
+}
+
+/* The label is removed from the layout entirely, so it cannot affect height. */
+.nav[data-collapsed='true'] .nav-label,
+.nav[data-collapsed='true'] .nav-foot,
+.nav[data-collapsed='true'] .nav-system {
+  display: none;
+}
+
+.nav[data-collapsed='true'] .nav-item .icon {
+  width: 21px;
+  height: 21px;
+}
+
+.nav[data-collapsed='true'] .nav-item[aria-current='page'] {
+  background: var(--gold-soft);
+  border-color: var(--gold-line);
+}
+
+.nav[data-collapsed='true'] .nav-item[aria-current='page'] .icon {
+  color: var(--gold-hi);
+}
+
 /* ------------------------------------------------------------ columns */
 
 .column {
@@ -367,16 +450,20 @@
 
 .column-center {
   position: relative;
-  /* The dock is wider than this column and deliberately floats over the
-     flanking ones, so this column must paint above them or their content
-     swallows clicks meant for the dock.
-
-     One step is enough: the flanking columns are at 5, and the surface layer
-     (40) and the header/presence chrome (70+) stay above, so surfaces still
-     float over the dock exactly as before. The old comment claimed this was
-     not a stacking context, but `position: relative` plus an inherited
-     z-index had made it one regardless. */
-  z-index: 6;
+  /* Deliberately no z-index.
+   *
+   * A z-index here would make this a stacking context, and anything inside it
+   * that blends — the presence canvas, most importantly — would then blend
+   * against this column's own (empty) contents rather than against the
+   * atmosphere behind it. That is what put a dark rectangle around the
+   * centrepiece. The chat bar that replaced the old floating dock is a grid row
+   * of its own, so it no longer needs this column stacked above its neighbours.
+   *
+   * `auto` rather than merely omitting it: `.column` sets `z-index: 5`, and a
+   * grid item takes its z-index whether or not it is written out. Leaving it
+   * off opts out of nothing.
+   */
+  z-index: auto;
   align-items: stretch;
   overflow: visible;
   padding: 0;
@@ -502,7 +589,8 @@
 
 @media (max-width: 1500px) {
   .shell {
-    grid-template-columns: 78px minmax(300px, 380px) minmax(300px, 1fr) minmax(290px, 380px);
+    --rail: 78px;
+    grid-template-columns: var(--rail) minmax(300px, 380px) minmax(300px, 1fr) minmax(290px, 380px);
   }
   .nav-item {
     padding-left: 0;
@@ -530,7 +618,8 @@
 
 @media (max-width: 1240px) {
   .shell {
-    grid-template-columns: 78px minmax(280px, 1fr) minmax(280px, 1fr);
+    --rail: 78px;
+    grid-template-columns: var(--rail) minmax(280px, 1fr) minmax(280px, 1fr);
     grid-template-rows: 88px minmax(0, 1fr);
   }
   .column-left {
@@ -552,4 +641,206 @@
   .command {
     height: 48px;
   }
+}
+
+/* --------------------------------------------------------- the top bar */
+
+/*
+ * The right half of the header: clock, presence, kernel status, and the two
+ * system controls. Not a bar of its own — the header is the navbar, and this is
+ * its right-hand side.
+ */
+.topbar {
+  position: relative;
+  z-index: 75; /* above surfaces: a status check must not be occluded by one */
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+
+.topbar-status {
+  display: flex;
+  align-items: center;
+}
+
+.kernel {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 3px 10px 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(8, 8, 12, 0.5);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.kernel i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  flex: none;
+}
+
+.kernel b {
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.kernel[data-state='connected'] i {
+  background: #6fd08c;
+  box-shadow: 0 0 8px rgba(111, 208, 140, 0.6);
+}
+
+.kernel[data-state='connected'] b {
+  color: var(--ink);
+}
+
+/* Stopped is the state that must be unmissable, even in a status pill. */
+.kernel[data-state='stopped'] {
+  border-color: rgba(224, 96, 96, 0.45);
+}
+
+.kernel[data-state='stopped'] i {
+  background: #e06060;
+  box-shadow: 0 0 8px rgba(224, 96, 96, 0.6);
+}
+
+.kernel[data-state='stopped'] b {
+  color: #e06060;
+}
+
+.kernel-sep {
+  opacity: 0.4;
+}
+
+.kernel-detail {
+  color: var(--ink-3);
+  letter-spacing: 0.06em;
+}
+
+.topbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.topbar-control {
+  position: relative;
+}
+
+.topbar-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 26px;
+  border-radius: 8px;
+  color: var(--ink-2);
+  border: 1px solid transparent;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+
+.topbar-icon .icon {
+  width: 17px;
+  height: 17px;
+}
+
+.topbar-icon:hover,
+.topbar-icon[aria-expanded='true'] {
+  color: var(--ink);
+  border-color: var(--gold-line);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.topbar-icon[data-danger] {
+  color: #e06060;
+}
+
+/*
+ * Attached to the icon that opened it, not a floating window. `position: absolute`
+ * against the control rather than a portal, so it moves with the bar and cannot
+ * be left behind by a scroll or a reflow.
+ */
+.topbar-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 268px;
+  padding: 12px 14px 12px;
+  border-radius: 13px;
+  background: rgba(10, 10, 15, 0.92);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--gold-line);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+  z-index: 80;
+}
+
+.topbar-panel h3 {
+  margin: 0 0 10px;
+  font: 400 10px/1 var(--font-display);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.topbar-note {
+  margin: 0 0 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+.topbar-facts {
+  margin: 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.topbar-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11.5px;
+}
+
+.topbar-facts dt {
+  color: var(--ink-3);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.topbar-facts dd {
+  margin: 0;
+  text-align: right;
+  color: var(--ink);
+}
+
+.topbar-open {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 9px;
+  font: 400 11px/1 var(--font-sans, inherit);
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  border: 1px solid var(--gold-line);
+  background: var(--gold-soft);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.topbar-open:hover {
+  color: var(--gold-hi);
+  border-color: var(--gold);
 }

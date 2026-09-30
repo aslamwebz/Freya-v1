@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SurfaceManager, type SurfaceEvent } from '../../src/core/surfaces/manager'
 import { surfaceTypes } from '../../src/core/surfaces/types'
+import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH } from '../../src/core/surfaces/geometry'
 
-/** Header and navigation rail are reserved, exactly as the shell reserves them. */
-const FRAME = { x: 186, y: 88, width: 1414, height: 912 }
+/**
+ * A frame with room for a laptop-sized window. The header, the status strip and
+ * the chat bar are reserved; the dashboard columns are not, because a window is
+ * allowed to cover them.
+ */
+const FRAME = { x: 60, y: 120, width: 1476, height: 800 }
 
 function makeManager() {
   const events: SurfaceEvent[] = []
@@ -16,17 +21,49 @@ function makeManager() {
 }
 
 describe('SurfaceManager — lifecycle', () => {
-  it('creates a surface with the descriptor default size, inside the frame', () => {
+  it('opens every surface at least laptop-sized, inside the frame', () => {
     const { manager } = makeManager()
     const surface = manager.open({ type: 'search' })
 
     expect(manager.surfaces).toHaveLength(1)
     expect(surface.type).toBe('search')
     expect(surface.title).toBe(surfaceTypes.search.title)
-    expect(surface.layout.width).toBe(surfaceTypes.search.width)
-    expect(surface.layout.height).toBe(surfaceTypes.search.height)
+    // The floor, not the descriptor: a 600x500 search panel is a panel
+    // pretending to be a workspace.
+    expect(surface.layout.width).toBeGreaterThanOrEqual(MIN_WINDOW_WIDTH)
+    expect(surface.layout.height).toBeGreaterThanOrEqual(MIN_WINDOW_HEIGHT)
+    // Still inside the frame it may be dragged within.
     expect(surface.layout.x).toBeGreaterThanOrEqual(FRAME.x)
     expect(surface.layout.y).toBeGreaterThanOrEqual(FRAME.y)
+  })
+
+  it('opens a window centred, and steps later windows away from the middle', () => {
+    const { manager } = makeManager()
+    const first = manager.open({ type: 'chat' })
+    const second = manager.open({ type: 'search' })
+
+    const centreX = first.layout.x + first.layout.width / 2
+    const frameCentre = FRAME.x + FRAME.width / 2
+    // The first window is centred on the frame.
+    expect(Math.abs(centreX - frameCentre)).toBeLessThanOrEqual(2)
+
+    // The second is distinguishable but has not walked off to one side.
+    expect(second.layout.x).toBeGreaterThan(first.layout.x)
+    expect(second.layout.x - first.layout.x).toBeLessThan(FRAME.width / 4)
+  })
+
+  it('caps a window at the frame when the frame is too small for the floor', () => {
+    const events: SurfaceEvent[] = []
+    const tiny = { x: 0, y: 0, width: 800, height: 600 }
+    const manager = new SurfaceManager({
+      frame: tiny,
+      onEvent: (event) => events.push(event),
+      now: () => 1_700_000_000_000,
+    })
+    const surface = manager.open({ type: 'search' })
+    // A window that cannot fit must still be openable and draggable back.
+    expect(surface.layout.width).toBeLessThanOrEqual(800)
+    expect(surface.layout.width).toBeGreaterThan(0)
   })
 
   it('assigns a unique id per surface and cascades new ones so they do not stack', () => {

@@ -24,7 +24,7 @@ import type { PresenceHandle } from './PresenceView'
  * It changes how Freya looks and never what she does — that is the shell
  * store's job.
  *
- * Keyboard: B background, P centrepiece, 1–4 brain style, C extras, R rings.
+ * Keyboard: B background, P centrepiece, 1–4 brain style, R rings.
  */
 
 const BACKGROUND_LABELS: Record<Background, string> = {
@@ -87,7 +87,6 @@ export function DesignLab({
       }
       if (key === 'b') update(cycleLab(lab, 'bg'))
       else if (key === 'p') update(cycleLab(lab, 'piece'))
-      else if (key === 'c') update(cycleLab(lab, 'clean'))
       else if (key === 'r') update(cycleLab(lab, 'rings'))
       else if (['1', '2', '3', '4'].includes(key)) {
         const style = BRAIN_STYLES[Number(key) - 1]
@@ -156,7 +155,6 @@ export function DesignLab({
           </div>
         </div>
 
-        {group('clean', LAB_OPTIONS.clean, { '0': 'Full', '1': 'Clean' })}
         {group('rings', LAB_OPTIONS.rings, { '0': 'Off', '1': 'On' })}
 
         <div className="lab-row">
@@ -172,7 +170,7 @@ export function DesignLab({
         </div>
 
         <div className="lab-foot">
-          <small>B background · P centrepiece · 1–4 style · C extras · R rings</small>
+          <small>B background · P centrepiece · 1–4 style · R rings</small>
           <button
             type="button"
             className="opt"
@@ -181,7 +179,6 @@ export function DesignLab({
                 bg: pick(BACKGROUNDS),
                 piece: pick(PIECES),
                 style: pick(BRAIN_STYLES),
-                clean: '0',
                 rings: '1',
               }
               update(next)
@@ -199,7 +196,6 @@ const LAB_LABELS: Record<keyof LabState, string> = {
   bg: 'Background',
   piece: 'Centrepiece',
   style: 'Brain style',
-  clean: 'Extras',
   rings: 'Outer rings',
 }
 

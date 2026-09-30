@@ -9,6 +9,8 @@ export interface WorkspaceSnapshot {
   surfaces: PersistedSurface[]
   presence: PresenceState
   nav: string
+  /** The systems rail folded to icons. */
+  navCollapsed: boolean
   savedAt: number
 }
 
@@ -104,10 +106,18 @@ export function parseWorkspace(raw: unknown): WorkspaceSnapshot | null {
     surfaces,
     presence: isPresenceState(raw.presence) ? raw.presence : 'idle',
     nav: typeof raw.nav === 'string' ? raw.nav.slice(0, 32) : 'home',
+    navCollapsed: raw.navCollapsed === true,
     savedAt: num(raw.savedAt, Date.now()),
   }
 }
 
 export function emptyWorkspace(): WorkspaceSnapshot {
-  return { schema: WORKSPACE_SCHEMA, surfaces: [], presence: 'idle', nav: 'home', savedAt: Date.now() }
+  return {
+    schema: WORKSPACE_SCHEMA,
+    surfaces: [],
+    presence: 'idle',
+    nav: 'home',
+    navCollapsed: false,
+    savedAt: Date.now(),
+  }
 }

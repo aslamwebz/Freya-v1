@@ -21,18 +21,36 @@ export type ShellEvent =
   | { type: 'command.submit'; text: string }
   /** What Core replied. `ok` is Core's verdict, not an optimistic guess. */
   | { type: 'command.acknowledged'; ok: boolean; detail: string; durableSequence?: number }
+  /** Fold the systems rail to icons. */
+  | { type: 'nav.collapse'; collapsed: boolean }
+  /** Append to the chat bar's transcript. */
+  | { type: 'chat.line'; role: 'you' | 'freya'; text: string; refused?: boolean }
   | { type: 'voice.toggle'; listening: boolean }
   | { type: 'attention.requested'; count: number }
-  | { type: 'workspace.restored'; nav: string; presence: PresenceState }
+  | { type: 'workspace.restored'; nav: string; navCollapsed: boolean; presence: PresenceState }
   | { type: 'work.updated'; note: string }
   | SurfaceEvent
 
 export interface ShellState {
   presence: Presence
   nav: string
+  /**
+   * The systems rail folds to icons only. Presentation state, persisted because
+   * someone who collapses it once generally wants it collapsed next time.
+   */
+  navCollapsed: boolean
   listening: boolean
   commandDraft: string
   lastCommand: string | null
+  /**
+   * The chat bar's own transcript.
+   *
+   * Presentation only, and deliberately *not* the record of what happened: each
+   * entry here is a line the person typed plus the acknowledgement Core sent
+   * back. It is a view of the command path, not a second copy of it, so it can
+   * be dropped without losing anything.
+   */
+  chat: ChatLine[]
   /**
    * A projection of the Surface Manager's list, carried on every surface event.
    * The manager owns surfaces; the shell reads a summary of them, never a copy.
@@ -42,6 +60,15 @@ export interface ShellState {
   runtime: { version: string; platform: string; userData: string; workspaceFile: string; dev: boolean }
   attention: { requested: number; lastNote: string | null }
   notices: Notice[]
+}
+
+export interface ChatLine {
+  id: number
+  role: 'you' | 'freya'
+  text: string
+  /** True when Core refused, so a line is never styled as a success. */
+  refused?: boolean
+  at: number
 }
 
 export interface Notice {
@@ -55,9 +82,11 @@ export function initialState(): ShellState {
   return {
     presence: { state: 'idle', since: Date.now(), activity: 0, detail: null },
     nav: 'home',
+    navCollapsed: false,
     listening: false,
     commandDraft: '',
     lastCommand: null,
+    chat: [],
     surfaces: { open: 0, minimized: 0, focused: null },
     dashboard: demoDashboard(),
     runtime: { version: '0.1.0', platform: 'browser', userData: '', workspaceFile: '', dev: true },
@@ -68,6 +97,10 @@ export function initialState(): ShellState {
 
 const MAX_NOTICES = 4
 let noticeSeq = 0
+
+/** The chat bar shows recent turns, not a scrollback nobody will read. */
+const MAX_CHAT_LINES = 40
+let chatSeq = 0
 
 function notice(state: ShellState, text: string, tone: Notice['tone']): Notice[] {
   noticeSeq += 1
@@ -110,6 +143,21 @@ export function reduce(state: ShellState, event: ShellEvent): ShellState {
 
     case 'nav.select':
       return state.nav === event.section ? state : { ...state, nav: event.section }
+
+    case 'nav.collapse':
+      return state.navCollapsed === event.collapsed ? state : { ...state, navCollapsed: event.collapsed }
+
+    case 'chat.line': {
+      chatSeq += 1
+      const line: ChatLine = {
+        id: chatSeq,
+        role: event.role,
+        text: event.text,
+        refused: event.refused === true,
+        at: Date.now(),
+      }
+      return { ...state, chat: [...state.chat, line].slice(-MAX_CHAT_LINES) }
+    }
 
     case 'voice.toggle': {
       if (event.listening) {
@@ -154,8 +202,10 @@ export function reduce(state: ShellState, event: ShellEvent): ShellState {
       return { ...state, attention: { ...state.attention, lastNote: event.note } }
 
     case 'workspace.restored': {
-      const withNav = state.nav === event.nav ? state : { ...state, nav: event.nav }
-      return withPresence(withNav, event.presence)
+      return withPresence(
+        { ...state, nav: event.nav, navCollapsed: event.navCollapsed },
+        event.presence,
+      )
     }
 
     // The manager owns surfaces and ships a summary; the store keeps it.

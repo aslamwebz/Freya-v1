@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react'
 import { PRESENCE_TONE } from '../../core/presence'
 import { useShell } from '../store'
-import { openSurface } from '../surfaceActions'
-import { Icon } from '../icons'
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
 const day = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
@@ -29,27 +27,6 @@ export function StatusArea() {
         <span className="status-dot" style={{ background: tone.accent, color: tone.accent }} />
         {tone.label}
       </div>
-
-      <span className="status-sep" aria-hidden="true" />
-
-      <button
-        type="button"
-        className="round"
-        aria-label="Security"
-        title="Security"
-        onClick={() => openSurface('security')}
-      >
-        <Icon name="shield" />
-      </button>
-      <button
-        type="button"
-        className="round"
-        aria-label="Settings"
-        title="Settings"
-        onClick={() => openSurface('settings')}
-      >
-        <Icon name="settings" />
-      </button>
 
       <span className="sr-only">
         Freya {runtime.version}, {runtime.platform}

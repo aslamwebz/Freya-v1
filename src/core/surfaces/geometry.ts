@@ -15,15 +15,26 @@ export interface Frame {
   height: number
 }
 
-/** Windows may not shrink below their type's minimum, nor grow past the frame. */
+/**
+ * Windows may not shrink below their type's minimum, nor grow past the frame —
+ * unless the frame is smaller than the minimum, in which case the frame wins.
+ *
+ * That exception is the important one. On a display too small to hold a
+ * laptop-sized window, insisting on the floor produces a window wider than the
+ * space it lives in: it hangs off both edges, and half of what is on screen is
+ * the dashboard behind it. A small window is a nuisance; a window you cannot see
+ * is broken.
+ */
 export function clampSize(
   size: { width: number; height: number },
   min: { width: number; height: number },
   frame: Frame,
 ): { width: number; height: number } {
+  const fit = (value: number, floor: number, available: number): number =>
+    round(Math.min(Math.max(value, Math.min(floor, available)), available))
   return {
-    width: round(Math.min(Math.max(size.width, min.width), Math.max(min.width, frame.width))),
-    height: round(Math.min(Math.max(size.height, min.height), Math.max(min.height, frame.height))),
+    width: fit(size.width, min.width, frame.width),
+    height: fit(size.height, min.height, frame.height),
   }
 }
 
@@ -54,18 +65,40 @@ export function clampLayout(
 }
 
 /**
- * Where a newly opened surface goes: a cascade, so a second window never
- * lands exactly on top of the first.
+ * The smallest window Freya opens.
+ *
+ * A 1366x768 laptop screen, which is the smallest display any real laptop has
+ * had for a long while. Anything smaller is a panel pretending to be a
+ * workspace, and content that is designed for a window ends up in a letterbox.
+ *
+ * It is a floor, not a fixed size: a window may be larger, and on a display
+ * too small to honour it the frame wins, because a window that cannot be
+ * dragged back on screen is worse than a small one.
+ */
+export const MIN_WINDOW_WIDTH = 1366
+export const MIN_WINDOW_HEIGHT = 768
+
+/**
+ * Where a newly opened surface goes.
+ *
+ * Centred in the workspace, because a window that appears in a corner reads as
+ * an accident. Later windows step away from the centre by a small, fixed
+ * amount rather than cascading across the screen, so they stay distinguishable
+ * without walking off to one side — and every one of them is draggable from
+ * there.
  */
 export function cascadePosition(
   index: number,
   size: { width: number; height: number },
   frame: Frame,
 ): { x: number; y: number } {
-  const step = 46
-  const slot = index % 6
+  const step = 34
+  // Cap the offset so the fourth window is still recognisably near the middle.
+  const slot = index % 4
+  const centreX = frame.x + (frame.width - size.width) / 2
+  const centreY = frame.y + (frame.height - size.height) / 2
   return clampPosition(
-    { x: frame.x + 24 + slot * step, y: frame.y + 20 + slot * 34 },
+    { x: centreX + slot * step, y: centreY + slot * step * 0.6 },
     size,
     frame,
   )

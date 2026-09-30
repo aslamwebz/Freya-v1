@@ -3,7 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
-import { GOLD_HI, U, flatMaterial, lineMaterial, lineSegments, makeRandom, pointCloud, rand, type PointSeed } from './primitives'
+import { GOLD_HI, U, flatMaterial, lineMaterial, lineSegments, makeRandom, pointCloud, type PointSeed } from './primitives'
 import type { LabState, Piece } from '../labState'
 import type { Centerpiece, Readout, VoiceLevels } from '../pieces/types'
 import { buildBrain } from '../pieces/brain'
@@ -55,17 +55,6 @@ export class PresenceStage {
   private readonly beacons: THREE.Points
   private readonly beaconAttribute: THREE.BufferAttribute
 
-  /** Shared by both beam shells, so the extras toggle dims the whole column. */
-  private readonly beamGain = { value: 1 }
-  private readonly strands: THREE.Object3D
-  private readonly screens: THREE.Object3D[] = []
-  private readonly swirls: THREE.Group
-  private readonly pedestalSpinners: { object: THREE.Object3D; speed: number }[] = []
-  private readonly sparkAttribute: THREE.BufferAttribute
-  private readonly sparkSpeed: number[]
-  private readonly sparkTop: number
-  private readonly sparkFloor: number
-
   private readonly pieces: Record<Piece, Centerpiece>
   private readonly brain: ReturnType<typeof buildBrain>
 
@@ -98,8 +87,14 @@ export class PresenceStage {
       canvas: options.canvas,
       antialias: true,
       powerPreference: 'high-performance',
+      // The canvas has to be able to be *nothing*. Opaque black here paints a
+      // dark rectangle over the atmosphere, because the canvas blends with
+      // `screen` inside its own stacking context, where the atmosphere is not
+      // the backdrop — so the "background" is the clear colour, not the space
+      // behind it.
+      alpha: true,
     })
-    this.renderer.setClearColor(0x000000, 1)
+    this.renderer.setClearColor(0x000000, 0)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.1
@@ -111,7 +106,10 @@ export class PresenceStage {
     this.composer.addPass(new RenderPass(this.scene, this.camera))
     this.bloom = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.7, 0.45, 0.3)
     this.composer.addPass(this.bloom)
-    this.composer.addPass(new OutputPass())
+    // `premultipliedAlpha: false` and a transparent clear: without this the
+    // output pass flattens the frame to opaque black and the rectangle is back.
+    const output = new OutputPass()
+    this.composer.addPass(output)
 
     const random = makeRandom(0x5eed1e)
     const pixelRatio = this.renderer.getPixelRatio()
@@ -132,20 +130,11 @@ export class PresenceStage {
     this.scanner.visible = false
     this.hud.add(this.scanner)
 
-    const beam = this.buildBeam()
-    this.strands = beam.strands
-    this.screens.push(...beam.screens)
-    this.swirls = beam.swirls
-    const sparks = beam.sparks
-    this.sparkAttribute = sparks.attribute
-    this.sparkSpeed = sparks.speed
-    this.sparkTop = sparks.top
-    this.sparkFloor = sparks.floor
 
     this.beacons = this.buildBeacons(pixelRatio)
     this.beaconAttribute = this.beacons.geometry.attributes.position as THREE.BufferAttribute
 
-    this.lab = { bg: 'space', piece: 'orb', style: 'current', clean: '0', rings: '1' }
+    this.lab = { bg: 'space', piece: 'orb', style: 'current', rings: '1' }
     this.applyLab(this.lab)
 
     this.onPointerMove = this.onPointerMove.bind(this)
@@ -227,195 +216,6 @@ export class PresenceStage {
     return beacons
   }
 
-  private buildBeam() {
-    const pedestalY = -2.35
-    const topY = 3.6
-    const height = topY - pedestalY
-    const beamMaterial = (color: THREE.Color, power: number) =>
-      new THREE.ShaderMaterial({
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        side: THREE.DoubleSide,
-        uniforms: { uColor: { value: color }, uTime: { value: 0 }, uGain: this.beamGain },
-        vertexShader: /* glsl */ `
-          varying vec2 vUv; varying float vF;
-          void main() {
-            vUv = uv; vec3 n = normalize(normalMatrix * normal);
-            vec4 mv = modelViewMatrix * vec4(position, 1.0);
-            vF = abs(dot(n, normalize(-mv.xyz)));
-            gl_Position = projectionMatrix * mv;
-          }`,
-        fragmentShader: /* glsl */ `
-          uniform vec3 uColor; uniform float uTime, uGain; varying vec2 vUv; varying float vF;
-          void main() {
-            float h = pow(1.0 - vUv.y, 1.4) * smoothstep(0.0, 0.05, vUv.y);
-            float flicker = 0.85 + 0.15 * sin(vUv.y * 40.0 - uTime * 6.0);
-            float a = pow(vF, ${power.toFixed(1)}) * h * flicker;
-            gl_FragColor = vec4(uColor * a * uGain, a);
-          }`,
-      })
-    const outer = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.34, 0.62, height, 40, 1, true),
-      beamMaterial(new THREE.Color('#3f8dff').multiplyScalar(0.28), 2.5),
-    )
-    const core = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.05, 0.13, height, 20, 1, true),
-      beamMaterial(new THREE.Color('#e8f4ff').multiplyScalar(0.45), 1.0),
-    )
-    for (const mesh of [outer, core]) {
-      mesh.position.y = pedestalY + height / 2
-      this.materials.push(mesh.material as THREE.ShaderMaterial)
-      this.world.add(mesh)
-    }
-
-    const random = makeRandom(0x5ead)
-    const strandPoints: number[] = []
-    const strandColours: number[] = []
-    for (let i = 0; i < 48; i += 1) {
-      const a = random() * 6.28
-      const r = rand(random, 0.05, 0.6)
-      const h = rand(random, 0.8, 2.6)
-      const x = Math.cos(a) * r
-      const z = Math.sin(a) * r
-      strandPoints.push(x, pedestalY, z, x * 0.7, pedestalY + h, z * 0.7)
-      strandColours.push(1, 0.75, 0.4, 0.05, 0.12, 0.25)
-    }
-    const strandGeometry = new THREE.BufferGeometry()
-    strandGeometry.setAttribute('position', new THREE.Float32BufferAttribute(strandPoints, 3))
-    strandGeometry.setAttribute('color', new THREE.Float32BufferAttribute(strandColours, 3))
-    const strands = new THREE.LineSegments(
-      strandGeometry,
-      new THREE.LineBasicMaterial({
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.3,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
-    )
-    this.world.add(strands)
-
-    const sparkCount = 320
-    const sparkSeeds: PointSeed[] = []
-    const sparkSpeed: number[] = []
-    for (let i = 0; i < sparkCount; i += 1) {
-      const a = random() * 6.28
-      const r = Math.pow(random(), 1.5) * 0.9
-      sparkSeeds.push({
-        x: Math.cos(a) * r,
-        y: rand(random, pedestalY, topY),
-        z: Math.sin(a) * r,
-        c: (random() < 0.6 ? GOLD_HI : new THREE.Color('#bfe2ff')).clone().multiplyScalar(0.6),
-        s: rand(random, 0.6, 1.5),
-      })
-      sparkSpeed.push(rand(random, 0.25, 0.9))
-    }
-    const sparks = pointCloud(sparkSeeds, 1, this.renderer.getPixelRatio())
-    this.world.add(sparks)
-
-    // Pedestal: stacked rings that give the composition a floor.
-    const pedestal = new THREE.Group()
-    pedestal.position.y = pedestalY
-    this.world.add(pedestal)
-    const discs: { radius: number; width: number; colour: string; opacity: number; y: number; dash?: number; spin?: number }[] = [
-      { radius: 0.55, width: 0.05, colour: '#fff1d0', opacity: 0.9, y: 0.02 },
-      { radius: 0.9, width: 0.02, colour: '#ffc46b', opacity: 0.8, y: 0, dash: 24, spin: 0.25 },
-      { radius: 1.25, width: 0.035, colour: '#ffb450', opacity: 0.7, y: -0.02 },
-      { radius: 1.55, width: 0.015, colour: '#ffd699', opacity: 0.6, y: -0.05, dash: 60, spin: -0.12 },
-      { radius: 1.85, width: 0.05, colour: '#e0993f', opacity: 0.55, y: -0.18 },
-      { radius: 2.15, width: 0.02, colour: '#ffc46b', opacity: 0.45, y: -0.34, dash: 8, spin: 0.06 },
-      { radius: 2.35, width: 0.04, colour: '#c9822f', opacity: 0.35, y: -0.5 },
-    ]
-    for (const disc of discs) {
-      const holder = new THREE.Group()
-      const parts = disc.dash ?? 1
-      const gap = disc.dash ? ((Math.PI * 2) / parts) * 0.35 : 0
-      for (let k = 0; k < parts; k += 1) {
-        const length = (Math.PI * 2) / parts - gap
-        holder.add(
-          new THREE.Mesh(
-            new THREE.RingGeometry(disc.radius - disc.width, disc.radius, disc.dash ? 8 : 128, 1, k * (length + gap), length),
-            flatMaterial(disc.colour, disc.opacity * 0.55),
-          ),
-        )
-      }
-      holder.rotation.x = -Math.PI / 2
-      holder.position.y = disc.y
-      pedestal.add(holder)
-      if (disc.spin) this.pedestalSpinners.push({ object: holder, speed: disc.spin })
-    }
-    pedestal.add(
-      new THREE.Mesh(
-        new THREE.CircleGeometry(2.6, 48),
-        new THREE.ShaderMaterial({
-          transparent: true,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-          vertexShader: /* glsl */ `
-            varying vec2 vUv;
-            void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-          fragmentShader: /* glsl */ `
-            varying vec2 vUv;
-            void main() {
-              float d = length(vUv - 0.5) * 2.0;
-              float a = pow(1.0 - clamp(d, 0.0, 1.0), 2.5);
-              gl_FragColor = vec4(vec3(1.0, 0.72, 0.36) * a * 0.3, a);
-            }`,
-        }),
-      ),
-    )
-
-    // Floating chart panels.
-    for (const side of [-1, 1]) {
-      const material = new THREE.MeshBasicMaterial({
-        map: chartTexture(side < 0 ? 0 : 1),
-        transparent: true,
-        opacity: 0.55,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      })
-      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.875), material)
-      mesh.position.set(side * 2.0, CENTRE_Y - 1.75, 0.4)
-      mesh.rotation.y = -side * 0.55
-      this.world.add(mesh)
-      this.screens.push(mesh)
-    }
-
-    // Gold and blue spiral swirls.
-    const swirls = new THREE.Group()
-    this.world.add(swirls)
-    for (const [offset, colour, strength] of [
-      [0, new THREE.Color('#ffbf62'), 1.0],
-      [Math.PI, new THREE.Color('#3f96ff'), 0.8],
-    ] as const) {
-      const list: PointSeed[] = []
-      for (let i = 0; i < 1100; i += 1) {
-        const t = i / 1100
-        const a = offset + t * Math.PI * 2 * 1.7
-        const r = 1.75 + 0.6 * Math.sin(t * Math.PI)
-        list.push({
-          x: Math.cos(a) * r + rand(random, -0.03, 0.03),
-          y: pedestalY + 0.4 + t * 4.1 + rand(random, -0.03, 0.03),
-          z: Math.sin(a) * r * 0.85,
-          c: colour.clone().multiplyScalar(0.95 * strength * (0.3 + 0.7 * Math.sin(t * Math.PI))),
-          s: rand(random, 0.8, 2.0) * (0.4 + Math.sin(t * Math.PI)),
-        })
-      }
-      swirls.add(pointCloud(list, 0.5, this.renderer.getPixelRatio()))
-    }
-
-    return {
-      outer,
-      core,
-      strands,
-      screens: this.screens,
-      swirls,
-      sparks: { attribute: sparks.geometry.attributes.position as THREE.BufferAttribute, speed: sparkSpeed, top: topY, floor: pedestalY },
-    }
-  }
-
   /* ------------------------------------------------------------ geometry */
 
   private tickRing(radius: number, count: number, length: number, colour: string, opacity: number) {
@@ -467,12 +267,6 @@ export class PresenceStage {
     this.brain.setStyle(lab.style)
     this.hud.visible = this.pieces[lab.piece].hud
     this.scanner.visible = lab.piece === 'brain'
-
-    const clean = lab.clean === '1'
-    this.swirls.visible = !clean
-    for (const screen of this.screens) screen.visible = !clean
-    this.strands.visible = !clean
-    this.beamGain.value = clean ? 0.3 : 1
 
     this.nextReadout = 0
     if (!this.running) this.draw(0)
@@ -579,15 +373,6 @@ export class PresenceStage {
       if (piece.group.visible && piece !== this.pieces[this.lab.piece]) piece.update(time, delta, this.voice, this.activity)
     }
 
-    this.swirls.rotation.y = time * 0.16
-    for (const { object, speed } of this.pedestalSpinners) object.rotation.z += speed * delta
-    for (let i = 0; i < this.sparkSpeed.length; i += 1) {
-      let y = this.sparkAttribute.getY(i) + (this.sparkSpeed[i] ?? 0) * delta
-      if (y > this.sparkTop) y = this.sparkFloor
-      this.sparkAttribute.setY(i, y)
-    }
-    this.sparkAttribute.needsUpdate = true
-
     this.world.rotation.y += (this.pointerX * 0.3 - this.world.rotation.y) * 0.04
     this.world.rotation.x += (this.pointerY * 0.06 - this.world.rotation.x) * 0.04
 
@@ -613,41 +398,4 @@ export class PresenceStage {
   }
 }
 
-
-/** A small 2D chart, drawn once into a texture for the floating panels. */
-function chartTexture(kind: number): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas')
-  canvas.width = 256
-  canvas.height = 320
-  const g = canvas.getContext('2d')
-  if (!g) return new THREE.CanvasTexture(canvas)
-  g.strokeStyle = 'rgba(110,190,255,.9)'
-  g.lineWidth = 3
-  g.strokeRect(6, 6, 244, 308)
-  g.fillStyle = 'rgba(40,110,220,.15)'
-  g.fillRect(6, 6, 244, 308)
-  g.fillStyle = 'rgba(150,210,255,.9)'
-  if (kind === 0) {
-    for (let i = 0; i < 26; i += 1) {
-      const h = 30 + Math.abs(Math.sin(i * 1.3)) * 120 + (i % 5) * 8
-      g.fillRect(20 + i * 8.5, 290 - h, 5, h)
-    }
-  } else {
-    g.lineWidth = 3
-    g.strokeStyle = 'rgba(150,210,255,.9)'
-    g.beginPath()
-    for (let i = 0; i <= 20; i += 1) {
-      const x = 20 + i * 11
-      const y = 200 - Math.sin(i * 0.6) * 50 - i * 4
-      if (i) g.lineTo(x, y)
-      else g.moveTo(x, y)
-    }
-    g.stroke()
-    for (let r = 0; r < 6; r += 1) g.fillRect(20, 240 + r * 10, 60 + ((r * 37) % 140), 4)
-  }
-  for (let r = 0; r < 3; r += 1) g.fillRect(20, 24 + r * 12, 50 + r * 30, 5)
-  const texture = new THREE.CanvasTexture(canvas)
-  texture.needsUpdate = true
-  return texture
-}
 

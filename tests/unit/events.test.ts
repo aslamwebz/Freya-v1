@@ -105,7 +105,7 @@ describe('event reducer', () => {
   })
 
   it('restores nav and presence from a workspace snapshot', () => {
-    const state = apply([{ type: 'workspace.restored', nav: 'vault', presence: 'working' }])
+    const state = apply([{ type: 'workspace.restored', nav: 'vault', navCollapsed: false, presence: 'working' }])
     expect(state.nav).toBe('vault')
     expect(state.presence.state).toBe('working')
   })
@@ -198,6 +198,7 @@ describe('every presence change goes through transition validation', () => {
     const after = reduce(errored, {
       type: 'workspace.restored',
       nav: 'vault',
+      navCollapsed: false,
       presence: 'working',
     })
 
@@ -211,6 +212,7 @@ describe('every presence change goes through transition validation', () => {
     const after = reduce(working, {
       type: 'workspace.restored',
       nav: 'work',
+      navCollapsed: false,
       presence: 'working',
     })
     expect(after.presence.state).toBe('working')

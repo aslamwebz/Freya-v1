@@ -22,11 +22,20 @@
   width: 100%;
 }
 
+/*
+ * No z-index, and that is load-bearing.
+ *
+ * The canvas below blends with `mix-blend-mode: screen`, which means against
+ * its *backdrop*. Giving this element a z-index makes it a stacking context,
+ * which isolates the blend: the atmosphere is then not the backdrop, the
+ * transparent page is, and the canvas's empty regions composite as near-black.
+ * That is the dark rectangle behind the centrepiece. Leaving the stage out of
+ * the stacking order lets the blend see the space it is actually in.
+ */
 .presence-stage {
   position: relative;
   flex: 1;
   min-height: 0;
-  z-index: 1;
 }
 
 .presence-canvas {
@@ -35,6 +44,15 @@
   width: 100%;
   height: 100%;
   display: block;
+  /*
+   * `screen` rather than plain compositing, and this is not decoration: screen
+   * can only ever lighten what is behind it, so the canvas cannot paint a dark
+   * rectangle over the nebula no matter what the postprocessing chain hands it.
+   * Plain compositing does exactly that, because the composer's alpha does not
+   * survive its own bloom pass.
+   *
+   * It only works because the blend is not isolated — see `.presence-stage`.
+   */
   mix-blend-mode: screen;
   -webkit-mask-image:
     linear-gradient(90deg, transparent, #000 9%, #000 91%, transparent),

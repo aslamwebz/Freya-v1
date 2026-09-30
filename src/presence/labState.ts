@@ -5,8 +5,13 @@
  * the presence is drawn, not what Freya is doing. It is kept here, separate from
  * the shell store, and persisted separately.
  *
- * Defaults are the ones Freya ships with: the liquid orb on deep space, full
- * extras, outer rings on.
+ * Defaults are the ones Freya ships with: the liquid orb on deep space, outer
+ * rings on.
+ *
+ * There is an "extras" toggle no longer. It used to hide the beam furniture
+ * around the centrepiece, and with the pedestal and the beam gone it would have
+ * been a control that changed nothing — worse than no control, because it looks
+ * like it is doing something.
  */
 
 export const BACKGROUNDS = ['city', 'space', 'grid', 'aurora', 'obsidian'] as const
@@ -24,7 +29,6 @@ export const LAB_OPTIONS = {
   bg: BACKGROUNDS,
   piece: PIECES,
   style: BRAIN_STYLES,
-  clean: CLEAN_MODES,
   rings: CLEAN_MODES,
 } as const
 
@@ -32,7 +36,6 @@ export interface LabState {
   bg: Background
   piece: Piece
   style: BrainStyle
-  clean: '0' | '1'
   rings: '0' | '1'
 }
 
@@ -40,7 +43,6 @@ export const DEFAULT_LAB: LabState = {
   bg: 'space',
   piece: 'orb',
   style: 'current',
-  clean: '0',
   rings: '1',
 }
 
@@ -58,7 +60,6 @@ export function loadLabState(): LabState {
       bg: read('bg'),
       piece: read('piece'),
       style: read('style'),
-      clean: read('clean'),
       rings: read('rings'),
     }
   } catch {

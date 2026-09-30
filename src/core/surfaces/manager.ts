@@ -1,4 +1,13 @@
-import { cascadePosition, clampLayout, clampPosition, clampSize, round, type Frame } from './geometry'
+import {
+  MIN_WINDOW_HEIGHT,
+  MIN_WINDOW_WIDTH,
+  cascadePosition,
+  clampLayout,
+  clampPosition,
+  clampSize,
+  round,
+  type Frame,
+} from './geometry'
 import { surfaceTypes, type Bounds, type Surface, type SurfaceLayout, type SurfaceType, type SurfaceTypeDescriptor } from './types'
 
 export type SurfaceEventName =
@@ -165,6 +174,17 @@ export class SurfaceManager {
    * The workspace was resized. Every surface is re-clamped so that a layout
    * saved on a wide display cannot leave windows off-screen on a small one.
    */
+  /**
+   * The region windows may currently occupy.
+   *
+   * Exposed so the shell's own layout and the geometry agree: a test asserting
+   * that a window respects the frame reads the same frame the manager is using,
+   * rather than a copy of it that can drift.
+   */
+  get workspaceFrame(): Frame {
+    return this.frame
+  }
+
   setFrame(frame: Frame): void {
     this.frame = frame
     let changed = false
@@ -215,9 +235,17 @@ export class SurfaceManager {
     }
 
     const descriptor = surfaceTypes[spec.type]
+    // Every window opens at least laptop-sized. The per-type minimum still
+    // applies on top, so a surface that genuinely needs more room still gets it
+    // and none of them can be shrunk below what a window is for.
+    const min = minSizeOf(descriptor)
+    const floor = {
+      width: Math.max(MIN_WINDOW_WIDTH, min.width),
+      height: Math.max(MIN_WINDOW_HEIGHT, min.height),
+    }
     const size = clampSize(
-      { width: descriptor.width, height: descriptor.height },
-      minSizeOf(descriptor),
+      { width: Math.max(floor.width, descriptor.width), height: Math.max(floor.height, descriptor.height) },
+      floor,
       this.frame,
     )
     const position = cascadePosition(this.items.length, size, this.frame)

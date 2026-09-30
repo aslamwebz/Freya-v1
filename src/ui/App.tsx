@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useShell } from './store'
 import { startShell } from './boot'
 import { CommandBar } from './shell/CommandBar'
-import { StatusArea } from './shell/StatusArea'
 import { Navigation } from './shell/Navigation'
+import { TopBar } from './shell/TopBar'
 import { SurfaceDock } from './shell/SurfaceDock'
 import {
   ActivityPanel,
@@ -67,7 +67,7 @@ export function App() {
             </div>
           </div>
           <CommandBar />
-          <StatusArea />
+          <TopBar />
         </header>
 
         <Navigation />

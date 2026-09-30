@@ -22,21 +22,40 @@ export const manager = new SurfaceManager({
 })
 
 /**
- * The region surfaces are allowed to occupy: everything except the header and
- * the navigation rail. Measured rather than hard-coded, so it stays correct
- * across the responsive breakpoints.
+ * The region surfaces are allowed to occupy: the full window width, below the
+ * header and above the chat bar.
+ *
+ * The frame is deliberately *not* the centre column. Windows open at least
+ * laptop-sized, and no part of the dashboard is wide enough to hold one, so
+ * bounding them to the middle column would cap every window at roughly a third
+ * of a laptop screen. The dashboard columns are the backdrop; a window is
+ * allowed to cover them, which is what a window is for.
+ *
+ * The rail is excluded only when it is expanded. Collapsed, it is a strip of
+ * icons and a window may sit over it — the icons stay reachable because the
+ * window can always be dragged, minimised or closed.
+ *
+ * Measured rather than hard-coded, so this stays correct across breakpoints and
+ * across the rail folding.
  */
 export function workspaceFrame() {
   const header = document.querySelector<HTMLElement>('.header')
   const nav = document.querySelector<HTMLElement>('.nav')
+  const chat = document.querySelector<HTMLElement>('.chatbar')
   // `||` not `??`: a measured zero is not an absent element.
   const top = header?.offsetHeight || 88
-  const left = nav?.offsetWidth || 186
+  const bottom = chat?.offsetHeight || 0
+  // An absent rail and a folded rail are different: absent means nothing has
+  // mounted yet, so assume the expanded width rather than placing windows under
+  // a rail that is about to appear. Folded means measured zero, and that is the
+  // answer.
+  const collapsed = nav?.dataset.collapsed === 'true'
+  const left = nav === null ? 186 : collapsed ? 0 : nav.offsetWidth || 186
   return {
     x: left,
     y: top,
     width: Math.max(320, window.innerWidth - left),
-    height: Math.max(240, window.innerHeight - top),
+    height: Math.max(240, window.innerHeight - top - bottom),
   }
 }
 
@@ -68,6 +87,7 @@ async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'bro
     shellStore.dispatch({
       type: 'workspace.restored',
       nav: snapshot.nav,
+      navCollapsed: snapshot.navCollapsed,
       presence: snapshot.presence,
     })
   }
@@ -79,6 +99,7 @@ async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'bro
       surfaces: manager.serialize(),
       presence: state.presence.state,
       nav: state.nav,
+      navCollapsed: state.navCollapsed,
       savedAt: Date.now(),
     })
   }
@@ -97,6 +118,12 @@ async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'bro
   shellStore.subscribe(schedule)
   window.addEventListener('beforeunload', persist)
   window.addEventListener('resize', onResize)
+
+  // Folding the rail changes the region windows may occupy, so the frame is
+  // re-measured and the manager re-clamps what it is holding.
+  shellStore.subscribe(() => {
+    manager.setFrame(workspaceFrame())
+  })
 
   // The host cannot reach us while the window is being torn down, so it asks.
   // This is the handler that answers that question with the current layout.

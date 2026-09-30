@@ -383,7 +383,7 @@ export class MindService {
       } catch (error) {
         // Nothing has been spent and nothing is claimed. A conversation that
         // cannot be written is a conversation that cannot be had.
-        return this.refuse(input, conversationFault(error))
+        return await this.refuse(input, conversationFault(error))
       }
 
       // --- 2. the turn exists, before it does anything ----------------------
@@ -405,7 +405,7 @@ export class MindService {
       try {
         await this.store.recordTurnStart(turn)
       } catch (error) {
-        return this.refuse(input, conversationFault(error))
+        return await this.refuse(input, conversationFault(error))
       }
       await this.fabric.append(
         'conversation.turn.started',
@@ -421,7 +421,7 @@ export class MindService {
       try {
         await this.authority.createGrant(grant)
       } catch (error) {
-        return this.finishTurn(input, turn, 'denied', {
+        return await this.finishTurn(input, turn, 'denied', {
           reason: `the turn could not be authorised: ${describe(error)}`,
         })
       }
@@ -444,7 +444,7 @@ export class MindService {
         )
       } catch (error) {
         if (error instanceof ContextBudgetExceeded) {
-          return this.finishTurn(input, turn, 'failed', { reason: error.message })
+          return await this.finishTurn(input, turn, 'failed', { reason: error.message })
         }
         throw error
       }
@@ -474,16 +474,16 @@ export class MindService {
 
       if (outcome.status === 'denied') {
         // The Governor refused. Nobody was asked, and the turn says so.
-        return this.finishTurn(input, turn, 'denied', { reason: outcome.reason })
+        return await this.finishTurn(input, turn, 'denied', { reason: outcome.reason })
       }
       if (outcome.status === 'cancelled') {
-        return this.finishTurn(input, turn, 'cancelled', {
+        return await this.finishTurn(input, turn, 'cancelled', {
           reason: outcome.reason,
           providerContacted: outcome.providerContacted,
         })
       }
       if (outcome.status === 'failed') {
-        return this.finishTurn(input, turn, 'failed', {
+        return await this.finishTurn(input, turn, 'failed', {
           reason: outcome.reason,
           providerContacted: outcome.providerContacted,
         })
@@ -505,14 +505,14 @@ export class MindService {
         // The answer exists in memory and cannot be kept. Reporting the turn as
         // completed would put text in the transcript that is not durable, which
         // is the one state this ordering exists to prevent.
-        return this.finishTurn(input, turn, 'failed', {
+        return await this.finishTurn(input, turn, 'failed', {
           reason: `the answer could not be stored: ${conversationFault(error)}`,
           providerId: outcome.providerId,
           model: outcome.model,
         })
       }
 
-      return this.finishTurn(
+      return await this.finishTurn(
         input,
         turn,
         'completed',
@@ -525,6 +525,11 @@ export class MindService {
         assistantMessage,
       )
     } finally {
+      // Important: every asynchronous terminal return above is awaited before
+      // this finally block runs. Returning the promise directly would execute
+      // this cleanup first, deleting per-turn Experience measurements while
+      // finishTurn was still awaiting its durable writes.
+      //
       // Whatever happened, the conversation is free again. A turn that left
       // itself marked active would make every later send fail.
       this.activeTurns.delete(input.conversationId)

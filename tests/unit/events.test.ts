@@ -37,6 +37,7 @@ const READY_CORE: CoreStatus = {
   guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
   governor: { status: 'ready', grantsActive: 0 },
   providers: [],
+  activeProviderCalls: 0,
   sessionUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
   durableUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
   faults: [],

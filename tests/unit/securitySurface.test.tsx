@@ -35,6 +35,7 @@ const STATUS: CoreStatus = {
       liveEnabled: false,
     },
   ],
+  activeProviderCalls: 0,
   sessionUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
   durableUsage: { calls: 3, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
   faults: [],

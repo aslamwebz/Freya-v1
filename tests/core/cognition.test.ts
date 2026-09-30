@@ -455,9 +455,9 @@ describe('the output token budget', () => {
     // At the moment the provider runs, the durable reservation already exists.
     let reservedWhenCalled: number | null = null
     const original = fake.complete.bind(fake)
-    ;(fake as unknown as { complete: typeof original }).complete = async (req) => {
+    ;(fake as unknown as { complete: typeof original }).complete = async (req, options) => {
       reservedWhenCalled = ownerAuthority(core!).grants()[0]?.usage.outputTokenBudgetReserved ?? null
-      return original(req)
+      return original(req, options)
     }
 
     await ownerAuthority(core).request(agentCall('a', 300))

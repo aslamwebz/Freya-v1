@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CoreStatus, ProviderStatus } from '../../core/protocol/core-protocol'
 import {
-  countInFlightProviderCalls,
   deriveAttention,
   derivePresence,
   projectDesktop,
@@ -28,6 +27,7 @@ function core(over: Partial<CoreStatus> = {}): CoreStatus {
     guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
     governor: { status: 'ready', grantsActive: 0 },
     providers: [],
+    activeProviderCalls: 0,
     sessionUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
     durableUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
     faults: [],
@@ -40,7 +40,6 @@ function input(over: Partial<ProjectionInput> = {}): ProjectionInput {
     core: core(),
     activity: [],
     listening: false,
-    inFlightProviderCalls: 0,
     now: 1_800_000_000_000,
     ...over,
   }
@@ -133,48 +132,38 @@ describe('presence derivation', () => {
     expect(errored.state).toBe('error')
   })
 
-  it('claims working only when a provider call is genuinely in flight', () => {
-    expect(derivePresence(input({ inFlightProviderCalls: 1 })).state).toBe('working')
+  it('claims working only when Core reports a live provider call', () => {
+    expect(derivePresence(input({ core: core({ activeProviderCalls: 1 }) })).state).toBe('working')
+    expect(derivePresence(input({ core: core({ activeProviderCalls: 3 }) })).state).toBe('working')
   })
 
   it('never claims working from a command alone', () => {
-    // A recorded command is not work. No input other than real in-flight
-    // provider activity can reach `working`, which is what makes this true by
-    // construction rather than by convention.
-    const idle = derivePresence(input({ inFlightProviderCalls: 0 }))
+    // A recorded command is not work. `command.received` reaches the activity
+    // feed and nothing else, and no input other than a live provider count can
+    // reach `working` — so this is true by construction rather than by
+    // convention.
+    const idle = derivePresence(
+      input({
+        core: core({ activeProviderCalls: 0 }),
+        activity: [activity('command.received:4')],
+      }),
+    )
     expect(idle.state).toBe('idle')
+  })
+
+  it('reports running model work above an open microphone', () => {
+    // A request that is executing is spending money whether or not anyone is
+    // speaking, and the count is the only thing the user cannot otherwise see.
+    const working = derivePresence(
+      input({ core: core({ activeProviderCalls: 2 }), listening: true }),
+    )
+    expect(working.state).toBe('working')
   })
 
   it('treats a null Core as starting up rather than as healthy', () => {
     const none = derivePresence(input({ core: null }))
     expect(none.state).toBe('idle')
     expect(none.detail).toMatch(/starting/i)
-  })
-})
-
-describe('in-flight provider counting', () => {
-  it('counts started minus finished', () => {
-    expect(
-      countInFlightProviderCalls([
-        activity('model.request.started:1'),
-        activity('model.request.started:2'),
-        activity('model.request.completed:3'),
-      ]),
-    ).toBe(1)
-  })
-
-  it('never goes negative on a feed that started mid-stream', () => {
-    expect(countInFlightProviderCalls([activity('model.request.completed:9')])).toBe(0)
-  })
-
-  it('does not call a crashed request live after a new Core session starts', () => {
-    expect(
-      countInFlightProviderCalls([
-        activity('model.request.started:7'),
-        activity('core.started:8'),
-        activity('core.ready:9'),
-      ]),
-    ).toBe(0)
   })
 })
 
@@ -308,7 +297,7 @@ describe('the whole projection', () => {
     const reachable = [
       derivePresence(input()).state,
       derivePresence(input({ listening: true })).state,
-      derivePresence(input({ inFlightProviderCalls: 2 })).state,
+      derivePresence(input({ core: core({ activeProviderCalls: 2 }) })).state,
       derivePresence(input({ core: null })).state,
       derivePresence(input({ core: core({ lifecycle: 'booting' }) })).state,
     ]

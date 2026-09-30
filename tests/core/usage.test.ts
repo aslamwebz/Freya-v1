@@ -12,7 +12,7 @@ import {
   FaultedModelProvider,
   SilentModelProvider,
 } from '../../core/model/fake-provider'
-import type { ModelProvider, ModelRequest, ModelResult } from '../../core/model/provider'
+import type { ModelCallOptions, ModelProvider, ModelRequest, ModelResult } from '../../core/model/provider'
 import type { ProviderStatus } from '../../core/protocol/core-protocol'
 
 /**
@@ -78,7 +78,7 @@ class ScriptedProvider implements ModelProvider {
     }
   }
 
-  async complete(_request: ModelRequest): Promise<ModelResult> {
+  async complete(_request: ModelRequest, _options: ModelCallOptions): Promise<ModelResult> {
     const reported = this.script[this.calls] ?? null
     this.calls += 1
     return {
@@ -368,7 +368,7 @@ describe('a failed provider attempt has unknown usage', () => {
         }
       }
 
-      async complete(): Promise<ModelResult> {
+      async complete(_request: ModelRequest, _options: ModelCallOptions): Promise<ModelResult> {
         this.calls += 1
         throw new Error('connection reset after the first tokens')
       }
@@ -442,7 +442,7 @@ describe('a failed provider attempt has unknown usage', () => {
         }
       }
 
-      async complete(request: ModelRequest): Promise<ModelResult> {
+      async complete(request: ModelRequest, _options: ModelCallOptions): Promise<ModelResult> {
         this.calls += 1
         if (this.calls === 1) {
           return {

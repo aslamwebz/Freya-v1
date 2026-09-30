@@ -66,6 +66,30 @@ export interface CognitionGrant {
  * Collapsing these is how a budget silently stops meaning anything, so they are
  * separate fields with separate rules.
  */
+/**
+ * What an owner asks for when creating a grant.
+ *
+ * Note what is absent: no `createdBy`, no `revokedBy`, no principal of any
+ * kind. Identity is assigned by Core from the authority the call arrived on. A
+ * spec that could name its own author would be a way to forge a durable record
+ * of who authorised something.
+ */
+export interface CognitionGrantSpec {
+  grantId: string
+  expiresAt: string
+  allowedOrigins: readonly CognitionOrigin[]
+  allowedCauses: readonly CognitionCause[]
+  goalId?: string | null
+  runId?: string | null
+  /** Narrow this grant to one principal. Null means any principal. */
+  actor?: PrincipalId | null
+  backgroundAllowed: boolean
+  /** Hard ceilings. Neither may be infinite, and neither may be zero. */
+  maxCalls: number
+  maxOutputTokens: number
+  parentGrantId?: string | null
+}
+
 export interface CognitionGrantUsage {
   calls: number
   /** Allowance consumed by authorisation. Monotonic. Never refunded. */

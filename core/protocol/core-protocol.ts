@@ -37,6 +37,23 @@ export const CAPABILITIES = [
 
 export type Capability = (typeof CAPABILITIES)[number]
 
+/**
+ * Everything the owner holds, in one place.
+ *
+ * The owner principal is built from this rather than from a list written out at
+ * the call site, so a capability added to the vocabulary cannot be quietly left
+ * off the one principal that is supposed to have it.
+ */
+export const ALL_CAPABILITIES: readonly Capability[] = CAPABILITIES
+
+/**
+ * The capabilities a worker may ever hold.
+ *
+ * Deliberately excludes `cognition.grant.manage` and every `security.*`
+ * capability: a worker can ask to think, and that is the end of it.
+ */
+export const WORKER_CAPABILITIES: readonly Capability[] = ['cognition.request']
+
 /* --------------------------------------------------------------- Guard */
 
 export type GuardOutcome = 'allow' | 'deny' | 'approval_required'
@@ -146,6 +163,13 @@ export type CoreCommandName =
   | 'security.stopAll'
   | 'security.resume'
   | 'cognition.status.read'
+  /**
+   * Grant governance. The handler ignores any principal in the payload and
+   * records the owner, because identity is assigned by Core and never
+   * accepted from a caller.
+   */
+  | 'cognition.grant.create'
+  | 'cognition.grant.revoke'
 
 export interface CoreCommandEnvelope {
   command: CoreCommandName

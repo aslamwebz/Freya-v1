@@ -11,6 +11,10 @@ import { ModelGateway, type GatewayRecorder } from './model/gateway'
 import type { ModelProvider } from './model/provider'
 import { FakeModelProvider } from './model/fake-provider'
 import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
+import { ALL_CAPABILITIES } from './protocol/core-protocol'
+import type { CognitionCause, CognitionOrigin } from './protocol/core-protocol'
+import type { CognitionGrantSpec } from './cognition/grants'
+import type { OwnerAuthority, WorkerAuthority } from './authority'
 import type {
   Capability,
   CoreCommandEnvelope,
@@ -47,6 +51,18 @@ export interface CoreOptions {
   providers?: ModelProvider[]
 }
 
+/**
+ * The production capability surface of Core.
+ *
+ * What is *not* here matters as much as what is. There is no cognition
+ * service, no grant store, no gateway, no provider and no policy object, so
+ * there is nothing for a caller to reach authority through. Cognition is
+ * reachable only by Core's own subsystems, which hold an authority object with
+ * a principal already baked in — see `core/authority.ts`.
+ *
+ * Grant governance from outside Core is a *command*, and the handler records
+ * the owner regardless of what the payload claims.
+ */
 export interface Core {
   start(): Promise<CoreStatus>
   stop(reason?: string): Promise<void>
@@ -54,8 +70,6 @@ export interface Core {
   handleCommand(envelope: CoreCommandEnvelope): Promise<CoreCommandResult>
   /** Subscribe to projection changes. Returns a disposer. */
   subscribe(listener: (status: CoreStatus) => void): () => void
-  /** Direct cognition entry point, for Core's own use and for tests. */
-  cognition: CognitionService
   readonly lifecycle: CoreLifecycle
 }
 
@@ -81,8 +95,28 @@ class FreyaCore implements Core {
     return this.currentLifecycle
   }
 
-  get cognition(): CognitionService {
-    return this.service
+  /**
+   * The authority objects Core hands to its own subsystems.
+   *
+   * Not on the `Core` interface, on purpose. It is reachable from
+   * `core/testing.ts` and from inside this module, and from nowhere else — a
+   * future agent or module is written *inside* Core and is issued one of these
+   * by Core, rather than importing a way to mint its own.
+   */
+  /**
+   * The authority objects Core issues to its own subsystems.
+   *
+   * Reachable from `core/testing.ts` and from inside this module, and from
+   * nowhere else. There is no public accessor and no interface member, so a
+   * future agent is written *inside* Core and handed one of these, rather than
+   * importing a way to mint its own.
+   */
+  issueOwnerAuthority(): OwnerAuthority {
+    return this.service.ownerAuthority()
+  }
+
+  issueWorkerAuthority(principalId: PrincipalId): WorkerAuthority {
+    return this.service.workerAuthority(principalId)
   }
 
   async start(): Promise<CoreStatus> {
@@ -113,7 +147,7 @@ class FreyaCore implements Core {
     })
 
     this.service = new CognitionService(
-      { fabric: this.fabric, gateway: this.gateway, now: this.options.now },
+      { fabric: this.fabric, gateway: this.gateway, guard: this.guard, now: this.options.now },
       this.state,
     )
 
@@ -256,6 +290,38 @@ class FreyaCore implements Core {
           }
         }
 
+        case 'cognition.grant.create': {
+          // The principal is *this* one. A `createdBy` in the payload is not
+          // merely ignored: it is not read at all, so there is no code path
+          // that could honour a forged author.
+          const spec = readGrantSpec(envelope.payload)
+          if (spec === null) {
+            return { requestId, ok: false, refusal: { reason: 'grant spec is malformed' } }
+          }
+          try {
+            await this.ownerAuthority.createGrant(spec)
+            return { requestId, ok: true, status: this.status() }
+          } catch (error) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: describe(error) },
+            }
+          }
+        }
+
+        case 'cognition.grant.revoke': {
+          const grantId = readString(envelope.payload, 'grantId')
+          if (grantId === null) {
+            return { requestId, ok: false, refusal: { reason: 'grantId is missing' } }
+          }
+          const reason = readString(envelope.payload, 'reason') ?? 'revoked by owner'
+          const revoked = await this.ownerAuthority.revokeGrant(grantId, reason)
+          return revoked
+            ? { requestId, ok: true, status: this.status() }
+            : { requestId, ok: false, refusal: { reason: 'no such grant, or already revoked' } }
+        }
+
         case 'security.stopAll': {
           const decision = this.guard.evaluate(this.owner, 'security.stop')
           if (!decision.allowed) {
@@ -306,16 +372,7 @@ class FreyaCore implements Core {
   /* ----------------------------------------------------------- private */
 
   private allCapabilities(): Capability[] {
-    return [
-      'core.status.read',
-      'core.command.submit',
-      'cognition.status.read',
-      'cognition.request',
-      'cognition.grant.manage',
-      'security.status.read',
-      'security.stop',
-      'security.resume',
-    ]
+    return [...ALL_CAPABILITIES]
   }
 
   private buildGuard(): Guard {
@@ -356,6 +413,11 @@ class FreyaCore implements Core {
         )
       },
     }
+  }
+
+  /** The owner's authority. Identity lives here, not in any caller's payload. */
+  private get ownerAuthority(): OwnerAuthority {
+    return this.issueOwnerAuthority()
   }
 
   private async recordGuard(
@@ -411,6 +473,42 @@ function degradedStatus(
     sessionUsage: { calls: 0, inputTokens: null, outputTokens: null },
     durableUsage: state.durableUsage,
     faults: [...state.faults],
+  }
+}
+
+/**
+ * Read a grant spec from a command payload.
+ *
+ * Strictly structural: every field is checked, and anything unrecognised makes
+ * the whole spec invalid rather than being carried through. There is
+ * deliberately no path for a principal to arrive here.
+ */
+function readGrantSpec(payload: unknown): CognitionGrantSpec | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const p = payload as Record<string, unknown>
+  const origins = p.allowedOrigins
+  const causes = p.allowedCauses
+  if (!Array.isArray(origins) || origins.length === 0) return null
+  if (!Array.isArray(causes) || causes.length === 0) return null
+  if (typeof p.grantId !== 'string' || p.grantId.length === 0) return null
+  if (typeof p.expiresAt !== 'string') return null
+  if (typeof p.backgroundAllowed !== 'boolean') return null
+  if (!Number.isInteger(p.maxCalls) || !Number.isInteger(p.maxOutputTokens)) return null
+  if (p.actor !== null && p.actor !== undefined && typeof p.actor !== 'string') return null
+  if (p.goalId !== null && p.goalId !== undefined && typeof p.goalId !== 'string') return null
+
+  return {
+    grantId: p.grantId,
+    expiresAt: p.expiresAt,
+    allowedOrigins: origins as CognitionOrigin[],
+    allowedCauses: causes as CognitionCause[],
+    goalId: typeof p.goalId === 'string' ? p.goalId : null,
+    runId: typeof p.runId === 'string' ? p.runId : null,
+    actor: typeof p.actor === 'string' ? (p.actor as PrincipalId) : null,
+    backgroundAllowed: p.backgroundAllowed,
+    maxCalls: p.maxCalls as number,
+    maxOutputTokens: p.maxOutputTokens as number,
+    parentGrantId: typeof p.parentGrantId === 'string' ? p.parentGrantId : null,
   }
 }
 

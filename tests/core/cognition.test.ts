@@ -11,7 +11,9 @@ import {
   SilentModelProvider,
   HangingModelProvider,
 } from '../../core/model/fake-provider'
-import type { CognitionCall } from '../../core/cognition/service'
+import { ownerAuthority } from '../../core/testing'
+import type { CognitionIntent } from '../../core/authority'
+import type { CognitionGrantSpec } from '../../core/cognition/grants'
 import type { CoreStatus } from '../../core/protocol/core-protocol'
 
 /**
@@ -40,34 +42,37 @@ function options(overrides: Partial<CoreOptions> = {}): CoreOptions {
   return { dataPath: join(dir, 'events.jsonl'), useFakeProviderOnly: true, ...overrides }
 }
 
-function call(overrides: Partial<CognitionCall> = {}): CognitionCall {
+/**
+ * Build an intent. There is no `actor`, no `origin`, no `cause` and no
+ * `background` field to set, because none of them is the caller's to choose.
+ */
+function call(overrides: Partial<CognitionIntent> = {}): CognitionIntent {
   return {
     cognitionRequestId: 'req-1',
     correlationId: 'corr-1',
-    origin: 'user',
-    cause: 'user_message',
-    actor: 'owner',
+    kind: 'user_turn',
     maxOutputTokens: 200,
     requestedModel: null,
-    parentRunId: null,
     goalId: null,
     prompt: 'hello',
     ...overrides,
   }
 }
 
-async function grant(c: Core, over: Record<string, unknown> = {}) {
-  return c.cognition.createGrant({
-    grantId: 'grant-1',
-    createdBy: 'owner',
-    expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    allowedOrigins: ['agent', 'system', 'workflow'],
-    allowedCauses: ['run_finished', 'scheduled_grant'],
-    backgroundAllowed: true,
-    maxCalls: 2,
-    maxOutputTokens: 1000,
-    ...over,
-  } as never)
+const grantSpec = (over: Partial<CognitionGrantSpec> = {}): CognitionGrantSpec => ({
+  grantId: 'grant-1',
+  expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  allowedOrigins: ['agent', 'system', 'workflow'],
+  allowedCauses: ['run_finished', 'scheduled_grant'],
+  backgroundAllowed: true,
+  maxCalls: 2,
+  maxOutputTokens: 1000,
+  ...over,
+})
+
+/** Create a grant as the owner. Goes through Guard, like every other path. */
+async function grant(c: Core, over: Partial<CognitionGrantSpec> = {}) {
+  return ownerAuthority(c).createGrant(grantSpec(over))
 }
 
 describe('cognition service', () => {
@@ -77,8 +82,8 @@ describe('cognition service', () => {
     const before = status.sessionUsage.calls
 
     // No grant, and nobody is waiting: the only correct answer is no.
-    const outcome = await core.cognition.request(
-      call({ origin: 'workflow', cause: 'run_finished', actor: 'agent:worker-1' }),
+    const outcome = await ownerAuthority(core).request(
+      call({ kind: 'agent_step' }),
     )
 
     expect(outcome.status).toBe('denied')
@@ -93,20 +98,21 @@ describe('cognition service', () => {
     // The single grantless path. Locked down deliberately: if this ever starts
     // demanding a grant, ordinary replies break; if it ever widens, silence
     // starts spending.
-    const outcome = await core.cognition.request(call())
+    const outcome = await ownerAuthority(core).request(call())
 
     expect(outcome.status).toBe('allowed')
     expect(core.status().sessionUsage.calls).toBe(1)
   })
 
-  it('treats a request as background unless it is plainly a user turn', async () => {
+  it('refuses an agent step against a grant that forbids unattended work', async () => {
     core = createCore(options())
     await core.start()
     await grant(core, { backgroundAllowed: false })
 
-    // A self-declared 'user' origin from a non-human actor must not buy the
-    // grantless path, and must not pass a grant that forbids background work.
-    const outcome = await core.cognition.request(call({ actor: 'agent:worker-1' }))
+    // `agent_step` is background by definition now, so it needs a grant that
+    // says background work is allowed. The impersonation cases — a worker
+    // claiming a user turn — are in authority.test.ts.
+    const outcome = await ownerAuthority(core).request(call({ kind: 'agent_step' }))
 
     expect(outcome.status).toBe('denied')
     expect(core.status().sessionUsage.calls).toBe(0)
@@ -117,8 +123,8 @@ describe('cognition service', () => {
     await core.start()
     await grant(core, { backgroundAllowed: false })
 
-    const outcome = await core.cognition.request(
-      call({ origin: 'system', cause: 'scheduled_grant', actor: 'agent:worker-1' }),
+    const outcome = await ownerAuthority(core).request(
+      call({ kind: 'scheduled_task' }),
     )
 
     expect(outcome.status).toBe('denied')
@@ -130,8 +136,8 @@ describe('cognition service', () => {
     await core.start()
     await grant(core)
 
-    const outcome = await core.cognition.request(
-      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    const outcome = await ownerAuthority(core).request(
+      call({ kind: 'agent_step' }),
     )
 
     expect(outcome.status).toBe('allowed')
@@ -144,10 +150,10 @@ describe('cognition service', () => {
     await core.start()
     await grant(core, { maxCalls: 2 })
 
-    const granted = call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' })
-    expect((await core.cognition.request({ ...granted, cognitionRequestId: 'a' })).status).toBe('allowed')
-    expect((await core.cognition.request({ ...granted, cognitionRequestId: 'b' })).status).toBe('allowed')
-    const third = await core.cognition.request({ ...granted, cognitionRequestId: 'c' })
+    const granted = call({ kind: 'agent_step' })
+    expect((await ownerAuthority(core).request({ ...granted, cognitionRequestId: 'a' })).status).toBe('allowed')
+    expect((await ownerAuthority(core).request({ ...granted, cognitionRequestId: 'b' })).status).toBe('allowed')
+    const third = await ownerAuthority(core).request({ ...granted, cognitionRequestId: 'c' })
 
     expect(third.status).toBe('denied')
     expect(core.status().sessionUsage.calls).toBe(2)
@@ -159,8 +165,8 @@ describe('cognition service', () => {
     await c.start()
     await grant(c, { maxCalls: 1 })
 
-    const outcome = await c.cognition.request(
-      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    const outcome = await ownerAuthority(c).request(
+      call({ kind: 'agent_step' }),
     )
     expect(outcome.status).toBe('failed')
     expect(failing.calls).toBe(1)
@@ -170,7 +176,7 @@ describe('cognition service', () => {
     const fresh = createCore(options())
     await fresh.start()
     core = fresh
-    const recovered = fresh.cognition.grants().find((g) => g.id === 'grant-1')
+    const recovered = ownerAuthority(fresh).grants().find((g) => g.id === 'grant-1')
     expect(recovered?.usage.calls).toBe(1)
   })
 
@@ -180,8 +186,8 @@ describe('cognition service', () => {
     await c.start()
     await grant(c, { maxCalls: 5 })
 
-    const outcome = await c.cognition.request(
-      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    const outcome = await ownerAuthority(c).request(
+      call({ kind: 'agent_step' }),
     )
 
     expect(outcome.status).toBe('failed')
@@ -197,8 +203,8 @@ describe('cognition service', () => {
     await c.start()
     await grant(c, { maxCalls: 3 })
 
-    const outcome = await c.cognition.request(
-      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    const outcome = await ownerAuthority(c).request(
+      call({ kind: 'agent_step' }),
     )
 
     // Declining to route is different from routing and failing; neither spends.
@@ -217,7 +223,7 @@ describe('cognition service', () => {
     await expect(
       grant(core, { expiresAt: new Date(Date.now() - 1_000).toISOString() }),
     ).rejects.toThrow()
-    expect(core.cognition.grants()).toHaveLength(0)
+    expect(ownerAuthority(core).grants()).toHaveLength(0)
   })
 })
 
@@ -226,28 +232,28 @@ describe('durable recovery', () => {
     const first = createCore(options())
     await first.start()
     await grant(first, { maxCalls: 2 })
-    const req = call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' })
-    await first.cognition.request({ ...req, cognitionRequestId: 'a' })
+    const req = call({ kind: 'agent_step' })
+    await ownerAuthority(first).request({ ...req, cognitionRequestId: 'a' })
     await first.stop('test')
 
     const second = createCore(options())
     await second.start()
     core = second
 
-    const recovered = second.cognition.grants().find((g) => g.id === 'grant-1')
+    const recovered = ownerAuthority(second).grants().find((g) => g.id === 'grant-1')
     expect(recovered?.usage.calls).toBe(1)
     expect(recovered?.maxCalls).toBe(2)
     // The remaining call is available; the spent one is not refunded.
-    expect((await second.cognition.request({ ...req, cognitionRequestId: 'b' })).status).toBe('allowed')
-    expect((await second.cognition.request({ ...req, cognitionRequestId: 'c' })).status).toBe('denied')
+    expect((await ownerAuthority(second).request({ ...req, cognitionRequestId: 'b' })).status).toBe('allowed')
+    expect((await ownerAuthority(second).request({ ...req, cognitionRequestId: 'c' })).status).toBe('denied')
   })
 
   it('restores a durable call total that includes calls from earlier sessions', async () => {
     const first = createCore(options())
     await first.start()
     await grant(first)
-    await first.cognition.request(
-      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    await ownerAuthority(first).request(
+      call({ kind: 'agent_step' }),
     )
     await first.stop('test')
 
@@ -271,8 +277,8 @@ describe('STOP ALL', () => {
     expect(stop.durableSequence).toBeGreaterThan(0)
 
     const before = first.status().sessionUsage.calls
-    const refused = await first.cognition.request(
-      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    const refused = await ownerAuthority(first).request(
+      call({ kind: 'agent_step' }),
     )
     expect(refused.status).toBe('denied')
     expect(first.status().sessionUsage.calls).toBe(before)
@@ -285,8 +291,8 @@ describe('STOP ALL', () => {
     expect(second.status().stopAll.active).toBe(true)
     expect(second.status().governor.status).toBe('deny_all')
     expect(
-      (await second.cognition.request(
-        call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+      (await ownerAuthority(second).request(
+        call({ kind: 'agent_step' }),
       )).status,
     ).toBe('denied')
 
@@ -405,9 +411,7 @@ describe('the output token budget', () => {
     call({
       cognitionRequestId: id,
       correlationId: id,
-      origin: 'agent',
-      cause: 'run_finished',
-      actor: 'agent:worker-1',
+      kind: 'agent_step',
       maxOutputTokens: tokens,
     })
 
@@ -421,14 +425,14 @@ describe('the output token budget', () => {
     let reservedWhenCalled: number | null = null
     const original = fake.complete.bind(fake)
     ;(fake as unknown as { complete: typeof original }).complete = async (req) => {
-      reservedWhenCalled = core!.cognition.grants()[0]?.usage.outputTokenBudgetReserved ?? null
+      reservedWhenCalled = ownerAuthority(core!).grants()[0]?.usage.outputTokenBudgetReserved ?? null
       return original(req)
     }
 
-    await core.cognition.request(agentCall('a', 300))
+    await ownerAuthority(core).request(agentCall('a', 300))
 
     expect(reservedWhenCalled).toBe(300)
-    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(300)
+    expect(ownerAuthority(core).grants()[0]?.usage.outputTokenBudgetReserved).toBe(300)
   })
 
   it('exhausts the token budget across repeated real requests', async () => {
@@ -439,18 +443,18 @@ describe('the output token budget', () => {
     await grant(core, { maxCalls: 10, maxOutputTokens: 1000 })
 
     for (const id of ['a', 'b', 'c']) {
-      expect((await core.cognition.request(agentCall(id, 300))).status).toBe('allowed')
+      expect((await ownerAuthority(core).request(agentCall(id, 300))).status).toBe('allowed')
     }
     // 900 of 1000 reserved. A fourth 300-token request does not fit.
-    const denied = await core.cognition.request(agentCall('d', 300))
+    const denied = await ownerAuthority(core).request(agentCall('d', 300))
     expect(denied.status).toBe('denied')
-    expect(core.cognition.grants()[0]?.usage.calls).toBe(3)
-    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(900)
+    expect(ownerAuthority(core).grants()[0]?.usage.calls).toBe(3)
+    expect(ownerAuthority(core).grants()[0]?.usage.outputTokenBudgetReserved).toBe(900)
 
     // A smaller request still fits in what is left.
-    expect((await core.cognition.request(agentCall('e', 100))).status).toBe('allowed')
-    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(1000)
-    expect((await core.cognition.request(agentCall('f', 1))).status).toBe('denied')
+    expect((await ownerAuthority(core).request(agentCall('e', 100))).status).toBe('allowed')
+    expect(ownerAuthority(core).grants()[0]?.usage.outputTokenBudgetReserved).toBe(1000)
+    expect((await ownerAuthority(core).request(agentCall('f', 1))).status).toBe('denied')
   })
 
   it('does not refund the reservation when the provider reports less', async () => {
@@ -459,12 +463,12 @@ describe('the output token budget', () => {
     await core.start()
     await grant(core, { maxCalls: 10, maxOutputTokens: 1000 })
 
-    await core.cognition.request(agentCall('a', 400))
+    await ownerAuthority(core).request(agentCall('a', 400))
     // The fake reports a small figure. The budget still shows 400 reserved:
     // usage is a report, not a correction.
     expect(fake.lastUsage).not.toBeNull()
-    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(400)
-    expect(core.cognition.grants()[0]?.usage.outputTokens).not.toBeNull()
+    expect(ownerAuthority(core).grants()[0]?.usage.outputTokenBudgetReserved).toBe(400)
+    expect(ownerAuthority(core).grants()[0]?.usage.outputTokens).not.toBeNull()
   })
 
   it('keeps charging a provider that reports no usage at all', async () => {
@@ -474,12 +478,12 @@ describe('the output token budget', () => {
     await grant(core, { maxCalls: 10, maxOutputTokens: 1000 })
 
     for (const id of ['a', 'b', 'c']) {
-      expect((await core.cognition.request(agentCall(id, 300))).status).toBe('allowed')
+      expect((await ownerAuthority(core).request(agentCall(id, 300))).status).toBe('allowed')
     }
     // Unknown usage must not read as free. The reservation is what moved.
-    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(900)
-    expect(core.cognition.grants()[0]?.usage.outputTokens).toBeNull()
-    expect((await core.cognition.request(agentCall('d', 300))).status).toBe('denied')
+    expect(ownerAuthority(core).grants()[0]?.usage.outputTokenBudgetReserved).toBe(900)
+    expect(ownerAuthority(core).grants()[0]?.usage.outputTokens).toBeNull()
+    expect((await ownerAuthority(core).request(agentCall('d', 300))).status).toBe('denied')
   })
 
   it('keeps the reservation when the provider fails', async () => {
@@ -488,11 +492,11 @@ describe('the output token budget', () => {
     await core.start()
     await grant(core, { maxCalls: 10, maxOutputTokens: 1000 })
 
-    const outcome = await core.cognition.request(agentCall('a', 400))
+    const outcome = await ownerAuthority(core).request(agentCall('a', 400))
     expect(outcome.status).toBe('failed')
     // The call never produced anything, and the allowance is still spent.
-    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(400)
-    expect(core.cognition.grants()[0]?.usage.calls).toBe(1)
+    expect(ownerAuthority(core).grants()[0]?.usage.outputTokenBudgetReserved).toBe(400)
+    expect(ownerAuthority(core).grants()[0]?.usage.calls).toBe(1)
   })
 
   it('carries the reserved budget across a restart', async () => {
@@ -500,7 +504,7 @@ describe('the output token budget', () => {
     await first.start()
     await grant(first, { maxCalls: 10, maxOutputTokens: 1000 })
     for (const id of ['a', 'b']) {
-      await first.cognition.request(agentCall(id, 300))
+      await ownerAuthority(first).request(agentCall(id, 300))
     }
     await first.stop('test')
 
@@ -508,13 +512,13 @@ describe('the output token budget', () => {
     await second.start()
     core = second
 
-    const recovered = second.cognition.grants().find((g) => g.id === 'grant-1')
+    const recovered = ownerAuthority(second).grants().find((g) => g.id === 'grant-1')
     expect(recovered?.usage.outputTokenBudgetReserved).toBe(600)
     expect(recovered?.usage.calls).toBe(2)
 
     // 400 left. One more 300 fits; the one after does not.
-    expect((await second.cognition.request(agentCall('c', 300))).status).toBe('allowed')
-    expect((await second.cognition.request(agentCall('d', 300))).status).toBe('denied')
+    expect((await ownerAuthority(second).request(agentCall('c', 300))).status).toBe('allowed')
+    expect((await ownerAuthority(second).request(agentCall('d', 300))).status).toBe('denied')
   })
 
   it('charges a crashed Core for the call it never completed', async () => {
@@ -525,7 +529,7 @@ describe('the output token budget', () => {
     await first.start()
     await grant(first, { maxCalls: 10, maxOutputTokens: 1000 })
 
-    void first.cognition.request(agentCall('a', 500)).catch(() => undefined)
+    void ownerAuthority(first).request(agentCall('a', 500)).catch(() => undefined)
     // Let the reservation land, then walk away without stopping cleanly.
     await new Promise((resolve) => setTimeout(resolve, 60))
     await first.stop('killed mid-flight')
@@ -533,7 +537,7 @@ describe('the output token budget', () => {
     const second = createCore(options())
     await second.start()
     core = second
-    const recovered = second.cognition.grants().find((g) => g.id === 'grant-1')
+    const recovered = ownerAuthority(second).grants().find((g) => g.id === 'grant-1')
     expect(recovered?.usage.outputTokenBudgetReserved).toBe(500)
   })
 })

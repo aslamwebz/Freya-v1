@@ -1,29 +1,35 @@
 import type { EventFabric } from '../events/fabric'
-import { isGrantActive, type CognitionGrant } from './grants'
+import { randomUUID } from 'node:crypto'
+import { isGrantActive, type CognitionGrant, type CognitionGrantSpec } from './grants'
 import { evaluateCognition, type CognitionRequest } from './governor'
 import type { ModelGateway, GatewayPermit, GatewayRecorder } from '../model/gateway'
 import type { CoreState, CognitionGrantUsage } from '../state'
 import { findGrant, reduceCoreState } from '../state'
-import type {
-  CognitionCause,
-  CognitionOrigin,
-  ModelUsage,
-  PrincipalId,
-} from '../protocol/core-protocol'
+import type { ModelUsage, PrincipalId } from '../protocol/core-protocol'
+import {
+  INTENT_SHAPES,
+  type CognitionIntent,
+  type OwnerAuthority,
+  type WorkerAuthority,
+  type WorkerIntent,
+} from '../authority'
+import type { Guard, Principal } from '../security/guard'
+import { ALL_CAPABILITIES, type Capability, type CognitionOrigin, type CognitionCause } from '../protocol/core-protocol'
 
 /**
  * The Cognition Service: the only door from the rest of Freya to a provider.
  *
- * It owns the Governor and the Gateway and exposes neither. A caller supplies
- * a request and receives an outcome; it cannot obtain a gateway, obtain a
- * provider, or construct a permit.
+ * It owns the Governor, the Gateway and the Guard, and exposes none of them.
+ * What it exposes instead is a pair of *authority* objects whose methods
+ * reflect the authority of the principal they were issued to: the owner's has
+ * grant governance on it, a worker's does not.
  *
  * The sequence is fixed and has no branches that skip a step:
  *
  *   append `cognition.requested`        (durable, before anything else)
  *   ask the Governor
  *     deny  -> append `cognition.denied` and return. The provider is untouched.
- *     allow -> append `cognition.allowed`, consume the grant, then call once.
+ *     allow -> append `cognition.allowed`, reserve the grant, then call once.
  *
  * There is no retry. A failure is one call, recorded once.
  */
@@ -34,55 +40,25 @@ export type CognitionOutcome =
   | { status: 'failed'; requestId: string; reason: string }
 
 /**
- * What a caller may say. Notably absent: `authorization`. A caller cannot name
- * a grant it believes it holds, and cannot assert that a human is waiting. The
- * service nominates a grant and derives those facts; the Governor validates.
- * Every way a caller could influence the outcome errs towards denial.
+ * What a caller may say. `CognitionCall` does not exist any more: it had
+ * `actor`, `origin`, `cause` and `background` fields, and every one of them
+ * was a value the caller chose. They are derived now, from a closed
+ * vocabulary, by the authority the call arrived on.
  */
-export interface CognitionCall {
-  cognitionRequestId: string
-  correlationId: string
-  origin: CognitionOrigin
-  cause: CognitionCause
-  actor: PrincipalId
-  maxOutputTokens: number
-  requestedModel?: string | null
-  parentRunId?: string | null
-  goalId?: string | null
-  /**
-   * A caller may declare its work background. It may never declare the
-   * opposite: a request is background unless it is plainly a user turn.
-   */
-  background?: boolean
-  /** The text to send. Held in memory only; never written to an audit event. */
-  prompt: string
-}
-
-export interface CreateGrantInput {
-  grantId: string
-  createdBy: PrincipalId
-  expiresAt: string
-  allowedOrigins: CognitionOrigin[]
-  allowedCauses: CognitionCause[]
-  goalId?: string | null
-  runId?: string | null
-  actor?: PrincipalId | null
-  backgroundAllowed: boolean
-  maxCalls: number
-  maxOutputTokens: number
-  parentGrantId?: string | null
-}
-
 export interface CognitionServiceOptions {
   fabric: EventFabric
   gateway: ModelGateway
+  guard: Guard
   now?: () => Date
+  newId?: () => string
 }
 
 export class CognitionService {
   private readonly fabric: EventFabric
   private readonly gateway: ModelGateway
+  private readonly guard: Guard
   private readonly now: () => Date
+  private readonly newId: () => string
   private readonly disposeFabric: () => void
 
   /** Kept current by the fabric subscription, so replay and live agree. */
@@ -91,7 +67,9 @@ export class CognitionService {
   constructor(options: CognitionServiceOptions, state: CoreState) {
     this.fabric = options.fabric
     this.gateway = options.gateway
+    this.guard = options.guard
     this.now = options.now ?? (() => new Date())
+    this.newId = options.newId ?? (() => `cog-${randomUUID()}`)
     this.state = state
     // The only way state changes: a durable event, applied after it persisted.
     this.disposeFabric = options.fabric.subscribe((event) => {
@@ -108,100 +86,169 @@ export class CognitionService {
     return this.state.durableUsage
   }
 
-  grants(): readonly CognitionGrant[] {
-    return this.state.grants
-  }
+  /**
+   * Create a grant, as a named principal.
+   *
+   * Guard decides. `createdBy` is the principal, never a value from the spec,
+   * so a caller cannot author a durable record claiming someone else authorised
+   * it. A refusal is durable too: the attempt is in the log either way.
+   */
+  async createGrantFor(principal: Principal, spec: CognitionGrantSpec): Promise<CognitionGrant> {
+    const verdict = this.guard.evaluate(principal, 'cognition.grant.manage')
+    if (!verdict.allowed) {
+      await this.recordGuardDenial(verdict, principal, 'cognition.grant.manage', spec.grantId)
+      throw new Error(`grant refused: ${verdict.reason}`)
+    }
 
-  async createGrant(input: CreateGrantInput): Promise<CognitionGrant> {
     // A grant is a division of a finite allowance. Zero or negative ceilings
     // are refused rather than stored as a grant that can never be used.
-    if (!Number.isInteger(input.maxCalls) || input.maxCalls <= 0) {
+    if (!Number.isInteger(spec.maxCalls) || spec.maxCalls <= 0) {
       throw new Error('a grant must allow at least one call')
     }
-    if (!Number.isInteger(input.maxOutputTokens) || input.maxOutputTokens <= 0) {
+    if (!Number.isInteger(spec.maxOutputTokens) || spec.maxOutputTokens <= 0) {
       throw new Error('a grant must allow at least one output token')
     }
-    if (new Date(input.expiresAt).getTime() <= this.now().getTime()) {
+    if (new Date(spec.expiresAt).getTime() <= this.now().getTime()) {
       throw new Error('a grant must expire in the future')
     }
 
     await this.fabric.append(
       'cognition.grant.created',
       {
-        grantId: input.grantId,
-        createdBy: input.createdBy,
-        expiresAt: input.expiresAt,
-        allowedOrigins: input.allowedOrigins,
-        allowedCauses: input.allowedCauses,
-        goalId: input.goalId ?? null,
-        runId: input.runId ?? null,
-        actor: input.actor ?? null,
-        backgroundAllowed: input.backgroundAllowed,
-        maxCalls: input.maxCalls,
-        maxOutputTokens: input.maxOutputTokens,
+        grantId: spec.grantId,
+        createdBy: principal.id,
+        expiresAt: spec.expiresAt,
+        allowedOrigins: [...spec.allowedOrigins],
+        allowedCauses: [...spec.allowedCauses],
+        goalId: spec.goalId ?? null,
+        runId: spec.runId ?? null,
+        actor: spec.actor ?? null,
+        backgroundAllowed: spec.backgroundAllowed,
+        maxCalls: spec.maxCalls,
+        maxOutputTokens: spec.maxOutputTokens,
       },
-      { actor: input.createdBy, correlationId: input.grantId },
+      { actor: principal.id, correlationId: spec.grantId },
     )
 
-    const grant = findGrant(this.state, input.grantId)
+    const grant = findGrant(this.state, spec.grantId)
     if (!grant) throw new Error('grant was not persisted')
     return grant
   }
 
-  async revokeGrant(grantId: string, by: PrincipalId, reason: string): Promise<boolean> {
+  /**
+   * Revoke a grant, as a named principal. Guard decides, as above.
+   */
+  async revokeGrantFor(
+    principal: Principal,
+    grantId: string,
+    reason: string,
+  ): Promise<boolean> {
+    const verdict = this.guard.evaluate(principal, 'cognition.grant.manage')
+    if (!verdict.allowed) {
+      await this.recordGuardDenial(verdict, principal, 'cognition.grant.manage', grantId)
+      return false
+    }
     const grant = findGrant(this.state, grantId)
     if (!grant || grant.revokedAt !== null) return false
     await this.fabric.append(
       'cognition.grant.revoked',
-      { grantId, revokedBy: by, reason },
-      { actor: by, correlationId: grantId },
+      { grantId, revokedBy: principal.id, reason },
+      { actor: principal.id, correlationId: grantId },
     )
     return true
   }
 
   /**
-   * Request cognition. The single entry point to a model provider.
+   * The owner's surface. Grant governance is on this interface and on no
+   * other, so there is nothing for a worker to reach.
    */
-  async request(call: CognitionCall): Promise<CognitionOutcome> {
-    const requestId = call.cognitionRequestId
+  ownerAuthority(): OwnerAuthority {
+    const owner = this.ownerPrincipal()
+    return {
+      principalId: 'owner',
+      request: (intent) => this.requestFor(owner, intent),
+      createGrant: (spec) => this.createGrantFor(owner, spec),
+      revokeGrant: (grantId, reason) => this.revokeGrantFor(owner, grantId, reason),
+      grants: () => this.state.grants,
+    }
+  }
+
+  /**
+   * A worker's surface. No grant methods, and `user_turn` is not in its type.
+   */
+  workerAuthority(principalId: PrincipalId): WorkerAuthority {
+    const worker = this.workerPrincipal(principalId)
+    return {
+      principalId,
+      request: (intent: WorkerIntent) => this.requestFor(worker, intent),
+    }
+  }
+
+  private ownerPrincipal(): Principal {
+    return { id: 'owner', capabilities: new Set(ALL_CAPABILITIES), trusted: true }
+  }
+
+  private workerPrincipal(principalId: PrincipalId): Principal {
+    // A worker is never trusted, whatever capability list it is handed. Guard
+    // refuses on `trusted` before it looks at capabilities at all.
+    return { id: principalId, capabilities: new Set<Capability>(), trusted: false }
+  }
+
+  /**
+   * Request cognition, as a named principal.
+   *
+   * The single entry point to a provider, and the only place an intent becomes
+   * a Governor request. Origin, cause, background and user-initiated are all
+   * derived from the intent's *kind*; the principal is not a parameter the
+   * caller can choose, because it arrives on the authority object.
+   */
+  async requestFor(principal: Principal, intent: CognitionIntent): Promise<CognitionOutcome> {
+    const shape = INTENT_SHAPES[intent.kind]
+    const requestId = intent.cognitionRequestId ?? this.newId()
+
+    // A worker asking for the grantless user path is refused before it is
+    // recorded as one. The worker's type does not permit `user_turn`; this says
+    // so again for a caller not using the types.
+    if (shape.userInitiated && principal.id !== 'owner') {
+      return {
+        status: 'denied',
+        requestId,
+        reason: 'only the owner may present a user turn',
+      }
+    }
+
+    const correlationId = intent.correlationId ?? requestId
+    const { origin, cause, background } = shape
+    const maxOutputTokens = intent.maxOutputTokens
 
     await this.fabric.append(
       'cognition.requested',
       {
         requestId,
-        origin: call.origin,
-        cause: call.cause,
-        maxOutputTokens: call.maxOutputTokens,
-        requestedModel: call.requestedModel ?? null,
-        parentRunId: call.parentRunId ?? null,
-        goalId: call.goalId ?? null,
+        origin,
+        cause,
+        maxOutputTokens,
+        requestedModel: intent.requestedModel ?? null,
+        parentRunId: null,
+        goalId: intent.goalId ?? null,
       },
-      { actor: call.actor, correlationId: call.correlationId, source: 'core' },
+      { actor: principal.id, correlationId, source: 'core' },
     )
 
-    // A request is user-initiated only when a human is genuinely waiting.
-    //
-    // `origin` alone is not enough: it is a label the caller supplies, so an
-    // agent can put 'user' in it. `actor` is the part the caller cannot choose,
-    // because the bridge assigns identity — so it is the part that decides. A
-    // request that is not plainly a human turn is background, which costs it the
-    // grantless path and requires a grant that permits background work.
-    const background =
-      call.background === true || call.origin !== 'user' || call.actor !== HUMAN_PRINCIPAL
-    const nominated = this.nominateGrant(call, background)
+    const nominated = this.nominateGrant(origin, cause, principal.id, background)
 
     const governorRequest: CognitionRequest = {
       cognitionRequestId: requestId,
-      correlationId: call.correlationId,
-      origin: call.origin,
-      cause: call.cause,
-      actor: call.actor,
-      parentRunId: call.parentRunId ?? null,
-      goalId: call.goalId ?? null,
-      requestedModel: call.requestedModel ?? null,
-      maxOutputTokens: call.maxOutputTokens,
+      correlationId,
+      origin,
+      cause,
+      actor: principal.id,
+      parentRunId: null,
+      goalId: intent.goalId ?? null,
+      requestedModel: intent.requestedModel ?? null,
+      maxOutputTokens,
       background,
-      authorization: { grantId: nominated, userInitiated: !background },
+      authorization: { grantId: nominated, userInitiated: shape.userInitiated },
     }
 
     const decision = evaluateCognition(governorRequest, {
@@ -214,7 +261,7 @@ export class CognitionService {
       await this.fabric.append(
         'cognition.denied',
         { requestId, reason: decision.reason, grantId: decision.grantId },
-        { actor: call.actor, correlationId: call.correlationId, causationId: null },
+        { actor: principal.id, correlationId, causationId: null },
       )
       // The provider is never touched on this path. Not even constructed.
       return { status: 'denied', requestId, reason: decision.reason }
@@ -223,26 +270,26 @@ export class CognitionService {
     await this.fabric.append(
       'cognition.allowed',
       { requestId, grantId: decision.grantId },
-      { actor: call.actor, correlationId: call.correlationId },
+      { actor: principal.id, correlationId },
     )
 
     // Reserve before spending. Both the call and the output allowance are
     // taken durably here, so a crash mid-flight cannot hand either back.
     if (decision.grantId !== null) {
-      await this.reserveGrant(decision.grantId, requestId, call.maxOutputTokens)
+      await this.reserveGrant(decision.grantId, requestId, maxOutputTokens)
     }
 
     const permit: GatewayPermit = {
       requestId,
-      correlationId: call.correlationId,
+      correlationId,
       grantId: decision.grantId,
       providerId: 'auto',
-      maxOutputTokens: call.maxOutputTokens,
-      model: call.requestedModel ?? null,
+      maxOutputTokens,
+      model: intent.requestedModel ?? null,
     }
 
     try {
-      const result = await this.gateway.execute(permit, call.prompt)
+      const result = await this.gateway.execute(permit, intent.prompt)
       if (decision.grantId !== null) {
         await this.reportProviderUsage(
           decision.grantId,
@@ -274,17 +321,36 @@ export class CognitionService {
    * context. Nominating nothing yields a refusal rather than a fallback, so a
    * mismatch fails closed.
    */
-  private nominateGrant(call: CognitionCall, background: boolean): string | null {
+  private nominateGrant(
+    origin: string,
+    cause: string,
+    principalId: string,
+    background: boolean,
+  ): string | null {
     const now = this.now()
     for (const grant of this.state.grants) {
       if (!isGrantActive(grant, now)) continue
-      if (!grant.allowedOrigins.includes(call.origin)) continue
-      if (!grant.allowedCauses.includes(call.cause)) continue
+      if (!grant.allowedOrigins.includes(origin as CognitionOrigin)) continue
+      if (!grant.allowedCauses.includes(cause as CognitionCause)) continue
       if (background && !grant.backgroundAllowed) continue
-      if (grant.actor !== null && grant.actor !== call.actor) continue
+      if (grant.actor !== null && grant.actor !== principalId) continue
       return grant.id
     }
     return null
+  }
+
+  /** Record a Guard refusal. The attempt is durable whether or not it worked. */
+  private async recordGuardDenial(
+    verdict: { reason: string; outcome: 'deny' | 'approval_required' },
+    principal: Principal,
+    capability: string,
+    correlationId: string,
+  ): Promise<void> {
+    await this.fabric.append(
+      'guard.decision',
+      { outcome: verdict.outcome, reason: verdict.reason, capability, principal: principal.id },
+      { actor: principal.id, correlationId },
+    )
   }
 
   /**
@@ -357,8 +423,5 @@ export class CognitionService {
     )
   }
 }
-
-/** The only principal that can stand in for a waiting human. */
-const HUMAN_PRINCIPAL = 'owner'
 
 export type { GatewayRecorder }

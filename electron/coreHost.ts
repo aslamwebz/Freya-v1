@@ -167,6 +167,9 @@ const NOT_READY: CoreStatus = {
   guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
   governor: { status: 'unknown', grantsActive: 0 },
   providers: [],
+  // No Core, so no gateway, so nothing executing. Zero is the honest reading of
+  // a host that has not started, not a guess at what a provider might be doing.
+  activeProviderCalls: 0,
   sessionUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
   durableUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
   faults: [],

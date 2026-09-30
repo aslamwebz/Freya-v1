@@ -50,6 +50,16 @@ const HEALTHY_JOURNAL: JournalFault = {
 
 export const CORE_VERSION = '0.1.0'
 
+/**
+ * How long shutdown waits for cancelled requests to record their outcome.
+ *
+ * Short enough that quitting feels like quitting, long enough that a provider
+ * which obeys its signal has finished reacting. Past this bound the Core stops
+ * waiting and closes anyway; the journal is then missing a terminal event, which
+ * is the same thing a crash would have produced and is not a worse record.
+ */
+const SHUTDOWN_DRAIN_MS = 1_000
+
 export interface CoreOptions {
   /** Where the durable log lives. */
   dataPath: string
@@ -255,7 +265,19 @@ class FreyaCore implements Core {
       providers: this.buildProviders(),
       recorder: this.fabricRecorder(),
       now: this.options.now,
+      // A request appearing in or leaving the registry is a change in what this
+      // process is spending, and the status has to say so at the moment it
+      // happens rather than whenever the next journal event happens to arrive.
+      onActivityChange: () => this.notify(),
     })
+
+    // A latch recovered from the journal is a stopped Core, and being stopped
+    // includes the gateway refusing to contact anybody. Restoring permission only
+    // where the latch is genuinely clear is what keeps a restarted, latched Core
+    // from being one field away from spending money.
+    if (this.state.stopAll.active) {
+      this.gateway.cancelAll('STOP ALL was latched before this session started')
+    }
 
     this.service = new CognitionService(
       {
@@ -329,6 +351,23 @@ class FreyaCore implements Core {
     return this.status()
   }
 
+  /**
+   * Stop, in the only order that leaves an honest journal.
+   *
+   *   1. refuse everything new and abort what is already running;
+   *   2. wait, briefly, for those requests to write their terminal events;
+   *   3. write the two shutdown events;
+   *   4. close the fabric, and with it the store.
+   *
+   * Step 2 is the one that is easy to get wrong. A cancelled request still owes
+   * the journal an outcome, and closing the fabric first would leave it writing
+   * into a closed store — so the process would record a cancellation, and then
+   * record a failure for having failed to record a cancellation. The wait is
+   * bounded because a provider that ignores its signal must not be able to hang
+   * the application: if the bound is reached, shutdown continues and the journal
+   * keeps the start with no finish, which is exactly what it would have said if
+   * the process had died.
+   */
   async stop(reason = 'shutdown'): Promise<void> {
     if (this.stopped) return
     this.stopped = true
@@ -338,6 +377,8 @@ class FreyaCore implements Core {
     const began = Date.now()
     try {
       if (this.fabric) {
+        this.gateway?.cancelAll(`core stopping: ${reason}`)
+        await this.gateway?.drain(SHUTDOWN_DRAIN_MS)
         await this.fabric.append('core.stopping', { reason }, { actor: 'system' })
         await this.fabric.append(
           'core.stopped',
@@ -529,12 +570,33 @@ class FreyaCore implements Core {
             return { requestId, ok: true, status: this.status() }
           }
           const reason = readString(envelope.payload, 'reason') ?? 'requested by owner'
-          const event = await this.fabric.append(
-            'security.stop_all.activated',
-            { by: this.owner.id, reason },
-            { actor: this.owner.id, correlationId: requestId },
-          )
-          return { requestId, ok: true, status: this.status(), durableSequence: event.sequence }
+
+          // The gateway is closed *before* the latch is written, and in the same
+          // synchronous turn as the decision to stop.
+          //
+          // Ordering it the other way round would leave a window where the
+          // request had been authorised, the stop was on its way to disk, and a
+          // provider could still be contacted. That window is exactly the race
+          // this exists to make impossible, so the cheaper half happens first:
+          // closing the gate costs nothing and can be undone, whereas a provider
+          // call cannot be un-spent.
+          this.gateway?.cancelAll(`STOP ALL: ${reason}`)
+
+          try {
+            const event = await this.fabric.append(
+              'security.stop_all.activated',
+              { by: this.owner.id, reason },
+              { actor: this.owner.id, correlationId: requestId },
+            )
+            return { requestId, ok: true, status: this.status(), durableSequence: event.sequence }
+          } catch (error) {
+            // No latch was written, so there is no stop to keep. Leaving the
+            // gate shut would refuse everything with nothing durable to explain
+            // it, and nothing would ever open it again — so the gate goes back to
+            // how it was and the failure is reported.
+            this.gateway?.resume()
+            throw error
+          }
         }
 
         case 'security.resume': {
@@ -546,6 +608,12 @@ class FreyaCore implements Core {
             return { requestId, ok: false, refusal: { reason: decision.reason } }
           }
           if (!this.state.stopAll.active) {
+            // The gate is reopened even when there was no latch, because this is
+            // the only command that can legitimately open it and an already-open
+            // gate is not a capability worth withholding. It restores permission
+            // and does nothing else: no cancelled request is restarted, no
+            // reservation is returned, and no result is replayed.
+            this.gateway?.resume()
             return { requestId, ok: true, status: this.status() }
           }
           const event = await this.fabric.append(
@@ -553,6 +621,7 @@ class FreyaCore implements Core {
             { by: this.owner.id },
             { actor: this.owner.id, correlationId: requestId },
           )
+          this.gateway?.resume()
           return { requestId, ok: true, status: this.status(), durableSequence: event.sequence }
         }
 
@@ -615,6 +684,13 @@ class FreyaCore implements Core {
       failed: async (record) => {
         await this.fabric.append(
           'model.request.failed',
+          record,
+          { actor: 'system', correlationId: record.requestId },
+        )
+      },
+      cancelled: async (record) => {
+        await this.fabric.append(
+          'model.request.cancelled',
           record,
           { actor: 'system', correlationId: record.requestId },
         )
@@ -686,6 +762,9 @@ function degradedStatus(
     governor: { status: lifecycle === 'degraded' ? 'deny_all' : 'unknown', grantsActive: 0 },
     // No log means no providers, and saying so is safer than listing any.
     providers: [],
+    // No gateway was ever built, so nothing was ever executing. Zero here is a
+    // fact about this Core, not a guess about a provider.
+    activeProviderCalls: 0,
     sessionUsage: emptyUsage(),
     durableUsage: state.durableUsage,
     faults: [...state.faults],

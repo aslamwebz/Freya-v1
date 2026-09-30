@@ -212,6 +212,15 @@ const PAYLOAD_RULES: {
     isEventId(p.requestId) &&
     isNonEmptyString(p.providerId) &&
     isNonEmptyString(p.reason),
+  // `providerContacted` is checked as a boolean rather than left to a default,
+  // because a cancellation with an unknown contact is a cancellation whose
+  // accounting cannot be trusted — and refusing to read the line is the
+  // fail-closed answer to that.
+  'model.request.cancelled': (p) =>
+    isEventId(p.requestId) &&
+    isNonEmptyString(p.providerId) &&
+    isNonEmptyString(p.reason) &&
+    typeof p.providerContacted === 'boolean',
 }
 
 /**

@@ -4,6 +4,7 @@ import { isGrantActive, type CognitionGrant, type CognitionGrantSpec } from './g
 import { evaluateCognition, type CognitionRequest } from './governor'
 import { wasProviderContacted } from '../model/gateway'
 import type { ModelGateway, GatewayPermit, GatewayRecorder } from '../model/gateway'
+import { isModelRequestCancelled } from '../model/provider'
 import type { CoreState } from '../state'
 import { findGrant, reduceCoreState } from '../state'
 import type { ModelUsage, PrincipalId } from '../protocol/core-protocol'
@@ -39,6 +40,14 @@ export type CognitionOutcome =
   | { status: 'allowed'; requestId: string; text: string; providerId: string; model: string }
   | { status: 'denied'; requestId: string; reason: string }
   | { status: 'failed'; requestId: string; reason: string }
+  /**
+   * Stopped rather than unsuccessful.
+   *
+   * Its own outcome, because the two are not the same claim: a cancelled
+   * request says nothing about whether the provider would have worked, and a
+   * caller that saw `failed` would be reporting a defect that never happened.
+   */
+  | { status: 'cancelled'; requestId: string; reason: string }
 
 /**
  * What a caller may say. `CognitionCall` does not exist any more: it had
@@ -383,21 +392,25 @@ export class CognitionService {
       // found a provider cannot have been billed, and recording `unknown` for it
       // would declare a gap that does not exist — as though something had been
       // spent. A request that reached a provider and then failed almost certainly
-      // was billed, so it does get an explicit gap.
+      // was billed, so it does get an explicit gap. A request that was cancelled
+      // after contact is in exactly that second position: the work the provider
+      // had already done was still paid for, and cancelling does not make it
+      // free.
       //
       // Which one this was comes from the gateway's own `providerContacted`
       // marker, not from the provider's name or kind.
       //
       // The reservation is unaffected either way: authorisation is not refunded
-      // because the provider misbehaved, nor because none was available.
+      // because the provider misbehaved, nor because none was available, nor
+      // because the owner stopped it.
       if (decision.grantId !== null && wasProviderContacted(error)) {
         await this.reportProviderUsage(decision.grantId, requestId, null, null)
       }
-      return {
-        status: 'failed',
-        requestId,
-        reason: error instanceof Error ? error.message : 'unknown provider failure',
+      const reason = error instanceof Error ? error.message : 'unknown provider failure'
+      if (isModelRequestCancelled(error)) {
+        return { status: 'cancelled', requestId, reason }
       }
+      return { status: 'failed', requestId, reason }
     }
   }
 

@@ -199,6 +199,19 @@ export interface CoreStatus {
     grantsActive: number
   }
   providers: ProviderStatus[]
+  /**
+   * Provider requests executing **right now**, in this Core process.
+   *
+   * Read straight from the Model Gateway's active registry, which is the only
+   * in-process record of live work. Deliberately not derived from the durable
+   * journal: a journal can say a request was started and cannot say whether it
+   * is still running, and a Core that died mid-call leaves a start with no
+   * finish forever. Inferring "working" from that history is how an idle Freya
+   * ends up claiming it is thinking.
+   *
+   * Zero means nothing is being spent, which is the normal state.
+   */
+  activeProviderCalls: number
   /** Usage for this Core session. Durable totals are separate. */
   sessionUsage: ModelUsage
   durableUsage: ModelUsage

@@ -1,6 +1,6 @@
 import type { AnyCoreEvent } from './events/envelope'
 import { emptyGrantUsage, type CognitionGrant, type CognitionGrantUsage } from './cognition/grants'
-import { accumulateAttempt, accumulateReported, accumulateUsage, emptyUsage } from './model/usage'
+import { accumulateAttempt, accumulateReported, accumulateUsage, emptyUsage, withdrawAttempt } from './model/usage'
 import type { ModelUsage, PrincipalId } from './protocol/core-protocol'
 
 /**
@@ -42,7 +42,7 @@ export interface CoreState {
    */
   integrityFault: IntegrityFaultRecord | null
   /**
-   * Requests that reached a provider and have not yet finished.
+   * Requests the journal says reached a provider and have not finished.
    *
    * This is how "was a provider contacted?" is answered during replay, and it
    * is answered from the events rather than from anything about the provider.
@@ -53,6 +53,11 @@ export interface CoreState {
    * certainly was not — and the difference between them is exactly whether a
    * `model.request.started` was written first. Inferring it any other way would
    * be a guess.
+   *
+   * `model.request.cancelled` does not have to guess: it carries
+   * `providerContacted` explicitly, because the gateway is the only thing that
+   * knows. It is still used here, to withdraw a start that was written in the
+   * instant before a stop arrived.
    */
   pendingRequests: string[]
 }
@@ -185,9 +190,13 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
       }
 
     // An attempt is counted when it is made: `model.request.started` is the only
-    // record that a provider was ever reached, so it is the honest place for the
+    // record that a provider was being reached, so it is the honest place for the
     // call count. It contributes no token figures and records no gap in
     // reporting, because the matching `completed` event carries both.
+    //
+    // It is written immediately before the provider is asked rather than before
+    // anything else, so the only thing that can follow it without a provider
+    // having been reached is a cancellation that withdraws it below.
     case 'model.request.started':
       return {
         ...state,
@@ -234,9 +243,44 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
         pendingRequests: without(state.pendingRequests, event.payload.requestId),
       }
 
+    // Cancellation, which is not failure and has opposite accounting from it.
+    //
+    // The gateway knows whether the provider had the request, and says so in the
+    // event rather than leaving it to be inferred — because the inference would
+    // be wrong precisely in the case that matters most. A stop that arrives in
+    // the instant between the `started` being written and the provider being
+    // asked leaves a start with no call behind it, and only the event can say
+    // which of the two happened.
+    case 'model.request.cancelled': {
+      const hadStarted = state.pendingRequests.includes(event.payload.requestId)
+      const pendingRequests = without(state.pendingRequests, event.payload.requestId)
+
+      if (!event.payload.providerContacted) {
+        // Refused at the door, so no provider was ever asked. If a start had
+        // already been written it is withdrawn, so the durable total nets back
+        // to a call that never happened. If there was no start, nothing moves.
+        return {
+          ...state,
+          durableUsage: hadStarted ? withdrawAttempt(state.durableUsage) : state.durableUsage,
+          pendingRequests,
+        }
+      }
+
+      // Aborted with the provider already working. The work it had done was
+      // still billed, and the amount is unknown, so this is an explicit gap
+      // rather than a zero that would make the totals look complete.
+      return {
+        ...state,
+        durableUsage: accumulateReported(state.durableUsage, {
+          inputTokens: null,
+          outputTokens: null,
+        }),
+        pendingRequests,
+      }
+    }
+
     case 'core.degraded':
       return { ...state, faults: [...state.faults, event.payload.reason] }
-
     case 'core.integrity_fault': {
       const p = event.payload
       const record: IntegrityFaultRecord = {

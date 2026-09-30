@@ -55,6 +55,10 @@ export function projectCoreStatus(input: ProjectionInput): CoreStatus {
     },
 
     providers: gateway.statuses(),
+    // The one place live provider work is read. The gateway owns the registry
+    // that holds the controllers, so this is a fact about the process rather
+    // than a reading of the journal.
+    activeProviderCalls: gateway.activeCallCount(),
     sessionUsage: gateway.usage(),
     durableUsage: state.durableUsage,
     faults: [...state.faults],

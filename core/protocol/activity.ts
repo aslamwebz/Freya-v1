@@ -43,6 +43,7 @@ export type ActivityKind =
   | 'provider.started'
   | 'provider.completed'
   | 'provider.failed'
+  | 'provider.cancelled'
   | 'grant.created'
   | 'grant.revoked'
   | 'other'
@@ -199,6 +200,20 @@ export function describeActivity(event: {
         kind: 'provider.failed',
         text: `Model request failed: ${text(event.payload.reason, 'no reason given')}`,
         tone: 'bad',
+      }
+
+    case 'model.request.cancelled':
+      // The two cases read differently on purpose. One was stopped before it
+      // cost anything; the other may already have been paid for, and saying
+      // "cancelled" about that without qualification would be the most
+      // reassuring lie in this feed.
+      return {
+        ...base,
+        kind: 'provider.cancelled',
+        text: event.payload.providerContacted
+          ? `Model request cancelled after reaching the provider: ${text(event.payload.reason)}. Its usage is unknown, so the totals are a lower bound.`
+          : `Model request cancelled before the provider was contacted: ${text(event.payload.reason)}. Nothing was spent.`,
+        tone: 'warn',
       }
 
     case 'cognition.grant.created':

@@ -23,6 +23,23 @@ import { existsSync } from 'node:fs'
 
 const ROOT = resolve(import.meta.dirname, '..', '..')
 const E2E_CONVERSATION_KEY = Buffer.alloc(32, 0x5a).toString('base64')
+/**
+ * A *different* key from the conversation one.
+ *
+ * Two domains get two secrets, and the E2E harness has to inject both as a pair -
+ * the host refuses a half-injected set, because one domain persistent and the
+ * other ephemeral fails in a way that reads as a Brain bug rather than as a harness
+ * that only half injected.
+ */
+const E2E_BRAIN_KEY = Buffer.alloc(32, 0x2b).toString('base64')
+/**
+ * Which monitor the suite drives Freya on.
+ *
+ * Overridable, because the right number depends on the desk: someone with three
+ * monitors wants the third, and hard-coding 2 would open the window behind the one
+ * they are actually watching. Read once, so every launch in a run agrees.
+ */
+const E2E_DISPLAY = process.env.FREYA_E2E_DISPLAY ?? '2'
 const results: { name: string; ok: boolean; detail?: string }[] = []
 
 function check(name: string, ok: boolean, detail?: string): void {
@@ -35,12 +52,22 @@ async function launch(
   env: Record<string, string> = {},
 ): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
-    args: [ROOT, `--user-data-dir=${userData}`],
+    // `--display=2`, so the suite drives Freya on the second monitor rather than on
+    // the primary. The usual reason is that the primary is busy — an IDE, a video
+    // call, or the very window someone is watching — and a run that takes the
+    // foreground from them is a run they will close.
+    //
+    // Main resolves that flag to a physical display by a stable geometric order
+    // (primary first, then secondaries left to right) and falls back to the
+    // platform's choice when the requested display does not exist, so this is
+    // harmless on a single-monitor machine.
+    args: [ROOT, `--user-data-dir=${userData}`, `--display=${E2E_DISPLAY}`],
     env: {
       ...process.env,
       NODE_ENV: 'production',
       FREYA_E2E: '1',
       FREYA_E2E_CONVERSATION_KEY: E2E_CONVERSATION_KEY,
+      FREYA_E2E_BRAIN_KEY: E2E_BRAIN_KEY,
       ...env,
     },
   })
@@ -87,6 +114,33 @@ async function openChat(page: Page): Promise<void> {
   }
   await page.waitForSelector('[role="dialog"][aria-label="Chat"]', { timeout: 15_000 })
   await page.waitForSelector('[role="dialog"][aria-label="Chat"] .chat-compose', { timeout: 15_000 })
+}
+
+/**
+ * Open the Vault and wait for it to report Freya's memory.
+ *
+ * Idempotent for the same reason as `openChat`: a restored singleton toggles shut if
+ * clicked twice.
+ */
+async function openVault(page: Page): Promise<void> {
+  const dialog = page.locator('[role="dialog"][aria-label="Vault"]')
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Vault' })
+      .click()
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Vault"] .vault-surface', { timeout: 15_000 })
+  await page.waitForFunction(
+    () => {
+      const surface = document.querySelector('[role="dialog"][aria-label="Vault"] .vault-surface')
+      // Not the "waiting for Core" state: durability has to be settled before
+      // anything is typed, and the check below depends on which one it is.
+      return surface !== null && !document.querySelector('.vault-absent')
+    },
+    undefined,
+    { timeout: 15_000 },
+  )
 }
 
 /** Send a message through the real composer, by pressing Enter. */
@@ -1154,6 +1208,174 @@ async function main(): Promise<void> {
       } finally {
         await relaunched?.close().catch(() => {})
         await chatApp.close().catch(() => {})
+      }
+    }
+
+    // =================================================================
+    // Phase 4: what Freya remembers, across a real process boundary
+    // =================================================================
+    {
+      const DEV = { FREYA_DEV_PROVIDER: 'slow-echo' }
+      const { app: vaultApp, page: vault } = await launch(userData, DEV)
+      let relaunched: ElectronApplication | null = null
+
+      try {
+        await openVault(vault)
+
+        // --- 1. durability is stated before anything can be typed --------
+        // The ordering is the property. Somebody deciding whether to tell Freya
+        // something needs to know whether it survives a restart first; finding out
+        // after the conversation is the failure this ordering prevents.
+        const banner = vault.locator('[role="dialog"][aria-label="Vault"] .vault-durability')
+        check(
+          'the Vault says whether Freya will remember before anything is typed',
+          (await banner.getAttribute('data-tone')) === 'durable' &&
+            ((await banner.textContent()) ?? '').includes('REMEMBERS ACROSS RESTARTS'),
+        )
+        check(
+          'the window reports Freya as remembering across restarts',
+          (await vault.locator('[role="dialog"][aria-label="Vault"] .vault-surface').getAttribute('data-durable')) ===
+            'true',
+        )
+
+        // --- 2. nothing she learned is reachable from the bridge ---------
+        // A memory surface must not become a second copy of everything Freya
+        // knows in a process that is disposable and possibly compromised.
+        const bridged = await vault.evaluate(() =>
+          Object.keys((window as unknown as { freyaHost?: object }).freyaHost ?? {}).sort(),
+        )
+        check(
+          'the bridge exposes no key, store or path for the Brain',
+          !bridged.some((key) => /key|store|path|file|crypto/i.test(key)),
+          bridged.join(', '),
+        )
+
+        // --- 3. she remembers something, with its source class ----------
+        const SECRET_TO_REFUSE = 'sk-abcdefghijklmnopqrstuvwx'
+        const THING_TO_REMEMBER = 'the owner prefers window seats on flights'
+
+        await vault.locator('[role="dialog"][aria-label="Vault"] .vault-field textarea').fill(THING_TO_REMEMBER)
+        await vault.locator('[role="dialog"][aria-label="Vault"] .vault-button').first().click()
+        await vault.waitForFunction(
+          () =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Vault"] .vault-memories li')].some((row) =>
+              (row.textContent ?? '').includes('owner-assertion'),
+            ),
+          undefined,
+          { timeout: 15_000 },
+        )
+        check('a memory is admitted and listed with the source class Core assigned', true)
+        check(
+          'the listing carries no memory content',
+          !((await vault.locator('[role="dialog"][aria-label="Vault"] .vault-memories').textContent()) ?? '').includes(
+            'window seats',
+          ),
+        )
+
+        // --- 4. a credential is refused, legibly -------------------------
+        await vault.locator('[role="dialog"][aria-label="Vault"] .vault-field textarea').fill(SECRET_TO_REFUSE)
+        await vault.locator('[role="dialog"][aria-label="Vault"] .vault-button').first().click()
+        await vault.waitForSelector('[role="dialog"][aria-label="Vault"] .vault-reply[data-tone="refused"]', {
+          timeout: 15_000,
+        })
+        const refusal = await vault
+          .locator('[role="dialog"][aria-label="Vault"] .vault-reply[data-tone="refused"]')
+          .textContent()
+        check(
+          'a credential-shaped memory is refused and says why',
+          (refusal ?? '').includes('appears to contain'),
+          refusal ?? 'no refusal shown',
+        )
+        check(
+          'the refused text is still in the composer',
+          (await vault.locator('[role="dialog"][aria-label="Vault"] .vault-field textarea').inputValue()) ===
+            SECRET_TO_REFUSE,
+        )
+
+        // --- 5. recall discloses its accounting ---------------------------
+        await vault.locator('[role="dialog"][aria-label="Vault"] .vault-recall').click()
+        await vault.waitForSelector('[role="dialog"][aria-label="Vault"] .vault-pack-counts', { timeout: 15_000 })
+        const counts = await vault.locator('[role="dialog"][aria-label="Vault"] .vault-pack-counts').textContent()
+        check(
+          'recall reports what it considered, included and left out',
+          /recalled from [0-9]+ considered/.test(counts ?? ''),
+          counts ?? 'no accounting shown',
+        )
+        check(
+          'a recalled item shows its source class',
+          ((await vault.locator('[role="dialog"][aria-label="Vault"] .vault-pack-items').textContent()) ?? '').includes(
+            'owner-assertion',
+          ),
+        )
+
+        // --- 6. what Freya believes about herself is readable -------------
+        const self = await vault.locator('[role="dialog"][aria-label="Vault"] .vault-self').textContent()
+        check('the Vault shows what Freya cannot do', (self ?? '').includes('cannot'), (self ?? '').slice(0, 120))
+
+        // --- 7. and it all survives an application relaunch -------------
+        // The only thing that can outlive a process is the encrypted store, so
+        // this is the check that memory is really persisted rather than cached.
+        await vaultApp.close()
+        const second = await launch(userData, DEV)
+        relaunched = second.app
+        await openVault(second.page)
+
+        await second.page.waitForFunction(
+          () =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Vault"] .vault-memories li')].some((row) =>
+              (row.textContent ?? '').includes('owner-assertion'),
+            ),
+          undefined,
+          { timeout: 20_000 },
+        )
+        check('a memory survives an application relaunch', true)
+        check(
+          'the Brain reports itself durable after a relaunch',
+          (await second.page.locator('[role="dialog"][aria-label="Vault"] .vault-surface').getAttribute('data-durable')) ===
+            'true',
+        )
+
+        // Recall after the restart must find it again, from disk. This is the check
+        // that would catch a store that replayed nothing while the UI went on
+        // showing what it had cached.
+        await second.page.locator('[role="dialog"][aria-label="Vault"] .vault-recall').click()
+        await second.page.waitForSelector('[role="dialog"][aria-label="Vault"] .vault-pack-items', { timeout: 15_000 })
+        check(
+          'the memory is recalled from disk after a relaunch',
+          ((await second.page.locator('[role="dialog"][aria-label="Vault"] .vault-pack-items').textContent()) ?? '').includes(
+            'owner-assertion',
+          ),
+        )
+
+        // --- 8. withdrawal stops recall without deleting ------------------
+        await second.page.locator('[role="dialog"][aria-label="Vault"] .vault-withdraw').first().click()
+        await second.page.waitForFunction(
+          () => [...document.querySelectorAll('[role="dialog"][aria-label="Vault"] .vault-memories li')].length === 0,
+          undefined,
+          { timeout: 15_000 },
+        )
+        check('a withdrawn memory stops being listed', true)
+        check(
+          'the withdrawal is counted rather than silently dropped',
+          ((await second.page.locator('[role="dialog"][aria-label="Vault"] .vault-facts').textContent()) ?? '').includes(
+            'Withdrawn',
+          ),
+        )
+
+        const third = await launch(userData, DEV)
+        await openVault(third.page)
+        await third.page.waitForFunction(
+          () => [...document.querySelectorAll('[role="dialog"][aria-label="Vault"] .vault-memories li')].length === 0,
+          undefined,
+          { timeout: 20_000 },
+        )
+        // Archived, not deleted. Deletion and tampering must not look alike, which is
+        // the one distinction the hash chain exists to keep.
+        check('the withdrawal survives a relaunch; nothing came back', true)
+        await third.app.close().catch(() => {})
+      } finally {
+        await relaunched?.close().catch(() => {})
+        await vaultApp.close().catch(() => {})
       }
     }
 

@@ -126,7 +126,14 @@ async function main(): Promise<void> {
           const host = document.querySelector('.presence-stage')
           if (!host) return null
           const box = host.getBoundingClientRect()
-          return { width: box.width, height: box.height }
+          return {
+            x: box.x,
+            y: box.y,
+            width: box.width,
+            height: box.height,
+            centreX: box.x + box.width / 2,
+            centreY: box.y + box.height / 2,
+          }
         })
 
       const initialFit = await backingMatchesBox(page)
@@ -152,11 +159,13 @@ async function main(): Promise<void> {
           JSON.stringify(foldedFit),
         )
         check(
-          'folding the systems rail does not resize the orb',
+          'folding the systems rail does not resize or move Freya',
           initialStageBox !== null &&
             foldedStageBox !== null &&
             Math.abs(foldedStageBox.width - initialStageBox.width) < 1 &&
-            Math.abs(foldedStageBox.height - initialStageBox.height) < 1,
+            Math.abs(foldedStageBox.height - initialStageBox.height) < 1 &&
+            Math.abs(foldedStageBox.centreX - initialStageBox.centreX) < 1 &&
+            Math.abs(foldedStageBox.centreY - initialStageBox.centreY) < 1,
           `before ${JSON.stringify(initialStageBox)} after ${JSON.stringify(foldedStageBox)}`,
         )
         await railToggle.click()

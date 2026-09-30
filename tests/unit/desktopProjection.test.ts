@@ -137,6 +137,37 @@ describe('presence derivation', () => {
     expect(derivePresence(input({ core: core({ activeProviderCalls: 3 }) })).state).toBe('working')
   })
 
+  it('follows one stop from running to locked to idle', () => {
+    // The whole sequence, as a window actually sees it. The part worth stating
+    // is the middle: once the work has finished, the window is still locked,
+    // because the latch — not the absence of work — is what holds it there.
+    const running = derivePresence(input({ core: core({ activeProviderCalls: 1 }) }))
+    expect(running.state).toBe('working')
+
+    const stopped = core({
+      activeProviderCalls: 1,
+      stopAll: { active: true, activatedAt: '2026-03-01T12:01:00.000Z', activatedBy: 'owner' },
+      governor: { status: 'deny_all', grantsActive: 0 },
+    })
+    expect(derivePresence(input({ core: stopped })).state).toBe('locked')
+
+    // The cancellation finished. Still locked: nothing about that undoes a stop.
+    expect(derivePresence(input({ core: { ...stopped, activeProviderCalls: 0 } })).state).toBe('locked')
+
+    const resumed = core({ activeProviderCalls: 0 })
+    expect(derivePresence(input({ core: resumed })).state).toBe('idle')
+
+    // The latch on its own, with the Governor not refusing, so this cannot be
+    // satisfied by the branch above. STOP ALL is what holds the window, and it
+    // holds it whether or not there is anything left to stop.
+    const latchedOnly = core({
+      activeProviderCalls: 0,
+      stopAll: { active: true, activatedAt: '2026-03-01T12:01:00.000Z', activatedBy: 'owner' },
+      governor: { status: 'ready', grantsActive: 0 },
+    })
+    expect(derivePresence(input({ core: latchedOnly })).state).toBe('locked')
+  })
+
   it('never claims working from a command alone', () => {
     // A recorded command is not work. `command.received` reaches the activity
     // feed and nothing else, and no input other than a live provider count can

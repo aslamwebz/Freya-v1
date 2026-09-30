@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { shellStore } from '../ui/store'
 import {
   conversationMirror,
   ensureConversationAttached,
@@ -29,7 +30,16 @@ export function useConversation(): ConversationProjection | null {
     let cancelled = false
     void ensureConversationAttached().then((attached) => {
       if (cancelled) return
-      dispose = attached.subscribe(setProjection)
+      dispose = attached.subscribe((next) => {
+        setProjection(next)
+        // Core decides which conversation is open; the store only remembers it so
+        // the window can re-open the same one after a reload. Dispatching rather
+        // than writing directly keeps one path into the state.
+        shellStore.dispatch({
+          type: 'conversation.selected',
+          conversationId: next?.activeConversationId ?? null,
+        })
+      })
     })
     return () => {
       cancelled = true

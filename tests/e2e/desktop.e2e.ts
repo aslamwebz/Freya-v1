@@ -10,6 +10,15 @@ import { existsSync } from 'node:fs'
  * Launches Electron against a throwaway userData directory so the test can
  * quit and relaunch without touching a real Freya workspace, then asserts the
  * layout survives. No model, no network, no AI provider is involved.
+ *
+ * ## Phase 3: the conversation flow
+ *
+ * That last sentence has to be *true*, not aspirational, so the conversation
+ * section launches with `FREYA_DEV_PROVIDER=slow-echo`: an explicitly named local
+ * developer provider that answers from a canned string and takes long enough to be
+ * interrupted. No NanoGPT key is present and none is read, so there is no path
+ * from this file to a paid call. The slow variant is not decoration —
+ * cancellation cannot be demonstrated against a provider that answers instantly.
  */
 
 const ROOT = resolve(import.meta.dirname, '..', '..')
@@ -20,15 +29,61 @@ function check(name: string, ok: boolean, detail?: string): void {
   console.log(`${ok ? '  ok  ' : '  FAIL'} ${name}${detail && !ok ? ` — ${detail}` : ''}`)
 }
 
-async function launch(userData: string): Promise<{ app: ElectronApplication; page: Page }> {
+async function launch(
+  userData: string,
+  env: Record<string, string> = {},
+): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
     args: [ROOT, `--user-data-dir=${userData}`],
-    env: { ...process.env, NODE_ENV: 'production' },
+    env: { ...process.env, NODE_ENV: 'production', ...env },
   })
   const page = await app.firstWindow()
   await page.waitForSelector('.app[data-ready="true"]', { timeout: 20_000 })
   await page.waitForSelector('.presence', { timeout: 20_000 })
   return { app, page }
+}
+
+/**
+ * Open the Chat surface and wait for its composer.
+ *
+ * Idempotent on purpose: a reloaded window restores whatever was open, so clicking
+ * the launcher on an already-open singleton *minimises* it. A helper that assumed
+ * "not open" would toggle the surface shut and then wait for a composer that had
+ * just been hidden.
+ */
+async function openChat(page: Page): Promise<void> {
+  const dialog = page.locator('[role="dialog"][aria-label="Chat"]')
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Chat' }).click()
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Chat"]', { timeout: 15_000 })
+  await page.waitForSelector('[role="dialog"][aria-label="Chat"] .chat-compose', { timeout: 15_000 })
+}
+
+/** Send a message through the real composer, by pressing Enter. */
+async function sendChatMessage(page: Page, text: string): Promise<void> {
+  const input = page.locator('[role="dialog"][aria-label="Chat"] .chat-input')
+  await input.fill(text)
+  await input.press('Enter')
+}
+
+/** The transcript as a person reads it, as `role: text` lines. */
+async function transcript(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].map(
+      (row) => `${row.getAttribute('data-role') ?? ''}: ${row.querySelector('span')?.textContent ?? ''}`,
+    ),
+  )
+}
+
+/** How many turns the transcript holds, for waiting on the *n*th reply. */
+async function replyCount(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].filter((r) =>
+        (r.textContent ?? '').includes('developer echo provider'),
+      ).length,
+  )
 }
 
 async function boxOf(page: Page, title: string) {
@@ -796,6 +851,276 @@ async function main(): Promise<void> {
       )
 
       await fourth.close()
+    }
+
+
+    // =================================================================
+    // Phase 3: a real conversation, with no model and no network
+    // =================================================================
+    {
+      // A named local developer provider: opt-in, answers from a canned string,
+      // and takes five seconds so a stop has something to stop. No NanoGPT key is
+      // present in this environment and none is read.
+      const DEV = { FREYA_DEV_PROVIDER: 'slow-echo' }
+      const { app: chatApp, page: chat } = await launch(userData, DEV)
+      let relaunched: ElectronApplication | null = null
+
+      try {
+        // --- the window is still sealed ---------------------------------
+        // A renderer that could reach the filesystem or the key would make every
+        // other claim in this section decorative.
+        const sealed = await chat.evaluate(() => {
+          const scope = window as unknown as Record<string, unknown>
+          return {
+            hasRequire: typeof scope.require === 'function',
+            hasProcess: typeof scope.process === 'object' && scope.process !== null,
+            bridgeKeys: Object.keys((scope.freyaHost as object | undefined) ?? {}).sort(),
+          }
+        })
+        check(
+          'the window cannot reach the filesystem or the key',
+          !sealed.hasRequire && !sealed.hasProcess,
+          JSON.stringify(sealed),
+        )
+        check(
+          'the bridge exposes no command Core keeps to itself',
+          !sealed.bridgeKeys.some((key) => /grant|key|crypto|file|path|ipc/i.test(key)),
+          sealed.bridgeKeys.join(', '),
+        )
+
+        await openChat(chat)
+
+        // --- 1-5. create, send, get a deterministic answer ---------------
+        await sendChatMessage(chat, 'what is a persistent intelligence?')
+
+        // The question is stored before anything is spent, so it is on screen
+        // while the provider is still thinking.
+        await chat.waitForFunction(
+          () =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].some((r) =>
+              (r.textContent ?? '').includes('what is a persistent intelligence?'),
+            ),
+          undefined,
+          { timeout: 15_000 },
+        )
+        check('the question is stored and shown before the answer exists', true)
+        // Waited for rather than sampled: the composer is disabled when the
+        // projection saying a turn is running arrives, and arriving is the point.
+        // Reading it in the same tick as the question is a race in the *test*.
+        await chat.waitForFunction(
+          () =>
+            document
+              .querySelector('[role="dialog"][aria-label="Chat"] .chat-input')
+              ?.hasAttribute('disabled') === true,
+          undefined,
+          { timeout: 15_000 },
+        )
+        check('the composer is refused while a turn is running', true)
+
+        await chat.waitForFunction(
+          () =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].some((r) =>
+              (r.textContent ?? '').includes('developer echo provider'),
+            ),
+          undefined,
+          { timeout: 40_000 },
+        )
+        const first = await transcript(chat)
+        check(
+          'a deterministic reply is stored and rendered',
+          first.some((line) => line.startsWith('assistant:')),
+          JSON.stringify(first),
+        )
+        check(
+          'the developer provider is visibly itself, not intelligence',
+          first.some((line) => line.includes('not intelligence')),
+        )
+
+        // --- 6. the transcript survives a renderer reload ----------------
+        await chat.reload()
+        await chat.waitForSelector('.app[data-ready="true"]', { timeout: 20_000 })
+        await openChat(chat)
+        await chat.waitForFunction(
+          () =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].some((r) =>
+              (r.textContent ?? '').includes('what is a persistent intelligence?'),
+            ),
+          undefined,
+          { timeout: 20_000 },
+        )
+        check('the transcript survives a renderer reload', true)
+
+        // --- 7-8. and an application relaunch ----------------------------
+        // The encrypted store is the only thing that can outlive a process, so
+        // this is the check that conversation history is really persisted.
+        await chatApp.close()
+        const second = await launch(userData, DEV)
+        relaunched = second.app
+        await openChat(second.page)
+        await second.page.waitForFunction(
+          () =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].some((r) =>
+              (r.textContent ?? '').includes('what is a persistent intelligence?'),
+            ),
+          undefined,
+          { timeout: 20_000 },
+        )
+        check('the transcript survives an application relaunch', true)
+        check(
+          'the conversation is listed as history, not only on screen',
+          (await second.page.locator('[role="dialog"][aria-label="Chat"] .chat-list-item').count()) > 0,
+        )
+
+        // --- 9-12. stop one response; Freya stays able to think ----------
+        await sendChatMessage(second.page, 'a long question that will be interrupted')
+        await second.page.waitForSelector(
+          '[role="dialog"][aria-label="Chat"] .chat-turn[data-state="generating"]',
+          { timeout: 20_000 },
+        )
+        check('a running turn is shown as generating', true)
+
+        await second.page.locator('[role="dialog"][aria-label="Chat"] .chat-stop').click()
+        await second.page.waitForFunction(
+          () =>
+            document.querySelector('[role="dialog"][aria-label="Chat"] .chat-turn[data-state="generating"]') ===
+            null,
+          undefined,
+          { timeout: 20_000 },
+        )
+        check('stopping the response ends the turn', true)
+
+        const presenceAfterCancel = await second.page.locator('.presence').getAttribute('data-state')
+        check(
+          'stopping a response does not lock Freya',
+          presenceAfterCancel !== 'locked',
+          `presence=${presenceAfterCancel ?? 'unknown'}`,
+        )
+        const stopLatched = await second.page.evaluate(async () => {
+          const host = (
+            window as unknown as {
+              freyaHost?: { coreStatus: () => Promise<{ stopAll: { active: boolean } }> }
+            }
+          ).freyaHost
+          if (!host) return true
+          return (await host.coreStatus()).stopAll.active
+        })
+        check('STOP ALL remains unlatched after stopping a response', stopLatched === false)
+
+        // The point of a *scoped* cancel: the next turn still works.
+        const repliesBefore = await replyCount(second.page)
+        await sendChatMessage(second.page, 'and a second question after that')
+        await second.page.waitForFunction(
+          (n) =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].filter((r) =>
+              (r.textContent ?? '').includes('developer echo provider'),
+            ).length > n,
+          repliesBefore,
+          { timeout: 40_000 },
+        )
+        check('a new explicit turn runs after a scoped cancel', true)
+
+        // --- 13-19. STOP ALL, then resume -------------------------------
+        const repliesBeforeStop = await replyCount(second.page)
+        await sendChatMessage(second.page, 'this one is running when Freya is stopped')
+        await second.page.waitForSelector(
+          '[role="dialog"][aria-label="Chat"] .chat-turn[data-state="generating"]',
+          { timeout: 20_000 },
+        )
+
+        const launcher = second.page.getByRole('toolbar', { name: /work surfaces/i })
+        await launcher.getByRole('button', { name: 'Security' }).click()
+        await second.page.waitForSelector('[role="dialog"][aria-label="Security"]')
+        await second.page.getByRole('button', { name: /stop all/i }).click()
+        await second.page.waitForSelector('[role="alertdialog"][aria-label="Confirm stop all"]')
+        await second.page.getByRole('button', { name: /yes, stop everything/i }).click()
+        await second.page.waitForFunction(
+          () => document.querySelector('.security-posture b')?.textContent === 'STOPPED',
+          undefined,
+          { timeout: 15_000 },
+        )
+        check('STOP ALL latches from the security surface', true)
+
+        // The running response is aborted and the presence locks.
+        await second.page.waitForFunction(
+          () => document.querySelector('.presence')?.getAttribute('data-state') === 'locked',
+          undefined,
+          { timeout: 20_000 },
+        )
+        check('STOP ALL aborts the running response and locks Presence', true)
+        await second.page.waitForFunction(
+          () =>
+            document.querySelector('[role="dialog"][aria-label="Chat"] .chat-turn[data-state="generating"]') ===
+            null,
+          undefined,
+          { timeout: 25_000 },
+        )
+        check('the stopped turn ends rather than finishing later', true)
+        check(
+          'no reply was fabricated for the stopped turn',
+          (await replyCount(second.page)) === repliesBeforeStop,
+        )
+
+        // Chat is completely subject to the stop.
+        check(
+          'the composer is refused while Freya is stopped',
+          await second.page.locator('[role="dialog"][aria-label="Chat"] .chat-input').isDisabled(),
+        )
+
+        await second.page.getByRole('button', { name: /resume core/i }).click()
+        await second.page.waitForFunction(
+          () => document.querySelector('.security-posture b')?.textContent === 'RUNNING',
+          undefined,
+          { timeout: 15_000 },
+        )
+        check('an explicit owner resume reopens cognition', true)
+
+        // --- 20. idle costs nothing and does nothing ---------------------
+        const turnsBeforeIdle = await second.page.evaluate(
+          () => document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn').length,
+        )
+        const callsBeforeIdle = await second.page.evaluate(async () => {
+          const host = (
+            window as unknown as {
+              freyaHost?: { coreStatus: () => Promise<{ sessionUsage: { calls: number } }> }
+            }
+          ).freyaHost
+          if (!host) return -1
+          return (await host.coreStatus()).sessionUsage.calls
+        })
+        await second.page.waitForTimeout(3_000)
+        const turnsAfterIdle = await second.page.evaluate(
+          () => document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn').length,
+        )
+        const callsAfterIdle = await second.page.evaluate(async () => {
+          const host = (
+            window as unknown as {
+              freyaHost?: { coreStatus: () => Promise<{ sessionUsage: { calls: number } }> }
+            }
+          ).freyaHost
+          if (!host) return -1
+          return (await host.coreStatus()).sessionUsage.calls
+        })
+        check(
+          'nothing runs on its own while idle',
+          turnsBeforeIdle === turnsAfterIdle && callsBeforeIdle === callsAfterIdle,
+          `turns ${turnsBeforeIdle}->${turnsAfterIdle}, calls ${callsBeforeIdle}->${callsAfterIdle}`,
+        )
+
+        // And only a *new* explicit turn may spend anything.
+        await sendChatMessage(second.page, 'a brand new question after the resume')
+        await second.page.waitForFunction(
+          (n) =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].filter((r) =>
+              (r.textContent ?? '').includes('developer echo provider'),
+            ).length > n,
+          repliesBeforeStop,
+          { timeout: 40_000 },
+        )
+        check('only a new explicit turn runs after a resume', true)
+      } finally {
+        await relaunched?.close().catch(() => {})
+        await chatApp.close().catch(() => {})
+      }
     }
 
     first = null

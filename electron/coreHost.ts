@@ -63,6 +63,13 @@ export interface CoreHostOptions {
    * ephemeral conversation store and says so.
    */
   conversationKey?: Uint8Array | null
+  /**
+   * The developer echo provider, when one was explicitly asked for.
+   *
+   * Forwarded verbatim to Core, which is the only place that decides what a
+   * provider is. The host does not construct one.
+   */
+  developerProvider?: 'echo' | 'slow-echo'
 }
 
 export class ElectronCoreHost implements CoreHost {
@@ -89,6 +96,9 @@ export class ElectronCoreHost implements CoreHost {
         // or put it in a projection, so there is nothing for it to leak through.
         ...(this.options.conversationKey
           ? { conversationKey: this.options.conversationKey }
+          : {}),
+        ...(this.options.developerProvider
+          ? { developerProvider: this.options.developerProvider }
           : {}),
       })
       await core.start()

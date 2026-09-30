@@ -45,11 +45,26 @@ export type ShellEvent =
    * the attempt fails, loudly, in a shipped build.
    */
   | { type: 'presence.simulate'; state: PresenceState; detail?: string }
+  /**
+   * Which conversation Core says is open.
+   *
+   * Dispatched by the conversation subscription, not written by a panel: a panel
+   * that chose its own active conversation would be keeping a second copy of state
+   * Core owns. It is presentation, and it is what the workspace file persists.
+   */
+  | { type: 'conversation.selected'; conversationId: string | null }
   /** Append to the chat bar's transcript. */
   | { type: 'chat.line'; role: 'you' | 'freya'; text: string; refused?: boolean }
   | { type: 'voice.toggle'; listening: boolean }
   | { type: 'attention.requested'; count: number }
-  | { type: 'workspace.restored'; nav: string; navCollapsed: boolean; presence: PresenceState }
+  | {
+      type: 'workspace.restored'
+      nav: string
+      navCollapsed: boolean
+      presence: PresenceState
+      /** Which conversation to re-open. Presentation, and re-read by Core. */
+      conversationId?: string | null
+    }
   | { type: 'work.updated'; note: string }
   | SurfaceEvent
 
@@ -61,6 +76,15 @@ export interface ShellState {
    * someone who collapses it once generally wants it collapsed next time.
    */
   navCollapsed: boolean
+  /**
+   * Which conversation the person had open.
+   *
+   * Presentation, and persisted for the same reason the rail is. It is an id and
+   * nothing more: Core re-reads the transcript from its own store, so a value that
+   * has gone stale, or was hand-edited into the file, resolves to nothing rather
+   * than to invented content.
+   */
+  conversationId: string | null
   listening: boolean
   commandDraft: string
   lastCommand: string | null
@@ -116,6 +140,7 @@ export function initialState(): ShellState {
     presence: { state: 'idle', since: Date.now(), activity: 0, detail: null },
     nav: 'home',
     navCollapsed: false,
+    conversationId: null,
     listening: false,
     commandDraft: '',
     lastCommand: null,
@@ -244,6 +269,11 @@ export function reduce(state: ShellState, event: ShellEvent): ShellState {
     case 'nav.select':
       return state.nav === event.section ? state : { ...state, nav: event.section }
 
+    case 'conversation.selected':
+      return state.conversationId === event.conversationId
+        ? state
+        : { ...state, conversationId: event.conversationId }
+
     case 'nav.collapse':
       return state.navCollapsed === event.collapsed ? state : { ...state, navCollapsed: event.collapsed }
 
@@ -310,7 +340,14 @@ export function reduce(state: ShellState, event: ShellEvent): ShellState {
      * layout comes back; the intelligence's state does not.
      */
     case 'workspace.restored': {
-      return project({ ...state, nav: event.nav, navCollapsed: event.navCollapsed })
+      // Layout comes back; intelligence does not. `conversationId` is which pane
+      // was open, not what was said in it — Core re-reads the transcript itself.
+      return project({
+        ...state,
+        nav: event.nav,
+        navCollapsed: event.navCollapsed,
+        conversationId: event.conversationId ?? null,
+      })
     }
 
     // The manager owns surfaces and ships a summary; the store keeps it.

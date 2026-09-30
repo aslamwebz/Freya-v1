@@ -364,7 +364,7 @@ describe('command surface', () => {
 
 describe('providers', () => {
   it('reports the echo provider honestly when a developer opts in', async () => {
-    core = createCore(options({ providers: undefined, developerEchoProvider: true, env: {} }))
+    core = createCore(options({ providers: undefined, developerProvider: 'echo', env: {} }))
     await core.start()
     const providers = core.status().providers
     const fake = providers.find((p) => p.id === 'fake')

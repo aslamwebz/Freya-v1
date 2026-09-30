@@ -87,10 +87,6 @@ export type TurnOutcome = 'pending' | 'completed' | 'denied' | 'cancelled' | 'fa
 /** A terminal outcome, i.e. anything that is not still running or unknown. */
 export type TerminalTurnOutcome = Exclude<TurnOutcome, 'pending'>
 
-export function isTerminal(outcome: TurnOutcome): outcome is TerminalTurnOutcome {
-  return outcome !== 'pending'
-}
-
 export interface ConversationTurn {
   turnId: string
   conversationId: string

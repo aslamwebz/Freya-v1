@@ -140,6 +140,16 @@ export interface MindServiceOptions {
   newId?: () => string
   /** Minimal runtime facts for the compiled packet. Opaque to the Mind. */
   runtimeFacts?: () => readonly string[]
+  /**
+   * Called when a turn starts and when it settles.
+   *
+   * A function rather than an event, and it fires at the *start* as well as the
+   * end, because the start is the moment a window most needs to hear about: a
+   * projection published only on completion would make "Freya is answering"
+   * impossible to display, since by the time it arrived the answer already
+   * existed.
+   */
+  onTurnStateChange?: () => void
 }
 
 export class MindService {
@@ -152,6 +162,7 @@ export class MindService {
   private readonly now: () => Date
   private readonly newId: () => string
   private readonly runtimeFacts: () => readonly string[]
+  private readonly onTurnStateChange: () => void
 
   /**
    * One actively running turn per conversation.
@@ -173,6 +184,7 @@ export class MindService {
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => randomUUID())
     this.runtimeFacts = options.runtimeFacts ?? (() => [])
+    this.onTurnStateChange = options.onTurnStateChange ?? (() => {})
   }
 
   /** Whether a conversation already has a turn generating. */
@@ -223,6 +235,10 @@ export class MindService {
 
     const turnId = input.turnId || this.newId()
     this.activeTurns.set(input.conversationId, turnId)
+    // Before any await, so the window is told a turn is running before it can
+    // possibly finish. A projection that only arrived afterwards would make the
+    // generating state unreachable.
+    this.onTurnStateChange()
 
     try {
       // --- 1. the user's words, stored before anything is spent ------------
@@ -237,6 +253,15 @@ export class MindService {
       try {
         await this.store.appendMessage(userMessage)
         await this.touchConversation(input.conversationId, startedAt, deriveConversationTitle(text))
+        // Published again now that the words are stored.
+        //
+        // The publish above the try says a turn is running, but it fires before the
+        // message exists, so the transcript a window is holding does not yet
+        // contain the question. Without this second push the person would not see
+        // what they had asked for until the answer had already arrived — which
+        // defeats storing the question first, and hides the whole five seconds a
+        // slow provider spends thinking.
+        this.onTurnStateChange()
       } catch (error) {
         // Nothing has been spent and nothing is claimed. A conversation that
         // cannot be written is a conversation that cannot be had.
@@ -371,6 +396,7 @@ export class MindService {
       // Whatever happened, the conversation is free again. A turn that left
       // itself marked active would make every later send fail.
       this.activeTurns.delete(input.conversationId)
+      this.onTurnStateChange()
     }
   }
 
@@ -463,6 +489,7 @@ export class MindService {
     // The turn is over for the Mind whatever the store says. A store that cannot
     // record the outcome must not leave the conversation permanently busy.
     this.activeTurns.delete(input.conversationId)
+    this.onTurnStateChange()
 
     let storedReason = reason
     try {

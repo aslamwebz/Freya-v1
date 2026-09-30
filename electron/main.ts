@@ -23,6 +23,18 @@ let quitting = false
 /** Long enough for a round trip, short enough that a wedged renderer still quits. */
 const COLLECT_TIMEOUT_MS = 750
 
+/**
+ * The developer echo provider, if one was explicitly asked for.
+ *
+ * Read from the environment by name and validated against a closed set, so a
+ * typo produces "no developer provider" rather than something unexpected being
+ * constructed. Undefined means none, and none is the default.
+ */
+function developerProvider(): 'echo' | 'slow-echo' | undefined {
+  const raw = process.env.FREYA_DEV_PROVIDER
+  return raw === 'echo' || raw === 'slow-echo' ? raw : undefined
+}
+
 function requireWorkspace(): WorkspaceFile {
   if (!workspace) throw new Error('workspace file used before the app was ready')
   return workspace
@@ -314,7 +326,14 @@ app.whenReady().then(() => {
         NANOGPT_MODEL: process.env.NANOGPT_MODEL,
         FREYA_ALLOW_LIVE_MODEL: process.env.FREYA_ALLOW_LIVE_MODEL,
       },
-      { conversationKey: result.key },
+      {
+        conversationKey: result.key,
+        // Opt-in, and named for what it is. Never inferred from a debug flag or
+        // from a missing credential: a build that answers from a canned string
+        // without saying so is the failure this guards against. The slow variant
+        // exists so the end-to-end suite has something to cancel.
+        ...(developerProvider() ? { developerProvider: developerProvider() } : {}),
+      },
     )
     registerIpc()
     mainWindow = createWindow()

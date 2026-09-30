@@ -21,9 +21,6 @@ import type { ProviderStatus } from '../protocol/core-protocol'
  * written to cooperate, and the real one — NanoGPT — would be the untested case.
  */
 
-/** A signal that is never aborted, for the paths that do not care. */
-export const NEVER_ABORTED: AbortSignal = new AbortController().signal
-
 /**
  * A deterministic provider.
  */
@@ -38,7 +35,7 @@ export class FakeModelProvider implements ModelProvider {
   /** The last usage reported. A test seam, not part of any provider contract. */
   lastUsage: { inputTokens: number; outputTokens: number } | null = null
 
-  constructor(private readonly model = 'fake-echo-1') {}
+  constructor(readonly model = 'fake-echo-1') {}
 
   status(): ProviderStatus {
     return {
@@ -55,15 +52,22 @@ export class FakeModelProvider implements ModelProvider {
   async complete(request: ModelRequest, options: ModelCallOptions): Promise<ModelResult> {
     throwIfAborted(options.signal, 'cancelled before the provider was contacted')
     this.calls += 1
-    const inputTokens = countTokens(request.prompt)
-    const outputTokens = countTokens(request.prompt)
+    // Echoes the last *user* turn, not the flattened prompt.
+    //
+    // The flattened form is what a single-prompt provider would receive, and it
+    // begins with the compiled Identity Kernel — so echoing it would print Freya's
+    // own instructions back into the transcript as though she had said them. This
+    // is a stand-in for an assistant, so it answers what was asked.
+    const said = request.messages.at(-1)?.content ?? request.prompt
+    const inputTokens = countTokens(said)
+    const outputTokens = countTokens(said)
     this.lastUsage = { inputTokens, outputTokens }
     return {
       requestId: request.requestId,
       providerId: this.id,
       model: this.model,
-      // Deterministic: the same prompt always yields the same answer.
-      text: `[developer echo provider — not intelligence] ${request.prompt}`,
+      // Deterministic: the same message always yields the same answer.
+      text: `[developer echo provider — not intelligence] ${said}`,
       inputTokens,
       outputTokens,
     }
@@ -261,4 +265,70 @@ function cancellationText(signal: AbortSignal): string {
 /** A rough token count for the fake providers only. Never used as a budget. */
 function countTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4))
+}
+
+/**
+ * A deliberately slow echo provider.
+ *
+ * It exists for one reason: cancellation cannot be demonstrated against a provider
+ * that answers instantly. A real model takes seconds, and a test that only ever
+ * sees instant answers never exercises the path where a stop arrives mid-call.
+ *
+ * It is a developer seam and says so in two places — the delay is explicit, and
+ * the reply is prefixed identically to the fast echo — so a window can never
+ * present its output as anything but a stand-in. It is listed after every real
+ * provider, so it can never shadow one.
+ */
+export class SlowFakeModelProvider extends FakeModelProvider {
+  override readonly id = 'slow-echo'
+  /** Contacts and aborts, so a test can prove the call really was interrupted. */
+  contacts = 0
+  aborts = 0
+
+  constructor(
+    private readonly delayMs = 5_000,
+    model = 'slow-echo-1',
+  ) {
+    super(model)
+  }
+
+  override status(): ProviderStatus {
+    return { ...super.status(), id: this.id, model: this.model }
+  }
+
+  override async complete(
+    request: ModelRequest,
+    options: ModelCallOptions,
+  ): Promise<ModelResult> {
+    if (options.signal.aborted) {
+      throw new ModelRequestCancelled('cancelled before the provider was contacted')
+    }
+    this.calls += 1
+    this.contacts += 1
+
+    // Resolves early on abort, so a cancelled call does not sit out the delay
+    // before the window hears about it. The abort is what ends this, not the timer.
+    const finished = new Promise<'done'>((resolve) => {
+      options.signal.addEventListener('abort', () => resolve('done'), { once: true })
+    })
+    const elapsed = new Promise<'done'>((resolve) => {
+      setTimeout(() => resolve('done'), this.delayMs)
+    })
+    const outcome = await Promise.race([finished, elapsed])
+    if (outcome === 'done' && options.signal.aborted) {
+      this.aborts += 1
+      throw new ModelRequestCancelled('the owner stopped this response')
+    }
+
+    // As with the fast echo: answer what was asked, not Freya's own instructions.
+    const said = request.messages.at(-1)?.content ?? request.prompt
+    return {
+      requestId: request.requestId,
+      providerId: this.id,
+      model: this.model,
+      text: `[developer echo provider — not intelligence] ${said}`,
+      inputTokens: countTokens(said),
+      outputTokens: countTokens(said),
+    }
+  }
 }

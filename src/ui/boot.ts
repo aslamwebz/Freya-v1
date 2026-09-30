@@ -3,6 +3,7 @@ import { WORKSPACE_SCHEMA } from '../core/workspace'
 import { shellStore } from './store'
 import { createWorkspaceStore, collectFrom, readRuntimeInfo } from '../platform/workspaceStore'
 import { coreMirror, ensureActivityAttached, ensureCoreAttached } from '../platform/coreClient'
+import { conversationMirror } from '../platform/conversationClient'
 
 const SAVE_DEBOUNCE = 400
 
@@ -98,7 +99,14 @@ async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'bro
       nav: snapshot.nav,
       navCollapsed: snapshot.navCollapsed,
       presence: snapshot.presence,
+      conversationId: snapshot.conversationId,
     })
+    // Re-open the conversation the person had. Core reads it from its own store
+    // and decides whether it still exists; an id that does not resolve simply
+    // leaves an empty pane, which is the honest outcome.
+    if (snapshot.conversationId !== null) {
+      void conversationMirror().read(snapshot.conversationId)
+    }
   }
 
   const persist = () => {
@@ -109,6 +117,7 @@ async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'bro
       presence: state.presence.state,
       nav: state.nav,
       navCollapsed: state.navCollapsed,
+      conversationId: state.conversationId,
       savedAt: Date.now(),
     })
   }
@@ -142,6 +151,7 @@ async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'bro
     presence: shellStore.getState().presence.state,
     nav: shellStore.getState().nav,
     navCollapsed: shellStore.getState().navCollapsed,
+    conversationId: shellStore.getState().conversationId,
     savedAt: Date.now(),
   }))
 

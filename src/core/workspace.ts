@@ -32,6 +32,15 @@ export interface WorkspaceSnapshot {
   nav: string
   /** The systems rail folded to icons. */
   navCollapsed: boolean
+  /**
+   * Which conversation was open.
+   *
+   * Presentation, and the reason it is safe here: an id is not authority. Core
+   * re-reads the conversation from its own store, and a stale or invented id
+   * resolves to nothing. A file the renderer can write may choose which
+   * conversation to *look at* and can never create, alter or authorise one.
+   */
+  conversationId: string | null
   savedAt: number
 }
 
@@ -128,6 +137,12 @@ export function parseWorkspace(raw: unknown): WorkspaceSnapshot | null {
     presence: isPresenceState(raw.presence) ? raw.presence : 'idle',
     nav: typeof raw.nav === 'string' ? raw.nav.slice(0, 32) : 'home',
     navCollapsed: raw.navCollapsed === true,
+    // Bounded and pattern-checked, because this file is untrusted input. A value
+    // that is not a conversation id cannot become one.
+    conversationId:
+      typeof raw.conversationId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(raw.conversationId)
+        ? raw.conversationId
+        : null,
     savedAt: num(raw.savedAt, Date.now()),
   }
 }
@@ -139,6 +154,7 @@ export function emptyWorkspace(): WorkspaceSnapshot {
     presence: 'idle',
     nav: 'home',
     navCollapsed: false,
+    conversationId: null,
     savedAt: Date.now(),
   }
 }

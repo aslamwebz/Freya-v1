@@ -10,7 +10,7 @@ import { CognitionService } from './cognition/service'
 import { ModelGateway, type GatewayRecorder } from './model/gateway'
 import { emptyUsage } from './model/usage'
 import type { ModelProvider } from './model/provider'
-import { FakeModelProvider } from './model/fake-provider'
+import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
 import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
 import { MindService } from './mind/mind'
 import { ConversationService } from './conversation/service'
@@ -87,13 +87,21 @@ export interface CoreOptions {
    */
   providers?: ModelProvider[]
   /**
-   * Developer seam: add the local echo provider to the production set.
+   * Developer seam: add a local echo provider to the production set.
    *
-   * Named for what it is and opt-in, because the failure mode it guards against
-   * is a build that appears to work while answering from a canned string. It is
-   * never inferred from a debug flag, a test runner, or an absent credential.
+   * Named for what it is and opt-in, because the failure mode it guards against is
+   * a build that appears to work while answering from a canned string. It is never
+   * inferred from a debug flag, a test runner, or an absent credential.
+   *
+   * - `echo` answers immediately.
+   * - `slow-echo` takes long enough that cancellation has something to interrupt,
+   *   which is the only way the stop path can be demonstrated end to end.
+   *
+   * It is listed last in the provider set, so it can never shadow a real provider
+   * when both are present, and its output is prefixed to say it is not
+   * intelligence.
    */
-  developerEchoProvider?: boolean
+  developerProvider?: 'echo' | 'slow-echo'
   /**
    * The conversation master key, supplied by the host.
    *
@@ -356,6 +364,10 @@ class FreyaCore implements Core {
       now: this.options.now,
       newId: this.options.newId,
       budget: this.options.contextBudget,
+      // The conversation service is built after the Mind, so this resolves lazily
+      // and is the only thing that couples the two. Without it a window would only
+      // learn a turn had started after it had already finished.
+      onTurnStateChange: () => this.conversations?.publish(),
       // The only fact about the outside world the Mind is told, and it is a fact
       // about Freya rather than about any provider.
       runtimeFacts: () => (this.state.stopAll.active ? ['Cognition is currently stopped.'] : []),
@@ -695,6 +707,10 @@ class FreyaCore implements Core {
               { by: this.owner.id, reason },
               { actor: this.owner.id, correlationId: requestId },
             )
+            // The conversation projection reports whether Freya is stopped and
+            // whether she can think, so a stop has to refresh it. Without this a
+            // Chat window keeps a composer it believes is still open.
+            this.conversations?.publish()
             return { requestId, ok: true, status: this.status(), durableSequence: event.sequence }
           } catch (error) {
             // Fail closed. The owner's stop decision already closed the contact
@@ -722,6 +738,7 @@ class FreyaCore implements Core {
             // mutating commands are rejected above once lifecycle is stopping or
             // stopped, and degraded Core is rejected before command dispatch.
             this.gateway?.resume()
+            this.conversations?.publish()
             return { requestId, ok: true, status: this.status() }
           }
           const event = await this.fabric.append(
@@ -730,6 +747,9 @@ class FreyaCore implements Core {
             { actor: this.owner.id, correlationId: requestId },
           )
           this.gateway?.resume()
+          // As above: a resume has to reach the surfaces that report it, or Chat
+          // stays visibly locked after Core has reopened.
+          this.conversations?.publish()
           return { requestId, ok: true, status: this.status(), durableSequence: event.sequence }
         }
 
@@ -972,7 +992,14 @@ class FreyaCore implements Core {
   private async buildConversationStore(): Promise<ConversationStore> {
     if (this.options.conversationStore) return this.options.conversationStore
     if (this.options.conversationKey) {
-      const path = this.fabric ? `${this.fabric.describe()}.conversations` : 'conversations.enc'
+      // Beside the journal, named from the Core's *data path*.
+      //
+      // Not from `fabric.describe()`: that returns a human description of the store
+      // kind and the file it came from — something like `jsonl:/path/to/events` —
+      // which is a label, not a filename. Using it here produced a directory
+      // component containing a colon and a nested path, and the conversation store
+      // silently fell back to being ephemeral.
+      const path = `${this.options.dataPath}.conversations`
       try {
         return await EncryptedConversationStore.open({ path, key: this.options.conversationKey })
       } catch (error) {
@@ -1109,7 +1136,13 @@ class FreyaCore implements Core {
     if (this.options.providers) return [...this.options.providers]
     const env = this.options.env ?? {}
     const providers: ModelProvider[] = [new NanoGptProvider({ config: readNanoGptConfig(env) })]
-    if (this.options.developerEchoProvider === true) providers.push(new FakeModelProvider())
+    if (this.options.developerProvider !== undefined) {
+      providers.push(
+        this.options.developerProvider === 'slow-echo'
+          ? new SlowFakeModelProvider()
+          : new FakeModelProvider(),
+      )
+    }
     return providers
   }
 

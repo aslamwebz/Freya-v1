@@ -30,6 +30,12 @@ import type {
 export interface ConversationServiceOptions {
   fabric: EventFabric
   store: ConversationStore
+  /**
+   * The Mind, which owns turn lifecycle.
+   *
+   * Built by Core and handed over rather than constructed here, so the Mind has
+   * exactly one owner and this service cannot end up with a second one.
+   */
   mind: MindService
   gateway: ModelGateway
   now?: () => Date
@@ -349,8 +355,12 @@ export class ConversationService {
    * Fire-and-forget by design: a subscriber is a window, and a window that has
    * gone away must not be able to make a turn's completion wait. The projection is
    * rebuilt on the next change regardless, so a dropped push is self-healing.
+   *
+   * Public because the Mind calls it: a turn starting and a turn settling are the
+   * two moments a window most needs to hear about, and only the Mind knows when
+   * they happen.
    */
-  private publish(): void {
+  publish(): void {
     void this.projection()
       .then((projection) => {
         for (const listener of [...this.listeners]) {

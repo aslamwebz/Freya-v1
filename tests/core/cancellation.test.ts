@@ -162,6 +162,12 @@ describe('A — an active request is aborted', () => {
 
     const inFlight = ownerAuthority(core).request(userTurn({ cognitionRequestId: 'a' }))
     await provider.contacted
+
+    const whileLive = core.status()
+    expect(whileLive.activeProviderCalls).toBe(1)
+    expect(whileLive.sessionUsage.unknownUsageCalls).toBe(1)
+    expect(whileLive.durableUsage.unknownUsageCalls).toBe(1)
+
     await stopAll(core)
     await inFlight
 
@@ -236,6 +242,28 @@ describe('B — the authorisation to provider-contact race', () => {
     expect(state.durableUsage.unknownUsageCalls).toBe(1)
     expect(state.durableUsage.inputTokens).toBeNull()
     expect(state.pendingRequests).toEqual([])
+  })
+
+  it('tracks duplicate request ids as separate attempts', async () => {
+    let state = reduceCoreState(initialCoreState(), modelEvent('model.request.started', { requestId: 'same' }))
+    state = reduceCoreState(state, modelEvent('model.request.started', { requestId: 'same' }))
+    expect(state.durableUsage.calls).toBe(2)
+    expect(state.pendingRequests).toEqual(['same', 'same'])
+
+    state = reduceCoreState(
+      state,
+      modelEvent('model.request.cancelled', { requestId: 'same', providerContacted: false }),
+    )
+    expect(state.durableUsage.calls).toBe(1)
+    expect(state.pendingRequests).toEqual(['same'])
+
+    state = reduceCoreState(
+      state,
+      modelEvent('model.request.completed', { requestId: 'same', inputTokens: 3, outputTokens: 4 }),
+    )
+    expect(state.pendingRequests).toEqual([])
+    expect(state.durableUsage.calls).toBe(1)
+    expect(state.durableUsage.outputTokens).toBe(4)
   })
 
   it('leaves an already-settled total alone when a refusal has no start to withdraw', async () => {
@@ -554,6 +582,36 @@ describe('G — Core shutdown', () => {
     await inFlight
   })
 
+  it('cannot be reopened by a resume command once shutdown starts', async () => {
+    class DeafProvider extends FakeModelProvider {
+      override readonly id = 'deaf-resume'
+      override complete(): Promise<never> {
+        return new Promise<never>(() => {
+          /* deliberately ignores cancellation */
+        })
+      }
+    }
+
+    const c = createCore(options({ providers: [new DeafProvider()] }))
+    core = c
+    await c.start()
+    void ownerAuthority(c).request(userTurn({ cognitionRequestId: 'a' })).catch(() => undefined)
+    await waitFor(() => c.status().activeProviderCalls === 1)
+
+    const stopping = c.stop('app quitting')
+    await waitFor(() => c.lifecycle === 'stopping')
+
+    const attemptedResume = await c.handleCommand({
+      command: 'security.resume',
+      requestId: 'resume-during-stop',
+    })
+    expect(attemptedResume.ok).toBe(false)
+    expect(attemptedResume.refusal?.reason).toMatch(/stopping/i)
+
+    await stopping
+    expect(c.lifecycle).toBe('stopped')
+  })
+
   it('does not hang on a provider that ignores its signal', async () => {
     // The worst case, and the reason the drain is bounded: a provider that
     // cannot be stopped must not be able to stop the application from exiting.
@@ -629,6 +687,36 @@ describe('H — no provider contact', () => {
       ),
     ).rejects.toThrow(/not enabled/i)
     expect(fetches).toBe(0)
+  })
+
+  it('records a provider timeout as failure, not owner cancellation', async () => {
+    const nanogpt = new NanoGptProvider({
+      config: { apiKey: 'k', baseUrl: 'https://example.invalid', model: 'm', liveEnabled: true },
+      timeoutMs: 5,
+      fetchImpl: ((_url: string, init: { signal: AbortSignal }) =>
+        new Promise<never>((_resolve, reject) => {
+          init.signal.addEventListener(
+            'abort',
+            () => reject(init.signal.reason ?? new Error('aborted')),
+            { once: true },
+          )
+        })) as unknown as typeof fetch,
+    })
+
+    const c = createCore(options({ providers: [nanogpt] }))
+    core = c
+    await c.start()
+    const path = join(dir, 'events.jsonl')
+
+    const outcome = await ownerAuthority(c).request(userTurn({ cognitionRequestId: 'timeout' }))
+    expect(outcome.status).toBe('failed')
+    expect(outcome.status === 'failed' ? outcome.reason : '').toMatch(/timed out/i)
+
+    const types = await requestEvents(path, 'timeout')
+    expect(types).toContain('model.request.failed')
+    expect(types).not.toContain('model.request.cancelled')
+    expect(c.status().sessionUsage.unknownUsageCalls).toBe(1)
+    expect(c.status().durableUsage.unknownUsageCalls).toBe(1)
   })
 
   it('lets an owner stop cancel a live call without a second attempt', async () => {

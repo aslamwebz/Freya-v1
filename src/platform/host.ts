@@ -5,6 +5,7 @@ import type {
 } from '../../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../../core/protocol/conversation'
+import type { BrainProjection } from '../../core/brain/brain'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -73,6 +74,18 @@ export interface FreyaHostBridge {
   coreConversation(): Promise<ConversationProjection | null>
   onCoreConversation(handler: (projection: ConversationProjection) => void): () => void
   coreVoice(): Promise<VoiceProjection | null>
+
+  /**
+   * The Brain projection.
+   *
+   * Its own channel, and note what does **not** cross: no memory content, no key,
+   * no store, no path. The projection carries identity, the self-model, counts,
+   * subjects and source classes. Content arrives only through an explicit
+   * `brain.recall` — a question with a query, not a standing feed — so an open
+   * window cannot hold a copy of everything Freya knows.
+   */
+  coreBrain(): Promise<BrainProjection | null>
+  onCoreBrain(handler: (projection: BrainProjection) => void): () => void
 }
 
 declare global {

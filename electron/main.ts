@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'
 import { join } from 'node:path'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
 import { ElectronCoreHost } from './coreHost'
-import { loadConversationKey } from './conversationKey'
+import { loadKeyring } from './keyring'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 
 const HERE = __dirname
@@ -27,18 +27,33 @@ const COLLECT_TIMEOUT_MS = 750
  * A deterministic key seam for the real Electron E2E process.
  *
  * The CI runner intentionally has no desktop keyring. Production must therefore
- * fall back to ephemeral conversation storage there, which is the correct
- * security behaviour but makes a restart-persistence E2E impossible to exercise.
- * The test harness may inject a non-secret 32-byte key only when both explicit
- * E2E variables are present. Normal application launches never read this path.
+ * fall back to ephemeral storage there, which is the correct security behaviour but
+ * makes a restart-persistence E2E impossible to exercise. The test harness may
+ * inject non-secret 32-byte keys only when both explicit E2E variables are present,
+ * and only as a *pair* — one domain persistent and the other ephemeral would fail
+ * in a way that reads as a Brain bug. Normal application launches never read this.
  */
-function e2eConversationKey(): Uint8Array | null {
+function e2eKey(variable: string): Uint8Array | null {
   if (process.env.FREYA_E2E !== '1') return null
-  const encoded = process.env.FREYA_E2E_CONVERSATION_KEY
+  const encoded = process.env[variable]
   if (!encoded) return null
   const bytes = Buffer.from(encoded, 'base64')
-  if (bytes.length !== 32) throw new Error('FREYA_E2E_CONVERSATION_KEY must decode to 32 bytes')
+  if (bytes.length !== 32) throw new Error(`${variable} must decode to 32 bytes`)
   return new Uint8Array(bytes)
+}
+
+/**
+ * Both test keys, or neither.
+ *
+ * One without the other would produce a restart-persistence E2E where the
+ * conversation survives and the Brain does not — or the reverse — and the failure
+ * would look like a Brain bug rather than a harness that only half injected.
+ */
+function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array } | null {
+  const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
+  const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
+  if (conversation === null || brain === null) return null
+  return { conversation, brain }
 }
 
 /**
@@ -235,10 +250,18 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:conversation', projection)
   })
 
+  // The Brain is a fourth channel for the same reason: a memory projection is
+  // neither a security status nor a transcript, and folding it into either would
+  // mean long-term knowledge travels wherever that channel is cached.
+  const detachBrain = coreHost?.onBrain((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:brain', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
     detachConversation?.()
+    detachBrain?.()
   })
 
   if (DEV_SERVER) {
@@ -307,6 +330,7 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:activity', () => requireCore().activity())
   ipcMain.handle('freya:core:conversation', () => requireCore().conversation())
   ipcMain.handle('freya:core:voice', () => requireCore().voice())
+  ipcMain.handle('freya:core:brain', () => requireCore().brain())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)
@@ -326,26 +350,42 @@ app.whenReady().then(() => {
   workspace = new WorkspaceFile({
     path: join(app.getPath('userData'), WORKSPACE_FILE),
   })
-  // The key is fetched before the Core is constructed, and it is the only secret
-  // this process handles. A machine with no OS secure storage gets `null`, which
-  // makes Core fall back to an ephemeral conversation store that labels itself —
+  // The keys are fetched before the Core is constructed, and they are the only
+  // secrets this process handles. A machine with no OS secure storage gets `null`
+  // for both, which makes Core fall back to ephemeral stores that label themselves —
   // never to a plaintext file and never to a key stored beside the data.
   //
+  // Two domains, two independent secrets. On this first run the keyring adopts any
+  // Phase 3 conversation key verbatim so existing history stays readable, and
+  // mints a separate Brain key.
+  //
   // CI has no desktop keyring, so the explicit E2E harness injects a deterministic
-  // non-secret test key. This is not a production fallback and is unreachable
-  // unless FREYA_E2E=1 was deliberately supplied to the process.
-  const testKey = e2eConversationKey()
-  const keyResult = testKey
-    ? Promise.resolve({ key: testKey, reason: null })
-    : loadConversationKey(join(app.getPath('userData'), CORE_LOG_FILE))
+  // pair of non-secret test keys. That is not a production fallback and is
+  // unreachable unless FREYA_E2E=1 was deliberately supplied to the process.
+  const dataPath = join(app.getPath('userData'), CORE_LOG_FILE)
+  const testKeys = e2eKeys()
+  const keyResult = testKeys
+    ? Promise.resolve({
+        conversation: { key: testKeys.conversation, reason: null as string | null },
+        brain: { key: testKeys.brain, reason: null as string | null },
+      })
+    : loadKeyring(dataPath)
   void keyResult.then((result) => {
-    if (result.key === null) {
+    // Reported per domain, because the two failures are genuinely independent: a
+    // machine can open an existing conversation key and be unable to create a Brain
+    // one. A single warning would hide which half is missing.
+    if (result.conversation.key === null) {
       // A warning, with a reason and no value. The conversation still works for the
       // session; it just will not survive a restart, and the UI says so.
-      console.warn(`[freya] conversation history is not being saved — ${result.reason}`)
+      console.warn(`[freya] conversation history is not being saved — ${result.conversation.reason}`)
+    }
+    if (result.brain.key === null) {
+      // Freya still answers. She just will not remember across a restart, and the
+      // surface says exactly that rather than implying a memory that is not there.
+      console.warn(`[freya] Freya will not remember across restarts — ${result.brain.reason}`)
     }
     coreHost = new ElectronCoreHost(
-      join(app.getPath('userData'), CORE_LOG_FILE),
+      dataPath,
       {
         NANOGPT_API_KEY: process.env.NANOGPT_API_KEY,
         NANOGPT_BASE_URL: process.env.NANOGPT_BASE_URL,
@@ -353,7 +393,8 @@ app.whenReady().then(() => {
         FREYA_ALLOW_LIVE_MODEL: process.env.FREYA_ALLOW_LIVE_MODEL,
       },
       {
-        conversationKey: result.key,
+        conversationKey: result.conversation.key,
+        brainKey: result.brain.key,
         // Opt-in, and named for what it is. Never inferred from a debug flag or
         // from a missing credential: a build that answers from a canned string
         // without saying so is the failure this guards against. The slow variant

@@ -12,7 +12,13 @@ import { emptyUsage } from './model/usage'
 import type { ModelProvider } from './model/provider'
 import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
 import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
-import { MindService } from './mind/mind'
+import { MindService, type TurnExperience } from './mind/mind'
+import type { ReferenceKnowledge } from './mind/context-compiler'
+import { Brain, buildIdentityRoot, buildSelfDefinition, type BrainProjection } from './brain/brain'
+import type { BrainStore } from './brain/store'
+import { EncryptedBrainStore } from './brain/encrypted-store'
+import { MemoryBrainStore } from './brain/memory-store'
+import type { Confidence, MemoryKind, Sensitivity } from './brain/types'
 import { ConversationService } from './conversation/service'
 import type { ConversationStore } from './conversation/store'
 import { EncryptedConversationStore } from './conversation/encrypted-store'
@@ -115,6 +121,22 @@ export interface CoreOptions {
   conversationKey?: Uint8Array
   /** Overrides the conversation store wholesale. For tests. */
   conversationStore?: ConversationStore
+  /**
+   * The Brain's own 256-bit key, supplied by the host.
+   *
+   * **A separate secret from the conversation key**, not a derivation of it. The
+   * Brain is expected to outlive the machine it was written on and holds the
+   * longest-lived, most valuable state in the system, so it is deliberately not one
+   * key-compromise away from the conversation log — see `electron/keyring.ts`.
+   *
+   * A Core with no Brain key still works: the Brain falls back to an ephemeral
+   * in-memory store that reports `durable: false`, and the surface says Freya will
+   * not remember across a restart. The Brain never refuses service, because a
+   * missing memory is not a reason to stop answering.
+   */
+  brainKey?: Uint8Array
+  /** Overrides the Brain store wholesale. For tests. */
+  brainStore?: BrainStore
   /** A local speech-to-text engine. Absent means none is configured. */
   voiceTranscriber?: VoiceTranscriber
   /** A local text-to-speech engine. Absent means none is configured. */
@@ -165,8 +187,27 @@ export interface Core {
   conversation(): Promise<ConversationProjection>
   /** The current voice projection. */
   voice(): VoiceProjection
+  /**
+   * Subscribe to the Brain projection.
+   *
+   * Same reason as the conversation mirror: the surface has to be able to say what
+   * Freya has remembered without asking for it on every render.
+   */
+  onBrain(listener: (projection: BrainProjection) => void): () => void
+  /**
+   * The current Brain projection.
+   *
+   * A mirror like the others, and it carries long-term knowledge, so it is its own
+   * slot rather than a widening of `CoreStatus`. A security projection that also
+   * held Freya's memories would be copied, cached and logged wherever status is.
+   */
+  brain(): BrainProjection
+  /** Subscribe to the Brain projection. Same mirror semantics as the others. */
+  onBrain(listener: (projection: BrainProjection) => void): () => void
   readonly lifecycle: CoreLifecycle
 }
+
+
 
 class FreyaCore implements Core {
   private currentLifecycle: CoreLifecycle = 'booting'
@@ -200,12 +241,14 @@ class FreyaCore implements Core {
   } | null = null
   private readonly listeners = new Set<(status: CoreStatus) => void>()
   private readonly activityListeners = new Set<(activity: CoreActivityEvent[]) => void>()
+  private readonly brainListeners = new Set<(projection: BrainProjection) => void>()
   /** Display-ready activity, rebuilt from the log on every start. */
   private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
   private disposeState: () => void = () => {}
   private stopped = false
   private conversationStore!: ConversationStore
+  private brainService!: Brain
   private mind!: MindService
   private conversations!: ConversationService
   private voiceService!: VoiceService
@@ -356,6 +399,45 @@ class FreyaCore implements Core {
     // the owner's authority to create a turn's grant — and it must not be able to
     // have any other.
     this.conversationStore = await this.buildConversationStore()
+    // The Brain is built before the Mind, and the Mind reads from it. A Brain that
+    // cannot be opened still produces a Brain: it is ephemeral, it reports itself
+    // as such, and every other subsystem carries on.
+    const brainStore = await this.buildBrainStore()
+    this.brainService = new Brain({
+      store: brainStore,
+      fabric: this.fabric,
+      now: this.options.now,
+      newId: this.options.newId,
+    })
+    await this.brainService.seed({
+      identity: buildIdentityRoot(),
+      self: buildSelfDefinition(),
+    })
+    await this.fabric.append(
+      'brain.seeded',
+      {
+        identityName: buildIdentityRoot().name,
+        identityClaimCount: buildIdentityRoot().claims.length,
+        capabilityCount: buildSelfDefinition().capabilities.length,
+        limitationCount: buildSelfDefinition().limitations.length,
+      },
+      { actor: 'system' },
+    )
+    // A Brain whose log could not be believed is reported once, in its own stream.
+    // This is emphatically not a security event: it cannot grant cognition or clear
+    // a stop, and it does not lock anything out either. See `SECURITY_EVENT_TYPES`.
+    const brainHealth = this.brainService.health()
+    if (brainHealth.health !== 'healthy') {
+      this.state = {
+        ...this.state,
+        faults: [...this.state.faults, `the Brain is ${brainHealth.health}: ${brainHealth.reason ?? 'unknown reason'}`],
+      }
+      await this.fabric.append(
+        'brain.degraded',
+        { reason: brainHealth.reason ?? 'the Brain is not fully readable' },
+        { actor: 'system' },
+      )
+    }
     this.mind = new MindService({
       fabric: this.fabric,
       store: this.conversationStore,
@@ -371,6 +453,14 @@ class FreyaCore implements Core {
       // The only fact about the outside world the Mind is told, and it is a fact
       // about Freya rather than about any provider.
       runtimeFacts: () => (this.state.stopAll.active ? ['Cognition is currently stopped.'] : []),
+      // Read-only recall. The Mind asks; the Brain decides what is recallable. This
+      // callback holds no store and no admission policy, so the request path
+      // cannot widen what Freya remembers — and a turn never writes memory at all,
+      // which is what keeps a prompt injection from becoming a durable fact.
+      recall: (query) => this.recallReference(query),
+      // Metadata only. The question and the answer are referenced by id and stay in
+      // the encrypted conversation store.
+      onTurnExperience: (experience) => this.recordTurnExperience(experience),
     })
     this.conversations = new ConversationService({
       fabric: this.fabric,
@@ -496,6 +586,11 @@ class FreyaCore implements Core {
       this.disposeState()
       this.service?.dispose()
       this.currentLifecycle = 'stopped'
+      // Closed before the fabric, so the Brain's in-flight writes land while the
+      // event stream that records them is still open. An experience record written
+      // after its own journal event would be a record of something the log says
+      // never happened.
+      await this.brainService?.close()
       await this.conversationStore?.close()
       await this.fabric?.close()
       this.notify()
@@ -557,6 +652,64 @@ class FreyaCore implements Core {
       } catch (error) {
         console.error('[freya.core] activity listener threw', error)
         this.activityListeners.delete(listener)
+      }
+    }
+  }
+
+  brain(): BrainProjection {
+    // Booting or degraded, the Brain may not exist yet. A truthful empty projection
+    // is returned rather than a throw: a surface must be able to render "no Brain
+    // yet" during startup without having to special-case the failure.
+    if (this.brainService === undefined) {
+      return {
+        health: 'unavailable',
+        reason: 'the Brain is not available',
+        persistence: 'unavailable',
+        durable: false,
+        identity: null,
+        self: null,
+        counts: {
+          entities: 0,
+          relations: 0,
+          observations: 0,
+          memories: 0,
+          admitted: 0,
+          conflicted: 0,
+          rejected: 0,
+          experiences: 0,
+        },
+        recentAdmissions: [],
+        conflicts: [],
+        sequence: 0,
+      }
+    }
+    return this.brainService.projection()
+  }
+
+  onBrain(listener: (projection: BrainProjection) => void): () => void {
+    this.brainListeners.add(listener)
+    // Delivered immediately, like every other subscription here, so a window that
+    // attaches late agrees with one that never left.
+    try {
+      listener(this.brain())
+    } catch (error) {
+      console.error('[freya.core] Brain subscriber threw', error)
+    }
+    return () => {
+      this.brainListeners.delete(listener)
+    }
+  }
+
+  /** Re-publish the Brain mirror. Called when the Brain's own state changes. */
+  private publishBrain(): void {
+    if (this.brainListeners.size === 0) return
+    const projection = this.brain()
+    for (const listener of [...this.brainListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Brain listener threw', error)
+        this.brainListeners.delete(listener)
       }
     }
   }
@@ -962,6 +1115,168 @@ class FreyaCore implements Core {
           return { requestId, ok: true, status: this.status(), voice: { operation: 'cancelled' } }
         }
 
+        /* ------------------------------------------------------------ brain */
+
+        case 'brain.status.read': {
+          // Read-only, so it is allowed while stopping, and it needs no capability:
+          // knowing what Freya remembers is the owner's own business.
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            brain: { operation: 'status' },
+          }
+        }
+
+        case 'brain.memory.write': {
+          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+          const content = readString(envelope.payload, 'content')
+          if (content === null) {
+            return { requestId, ok: false, refusal: { reason: 'content is missing' } }
+          }
+          // The owner pressing this button is the origin, and the handler assigns
+          // that itself. Nothing in the payload can claim to be more trustworthy
+          // than the pathway that admits it — see `admission.ts`.
+          const outcome = await this.brainService.writeMemory({
+            kind: readMemoryKind(envelope.payload),
+            subject: readString(envelope.payload, 'subject') ?? 'unspecified',
+            content,
+            source: 'owner-assertion',
+            sourceRef: readString(envelope.payload, 'sourceRef'),
+            observedAt: readString(envelope.payload, 'observedAt') ?? undefined,
+            confidence: readConfidence(envelope.payload),
+            sensitivity: readSensitivity(envelope.payload),
+            tags: readStringArray(envelope.payload, 'tags'),
+            entityRefs: readStringArray(envelope.payload, 'entityRefs'),
+          })
+          this.publishBrain()
+          if (outcome.outcome !== 'admitted') {
+            return {
+              requestId,
+              ok: true,
+              // Refused, not failed: the policy did its job, and the person is told
+              // why rather than being met with a generic failure.
+              status: this.status(),
+              brain: {
+                operation: 'memory-refused',
+                reason: outcome.reason,
+              },
+            }
+          }
+          const memory = outcome.memory
+          if (memory === null) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'the memory was admitted but could not be read back' },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            brain: {
+              operation: 'memory-written',
+              reason: outcome.reason,
+              memory: {
+                memoryId: memory.memoryId,
+                kind: memory.kind,
+                subject: memory.subject,
+                status: memory.status,
+                source: memory.source,
+                confidence: memory.confidence,
+                admittedAt: memory.admittedAt,
+              },
+            },
+          }
+        }
+
+        case 'brain.memory.archive': {
+          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+          const memoryId = readString(envelope.payload, 'memoryId')
+          if (memoryId === null) {
+            return { requestId, ok: false, refusal: { reason: 'memoryId is missing' } }
+          }
+          const outcome = await this.brainService.archiveMemory(
+            memoryId,
+            readString(envelope.payload, 'reason') ?? 'the owner withdrew this',
+          )
+          this.publishBrain()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            brain: {
+              operation: outcome.outcome === 'admitted' ? 'memory-archived' : 'memory-refused',
+              reason: outcome.reason,
+              ...(outcome.memory === null
+                ? {}
+                : {
+                    memory: {
+                      memoryId: outcome.memory.memoryId,
+                      kind: outcome.memory.kind,
+                      subject: outcome.memory.subject,
+                      status: outcome.memory.status,
+                      source: outcome.memory.source,
+                      confidence: outcome.memory.confidence,
+                      admittedAt: outcome.memory.admittedAt,
+                    },
+                  }),
+            },
+          }
+        }
+
+        case 'brain.recall': {
+          const pack = this.brainService.recall(
+            {
+              text: readString(envelope.payload, 'query') ?? '',
+              kinds: readMemoryKindArray(envelope.payload),
+              tags: readStringArray(envelope.payload, 'tags'),
+              entityRefs: readStringArray(envelope.payload, 'entityRefs'),
+              limit: readNumber(envelope.payload, 'limit') ?? undefined,
+            },
+            {
+              // Bounded from above inside `clampBudget`, so a renderer asking for a
+              // huge pack cannot turn recall into a context flood.
+              maxEstimatedTokens: readNumber(envelope.payload, 'maxEstimatedTokens') ?? 800,
+              maxItems: readNumber(envelope.payload, 'maxItems') ?? 12,
+            },
+          )
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            brain: {
+              operation: 'recall',
+              recall: {
+                query: pack.query,
+                items: pack.memories.map((item) => ({
+                  memoryId: item.memoryId,
+                  subject: item.subject,
+                  content: item.content,
+                  source: item.source,
+                  confidence: item.confidence,
+                  status: item.status,
+                  score: item.score,
+                })),
+                conflicts: pack.conflicts,
+                candidatesConsidered: pack.candidatesConsidered,
+                omittedCount: pack.omittedCount,
+                estimatedTokens: pack.estimatedTokens,
+                empty: pack.empty,
+              },
+            },
+          }
+        }
+
         default:
           return reject(envelope, `unknown command: ${String(command)}`)
       }
@@ -989,6 +1304,128 @@ class FreyaCore implements Core {
    * someone's conversation history in the clear would be a worse bug than
    * forgetting it.
    */
+  /**
+   * The Brain store, and the only place its key is touched.
+   *
+   * Three outcomes, mirroring the conversation store, and no fourth:
+   *
+   *   - a key was supplied, so an encrypted hash-chained store;
+   *   - no key, so an **ephemeral** in-memory Brain that reports `durable: false`;
+   *   - a store was injected, so that.
+   *
+   * No plaintext-on-disk path, and the failure mode is deliberately asymmetric
+   * against the conversation store's: a Brain that cannot be opened is still a
+   * working Brain for the session. Freya keeps answering, the surface says she will
+   * not remember across a restart, and nothing is written unencrypted. Losing memory
+   * is recoverable; silently persisting it in the clear is not.
+   *
+   * A Brain fault also never changes any authority. See `brain/store.ts`.
+   */
+  private async buildBrainStore(): Promise<BrainStore> {
+    if (this.options.brainStore) return this.options.brainStore
+    if (this.options.brainKey) {
+      const path = `${this.options.dataPath}.brain`
+      try {
+        return await EncryptedBrainStore.open({ path, key: this.options.brainKey })
+      } catch (error) {
+        // Not replaced with a weaker *persistent* store. An ephemeral one that
+        // reports itself is the only honest fallback.
+        console.error('[freya.core] encrypted Brain store unavailable', describe(error))
+        return new MemoryBrainStore({
+          mode: 'ephemeral',
+          faultReason: `the Brain could not be opened: ${describe(error)}`,
+        })
+      }
+    }
+    return new MemoryBrainStore({
+      mode: 'ephemeral',
+      faultReason:
+        'no secure Brain key is available on this machine, so what Freya learns is being kept ' +
+        'in memory only and will not survive a restart',
+    })
+  }
+
+  /**
+   * What Freya remembers about this text, for the Mind to render as reference.
+   *
+   * The projection from a `RecallPack` to the compiler's shape is here, in Core,
+   * rather than in either component — so the Brain decides what is recallable and
+   * the Mind decides nothing at all.
+   *
+   * The source class and confidence travel with every item *into the rendered text*.
+   * A memory from a web page and a memory from the owner are indistinguishable once
+   * flattened into "notes", and a provider reading "Freya's notes: the owner
+   * prefers X" has been told a preference is a fact. Carrying the labels is what
+   * keeps a stored claim looking like a claim.
+   */
+  private recallReference(query: string): ReferenceKnowledge | null {
+    const pack = this.brainService.recall({ text: query }, { maxEstimatedTokens: 600, maxItems: 8 })
+    if (pack.empty) return null
+    return {
+      items: pack.memories.map((item) => ({
+        subject: item.subject,
+        content: item.content,
+        sourceLabel: item.source,
+        confidenceLabel: item.confidence,
+      })),
+      conflicts: pack.conflicts.map((conflict) =>
+        `${conflict.detail} (${conflict.memoryId} against ${conflict.conflictsWith.join(', ')})`,
+      ),
+      omittedCount: pack.omittedCount,
+    }
+  }
+
+  /**
+   * Record one conversation turn in the Brain's experience log.
+   *
+   * Everything here is an id, a count, a model name or a length. No text is
+   * duplicated out of the encrypted conversation store, so the Brain cannot become a
+   * second and less-protected home for the most private data in the system.
+   */
+  private async recordTurnExperience(experience: TurnExperience): Promise<void> {
+    const result = experience.outcome === 'denied' ? 'denied' : experience.outcome
+    await this.brainService.recordExperience({
+      goalSummary: `answered a conversation turn`,
+      startedAt: experience.startedAt,
+      endedAt: experience.endedAt,
+      modelsUsed: experience.model === null ? [] : [experience.model],
+      toolsUsed: [],
+      actions: [
+        {
+          at: experience.startedAt,
+          summary: 'compiled context and requested one bounded cognition',
+          outcome: experience.providerContacted ? 'succeeded' : 'skipped',
+        },
+      ],
+      observations: [
+        experience.referenceUsed
+          ? `used ${experience.referenceItemCount} recalled item(s) as reference`
+          : 'no reference memory was used',
+      ],
+      // Ids of the records that back the outcome. Not their content.
+      evidenceRefs: experience.answerPersisted ? [experience.turnId] : [],
+      result,
+      humanCorrection: null,
+      relatedEntities: [],
+      relatedMemories: [],
+      resourceUsage: {
+        providerId: experience.providerId,
+        model: experience.model,
+        providerContacted: experience.providerContacted,
+        // Phase 4 does not read per-call usage off the gateway for this record. Null
+        // means "nothing reported here", which is not the same as zero — the
+        // accounting that does track provider-reported usage is separate and
+        // authoritative.
+        inputTokens: null,
+        outputTokens: null,
+        usageUnknown: true,
+      },
+      answerPersisted: experience.answerPersisted,
+      conversationId: experience.conversationId,
+      turnId: experience.turnId,
+    })
+  }
+
   private async buildConversationStore(): Promise<ConversationStore> {
     if (this.options.conversationStore) return this.options.conversationStore
     if (this.options.conversationKey) {
@@ -1356,6 +1793,66 @@ function toTurnView(turn: {
         }
       : null,
   }
+}
+
+const MEMORY_KINDS: readonly MemoryKind[] = [
+  'semantic',
+  'episodic',
+  'procedural',
+  'working',
+  'relationship',
+  'autobiographical',
+]
+
+const CONFIDENCES: readonly Confidence[] = ['unknown', 'low', 'medium', 'high', 'verified']
+const SENSITIVITIES: readonly Sensitivity[] = ['normal', 'personal', 'sensitive', 'secret-reference']
+
+/**
+ * Narrow a caller-supplied memory kind.
+ *
+ * Falls back to `semantic`, the most general kind, rather than throwing. A renderer
+ * sending an unknown kind gets a memory labelled as knowledge rather than a crash,
+ * and the label it *does* get is chosen here in trusted code.
+ */
+function readMemoryKind(payload: unknown): MemoryKind {
+  const value = readString(payload, 'kind')
+  return MEMORY_KINDS.find((kind) => kind === value) ?? 'semantic'
+}
+
+function readMemoryKindArray(payload: unknown): readonly MemoryKind[] | undefined {
+  const raw = readStringArray(payload, 'kinds')
+  if (raw === undefined) return undefined
+  return raw.filter((value): value is MemoryKind => MEMORY_KINDS.includes(value as MemoryKind))
+}
+
+/**
+ * Narrow a caller-supplied confidence, then let admission cap it.
+ *
+ * A renderer cannot grant itself `verified`, and cannot stop `admission.ts` from
+ * lowering it either — the cap is applied against the source class there, so even a
+ * future in-process caller naming `verified` would be recorded at the ceiling the
+ * owner-assertion class supports, which is `high`.
+ */
+function readConfidence(payload: unknown): Confidence {
+  const value = readString(payload, 'confidence')
+  return CONFIDENCES.find((confidence) => confidence === value) ?? 'medium'
+}
+
+function readSensitivity(payload: unknown): Sensitivity {
+  const value = readString(payload, 'sensitivity')
+  return SENSITIVITIES.find((sensitivity) => sensitivity === value) ?? 'normal'
+}
+
+/** A string array, bounded and free of blanks. Never null, so callers stay simple. */
+function readStringArray(payload: unknown, key: string): string[] | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const value = (payload as Record<string, unknown>)[key]
+  if (!Array.isArray(value)) return undefined
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .slice(0, 32)
 }
 
 function readString(payload: unknown, key: string): string | null {

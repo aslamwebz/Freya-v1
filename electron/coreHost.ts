@@ -2,6 +2,7 @@ import { createCore, type Core } from '../core/index'
 import type { CoreCommandEnvelope, CoreCommandResult, CoreStatus } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
+import type { BrainProjection } from '../core/brain/brain'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 
 /**
@@ -50,6 +51,15 @@ export interface CoreHost {
   onConversation(send: (projection: ConversationProjection) => void): () => void
   conversation(): Promise<ConversationProjection | null>
   voice(): VoiceProjection | null
+  /**
+   * Attach to the Brain projection. Returns a disposer.
+   *
+   * Its own channel, not another field on the status. The Brain is where Freya's
+   * long-term knowledge lives; shipping it inside a security projection would put
+   * it wherever status is cached, logged or forwarded.
+   */
+  onBrain(send: (projection: BrainProjection) => void): () => void
+  brain(): BrainProjection | null
   stop(reason?: string): Promise<void>
 }
 
@@ -63,6 +73,15 @@ export interface CoreHostOptions {
    * ephemeral conversation store and says so.
    */
   conversationKey?: Uint8Array | null
+  /**
+   * The Brain's own key, from the keyring.
+   *
+   * A **separate secret**, not a derivation of the conversation key: compromising
+   * conversation history must not yield the Brain, and vice versa. See
+   * `electron/keyring.ts` for why the isolation is worth two secrets to protect.
+   * Null means the Brain falls back to ephemeral and reports `durable: false`.
+   */
+  brainKey?: Uint8Array | null
   /**
    * The developer echo provider, when one was explicitly asked for.
    *
@@ -78,6 +97,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly windows = new Set<(status: CoreStatus) => void>()
   private readonly activityWindows = new Set<(activity: CoreActivityEvent[]) => void>()
   private readonly conversationWindows = new Set<(projection: ConversationProjection) => void>()
+  private readonly brainWindows = new Set<(projection: BrainProjection) => void>()
 
   constructor(
     private readonly dataPath: string,
@@ -97,6 +117,7 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.conversationKey
           ? { conversationKey: this.options.conversationKey }
           : {}),
+        ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),
@@ -107,6 +128,7 @@ export class ElectronCoreHost implements CoreHost {
       core.subscribe((status) => this.broadcast(status))
       core.onActivity((activity) => this.broadcastActivity(activity))
       core.onConversation((projection) => this.broadcastConversation(projection))
+      core.onBrain((projection) => this.broadcastBrain(projection))
     })()
     try {
       await this.starting
@@ -186,6 +208,27 @@ export class ElectronCoreHost implements CoreHost {
     return this.core?.voice() ?? null
   }
 
+  onBrain(send: (projection: BrainProjection) => void): () => void {
+    this.brainWindows.add(send)
+    // Pushed immediately, so a window that attaches after startup still sees what
+    // Freya already remembers rather than waiting for the next admission.
+    const core = this.core
+    if (core) {
+      try {
+        send(core.brain())
+      } catch (error) {
+        console.error('[freya.core] window Brain push threw', error)
+      }
+    }
+    return () => {
+      this.brainWindows.delete(send)
+    }
+  }
+
+  brain(): BrainProjection | null {
+    return this.core?.brain() ?? null
+  }
+
   activity(): CoreActivityEvent[] {
     return this.core?.activity() ?? []
   }
@@ -200,7 +243,19 @@ export class ElectronCoreHost implements CoreHost {
     this.windows.clear()
     this.activityWindows.clear()
     this.conversationWindows.clear()
+    this.brainWindows.clear()
     await core?.stop(reason)
+  }
+
+  private broadcastBrain(projection: BrainProjection): void {
+    for (const send of [...this.brainWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Brain push threw', error)
+        this.brainWindows.delete(send)
+      }
+    }
   }
 
   private broadcastConversation(projection: ConversationProjection): void {

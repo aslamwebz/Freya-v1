@@ -250,6 +250,22 @@ export type CoreCommandName =
   | 'voice.capture.start'
   | 'voice.capture.end'
   | 'voice.capture.cancel'
+  /* -------------------------------------------------------------- brain */
+  /** Read-only. Reports what the Brain is and what it holds. */
+  | 'brain.status.read'
+  /**
+   * Ask Freya to remember something.
+   *
+   * The renderer's *request*, not a write. It carries what the person wants
+   * remembered and nothing about how trusted it is — the source class is assigned
+   * by the pathway that admits it, in Core, because a caller that could name its own
+   * source could launder a web page's contents in as an owner assertion.
+   */
+  | 'brain.memory.write'
+  /** Withdraw a memory deliberately. Archived, never deleted. */
+  | 'brain.memory.archive'
+  /** Recall on demand, so a person can see what Freya would bring to a question. */
+  | 'brain.recall'
 
 export interface CoreCommandEnvelope {
   command: CoreCommandName
@@ -290,4 +306,57 @@ export interface CoreCommandResult {
    * projection, and two unrelated streams sharing one field is how that starts.
    */
   voice?: VoiceCommandOutcome
+  /**
+   * The Brain view of a Brain command's result.
+   *
+   * Its own slot, for the same reason the conversation and voice slots exist: the
+   * Brain is where Freya's long-term knowledge lives, and it must never have to be
+   * dug out of a security projection — where it would be copied and cached
+   * wherever status is.
+   */
+  brain?: BrainCommandOutcome
+}
+
+/**
+ * What a Brain command produced.
+ *
+ * `recall` is the interesting one, and its shape is the point: a pack that names
+ * every item's source class and confidence, discloses the contradictions it found,
+ * and counts what it left out. "Freya recalled this" is only a meaningful thing to
+ * show somebody if they can also see where it came from and what was dropped.
+ */
+export interface BrainCommandOutcome {
+  operation:
+    | 'status'
+    | 'memory-written'
+    | 'memory-refused'
+    | 'memory-archived'
+    | 'recall'
+  reason?: string
+  memory?: {
+    memoryId: string
+    kind: string
+    subject: string
+    status: string
+    source: string
+    confidence: string
+    admittedAt: string
+  }
+  recall?: {
+    query: string
+    items: readonly {
+      memoryId: string
+      subject: string
+      content: string
+      source: string
+      confidence: string
+      status: string
+      score: number
+    }[]
+    conflicts: readonly { memoryId: string; conflictsWith: readonly string[]; detail: string }[]
+    candidatesConsidered: number
+    omittedCount: number
+    estimatedTokens: number
+    empty: boolean
+  }
 }

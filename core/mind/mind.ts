@@ -9,6 +9,7 @@ import {
   ContextBudgetExceeded,
   compileContext,
   type ContextBudget,
+  type ReferenceKnowledge,
 } from './context-compiler'
 import { ConversationStoreError, type ConversationStore } from '../conversation/store'
 import {
@@ -94,6 +95,39 @@ export interface MindSubmitInput {
 }
 
 /**
+ * One turn's outcome, as metadata the Brain may keep.
+ *
+ * Note what is *not* here. No `text`, no `assistantText`, no excerpt, no summary
+ * anybody wrote. The question and the answer live in the encrypted conversation
+ * store and are referenced by id, so the Brain can reason about what Freya has done
+ * without becoming a second, less-protected copy of what was said.
+ *
+ * `providerContacted` comes from the gateway's own account rather than from whether
+ * the turn "got far enough to have cost something". A cancelled turn that had
+ * already reached a provider was very probably billed, and cancelling does not make
+ * it free.
+ */
+export interface TurnExperience {
+  conversationId: string
+  turnId: string
+  startedAt: string
+  endedAt: string
+  outcome: MindTurnOutcome
+  reason: string | null
+  providerId: string | null
+  model: string | null
+  providerContacted: boolean
+  /** Lengths, for analysis. Never the content they measure. */
+  requestLength: number
+  answerLength: number
+  /** Whether a reference pack contributed to this turn's context. */
+  referenceUsed: boolean
+  referenceItemCount: number
+  /** True when an answer reached the encrypted store. Says nothing about being right. */
+  answerPersisted: boolean
+}
+
+/**
  * The grant a foreground conversation turn runs under.
  *
  * Built here, from constants, and issued through the owner's authority — never
@@ -141,6 +175,37 @@ export interface MindServiceOptions {
   /** Minimal runtime facts for the compiled packet. Opaque to the Mind. */
   runtimeFacts?: () => readonly string[]
   /**
+   * What Freya remembers about this turn's text, if anything.
+   *
+   * **Retrieval is not the Mind's job and cannot be the Mind's decision.** This is a
+   * function the Core supplies, and it is called with the user's own text purely to
+   * build a query. Three consequences are deliberate:
+   *
+   *  - The Mind cannot choose what to remember. It has no store, no admission
+   *    policy and no write path; it asks and the Brain answers with what it already
+   *    decided was recallable.
+   *  - A turn never *writes* memory. Learning is out of scope for the request path,
+   *    so a prompt injection cannot become a durable fact just by being sent.
+   *  - The result is reference material, rendered below the transcript and never in
+   *    the system message. See `compileReference`.
+   *
+   * Returning null, or throwing, yields no reference block at all. A Brain that
+   * cannot answer must not stop a person getting an answer.
+   */
+  recall?: (query: string) => ReferenceKnowledge | null
+  /**
+   * Record what this turn attempted, as metadata.
+   *
+   * Supplied by the Core, which owns the Brain. Aimed at the Brain, never at the
+   * conversation store, and it is given **ids and outcomes only** — the Mind does not
+   * pass the user's text or the answer, so the Brain physically cannot end up holding
+   * a second copy of the most private text in the system.
+   *
+   * Failures are swallowed by the caller. An experience record is analysis, and
+   * analysis is never worth failing a turn over.
+   */
+  onTurnExperience?: (experience: TurnExperience) => Promise<void>
+  /**
    * Called when a turn starts and when it settles.
    *
    * A function rather than an event, and it fires at the *start* as well as the
@@ -162,7 +227,26 @@ export class MindService {
   private readonly now: () => Date
   private readonly newId: () => string
   private readonly runtimeFacts: () => readonly string[]
+  private readonly recall: ((query: string) => ReferenceKnowledge | null) | null
   private readonly onTurnStateChange: () => void
+  private readonly onTurnExperience: ((experience: TurnExperience) => Promise<void>) | null
+
+  /**
+   * Measurements gathered during the current turn, for its experience record.
+   *
+   * Per-turn and never read after the terminal event: the `finally` in `runTurn`
+   * clears it, so a stale value cannot be attached to a later turn. Null means "no
+   * answer reached a provider", which is a different experience from "an answer came
+   * back" and worth recording as such.
+   */
+  private pendingExperience: {
+    referenceUsed: boolean
+    referenceItemCount: number
+    requestLength: number
+  } | null = null
+
+  /** When this turn began, for its experience record. */
+  private turnStartedAt: string | null = null
 
   /**
    * One actively running turn per conversation.
@@ -184,7 +268,30 @@ export class MindService {
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => randomUUID())
     this.runtimeFacts = options.runtimeFacts ?? (() => [])
+    this.recall = options.recall ?? null
     this.onTurnStateChange = options.onTurnStateChange ?? (() => {})
+    this.onTurnExperience = options.onTurnExperience ?? null
+  }
+
+  /**
+   * What Freya remembers about this text, as reference material.
+   *
+   * Never throws. A Brain that is unavailable, empty or unhappy returns null, and
+   * the turn proceeds with no reference block. The alternative — letting a memory
+   * failure become a turn failure — would mean a corrupt Brain stops Freya
+   * answering, which would be a security-relevant failure mode dressed up as a
+   * reliability one.
+   */
+  private recalledFor(text: string): ReferenceKnowledge | null {
+    if (this.recall === null) return null
+    try {
+      return this.recall(text)
+    } catch (error) {
+      // Logged and swallowed. The fault is the Brain's to report through its own
+      // health; here it must only mean "no reference material this turn".
+      console.error('[freya.mind] recall failed; continuing without reference memory', error)
+      return null
+    }
   }
 
   /** Whether a conversation already has a turn generating. */
@@ -323,6 +430,10 @@ export class MindService {
             history: record.messages,
             currentUserMessage: userMessage,
             runtimeFacts: this.runtimeFacts(),
+            // Read-only, and inside the same try as compilation so that a Brain which
+            // cannot answer degrades to no reference block rather than failing a
+            // turn. Forgetting is not a reason to refuse to answer.
+            referenceKnowledge: this.recalledFor(text),
           },
           this.budget,
         )
@@ -365,6 +476,12 @@ export class MindService {
 
       // --- 6. the answer, stored before anyone is told it exists ------------
       const endedAt = this.now().toISOString()
+      this.pendingExperience = {
+        referenceUsed: compiled.reference.included,
+        referenceItemCount: compiled.reference.itemCount,
+        requestLength: text.length,
+      }
+      this.turnStartedAt = startedAt
       const assistantMessage: ConversationMessage = {
         messageId: this.newId(),
         conversationId: input.conversationId,
@@ -403,6 +520,10 @@ export class MindService {
       // itself marked active would make every later send fail.
       this.activeTurns.delete(input.conversationId)
       this.onTurnStateChange()
+      // Cleared after the terminal event, so a stale measurement cannot be attached
+      // to whatever runs next.
+      this.pendingExperience = null
+      this.turnStartedAt = null
     }
   }
 
@@ -468,14 +589,15 @@ export class MindService {
    * store-then-journal so an audit reader never sees a terminal event for a turn
    * the conversation store has not caught up with.
    */
-  private async finishTurn(
+private async finishTurn(
     input: MindSubmitInput,
     turn: ConversationTurn,
     outcome: MindTurnOutcome,
     detail: {
       reason?: string
       endedAt?: string
-      assistantMessageId?: string
+      startedAt?: string
+      assistantMessageId?: string | null
       providerId?: string | null
       model?: string | null
       /**
@@ -523,6 +645,31 @@ export class MindService {
       { actor: 'owner', correlationId: turn.turnId },
     )
 
+    const providerContacted = detail.providerContacted ?? outcome === 'completed'
+
+    // Experience is recorded after the terminal event, so the journal and the store
+    // are already truthful about this turn and the Brain's account of it is the last
+    // thing written rather than the first.
+    await this.recordExperience({
+      conversationId: input.conversationId,
+      turnId: turn.turnId,
+      startedAt: detail.startedAt ?? this.turnStartedAt ?? turn.startedAt,
+      endedAt,
+      outcome,
+      reason: storedReason,
+      providerId,
+      model,
+      // The gateway's own account of contact, never inferred from how far the turn
+      // got. A cancelled turn that had already reached a provider was very probably
+      // billed, and cancelling does not make it free.
+      providerContacted,
+      requestLength: this.pendingExperience?.requestLength ?? 0,
+      answerLength: assistantMessage?.content.length ?? 0,
+      referenceUsed: this.pendingExperience?.referenceUsed ?? false,
+      referenceItemCount: this.pendingExperience?.referenceItemCount ?? 0,
+      answerPersisted: assistantMessage !== null,
+    })
+
     return {
       turnId: turn.turnId,
       conversationId: input.conversationId,
@@ -531,11 +678,23 @@ export class MindService {
       assistantMessage,
       providerId,
       model,
-      // Taken from the gateway's own account of contact, and never inferred from
-      // whether the turn "got far enough to have cost something". A cancelled
-      // turn that had already reached a provider was very probably billed, and
-      // cancelling does not make it free.
-      providerContacted: detail.providerContacted ?? outcome === 'completed',
+      providerContacted,
+    }
+  }
+
+  /**
+   * Hand this turn's metadata to the Brain.
+   *
+   * Best effort by construction. An experience record is analysis of what happened,
+   * and losing one is a much smaller problem than failing a turn that already has a
+   * stored answer and a terminal event.
+   */
+  private async recordExperience(experience: TurnExperience): Promise<void> {
+    if (this.onTurnExperience === null) return
+    try {
+      await this.onTurnExperience(experience)
+    } catch (error) {
+      console.error('[freya.mind] an experience record could not be stored', error)
     }
   }
 

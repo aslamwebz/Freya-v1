@@ -7,8 +7,10 @@ import type {
 } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
+import type { BrainProjection } from '../core/brain/brain'
 import { CONVERSATION_LIMITS } from '../core/conversation/types'
 import { VOICE_LIMITS } from '../core/voice/types'
+import { BRAIN_LIMITS } from '../core/brain/types'
 
 export interface RuntimeInfo {
   version: string
@@ -142,6 +144,26 @@ const api = {
   coreVoice: (): Promise<VoiceProjection | null> => ipcRenderer.invoke('freya:core:voice'),
 
   /**
+   * The Brain projection: identity, the self-model, counts, recent admissions and
+   * known conflicts.
+   *
+   * Memory *content* does not cross here — the projection carries subjects, ids,
+   * source classes and confidences, not what was remembered. Content comes only
+   * through an explicit `brain.recall`, which is a question with a query rather
+   * than a standing feed, so a window cannot hold a copy of everything Freya knows
+   * by simply being open.
+   */
+  coreBrain: (): Promise<BrainProjection | null> => ipcRenderer.invoke('freya:core:brain'),
+
+  onCoreBrain: (handler: (projection: BrainProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: BrainProjection): void => handler(projection)
+    ipcRenderer.on('freya:core:brain', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:brain', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -187,6 +209,16 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'voice.capture.start',
   'voice.capture.end',
   'voice.capture.cancel',
+  // The Brain is readable and writable by the owner, because remembering is the
+  // product. Note what is *not* reachable through these: a window cannot name a
+  // source class, a confidence ceiling or a verification status. It says what it
+  // wants remembered, and Core decides how much that is worth — a window that could
+  // assert `owner-assertion` for itself would be a window that could launder a web
+  // page's contents in as something the owner said.
+  'brain.status.read',
+  'brain.memory.write',
+  'brain.memory.archive',
+  'brain.recall',
 ])
 
 type RendererPayloadResult =
@@ -219,6 +251,7 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     case 'voice.status.read':
     case 'voice.capture.start':
     case 'voice.capture.cancel':
+    case 'brain.status.read':
       return { ok: true }
 
     case 'core.command.submit': {
@@ -299,6 +332,54 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
           durationMs,
           ...(cancelled === undefined ? {} : { cancelled }),
         },
+      }
+    }
+
+    case 'brain.memory.write': {
+      // Bounded here rather than only in Core: this bridge is a capability
+      // boundary, and a payload large enough to be a denial-of-service belongs to
+      // be refused before it is structured-cloned into the main process.
+      const content = string('content', BRAIN_LIMITS.maxMemoryContentChars)
+      const subject = string('subject', BRAIN_LIMITS.maxMemorySubjectChars, false)
+      const kind = string('kind', 40, false)
+      if (content === null || content === undefined) {
+        return { ok: false, reason: 'memory content is too large or invalid' }
+      }
+      if (subject === null) return { ok: false, reason: 'memory subject is too large or invalid' }
+      if (kind === null) return { ok: false, reason: 'memory kind is invalid' }
+      return {
+        ok: true,
+        payload: {
+          content,
+          ...(subject === undefined ? {} : { subject }),
+          ...(kind === undefined ? {} : { kind }),
+        },
+      }
+    }
+
+    case 'brain.memory.archive': {
+      const memoryId = string('memoryId', MAX_ID_CHARS)
+      const reason = string('reason', MAX_STOP_REASON_CHARS, false)
+      if (memoryId === null || memoryId === undefined) {
+        return { ok: false, reason: 'memory id is invalid' }
+      }
+      if (reason === null) return { ok: false, reason: 'memory archive reason is invalid' }
+      return { ok: true, payload: { memoryId, ...(reason === undefined ? {} : { reason }) } }
+    }
+
+    case 'brain.recall': {
+      const query = string('query', 2_000, false)
+      if (query === null) return { ok: false, reason: 'recall query is invalid' }
+      // Bounded to the same ceiling Core clamps to, so a window cannot ask for an
+      // unbounded pack. `clampBudget` enforces it again inside Core; this is the
+      // first of the two, not the only one.
+      const limit = record?.limit
+      if (limit !== undefined && (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 0)) {
+        return { ok: false, reason: 'recall limit is invalid' }
+      }
+      return {
+        ok: true,
+        payload: { ...(query === undefined ? {} : { query }), ...(limit === undefined ? {} : { limit }) },
       }
     }
 

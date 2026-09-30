@@ -18,7 +18,7 @@ export interface WorkspaceStore {
  * teardown is dropped, which is precisely why the host has to ask before the
  * window goes away. Returns a disposer so a reload can detach cleanly.
  */
-export function collectFrom(snapshot: () => unknown): () => void {
+export function collectFrom(snapshot: () => WorkspaceSnapshot): () => void {
   const host = hostBridge()
   if (!host) return () => {}
   host.onCollect(snapshot)

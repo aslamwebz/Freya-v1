@@ -26,6 +26,7 @@ export interface ProjectionInput {
 
 export function projectCoreStatus(input: ProjectionInput): CoreStatus {
   const { state, lifecycle, gateway, fabric, now, startedAt, integrity } = input
+  const gate = gateway.gateStatus()
 
   return {
     lifecycle,
@@ -50,7 +51,9 @@ export function projectCoreStatus(input: ProjectionInput): CoreStatus {
       // because the discarded segment may have held the STOP ALL that followed.
       // Reporting `ready` here would be the one lie this system cannot afford.
       status:
-        state.stopAll.active || integrity.integrity === 'corrupt' ? 'deny_all' : 'ready',
+        state.stopAll.active || integrity.integrity === 'corrupt' || !gate.open
+          ? 'deny_all'
+          : 'ready',
       grantsActive: activeGrants(state, now).length,
     },
 
@@ -69,6 +72,11 @@ export function projectCoreStatus(input: ProjectionInput): CoreStatus {
       unknownUsageCalls:
         state.durableUsage.unknownUsageCalls + state.pendingRequests.length,
     },
-    faults: [...state.faults],
+    faults: [
+      ...state.faults,
+      ...(!gate.open && !state.stopAll.active && lifecycle === 'ready'
+        ? [`cognition gate is fail-closed: ${gate.reason ?? 'reason unavailable'}`]
+        : []),
+    ],
   }
 }

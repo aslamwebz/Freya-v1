@@ -195,12 +195,28 @@ function project(state: ShellState): ShellState {
     inFlightProviderCalls: countInFlightProviderCalls(state.activity),
     now: Date.now(),
   })
-  const presence = withPresence(
-    { ...state, presence: desktop.presenceDetail ? state.presence : state.presence },
-    desktop.presence,
-    desktop.presenceDetail,
-  )
-  return { ...presence, desktop }
+
+  // Core's projection is a fact, not a requested UI transition. The old Phase 0
+  // transition table is still useful for local simulation and microphone
+  // controls, but it must never be able to veto a security state reported by
+  // Core. In particular: listening -> locked and locked -> error must both be
+  // representable immediately.
+  const sameState = state.presence.state === desktop.presence
+  const sameDetail = state.presence.detail === desktop.presenceDetail
+  const projected =
+    sameState && sameDetail
+      ? state
+      : {
+          ...state,
+          presence: {
+            state: desktop.presence,
+            since: sameState ? state.presence.since : Date.now(),
+            activity: state.presence.activity,
+            detail: desktop.presenceDetail,
+          },
+        }
+
+  return { ...projected, desktop }
 }
 
 export function reduce(state: ShellState, event: ShellEvent): ShellState {

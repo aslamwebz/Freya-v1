@@ -29,8 +29,16 @@ const RECORD_KINDS: readonly BrainRecordKind[] = [
 
 export const BRAIN_RECORD_VERSION = 1
 
-/** Apply one record. Idempotent per id, so a duplicate cannot double-apply. */
+/**
+ * Apply one record. Idempotent per id, so a duplicate cannot double-apply.
+ *
+ * Advances `state.sequence` as well, because the sequence is part of the folded
+ * state rather than bookkeeping bolted on beside it: after a replay it is the count
+ * of records that were read and believed, and a projection that reported 0 after
+ * reading thirty would be indistinguishable from an empty Brain.
+ */
 export function applyRecord(state: BrainState, record: BrainRecord): void {
+  state.sequence += 1
   switch (record.kind) {
     case 'identity-root':
       // Root identity is written once. A later record does not replace it: the
@@ -136,8 +144,13 @@ export function validateRecord(value: unknown): { ok: true; record: BrainRecord 
       if (!Array.isArray(entity.aliases) || entity.aliases.length > BRAIN_LIMITS.maxAliasesPerEntity) {
         return { ok: false, reason: 'entity aliases are malformed' }
       }
-      if (!Array.isArray(entity.attributes) || entity.attributes.length > BRAIN_LIMITS.maxAttributesPerEntity) {
+      // `attributes` is a record of string values, not a list, so it is checked as a
+      // map: a caller passing an array here was not writing the type they meant.
+      if (!isStringRecord(entity.attributes)) {
         return { ok: false, reason: 'entity attributes are malformed' }
+      }
+      if (Object.keys(entity.attributes).length > BRAIN_LIMITS.maxAttributesPerEntity) {
+        return { ok: false, reason: 'an entity has more attributes than the limit' }
       }
       if (!isInstant(entity.createdAt) || !isInstant(entity.updatedAt)) {
         return { ok: false, reason: 'entity timestamps are malformed' }
@@ -208,8 +221,16 @@ export function validateRecord(value: unknown): { ok: true; record: BrainRecord 
       if (typeof memory.kind !== 'string' || memory.kind.length === 0) {
         return { ok: false, reason: 'memory has no kind' }
       }
-      if (!isText(memory.content, BRAIN_LIMITS.maxMemoryContentChars)) {
-        return { ok: false, reason: 'memory content exceeds the limit' }
+      if (typeof memory.content !== 'string') {
+        return { ok: false, reason: 'memory content is malformed' }
+      }
+      if (
+        memory.content.trim().length === 0 ||
+        memory.content.length > BRAIN_LIMITS.maxMemoryContentChars
+      ) {
+        // Empty as well as too long. An admitted memory with no content is a record
+        // that claims to be knowledge while carrying none.
+        return { ok: false, reason: 'memory content is empty or exceeds the limit' }
       }
       if (!isText(memory.subject, BRAIN_LIMITS.maxMemorySubjectChars)) {
         return { ok: false, reason: 'memory subject exceeds the limit' }
@@ -270,6 +291,18 @@ export function validateRecord(value: unknown): { ok: true; record: BrainRecord 
     default:
       return { ok: false, reason: `a Brain record named an unknown kind: ${String(kind)}` }
   }
+}
+
+/**
+ * A plain object whose values are all strings.
+ *
+ * Rejects arrays and null-prototype oddities alike, because the consumers index it
+ * and treat the result as text. An attribute holding an object would reach a prompt
+ * as `[object Object]`, which is worse than refusing it.
+ */
+function isStringRecord(value: unknown): value is Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return Object.values(value as Record<string, unknown>).every((item) => typeof item === 'string')
 }
 
 function isProvenance(value: unknown): boolean {

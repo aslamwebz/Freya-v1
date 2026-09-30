@@ -36,7 +36,7 @@ export class MemoryBrainStore implements BrainStore {
     const checked = validateRecord(record)
     if (!checked.ok) throw new BrainStoreError('invalid-record', checked.reason)
     assertRecordSize(record)
-    this.brain.sequence += 1
+    // The fold owns the sequence; there is no second counter here to fall behind it.
     applyRecord(this.brain, record)
     return record
   }

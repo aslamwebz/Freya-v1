@@ -103,6 +103,8 @@ export interface MemoryWriteRequest {
   entityRefs?: readonly string[]
   structuredData?: Readonly<Record<string, string>>
   actor?: string
+  /** Records this memory is known to contradict, by id. */
+  conflictsWith?: readonly string[]
 }
 
 export interface MemoryWriteOutcome {
@@ -402,6 +404,7 @@ export class Brain {
       candidateId,
       memoryId,
       actor: request.actor,
+      conflictsWith: request.conflictsWith,
     }
 
     try {
@@ -645,14 +648,21 @@ export class Brain {
    * start cannot swap who Freya is even if the seed values change in a later
    * release. That asymmetry is intended — changing the seed is a code change, and
    * the wrong kind of claim to make at runtime.
+   *
+   * Returns whether anything was written, so the caller can record the seeding once
+   * rather than every time the application launches.
    */
-  async seed(definition: { identity: IdentityRoot; self: SelfDefinition }): Promise<void> {
+  async seed(definition: { identity: IdentityRoot; self: SelfDefinition }): Promise<boolean> {
+    let wrote = false
     if (this.store.state().identity === null) {
       await this.write({ kind: 'identity-root', identity: definition.identity })
+      wrote = true
     }
     if (this.store.state().self === null) {
       await this.write({ kind: 'self-definition', definition: definition.self })
+      wrote = true
     }
+    return wrote
   }
 
   private timestamp(): string {

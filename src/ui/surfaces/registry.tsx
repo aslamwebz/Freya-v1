@@ -4,6 +4,7 @@ import { ChatSurface } from './ChatSurface'
 import { SearchSurface } from './SearchSurface'
 import { HarnessSurface } from './HarnessSurface'
 import { SecuritySurface } from './SecuritySurface'
+import { VaultSurface } from './VaultSurface'
 import type { SurfaceDefinition } from './types'
 
 /**
@@ -27,6 +28,7 @@ const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   search: () => <SearchSurface />,
   harness: () => <HarnessSurface />,
   security: () => <SecuritySurface />,
+  vault: () => <VaultSurface />,
 }
 
 /** The registry, resolved once from the two catalogs it is built from. */

@@ -76,6 +76,14 @@ export interface AdmissionRequest {
   candidateId: string
   memoryId: string
   actor?: string
+  /**
+   * Records this memory is known to contradict.
+   *
+   * For a pathway that knows something the text does not — an owner correcting an
+   * earlier statement, say. Ids that do not exist are dropped rather than trusted,
+   * so a caller cannot invent a conflict with a record nobody has.
+   */
+  conflictsWith?: readonly string[]
 }
 
 export type AdmissionOutcome =
@@ -205,7 +213,7 @@ export function admit(request: AdmissionRequest, state?: BrainState): AdmissionO
     evidenceSummary: null,
   }
 
-  const conflictsWith = findConflicts(content, state)
+  const conflictsWith = findConflicts(request, state, request.conflictsWith ?? [])
   if (conflictsWith.length > 0) {
     notes.push(
       `contradicted by ${conflictsWith.join(', ')}; both sides are kept and the disagreement is disclosed on recall`,
@@ -265,31 +273,55 @@ export function findSecretShape(text: string): string | null {
 }
 
 /**
- * Records this content contradicts.
+ * Records this memory contradicts.
  *
- * Deliberately literal, not semantic. "Project Alpha is delayed" and "Project Alpha
- * shipped on time" only conflict once something knows they are about the same
- * thing, and the only thing that knows is an entity reference. With no shared
- * entity, this returns nothing — which is the safe direction, because a wrong
- * conflict suppresses a true memory.
+ * ## What this can honestly detect
+ *
+ * A contradiction is not a string comparison. "Project Alpha is delayed" and
+ * "Project Alpha shipped on time" disagree; "I prefer tea" and "the office tea
+ * machine is broken" do not; and no amount of normalisation tells them apart. Phase
+ * 4 has no model and no semantic layer, so it cannot find contradictions in prose —
+ * and a rule that *looked* like it could would be worse than none, because it would
+ * mark unrelated memories as conflicting and suppress true ones.
+ *
+ * So two things count, and only two:
+ *
+ *  1. **Same slot, different value.** Two admitted memories of the same kind about
+ *     the same normalised subject, sharing at least one entity, whose contents
+ *     differ. That is the shape of "two things were said about the same thing and
+ *     they do not match".
+ *  2. **An explicit declaration.** `conflictsWith` on the request, from a pathway
+ *     that knows something the text does not.
+ *
+ * Anything else returns nothing, which is the safe direction: a missed conflict
+ * shows both memories, and a false one suppresses a true memory.
+ *
+ * Identical content is explicitly *not* a conflict. It is the same claim twice, and
+ * the honest response is to keep one record and let the newer supersede it.
  */
-function findConflicts(content: string, state: BrainState | undefined): string[] {
-  if (state === undefined) return []
-  const normalised = normalise(content)
-  const conflicts: string[] = []
+function findConflicts(
+  request: AdmissionRequest,
+  state: BrainState | undefined,
+  declared: readonly string[],
+): string[] {
+  const conflicts = new Set<string>(declared.filter((id) => state?.memories.has(id)))
+  if (state === undefined) return [...conflicts]
+
+  const normalised = normalise(request.content)
+  const subject = normalise(request.subject)
+  const entities = new Set(request.entityRefs ?? [])
+
   for (const memory of state.memories.values()) {
     if (memory.status !== 'admitted' && memory.status !== 'conflicted') continue
-    if (memory.content === content) continue
-    if (sharesEntity(memory, state) && normalise(memory.content) === normalised) {
-      conflicts.push(memory.memoryId)
-    }
+    if (normalise(memory.content) === normalised) continue
+    if (normalise(memory.subject) !== subject) continue
+    if (memory.kind !== request.kind) continue
+    // No shared entity means nothing knows these are about the same thing.
+    const shared = memory.entityRefs.some((ref) => entities.has(ref))
+    if (!shared) continue
+    conflicts.add(memory.memoryId)
   }
-  return conflicts
-}
-
-/** Two memories are about the same thing when they name the same entity. */
-function sharesEntity(memory: MemoryRecord, _state: BrainState): boolean {
-  return memory.entityRefs.length > 0
+  return [...conflicts].sort()
 }
 
 /** Whitespace and case folding only. No stemming, no fuzzy matching. */

@@ -395,6 +395,19 @@ class FreyaCore implements Core {
     // Core that builds a trusted one.
     this.owner = this.service.ownerPrincipalFor()
 
+    // State follows the log, for both replay and live appends.
+    //
+    // Installed *before* anything else appends, deliberately. A subscription
+    // registered after the Brain seeds itself would mean `brain.seeded` reached
+    // the journal without ever reaching the activity feed — so a window open during
+    // the first launch would disagree with a window that attached after a restart
+    // and read the same log. Any event written before this line is a bug.
+    this.disposeState = this.fabric.subscribe((event) => {
+      this.state = reduceCoreState(this.state, event)
+      this.recordActivity(event)
+      this.notify()
+    })
+
     // Conversation and voice, built after the owner exists because the Mind needs
     // the owner's authority to create a turn's grant — and it must not be able to
     // have any other.
@@ -409,20 +422,28 @@ class FreyaCore implements Core {
       now: this.options.now,
       newId: this.options.newId,
     })
-    await this.brainService.seed({
+    // Only records the seeding when it actually happened. Re-announcing it on every
+    // start would put a "seeded" event in the journal for a Brain that was seeded
+    // weeks ago, and an audit reader would reasonably ask what it means that
+    // Freya's identity is written down again each time she launches.
+    const seeded = await this.brainService.seed({
       identity: buildIdentityRoot(),
       self: buildSelfDefinition(),
     })
-    await this.fabric.append(
-      'brain.seeded',
-      {
-        identityName: buildIdentityRoot().name,
-        identityClaimCount: buildIdentityRoot().claims.length,
-        capabilityCount: buildSelfDefinition().capabilities.length,
-        limitationCount: buildSelfDefinition().limitations.length,
-      },
-      { actor: 'system' },
-    )
+    if (seeded) {
+      const identity = buildIdentityRoot()
+      const self = buildSelfDefinition()
+      await this.fabric.append(
+        'brain.seeded',
+        {
+          identityName: identity.name,
+          identityClaimCount: identity.claims.length,
+          capabilityCount: self.capabilities.length,
+          limitationCount: self.limitations.length,
+        },
+        { actor: 'system' },
+      )
+    }
     // A Brain whose log could not be believed is reported once, in its own stream.
     // This is emphatically not a security event: it cannot grant cognition or clear
     // a stop, and it does not lock anything out either. See `SECURITY_EVENT_TYPES`.
@@ -481,13 +502,6 @@ class FreyaCore implements Core {
       synthesizer: this.options.voiceSynthesizer,
       now: this.options.now,
       newId: this.options.newId,
-    })
-
-    // State follows the log, for both replay and live appends.
-    this.disposeState = this.fabric.subscribe((event) => {
-      this.state = reduceCoreState(this.state, event)
-      this.recordActivity(event)
-      this.notify()
     })
 
     const recoveredSequence = this.fabric.lastSequence

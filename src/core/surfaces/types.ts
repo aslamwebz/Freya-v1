@@ -139,13 +139,18 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   vault: {
     type: 'vault',
     title: 'Vault',
-    summary: 'Durable knowledge, Obsidian-compatible. Not implemented yet.',
+    // The summary is the placeholder copy and is still accurate as a summary: the
+    // Brain is durable knowledge, encrypted and chained, but it is not an
+    // Obsidian-compatible library and pretending otherwise would be a lie about
+    // interoperability that does not exist.
+    summary:
+      'What Freya remembers, where each memory came from, and who she believes she is. Obsidian-compatible import is not implemented.',
     width: 620,
     height: 540,
     minWidth: 400,
     minHeight: 320,
     instance: 'singleton',
-    status: 'placeholder',
+    status: 'working',
   },
   harness: {
     type: 'harness',

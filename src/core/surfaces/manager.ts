@@ -111,6 +111,28 @@ export class SurfaceManager {
     return this.items.some((s) => s.type === type)
   }
 
+  /**
+   * The already-open surface this request refers to, or undefined.
+   *
+   * A keyed type whose context carries no key has no identity to match on, so
+   * it is treated as a singleton until one arrives. Two unkeyed windows of a
+   * keyed type would be indistinguishable to a person, which is the thing
+   * multi-instance support exists to avoid.
+   */
+  private instanceOf(
+    descriptor: SurfaceTypeDescriptor,
+    spec: OpenSurfaceSpec,
+  ): Surface | undefined {
+    const ofType = this.items.filter((s) => s.type === descriptor.type)
+    if (ofType.length === 0) return undefined
+    if (descriptor.instance === 'singleton') return ofType[0]
+
+    const key = descriptor.instance.keyedBy
+    const wanted = spec.context?.[key]
+    if (wanted === undefined) return ofType[0]
+    return ofType.find((s) => s.context[key] === wanted)
+  }
+
   /** The topmost surface the user can actually see. */
   private topmostVisible(): Surface | undefined {
     let best: Surface | undefined
@@ -227,14 +249,27 @@ export class SurfaceManager {
 
   /* ------------------------------------------------------------- open */
 
+  /**
+   * Open a surface, or raise the one that is already open.
+   *
+   * The instance policy in the type descriptor decides what "the one that is
+   * already open" means, so this method has no per-type branch and will not
+   * need one: a singleton is found by type, a keyed type by the context field
+   * its descriptor names.
+   */
   open(spec: OpenSurfaceSpec): Surface {
-    const existing = spec.id ? this.get(spec.id) : undefined
+    const descriptor = surfaceTypes[spec.type]
+
+    const existing = (spec.id ? this.get(spec.id) : undefined) ?? this.instanceOf(descriptor, spec)
     if (existing) {
+      // Raise it rather than duplicate it. Restoring as well as focusing,
+      // because "open this again" from a launcher means "show me that", and a
+      // minimised window the user cannot see has not been shown.
+      this.unminimize(existing.id)
       this.focus(existing.id)
       return existing
     }
 
-    const descriptor = surfaceTypes[spec.type]
     // Every window opens at least laptop-sized. The per-type minimum still
     // applies on top, so a surface that genuinely needs more room still gets it
     // and none of them can be shrunk below what a window is for.
@@ -373,6 +408,28 @@ export class SurfaceManager {
     })
     this.commit('surface.state.changed', id, next)
     if (wasFocused) this.handOverFocus(next)
+    return true
+  }
+
+  /**
+   * Bring a minimised surface back.
+   *
+   * The counterpart to `minimize`, and separate from `restore`, which replaces
+   * the whole workspace with a persisted layout. Confusing the two would let a
+   * launcher click wipe the arrangement of every other window.
+   *
+   * Focus follows the restore, because un-minimising something into the
+   * background is not what anyone means by "show me that".
+   */
+  unminimize(id: string): boolean {
+    const surface = this.get(id)
+    if (!surface || !surface.layout.minimized) return false
+    const next = this.replace(surface, {
+      state: 'open',
+      layout: { ...surface.layout, minimized: false },
+    })
+    this.commit('surface.state.changed', id, next)
+    this.focus(next.id)
     return true
   }
 

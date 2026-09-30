@@ -1,5 +1,6 @@
 import { createCore, type Core } from '../core/index'
 import type { CoreCommandEnvelope, CoreCommandResult, CoreStatus } from '../core/protocol/core-protocol'
+import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 
 /**
@@ -34,6 +35,15 @@ export interface CoreHost {
    * without asking.
    */
   attach(send: (status: CoreStatus) => void): () => void
+  /**
+   * Attach to the activity feed. Returns a disposer.
+   *
+   * Narrow on purpose: a window gets display-ready rows, not the event fabric.
+   * There is no channel here that could carry a payload, so no future event can
+   * leak its contents into a window through this door.
+   */
+  onActivity(send: (activity: CoreActivityEvent[]) => void): () => void
+  activity(): CoreActivityEvent[]
   status(): CoreStatus
   stop(reason?: string): Promise<void>
 }
@@ -42,6 +52,7 @@ export class ElectronCoreHost implements CoreHost {
   private core: Core | null = null
   private starting: Promise<void> | null = null
   private readonly windows = new Set<(status: CoreStatus) => void>()
+  private readonly activityWindows = new Set<(activity: CoreActivityEvent[]) => void>()
 
   constructor(
     private readonly dataPath: string,
@@ -57,6 +68,7 @@ export class ElectronCoreHost implements CoreHost {
       this.core = core
       // Any window attached later still gets every subsequent change.
       core.subscribe((status) => this.broadcast(status))
+      core.onActivity((activity) => this.broadcastActivity(activity))
     })()
     try {
       await this.starting
@@ -88,6 +100,22 @@ export class ElectronCoreHost implements CoreHost {
     }
   }
 
+  onActivity(send: (activity: CoreActivityEvent[]) => void): () => void {
+    this.activityWindows.add(send)
+    try {
+      send(this.activity())
+    } catch (error) {
+      console.error('[freya.core] window activity push threw', error)
+    }
+    return () => {
+      this.activityWindows.delete(send)
+    }
+  }
+
+  activity(): CoreActivityEvent[] {
+    return this.core?.activity() ?? []
+  }
+
   status(): CoreStatus {
     return this.core?.status() ?? NOT_READY
   }
@@ -96,7 +124,19 @@ export class ElectronCoreHost implements CoreHost {
     const core = this.core
     this.core = null
     this.windows.clear()
+    this.activityWindows.clear()
     await core?.stop(reason)
+  }
+
+  private broadcastActivity(activity: CoreActivityEvent[]): void {
+    for (const send of [...this.activityWindows]) {
+      try {
+        send(activity)
+      } catch (error) {
+        console.error('[freya.core] window activity push threw', error)
+        this.activityWindows.delete(send)
+      }
+    }
   }
 
   private broadcast(status: CoreStatus): void {

@@ -5,6 +5,7 @@ import type {
   CoreCommandResult,
   CoreStatus,
 } from '../core/protocol/core-protocol'
+import type { CoreActivityEvent } from '../core/protocol/activity'
 
 export interface RuntimeInfo {
   version: string
@@ -19,11 +20,12 @@ export interface RuntimeInfo {
 /**
  * The entire privileged surface of the Freya desktop host.
  *
- * Four functions and one flag for the workspace, three for the Core, and one
+ * Four functions and one flag for the workspace, five for the Core, and one
  * flag: `getRuntimeInfo`, `loadWorkspace`, `saveWorkspace`, `onCollect`,
- * `coreSubmit`, `coreStatus`, `onCoreStatus`, and `isDesktop`. No
- * ipcRenderer passthrough, no remote module, no eval. A renderer compromise gets
- * an attacker exactly what this file exposes.
+ * `coreSubmit`, `coreStatus`, `onCoreStatus`, `coreActivity`, `onCoreActivity`,
+ * and `isDesktop`. No ipcRenderer passthrough, no remote module, no eval, and no
+ * way to name an IPC channel from the renderer. A renderer compromise gets an
+ * attacker exactly what this file exposes.
  *
  * The Core functions are named individually rather than exposing a channel
  * string, so the renderer cannot invent a command name at the bridge. The
@@ -68,6 +70,24 @@ const api = {
   },
 
   coreStatus: (): Promise<CoreStatus> => ipcRenderer.invoke('freya:core:status'),
+
+  /**
+   * The activity feed: display-ready rows derived from durable events.
+   *
+   * Narrow on purpose. There is no generic "read events" call here, and no
+   * channel the renderer can name itself — a window cannot ask for a payload, an
+   * event id, or the journal. Command text is not in these rows and never will
+   * be, which is the same property the journal itself has.
+   */
+  coreActivity: (): Promise<CoreActivityEvent[]> => ipcRenderer.invoke('freya:core:activity'),
+
+  onCoreActivity: (handler: (activity: CoreActivityEvent[]) => void): (() => void) => {
+    const listener = (_event: unknown, activity: CoreActivityEvent[]): void => handler(activity)
+    ipcRenderer.on('freya:core:activity', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:activity', listener)
+    }
+  },
 
   /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously

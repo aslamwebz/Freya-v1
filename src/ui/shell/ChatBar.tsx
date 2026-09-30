@@ -4,6 +4,7 @@ import { shellStore, useShell } from '../store'
 import { submitCommand } from '../commandPath'
 import { Icon, type IconName } from '../icons'
 import { surfaceTypes, type SurfaceType } from '../../core/surfaces/types'
+import { launcherSurfaces } from '../surfaces/registry'
 
 /**
  * The chat bar, which is what the floating dock used to be.
@@ -24,16 +25,23 @@ import { surfaceTypes, type SurfaceType } from '../../core/surfaces/types'
  * Model replies are not connected. The transcript says so once, plainly, rather
  * than leaving an empty pane to be interpreted as a reply that is coming.
  */
-const SURFACES: { type: SurfaceType; icon: IconName }[] = [
-  { type: 'chat', icon: 'relay' },
-  { type: 'search', icon: 'search' },
-  { type: 'work', icon: 'work' },
-  { type: 'mission', icon: 'mission' },
-  { type: 'vault', icon: 'vault' },
-  { type: 'harness', icon: 'harness' },
-  { type: 'foundry', icon: 'foundry' },
-  { type: 'team', icon: 'team' },
-]
+/**
+ * The launcher's contents, read from the surface registry.
+ *
+ * Previously a hand-written array beside this component. It had drifted: Security
+ * was missing from it, so the surface with the stop button was the one you could
+ * not launch. Deriving the list means a new surface appears in the launcher
+ * because it was registered, not because someone remembered a second list.
+ */
+const LAUNCHER_ICON: Partial<Record<SurfaceType, IconName>> = {
+  chat: 'relay',
+  search: 'search',
+  work: 'work',
+  mission: 'mission',
+  vault: 'vault',
+  harness: 'harness',
+  security: 'shield',
+}
 
 export function ChatBar({ onToggle }: { onToggle: (type: SurfaceType) => void }) {
   const chat = useShell((s) => s.chat)
@@ -62,7 +70,9 @@ export function ChatBar({ onToggle }: { onToggle: (type: SurfaceType) => void })
   return (
     <div className="chatbar">
       <div className="chatbar-switcher" role="toolbar" aria-label="Work surfaces">
-        {SURFACES.map(({ type, icon }) => {
+        {launcherSurfaces().map((definition) => {
+          const type = definition.type
+          const icon = LAUNCHER_ICON[type] ?? 'work'
           const descriptor = surfaceTypes[type]
           const open = surfaces.find((s) => s.type === type)
           const active = Boolean(open && !open.layout.minimized)

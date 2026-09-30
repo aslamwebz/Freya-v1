@@ -457,3 +457,96 @@ describe('SurfaceManager — serialisation', () => {
     expect(listener).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('SurfaceManager — instance policy', () => {
+  it('does not duplicate a singleton when it is opened again', () => {
+    const { manager } = makeManager()
+    const first = manager.open({ type: 'security' })
+    const second = manager.open({ type: 'security' })
+
+    expect(second.id).toBe(first.id)
+    expect(manager.surfaces).toHaveLength(1)
+  })
+
+  it('raises and restores a minimised singleton rather than opening a second one', () => {
+    const { manager } = makeManager()
+    const first = manager.open({ type: 'security' })
+    manager.minimize(first.id)
+    expect(manager.get(first.id)?.layout.minimized).toBe(true)
+
+    manager.open({ type: 'security' })
+
+    expect(manager.surfaces).toHaveLength(1)
+    expect(manager.get(first.id)?.layout.minimized).toBe(false)
+  })
+
+  it('focuses a singleton that is open but behind another window', () => {
+    const { manager } = makeManager()
+    const security = manager.open({ type: 'security' })
+    manager.open({ type: 'search' })
+    expect(manager.focused?.type).toBe('search')
+
+    manager.open({ type: 'security' })
+
+    expect(manager.focused?.id).toBe(security.id)
+    expect(manager.surfaces).toHaveLength(2)
+  })
+
+  it('allows one window per key for a keyed type', () => {
+    const { manager } = makeManager()
+    expect(surfaceTypes.mission.instance).toEqual({ keyedBy: 'missionId' })
+
+    const first = manager.open({ type: 'mission', context: { missionId: 'm-1' } })
+    const again = manager.open({ type: 'mission', context: { missionId: 'm-1' } })
+    expect(again.id).toBe(first.id)
+    expect(manager.surfaces).toHaveLength(1)
+
+    const other = manager.open({ type: 'mission', context: { missionId: 'm-2' } })
+    expect(other.id).not.toBe(first.id)
+    expect(manager.surfaces).toHaveLength(2)
+  })
+
+  it('treats a keyed type with no key as a singleton, because two of them would be indistinguishable', () => {
+    const { manager } = makeManager()
+    const first = manager.open({ type: 'mission' })
+    const again = manager.open({ type: 'mission' })
+    expect(again.id).toBe(first.id)
+    expect(manager.surfaces).toHaveLength(1)
+  })
+
+  it('declares an instance policy for every surface type', () => {
+    // A new type that forgets this would fall back to duplicating, so the
+    // invariant is checked over the whole vocabulary rather than spot-checked.
+    for (const descriptor of Object.values(surfaceTypes)) {
+      expect(
+        descriptor.instance === 'singleton' || typeof descriptor.instance.keyedBy === 'string',
+        `${descriptor.type} has no instance policy`,
+      ).toBe(true)
+    }
+  })
+
+  it('reopens by explicit id even when the type would be keyed', () => {
+    const { manager } = makeManager()
+    const saved = manager.open({ type: 'harness', context: { sessionId: 's-1' } })
+    manager.close(saved.id)
+    const restored = manager.open({ type: 'harness', id: saved.id, context: { sessionId: 's-1' } })
+    expect(restored.id).toBe(saved.id)
+    expect(manager.surfaces).toHaveLength(1)
+  })
+
+  it('restores a saved layout without duplicating entries', () => {
+    const { manager } = makeManager()
+    manager.open({ type: 'security' })
+    manager.open({ type: 'mission', context: { missionId: 'm-1' } })
+    manager.open({ type: 'mission', context: { missionId: 'm-2' } })
+    const saved = manager.serialize()
+
+    manager.restore(saved)
+
+    expect(manager.surfaces).toHaveLength(3)
+    // And re-opening a restored mission still finds its own window.
+    const m1 = manager.open({ type: 'mission', context: { missionId: 'm-1' } })
+    expect(manager.surfaces).toHaveLength(3)
+    expect(manager.get(m1.id)?.context.missionId).toBe('m-1')
+  })
+})

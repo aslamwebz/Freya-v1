@@ -9,10 +9,9 @@ import {
   AttentionPanel,
   FocusPanel,
   RuntimePanel,
-  WorkforcePanel,
+  SystemPanel,
   WorkPanel,
 } from './dashboard/Panels'
-import { CorePanel } from './dashboard/CorePanel'
 import { Presence } from '../presence/Presence'
 import { DesignLab } from '../presence/DesignLab'
 import { PresenceStatesConnected } from './dashboard/PresenceStates'
@@ -26,6 +25,10 @@ import { loadLabState, onLabChange } from '../presence/labState'
 
 export function App() {
   const [ready, setReady] = useState(false)
+  // Hydrated at runtime, before the first paint of the workspace. Until the
+  // runtime says otherwise the shell assumes a shipped build, so the development
+  // controls cannot flash on screen in a production window.
+  const dev = useShell((state) => state.runtime.dev)
   const ringCanvas = useRef<HTMLCanvasElement | null>(null)
   const [background, setBackground] = useState(() => loadLabState().bg)
 
@@ -82,29 +85,35 @@ export function App() {
         <div className="column column-left">
           <FocusPanel />
           <WorkPanel />
-          <AttentionPanel />
         </div>
 
         <main className="column column-center">
           {/* Presentation controls, at the top: how Freya is drawn is a
               top-of-workspace concern, not something buried under the canvas. */}
-          <div className="center-top">
-            <DesignLab
-              handle={presenceHandle}
-              onSimulateUser={() => voiceEnvelope.simulateUser()}
-              onSimulateReply={() => voiceEnvelope.simulateReply()}
-            />
-            <PresenceStatesConnected />
-          </div>
+          {/* Development-only. The Design Lab and the presence chips can put
+              Freya into any state without Core having done anything, so they are
+              not rendered in a shipped window at all. The store refuses the
+              matching event outside development too — this is the second of two
+              locks, not the only one. */}
+          {dev ? (
+            <div className="center-top" data-dev-tools="true">
+              <DesignLab
+                handle={presenceHandle}
+                onSimulateUser={() => voiceEnvelope.simulateUser()}
+                onSimulateReply={() => voiceEnvelope.simulateReply()}
+              />
+              <PresenceStatesConnected />
+            </div>
+          ) : null}
 
           <Presence ringCanvas={ringCanvas} onReady={setPresenceHandle} />
         </main>
 
         <div className="column column-right">
-          <CorePanel />
-          <RuntimePanel />
-          <WorkforcePanel />
+          <SystemPanel />
+          <AttentionPanel />
           <ActivityPanel />
+          <RuntimePanel />
         </div>
 
         {/* The chat bar is a row of its own across the whole workspace, not a

@@ -3,6 +3,7 @@ import type {
   CoreCommandResult,
   CoreStatus,
 } from '../../core/protocol/core-protocol'
+import type { CoreActivityEvent } from '../../core/protocol/activity'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -50,6 +51,15 @@ export interface FreyaHostBridge {
   coreStatus(): Promise<CoreStatus>
   /** Returns a disposer, so a React effect can clean up. */
   onCoreStatus(handler: (status: CoreStatus) => void): () => void
+
+  /**
+   * Display-ready activity, derived from durable events.
+   *
+   * The absence of a generic event reader here is the security property, not an
+   * oversight. A window can have rows; it cannot have the journal.
+   */
+  coreActivity(): Promise<CoreActivityEvent[]>
+  onCoreActivity(handler: (activity: CoreActivityEvent[]) => void): () => void
 }
 
 declare global {

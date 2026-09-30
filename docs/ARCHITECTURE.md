@@ -99,12 +99,17 @@ ShellState = {
   listening:  boolean
   commandDraft: string
   lastCommand: string | null
-  dashboard:  { focus, work[], attention[], workforce[], activity[] }
+  core:       CoreStatus | null          // Core's projection, verbatim
+  activity:   CoreActivityEvent[]        // Core's feed, verbatim
+  desktop:    DesktopProjection          // everything derived, computed below
   runtime:    { version, platform, userData, workspaceFile, dev }
   attention:  { requested, lastNote }
   notices:    Notice[]
 }
 ```
+
+`dashboard` is gone. The `demo: true` fixtures it carried were removed in Phase 2
+rather than relabelled — see §3.5.
 
 Ownership is disjoint and explicit. The **Surface Manager owns surfaces**; the
 store owns everything else. Every manager lifecycle change is dispatched onto
@@ -115,21 +120,42 @@ pure, so it stores the summary without needing to reach into the manager.
 That single path is what the shell subscribes to. There is no second
 subscription on the manager, and no component calls another.
 
-The dashboard collections are **demo fixtures**, marked `demo: true` in state and
-rendered with a visible DEMO marker. They are not pretending to be live data.
+### 3.1b Presence is derived, and one path can still move it by hand
 
-### 3.1b Presence changes are validated in one place
+**Revised in Phase 2.** Presence used to be a stored value that events could
+transition. It is now a function of Core's status, recomputed in `project()` on
+every Core push:
 
-Every event that wants a new presence — `presence.set`, `voice.toggle`,
-`command.submit`, `workspace.restored` — goes through a single
-`withPresence` helper that consults the transition table. There is no second
-assignment path, and `ShellStore.hydrate` is narrowed to the runtime identity
-alone so that it cannot be used to smuggle state in at boot.
+```
+CoreStatus.integrity / lifecycle / stopAll / governor
+        + listening (local)
+        + inFlightProviderCalls (durable events)
+        ↓
+   derivePresence()  →  PresenceState
+```
 
-The consequence that matters: a locked or errored Freya cannot be talked out of
-it. The microphone button does not go live, a submitted command is recorded but
-does not start work, and a restored workspace applies its navigation but not its
-presence.
+Ordered by how much the condition matters: a corrupt journal outranks an open
+microphone, which is fail-closed arriving in the UI layer.
+
+Consequences, all of them tested:
+
+- **No ungated setter.** `presence.set` is gone. `presence.simulate` is the only
+  way to move presence without Core, and the reducer ignores it unless
+  `runtime.dev`. `runtime.dev` defaults to `false` and is set only by the host, so
+  a window whose hydration failed cannot come up with the simulator enabled. The
+  Development Lab and its chips are additionally not rendered unless `runtime.dev`.
+- **The microphone is refused, not overridden.** Setting `listening: true` is
+  accepted only if the derived presence would actually become `listening`. A
+  locked, degraded or journal-faulted Core refuses the toggle outright, so
+  `state.listening` is never true while the window says `locked`.
+- **`working` requires real work.** It has exactly one door:
+  `inFlightProviderCalls > 0`, counted from durable provider events. `thinking`
+  has none.
+- **A workspace restores layout, not presence.** `ShellStore.hydrate` is narrowed
+  to the runtime identity alone so it cannot smuggle state in at boot.
+
+`withPresence` and the transition table remain, governing the one path that can
+still set a state directly: the development override.
 
 ### 3.2 Surface Manager (`src/core/surfaces/`)
 
@@ -146,10 +172,19 @@ a *frame* (the workspace bounds) so it can clamp and maximise without measuring
 anything itself. It exposes exactly:
 
 ```
-open · close · focus · move · resize · minimize · restore · maximize · pin · cycle
+open · close · focus · move · resize · minimize · unminimize
+     · maximize · unmaximize · togglePin · cycle · serialize · restore
 ```
 
 and emits `surface.opened/closed/focused/moved/resized/state.changed`.
+
+Two names that are easy to confuse and are not:
+
+- `unminimize(id)` — bring one surface back. Added in Phase 2, because the spec
+  listed `restore` as a per-surface operation and only the workspace-wide
+  `restore(array)` existed.
+- `restore(persisted)` — replace the whole layout from a saved file. A launcher
+  click calling the other one would wipe the arrangement of every window.
 
 Consequences that matter:
 
@@ -162,7 +197,25 @@ Consequences that matter:
   schema change is a version bump in one place.
 
 Surface **types** are declared as data (`surfaceTypes.ts`): id, title, icon,
-default size, minimum size. Adding Vault-as-a-surface is one entry.
+default size, minimum size, status, and an **instance policy**. Adding
+Vault-as-a-surface is one entry there plus one body component.
+
+```ts
+instance: 'singleton' | { keyedBy: 'missionId' }
+```
+
+`open()` consults that policy instead of branching on type, so a future
+multi-instance surface needs a descriptor field and no manager edit. Opening an
+already-open singleton **restores and focuses** it rather than duplicating it —
+two Security windows would be two ways to stop Freya. A keyed type opened without
+its key behaves as a singleton, because two unkeyed windows of a keyed type are
+indistinguishable to a person.
+
+`registry.tsx` combines that data with a body component into one catalog
+(`SURFACES`), and the launcher, the placeholders and the manager all read from it.
+The launcher was a hand-written array beside `ChatBar` and had already drifted —
+**Security was missing from it**, so the surface with the stop button was the one
+you could not launch.
 
 ### 3.3 Presence (`src/presence/`)
 
@@ -206,6 +259,52 @@ screenshotted in a plain browser without weakening the desktop boundary.
 
 ---
 
+### 3.5 Projection — one interpretation, no interpretation in panels
+
+`src/core/desktopProjection.ts` is a pure function:
+
+```
+CoreStatus + CoreActivityEvent[] + local shell facts
+        ↓  projectDesktop()
+   DesktopProjection
+        ↓
+panels, Presence, the system area
+```
+
+Panels do not read `CoreStatus` fields. They read a `DesktopProjection`, which is
+why four panels cannot disagree about what `governor.status: 'deny_all'` means —
+there is one function that decided, and it is unit-tested against a table of cases
+rather than by looking at a window.
+
+The reducer recomputes it in one place (`project()` in `src/core/events.ts`) on
+every `core.status` or `core.activity` event. It is deterministic given the same
+input: no globals, no randomness, no clock beyond the `now` passed in.
+
+**Presence is derived from it, not stored alongside it.** There is no ungated
+`presence.set` event; the only way to move presence without Core is
+`presence.simulate`, which the reducer ignores unless `runtime.dev` — and
+`runtime.dev` itself defaults to `false` and is set only by the host, which knows
+how it was launched.
+
+### 3.6 Activity is a projection of the journal, and the journal stays in Core
+
+The renderer receives `CoreActivityEvent[]`: `{ id, kind, type, sequence, at,
+text, tone }`.
+
+**There is no payload field.** That is the whole security property, and it is
+structural: `command.received` maps to `Command received (42 characters)`, a
+hostile payload cannot reach the row because the row is built from named fields,
+and adding a field to an event does not add it here. The journal has never held
+command text and neither does the feed.
+
+`Core.start()` folds the log once, deriving state and activity from the same
+events in the same order, and a subscriber gets the whole feed on attach — so a
+window opening on day seven agrees with one that never left. There is no
+renderer-side activity database.
+
+The preload bridge exposes `coreActivity()` and `onCoreActivity()` and
+deliberately **no generic event reader**: a window can have rows, not the journal.
+
 ## 4. Persistence
 
 `workspace.json` lives in Electron's `app.getPath('userData')`:
@@ -218,6 +317,18 @@ screenshotted in a plain browser without weakening the desktop boundary.
   "nav": "home"
 }
 ```
+
+`presence` is **written but not restored**, and that is intentional rather than an
+oversight: presence is derived from Core's live status, so a saved `thinking` from
+a crashed session is not a fact about the current one. The field is kept so the
+on-disk shape of files people already have does not change under them. The e2e
+asserts the stronger version of this — after a relaunch with STOP ALL latched,
+presence reads `locked`, read from Core's durable latch rather than from disk.
+
+Presentation only. There is no field here for a credential, a capability, a
+grant, a prompt or a model response, and the parser discards anything it does not
+recognise. Anything that decides *whether Freya may act* lives in the durable
+journal and nowhere else: a file the renderer can write must never move it.
 
 Rules:
 
@@ -326,11 +437,23 @@ is the point: the bridge should not be able to grow unnoticed.
 
 ## 7. Deliberately absent
 
-Phase 1 does not implement: chat or conversation, streaming, speech
-transcription, Searcher, Vault, Missions, Work, the Run engine, agents, swarms,
-PTYs, terminal, Foundry, connectors, Office, learning, or self-modification.
-There are no stub classes for them.
+Neither Phase 1 nor Phase 2 implements: chat or conversation, streaming, speech
+transcription, Searcher, web research, browser automation, Browser Relay, Vault,
+Missions execution, Work, the Run engine, agents, swarms, PTYs, terminal,
+Foundry, connectors/MCP, 3D Office, learning, or self-modification. There are no
+stub classes for them, and no panel that implies one is running.
+
+A surface type may exist with `status: 'placeholder'`, in which case its window
+is real — movable, resizable, persisted — and its body says which system is
+missing and why. That is a declared boundary, not a fake.
 
 A submitted command reaches Core, is made durable, and stops there. The
 acknowledgement says so explicitly, because a user told a command was received
 will otherwise wait for a reply that is not coming.
+
+**Idle Freya spends nothing.** No automatic model call exists anywhere in the
+shell, and the e2e checks the call counters after boot, after a command, after a
+renderer reload and after a relaunch.
+
+Browser work is documented as direction only, in
+[BROWSER-ROADMAP.md](BROWSER-ROADMAP.md).

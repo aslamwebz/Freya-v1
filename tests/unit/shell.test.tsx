@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import type { CoreStatus } from '../../core/protocol/core-protocol'
 import { App } from '../../src/ui/App'
 import { manager } from '../../src/ui/boot'
 import { shellStore } from '../../src/ui/store'
@@ -70,7 +71,7 @@ function installCoreBridge(over: {
 }
 
 /** A status with nothing claimed about it, so tests can assert against it. */
-const CORE_STATUS = {
+const CORE_STATUS: CoreStatus = {
   lifecycle: 'ready',
   eventSequence: 7,
   coreStartedAt: '2026-03-01T12:00:00.000Z',
@@ -109,7 +110,9 @@ describe('Freya shell', () => {
     // The manager and the store are module singletons; reset both so each test
     // starts from the same workspace.
     manager.restore([])
-    shellStore.dispatch({ type: 'presence.set', state: 'idle' })
+    // Presence is derived from Core now, so there is nothing to reset by hand;
+    // a ready Core is pushed so the shell is not staring at "connecting".
+    shellStore.dispatch({ type: 'core.status', status: CORE_STATUS })
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 1000 })
     // The presence canvas has no 2D context in jsdom.
@@ -521,11 +524,31 @@ describe('Freya shell', () => {
     expect(manager.get(id)?.layout.x).toBeGreaterThan(0)
   })
 
-  it('labels every dashboard panel as demo data', async () => {
+  it('shows no demo data anywhere in the dashboard', async () => {
     await boot()
-    // Every dashboard panel plus the presence console declares its data as demo.
-    expect(screen.getAllByText('Demo data').length).toBe(5)
-    expect(screen.getByText('Demo')).toBeInTheDocument()
+    // Phase 2 removed the fixtures entirely, so there is no demo badge left to
+    // render — which is the stronger property: nothing can forget to label
+    // itself, because nothing is fictional.
+    expect(screen.queryAllByText('Demo data')).toHaveLength(0)
+    expect(screen.queryAllByText(/Agent|Archivist|Smith|Liaison|Warden/)).toHaveLength(0)
+    expect(screen.queryByText(/researching|Mission \d+ running/)).toBeNull()
+  })
+
+  it('states the empty states in words rather than inventing content', async () => {
+    await boot()
+    expect(screen.getByText('No active work')).toBeInTheDocument()
+    expect(screen.getByText('Nothing needs you')).toBeInTheDocument()
+    expect(screen.getByText('No activity yet')).toBeInTheDocument()
+  })
+
+  it('reports the real Core facts in the system area', async () => {
+    await boot()
+    const system = document.querySelector('.core-facts') as HTMLElement
+    for (const label of ['Core', 'Security', 'Journal', 'Governor', 'Models']) {
+      expect(system.textContent).toContain(label)
+    }
+    expect(screen.getByText('Running')).toBeInTheDocument()
+    expect(screen.getByText('Healthy')).toBeInTheDocument()
   })
 
   it('drives the design lab from the keyboard', async () => {

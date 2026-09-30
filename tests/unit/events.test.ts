@@ -1,30 +1,119 @@
 import { describe, expect, it } from 'vitest'
+import type { CoreStatus } from '../../core/protocol/core-protocol'
 import { initialState, reduce, type ShellEvent, type ShellState } from '../../src/core/events'
-import { PRESENCE_DETAIL } from '../../src/core/presence'
+
+/** The event names the reducer accepts, read off the union at runtime. */
+const EVENT_NAMES: string[] = (
+  [
+    'presence.activity',
+    'presence.simulate',
+    'nav.select',
+    'command.submit',
+    'core.status',
+    'core.activity',
+    'command.acknowledged',
+    'nav.collapse',
+    'chat.line',
+    'voice.toggle',
+    'attention.requested',
+    'workspace.restored',
+    'work.updated',
+  ] as const
+).map(String)
+
+/** A minimal healthy Core status, for tests that need one. */
+const READY_CORE: CoreStatus = {
+  lifecycle: 'ready',
+  eventSequence: 3,
+  coreStartedAt: '2026-03-01T12:00:00.000Z',
+  integrity: {
+    integrity: 'ok',
+    reason: 'test',
+    line: null,
+    eventsRead: 3,
+    bytesDiscarded: 0,
+  },
+  stopAll: { active: false, activatedAt: null, activatedBy: null },
+  guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
+  governor: { status: 'ready', grantsActive: 0 },
+  providers: [],
+  sessionUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
+  durableUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
+  faults: [],
+}
+
+/** STOP ALL latched: the Core refuses everything. */
+const STOPPED_CORE: CoreStatus = {
+  ...READY_CORE,
+  governor: { status: 'deny_all', grantsActive: 0 },
+  stopAll: {
+    active: true,
+    activatedAt: '2026-03-01T12:05:00.000Z',
+    activatedBy: 'owner',
+  },
+}
+
+/** A corrupt journal: fail closed, and stay that way. */
+const CORRUPT_CORE: CoreStatus = {
+  ...READY_CORE,
+  lifecycle: 'degraded',
+  integrity: {
+    integrity: 'corrupt',
+    reason: 'journal corrupted at line 3',
+    line: 3,
+    eventsRead: 2,
+    bytesDiscarded: 120,
+  },
+  governor: { status: 'deny_all', grantsActive: 0 },
+}
 
 function apply(events: ShellEvent[], from: ShellState = initialState()): ShellState {
   return events.reduce(reduce, from)
 }
 
+
+/**
+ * Presence is derived from Core from Phase 2 onwards.
+ *
+ * There is deliberately no `presence.set` event any more. A Development Lab
+ * override exists and is `presence.simulate`, which the reducer refuses unless
+ * the runtime says this is a development build — so a simulated state cannot be
+ * mistaken for a real one in a shipped window.
+ */
+function devState(): ShellState {
+  return { ...initialState(), runtime: { ...initialState().runtime, dev: true } }
+}
+
 describe('event reducer', () => {
-  it('transitions presence and stamps the moment it happened', () => {
-    const state = apply([{ type: 'presence.set', state: 'listening' }])
+  it('has no ungated presence setter in the event union', () => {
+    // Structural rather than behavioural: the union is the API, and it has no
+    // member that moves presence without Core having caused it.
+    const setters = EVENT_NAMES.filter((name) => name.startsWith('presence.'))
+    expect(setters).toEqual(['presence.activity', 'presence.simulate'])
+  })
+
+  it('lets the Development Lab simulate presence, in a development build', () => {
+    const state = apply([{ type: 'presence.simulate', state: 'listening' }], devState())
     expect(state.presence.state).toBe('listening')
-    expect(state.presence.detail).toBe(PRESENCE_DETAIL.listening)
     expect(state.presence.since).toBeGreaterThan(0)
   })
 
-  it('refuses an illegal presence transition and leaves state untouched', () => {
-    const locked = apply([{ type: 'presence.set', state: 'locked' }])
-    const next = reduce(locked, { type: 'presence.set', state: 'working' })
-
-    expect(next).toBe(locked)
-    expect(next.presence.state).toBe('locked')
+  it('refuses a simulated presence in a shipped build', () => {
+    // The second lock. The Design Lab is not rendered in production either, and
+    // even if something dispatched this, the reducer ignores it and returns the
+    // very same state object, so nothing even re-renders.
+    const state = initialState()
+    expect(reduce(state, { type: 'presence.simulate', state: 'working' })).toBe(state)
+    expect(state.presence.state).toBe('idle')
   })
 
-  it('is a no-op when the presence is already in the requested state', () => {
-    const idle = initialState()
-    expect(reduce(idle, { type: 'presence.set', state: 'idle' })).toBe(idle)
+  it('re-derives presence from Core and so overrides a simulated state', () => {
+    // A Core status push is the truth. A lab that left Freya in `working` is
+    // corrected by the next fact to arrive, rather than persisting.
+    const dev = apply([{ type: 'presence.simulate', state: 'working' }], devState())
+    expect(dev.presence.state).toBe('working')
+    const withCore = reduce(dev, { type: 'core.status', status: READY_CORE })
+    expect(withCore.presence.state).toBe('idle')
   })
 
   it('clamps reported presence activity to 0..1', () => {
@@ -104,10 +193,14 @@ describe('event reducer', () => {
     expect(state.attention.lastNote).toBe('surface restored')
   })
 
-  it('restores nav and presence from a workspace snapshot', () => {
-    const state = apply([{ type: 'workspace.restored', nav: 'vault', navCollapsed: false, presence: 'working' }])
+  it('restores nav from a workspace snapshot but never presence', () => {
+    // A saved `thinking` from last week's crash is not a fact about now. The
+    // layout comes back; Core decides the intelligence's state.
+    const state = apply([
+      { type: 'workspace.restored', nav: 'vault', navCollapsed: false, presence: 'working' },
+    ])
     expect(state.nav).toBe('vault')
-    expect(state.presence.state).toBe('working')
+    expect(state.presence.state).toBe('idle')
   })
 
   it('projects a surface summary onto the shell state', () => {
@@ -153,8 +246,15 @@ describe('event reducer', () => {
     expect(after).toBe(before)
   })
 
-  it('marks every dashboard fixture as demo data', () => {
-    expect(initialState().dashboard.demo).toBe(true)
+  it('has no demo dashboard at all', () => {
+    // Phase 2 removed the fixtures. Every dashboard value is now derived from
+    // Core, so there is nothing to mark as demo — and no `demo` flag that a
+    // panel could forget to render.
+    const state = initialState()
+    expect((state as unknown as Record<string, unknown>).dashboard).toBeUndefined()
+    expect(state.desktop.corePresent).toBe(false)
+    expect(state.desktop.work.empty).toBe(true)
+    expect(state.desktop.attentionItems).toEqual([])
   })
 
   it('starts with an empty surface projection', () => {
@@ -164,7 +264,8 @@ describe('event reducer', () => {
 
 describe('every presence change goes through transition validation', () => {
   it('a submitted command cannot unlock a locked Freya', () => {
-    const locked = apply([{ type: 'presence.set', state: 'locked' }])
+    const locked = apply([{ type: 'core.status', status: STOPPED_CORE }])
+    expect(locked.presence.state).toBe('locked')
     const after = reduce(locked, {
       type: 'command.acknowledged',
       ok: true,
@@ -178,23 +279,28 @@ describe('every presence change goes through transition validation', () => {
   })
 
   it('the microphone cannot listen while locked', () => {
-    const locked = apply([{ type: 'presence.set', state: 'locked' }])
+    const locked = apply([{ type: 'core.status', status: STOPPED_CORE }])
     const after = reduce(locked, { type: 'voice.toggle', listening: true })
 
     expect(after.presence.state).toBe('locked')
+    // Refused outright, not merely overridden by the display. A store claiming
+    // `listening: true` while the presence reads locked is the contradiction the
+    // Phase 1 rule was written to prevent.
     expect(after.listening).toBe(false)
+    expect(after).toBe(locked)
   })
 
-  it('the microphone cannot listen while errored', () => {
-    const errored = apply([{ type: 'presence.set', state: 'error' }])
-    const after = reduce(errored, { type: 'voice.toggle', listening: true })
+  it('the microphone cannot listen while the journal is corrupt', () => {
+    const errored = apply([{ type: 'core.status', status: CORRUPT_CORE }])
+    expect(errored.presence.state).toBe('error')
 
+    const after = reduce(errored, { type: 'voice.toggle', listening: true })
     expect(after.presence.state).toBe('error')
     expect(after.listening).toBe(false)
   })
 
   it('a restored workspace cannot clear an error', () => {
-    const errored = apply([{ type: 'presence.set', state: 'error' }])
+    const errored = apply([{ type: 'core.status', status: CORRUPT_CORE }])
     const after = reduce(errored, {
       type: 'workspace.restored',
       nav: 'vault',
@@ -207,20 +313,26 @@ describe('every presence change goes through transition validation', () => {
     expect(after.nav).toBe('vault')
   })
 
-  it('a restored workspace may restore the state it legitimately saved', () => {
-    const working = apply([{ type: 'presence.set', state: 'working' }])
-    const after = reduce(working, {
+  it('a restored workspace restores layout and not intelligence state', () => {
+    // The old behaviour restored a saved `working`. There is no `working` to
+    // restore to in Phase 2 — presence comes from Core — so the saved field is
+    // read for navigation and ignored for state.
+    const after = reduce(initialState(), {
       type: 'workspace.restored',
       nav: 'work',
-      navCollapsed: false,
+      navCollapsed: true,
       presence: 'working',
     })
-    expect(after.presence.state).toBe('working')
     expect(after.nav).toBe('work')
+    expect(after.navCollapsed).toBe(true)
+    expect(after.presence.state).toBe('idle')
   })
 
   it('turning the microphone off always returns to idle when that is legal', () => {
-    const listening = apply([{ type: 'voice.toggle', listening: true }])
+    const listening = apply([
+      { type: 'core.status', status: READY_CORE },
+      { type: 'voice.toggle', listening: true },
+    ])
     const after = reduce(listening, { type: 'voice.toggle', listening: false })
     expect(after.presence.state).toBe('idle')
     expect(after.listening).toBe(false)

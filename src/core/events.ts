@@ -1,6 +1,12 @@
 import type { Presence, PresenceState } from './presence'
 import { PRESENCE_DETAIL, canTransition } from './presence'
-import { demoDashboard, type Dashboard } from '../demo/fixtures'
+import type { CoreStatus } from '../../core/protocol/core-protocol'
+import type { CoreActivityEvent } from '../../core/protocol/activity'
+import {
+  countInFlightProviderCalls,
+  projectDesktop,
+  type DesktopProjection,
+} from './desktopProjection'
 import type { SurfaceEvent, SurfaceSummary } from './surfaces/manager'
 
 /**
@@ -11,7 +17,6 @@ import type { SurfaceEvent, SurfaceSummary } from './surfaces/manager'
  * wiring props through the tree.
  */
 export type ShellEvent =
-  | { type: 'presence.set'; state: PresenceState; detail?: string }
   | { type: 'presence.activity'; value: number }
   | { type: 'nav.select'; section: string }
   /**
@@ -19,10 +24,31 @@ export type ShellEvent =
    * back as `command.acknowledged`, from Core, not from this dispatch.
    */
   | { type: 'command.submit'; text: string }
+  /**
+   * Core's own projection arrived. The mirror publishes this; nothing in the UI
+   * fabricates one, and the renderer cannot write one back.
+   */
+  | { type: 'core.status'; status: CoreStatus | null }
+  /**
+   * Durable events, already reduced to display rows by Core.
+   *
+   * These rows carry no payload field, so command text cannot reach the feed even
+   * by accident. They are a view of the journal, not a second journal.
+   */
+  | { type: 'core.activity'; activity: CoreActivityEvent[] }
   /** What Core replied. `ok` is Core's verdict, not an optimistic guess. */
   | { type: 'command.acknowledged'; ok: boolean; detail: string; durableSequence?: number }
   /** Fold the systems rail to icons. */
   | { type: 'nav.collapse'; collapsed: boolean }
+  /**
+   * A Development Lab presence override.
+   *
+   * The only event that may set presence without Core having caused it, and it
+   * carries its own marker so the store can refuse it outside development. That
+   * is the whole reason simulated presence cannot be mistaken for real presence:
+   * the attempt fails, loudly, in a shipped build.
+   */
+  | { type: 'presence.simulate'; state: PresenceState; detail?: string }
   /** Append to the chat bar's transcript. */
   | { type: 'chat.line'; role: 'you' | 'freya'; text: string; refused?: boolean }
   | { type: 'voice.toggle'; listening: boolean }
@@ -56,7 +82,18 @@ export interface ShellState {
    * The manager owns surfaces; the shell reads a summary of them, never a copy.
    */
   surfaces: SurfaceSummary
-  dashboard: Dashboard
+  /**
+   * Core's last status, verbatim.
+   *
+   * Kept as received rather than interpreted. Every derived fact the shell shows
+   * lives in `desktop`, produced by one pure function from this and the
+   * activity feed, so there is exactly one interpretation in the system.
+   */
+  core: CoreStatus | null
+  /** Core's activity feed, in the order Core sent it. */
+  activity: CoreActivityEvent[]
+  /** The projection the whole shell reads. Never written by hand. */
+  desktop: DesktopProjection
   runtime: { version: string; platform: string; userData: string; workspaceFile: string; dev: boolean }
   attention: { requested: number; lastNote: string | null }
   notices: Notice[]
@@ -88,8 +125,19 @@ export function initialState(): ShellState {
     lastCommand: null,
     chat: [],
     surfaces: { open: 0, minimized: 0, focused: null },
-    dashboard: demoDashboard(),
-    runtime: { version: '0.1.0', platform: 'browser', userData: '', workspaceFile: '', dev: true },
+    core: null,
+    activity: [],
+    desktop: projectDesktop({
+      core: null,
+      activity: [],
+      listening: false,
+      inFlightProviderCalls: 0,
+      now: Date.now(),
+    }),
+    // `dev` starts false and is only ever set true by the host, which knows how
+    // it was launched. Defaulting it the other way would mean a window whose
+    // hydration failed came up with the presence simulator enabled.
+    runtime: { version: '0.1.0', platform: 'browser', userData: '', workspaceFile: '', dev: false },
     attention: { requested: 0, lastNote: null },
     notices: [],
   }
@@ -133,10 +181,47 @@ function withPresence(
   }
 }
 
+/**
+ * Recompute everything derived, from `core` and `activity` only.
+ *
+ * One place, so the panels cannot drift apart, and cheap enough to run on every
+ * Core push: it is a pure function over two small inputs.
+ */
+function project(state: ShellState): ShellState {
+  const desktop = projectDesktop({
+    core: state.core,
+    activity: state.activity,
+    listening: state.listening,
+    inFlightProviderCalls: countInFlightProviderCalls(state.activity),
+    now: Date.now(),
+  })
+  const presence = withPresence(
+    { ...state, presence: desktop.presenceDetail ? state.presence : state.presence },
+    desktop.presence,
+    desktop.presenceDetail,
+  )
+  return { ...presence, desktop }
+}
+
 export function reduce(state: ShellState, event: ShellEvent): ShellState {
   switch (event.type) {
-    case 'presence.set':
-      return withPresence(state, event.state, event.detail ?? null)
+    case 'core.status':
+      return project(state.core === event.status ? state : { ...state, core: event.status })
+
+    case 'core.activity':
+      return project(state.activity === event.activity ? state : { ...state, activity: event.activity })
+
+    /**
+     * A Development Lab override.
+     *
+     * Refused outside development. The Design Lab is allowed to drive presence
+     * while someone is designing how it looks; it is not allowed to do so in a
+     * window where the state would be read as a statement about Core.
+     */
+    case 'presence.simulate':
+      return state.runtime.dev
+        ? withPresence(state, event.state, event.detail ?? null)
+        : state
 
     case 'presence.activity':
       return { ...state, presence: { ...state.presence, activity: clamp01(event.value) } }
@@ -201,11 +286,16 @@ export function reduce(state: ShellState, event: ShellEvent): ShellState {
     case 'work.updated':
       return { ...state, attention: { ...state.attention, lastNote: event.note } }
 
+    /**
+     * Restoring a workspace.
+     *
+     * Presence is *not* restored from the file, and that is the point. A saved
+     * `thinking` from last week's crash is not a fact about now: Core decides
+     * presence, and Core has already said so by the time this arrives. The
+     * layout comes back; the intelligence's state does not.
+     */
     case 'workspace.restored': {
-      return withPresence(
-        { ...state, nav: event.nav, navCollapsed: event.navCollapsed },
-        event.presence,
-      )
+      return project({ ...state, nav: event.nav, navCollapsed: event.navCollapsed })
     }
 
     // The manager owns surfaces and ships a summary; the store keeps it.

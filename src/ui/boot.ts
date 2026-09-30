@@ -2,6 +2,7 @@ import { SurfaceManager } from '../core/surfaces/manager'
 import { WORKSPACE_SCHEMA } from '../core/workspace'
 import { shellStore } from './store'
 import { createWorkspaceStore, collectFrom, readRuntimeInfo } from '../platform/workspaceStore'
+import { coreMirror, ensureActivityAttached, ensureCoreAttached } from '../platform/coreClient'
 
 const SAVE_DEBOUNCE = 400
 
@@ -72,6 +73,22 @@ async function boot(): Promise<{ manager: SurfaceManager; host: 'desktop' | 'bro
   manager.setFrame(workspaceFrame())
 
   shellStore.hydrateRuntime(await readRuntimeInfo())
+
+  // Attach to Core's projection and its activity feed before anything reads
+  // them, so the first render already has real facts.
+  //
+  // Attaching here rather than in a panel is what makes the whole shell agree:
+  // one subscription, created once, outliving any component. And it is what
+  // keeps the Phase 1 invariant intact — a renderer reload re-attaches to the
+  // Core that is already running rather than starting one.
+  const core = coreMirror()
+  core.subscribe((status) => {
+    shellStore.dispatch({ type: 'core.status', status })
+  })
+  core.subscribeActivity((activity) => {
+    shellStore.dispatch({ type: 'core.activity', activity })
+  })
+  await Promise.all([ensureCoreAttached(), ensureActivityAttached()])
 
   const snapshot = await store.load()
   if (snapshot) {

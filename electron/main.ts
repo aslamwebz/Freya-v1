@@ -128,8 +128,18 @@ function createWindow(): BrowserWindow {
   const detachCore = coreHost?.attach((status) => {
     if (!window.isDestroyed()) window.webContents.send('freya:core:status', status)
   })
+
+  // Activity is a separate push, and separate on purpose. Status is a
+  // projection that changes rarely; activity is a stream. Keeping them apart
+  // means a busy feed cannot force a status projection to be rebuilt and shipped
+  // on every event, and a window that only wants status never pays for the feed.
+  const detachActivity = coreHost?.onActivity((activity) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:activity', activity)
+  })
+
   window.on('closed', () => {
     detachCore?.()
+    detachActivity?.()
   })
 
   if (DEV_SERVER) {
@@ -191,6 +201,7 @@ function registerIpc(): void {
     requireCore().submit(envelope),
   )
   ipcMain.handle('freya:core:status', () => requireCore().status())
+  ipcMain.handle('freya:core:activity', () => requireCore().activity())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

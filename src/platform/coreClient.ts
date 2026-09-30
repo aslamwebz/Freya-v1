@@ -3,6 +3,7 @@ import type {
   CoreCommandResult,
   CoreStatus,
 } from '../../core/protocol/core-protocol'
+import type { CoreActivityEvent } from '../../core/protocol/activity'
 import { hostBridge } from './host'
 
 /**
@@ -27,6 +28,18 @@ export interface CoreMirror {
    * remount cannot end up with two live listeners.
    */
   attach(): Promise<() => void>
+  /** Idempotent, and independent of `attach()`. */
+  attachActivity(): Promise<() => void>
+
+  /**
+   * The activity feed, rebuilt by Core from the log and pushed on change.
+   *
+   * A mirror like `status`: the renderer holds what Core last sent and cannot
+   * write to it. There is no renderer-side journal and no renderer-side
+   * activity database — dropping this loses nothing, because Core still has it.
+   */
+  readonly activity: CoreActivityEvent[]
+  subscribeActivity(listener: (activity: CoreActivityEvent[]) => void): () => void
 }
 
 /** Shown when there is no Core. `null` facts, never optimistic ones. */
@@ -64,6 +77,7 @@ const ABSENT: CoreStatus = {
  */
 let shared: CoreMirror | null = null
 let attachPromise: Promise<CoreMirror> | null = null
+let activityAttachPromise: Promise<CoreMirror> | null = null
 
 export function coreMirror(): CoreMirror {
   shared ??= createCoreMirror()
@@ -74,6 +88,12 @@ export function coreMirror(): CoreMirror {
 export function ensureCoreAttached(): Promise<CoreMirror> {
   attachPromise ??= coreMirror().attach().then(() => coreMirror())
   return attachPromise
+}
+
+/** Attach to the activity feed once. Safe during an effect. */
+export function ensureActivityAttached(): Promise<CoreMirror> {
+  activityAttachPromise ??= coreMirror().attachActivity().then(() => coreMirror())
+  return activityAttachPromise
 }
 
 /**
@@ -88,21 +108,34 @@ export function ensureCoreAttached(): Promise<CoreMirror> {
 export function resetCoreMirror(): void {
   shared = null
   attachPromise = null
+  activityAttachPromise = null
 }
 
 export function createCoreMirror(): CoreMirror {
   const listeners = new Set<(status: CoreStatus | null) => void>()
+  const activityListeners = new Set<(activity: CoreActivityEvent[]) => void>()
   let current: CoreStatus | null = null
+  let currentActivity: CoreActivityEvent[] = []
   let disposeBridge: (() => void) | null = null
+  let disposeActivity: (() => void) | null = null
 
   const publish = (status: CoreStatus | null) => {
     current = status
     for (const listener of [...listeners]) listener(status)
   }
 
+  const publishActivity = (activity: CoreActivityEvent[]) => {
+    currentActivity = activity
+    for (const listener of [...activityListeners]) listener(activity)
+  }
+
   return {
     get status() {
       return current
+    },
+
+    get activity() {
+      return currentActivity
     },
 
     subscribe(listener) {
@@ -112,6 +145,14 @@ export function createCoreMirror(): CoreMirror {
       listener(current)
       return () => {
         listeners.delete(listener)
+      }
+    },
+
+    subscribeActivity(listener) {
+      activityListeners.add(listener)
+      listener(currentActivity)
+      return () => {
+        activityListeners.delete(listener)
       }
     },
 
@@ -147,6 +188,26 @@ export function createCoreMirror(): CoreMirror {
       const initial = await host.coreStatus()
       publish(initial)
       return disposer
+    },
+
+    /**
+     * Attach to the activity feed.
+     *
+     * Separate from `attach()` on purpose, and idempotent in its own right: the
+     * feed is a stream and the status is a projection, and a caller that only
+     * wants one should not be made to hold the other's subscription.
+     */
+    async attachActivity(): Promise<() => void> {
+      disposeActivity?.()
+      const host = hostBridge()
+      if (!host) {
+        publishActivity([])
+        return () => {}
+      }
+      disposeActivity = host.onCoreActivity((activity) => publishActivity(activity))
+      // Backstop for a push that raced the subscription, same as for status.
+      publishActivity(await host.coreActivity())
+      return disposeActivity
     },
   }
 }

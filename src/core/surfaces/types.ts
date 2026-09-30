@@ -63,9 +63,32 @@ export interface SurfaceTypeDescriptor {
   height: number
   minWidth: number
   minHeight: number
-  /** Whether this type is functional in Phase 0 or a declared placeholder. */
+  /** Whether this type is functional in Phase 2 or a declared placeholder. */
   status: 'working' | 'real' | 'placeholder'
+  /**
+   * How many windows of this type may be open at once.
+   *
+   * Declared here rather than special-cased in the manager, because "can this
+   * open twice?" is a property of the surface type and not of the code that
+   * happens to open it. A future type that wants one window per mission says
+   * `keyedBy: 'missionId'` and the manager does the rest; nothing in the manager
+   * needs editing, and there is no switch statement to remember to update.
+   *
+   * `singleton` means opening again focuses and restores the existing window.
+   * Duplicating a Security window would give the user two ways to stop Freya and
+   * no way to tell which is authoritative.
+   */
+  instance: SurfaceInstancePolicy
 }
+
+/**
+ * `'singleton'`, or the name of the context field that distinguishes instances.
+ *
+ * A `keyedBy` surface opened without that field in its context behaves as a
+ * singleton until one is supplied, which is the conservative reading: two
+ * unkeyed windows of a keyed type would be indistinguishable to the user.
+ */
+export type SurfaceInstancePolicy = 'singleton' | { keyedBy: string }
 
 export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   chat: {
@@ -77,6 +100,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 560,
     minWidth: 360,
     minHeight: 320,
+    instance: 'singleton',
     status: 'working',
   },
   search: {
@@ -87,6 +111,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 500,
     minWidth: 380,
     minHeight: 300,
+    instance: 'singleton',
     status: 'working',
   },
   work: {
@@ -97,6 +122,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 520,
     minWidth: 420,
     minHeight: 320,
+    instance: 'singleton',
     status: 'placeholder',
   },
   mission: {
@@ -107,6 +133,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 540,
     minWidth: 400,
     minHeight: 320,
+    instance: { keyedBy: 'missionId' },
     status: 'placeholder',
   },
   vault: {
@@ -117,6 +144,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 540,
     minWidth: 400,
     minHeight: 320,
+    instance: 'singleton',
     status: 'placeholder',
   },
   harness: {
@@ -127,6 +155,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 460,
     minWidth: 460,
     minHeight: 280,
+    instance: { keyedBy: 'sessionId' },
     status: 'working',
   },
   foundry: {
@@ -137,6 +166,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 520,
     minWidth: 420,
     minHeight: 320,
+    instance: 'singleton',
     status: 'placeholder',
   },
   relay: {
@@ -147,6 +177,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 480,
     minWidth: 380,
     minHeight: 300,
+    instance: 'singleton',
     status: 'placeholder',
   },
   team: {
@@ -157,6 +188,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 500,
     minWidth: 400,
     minHeight: 300,
+    instance: 'singleton',
     status: 'placeholder',
   },
   office: {
@@ -167,6 +199,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 580,
     minWidth: 480,
     minHeight: 360,
+    instance: 'singleton',
     status: 'placeholder',
   },
   security: {
@@ -178,6 +211,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 520,
     minWidth: 400,
     minHeight: 320,
+    instance: 'singleton',
     status: 'real',
   },
   settings: {
@@ -188,6 +222,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 480,
     minWidth: 380,
     minHeight: 300,
+    instance: 'singleton',
     status: 'placeholder',
   },
 }

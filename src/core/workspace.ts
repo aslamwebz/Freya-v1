@@ -2,11 +2,32 @@ import { SURFACE_TYPES, type SurfaceLayout, type SurfaceType } from './surfaces/
 import type { PersistedSurface } from './surfaces/manager'
 import { isPresenceState, type PresenceState } from './presence'
 
+/**
+ * What the workspace file is allowed to contain.
+ *
+ * Presentation only: which windows are open, where they are, whether the rail is
+ * folded. It is not Freya's memory and not her authority — there is no field here
+ * for a credential, a capability, a grant, a prompt or a model response, and the
+ * parse below will discard anything it does not recognise rather than keeping it
+ * because it arrived.
+ *
+ * Anything that decides *whether Freya may act* lives in the durable journal and
+ * nowhere else. A file a renderer can write must never be able to move that.
+ */
+
 export const WORKSPACE_SCHEMA = 1
 
 export interface WorkspaceSnapshot {
   schema: number
   surfaces: PersistedSurface[]
+  /**
+   * Written for schema compatibility and **not restored**.
+   *
+   * Left in place deliberately rather than dropped, because removing it would
+   * silently change the on-disk shape of a file people already have. It is
+   * ignored: presence is derived from Core's live status, and a saved `thinking`
+   * from a crashed session is not a fact about the current one.
+   */
   presence: PresenceState
   nav: string
   /** The systems rail folded to icons. */

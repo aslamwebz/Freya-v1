@@ -4,18 +4,59 @@ import { ChatSurface } from './ChatSurface'
 import { SearchSurface } from './SearchSurface'
 import { HarnessSurface } from './HarnessSurface'
 import { SecuritySurface } from './SecuritySurface'
+import type { SurfaceDefinition } from './types'
 
 /**
- * Surface registry: type → body.
+ * The surface registry.
  *
- * The windowing behaviour is in `SurfaceWindow`; only the body is chosen here.
- * A new surface type adds one entry here and one descriptor in `surfaceTypes`.
+ * One catalog: what a surface is called, whether it can be opened more than
+ * once, how big it wants to be, and which component draws its body.
+ *
+ * The point is that a new surface is one entry in `surfaceTypes` and one entry
+ * here, and nothing else in the shell needs to learn its name. The launcher, the
+ * dock, restoration and the Surface Manager all read the same metadata, so there
+ * is no second list somewhere that can fall out of step and leave a window the
+ * launcher cannot open or a placeholder with no component.
+ *
+ * Anything with no entry here is a declared placeholder rather than a broken
+ * surface, which is what lets a type exist in the vocabulary — `foundry`,
+ * `relay`, `office` — before the system behind it does.
  */
 const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   chat: () => <ChatSurface />,
   search: () => <SearchSurface />,
   harness: () => <HarnessSurface />,
   security: () => <SecuritySurface />,
+}
+
+/** The registry, resolved once from the two catalogs it is built from. */
+export const SURFACES: readonly SurfaceDefinition[] = Object.values(surfaceTypes).map((descriptor) => ({
+  ...descriptor,
+  render: BODIES[descriptor.type],
+}))
+
+export function surfaceDefinition(type: SurfaceType): SurfaceDefinition {
+  const found = SURFACES.find((definition) => definition.type === type)
+  // Unreachable through typed callers; guarded because a typo here would
+  // otherwise surface as an undefined component rather than as a clear error.
+  if (!found) throw new Error(`unknown surface type: ${type}`)
+  return found
+}
+
+/**
+ * What the launcher offers.
+ *
+ * Derived from the catalog and filtered by status, not hand-listed. The previous
+ * list was written out separately and had already drifted — it omitted Security,
+ * which is the one surface with a button in it that stops Freya.
+ *
+ * Placeholders are excluded on purpose: a launcher full of windows that open
+ * onto "not implemented yet" is advertising systems that do not exist. A
+ * declared placeholder stays reachable through its own panel, which is where an
+ * honest explanation of the boundary belongs.
+ */
+export function launcherSurfaces(): readonly SurfaceDefinition[] {
+  return SURFACES.filter((definition) => definition.status !== 'placeholder')
 }
 
 /**
@@ -37,6 +78,6 @@ export function PlaceholderSurface({ type }: { type: SurfaceType }) {
 }
 
 export function SurfaceBody({ type }: { type: SurfaceType }) {
-  const Body = BODIES[type]
-  return Body ? Body() : <PlaceholderSurface type={type} />
+  const definition = surfaceDefinition(type)
+  return definition.render ? definition.render() : <PlaceholderSurface type={type} />
 }

@@ -20,8 +20,11 @@ export function openSurface(type: SurfaceType, title?: string): Surface {
 
 /**
  * Dock behaviour: raise an open surface, or open it if it is not open yet.
- * A surface that is already focused is minimised instead, which is the
- * expected toggle and keeps the dock honest about what is on screen.
+ *
+ * Finding "is it open yet" no longer has to guess at ids, because the manager
+ * knows the instance policy for the type. A surface that is already focused is
+ * minimised instead, which is the expected toggle and keeps the dock honest
+ * about what is on screen.
  */
 export function toggleSurface(type: SurfaceType): void {
   const existing = manager.surfaces.find((s) => s.type === type)

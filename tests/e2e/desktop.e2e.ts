@@ -121,22 +121,18 @@ async function main(): Promise<void> {
       )
       check('presence readouts are live', true)
 
-      // The design lab is presentation only, and every option is wired.
-      await page.getByRole('button', { name: /design lab/i }).click()
-      await page.getByRole('button', { name: 'Galaxy', exact: true }).click()
-      await page.waitForTimeout(500)
-      check('design lab switches the centrepiece', (await page.locator('.hud-a b').textContent()) === 'STARS')
-
-      await page.getByRole('button', { name: 'Grid lab', exact: true }).click()
-      await page.waitForTimeout(250)
+      // The Design Lab and the presence chips can put Freya into any state
+      // without Core having done anything. This window was launched against the
+      // built renderer, so they must not be here at all — the assertion is that
+      // the controls are absent, not that they work.
       check(
-        'design lab switches the background',
-        (await page.locator('.atmosphere').getAttribute('data-bg')) === 'grid',
+        'the Development Lab is not present in a production window',
+        (await page.getByRole('button', { name: /design lab/i }).count()) === 0,
       )
-
-      await page.getByRole('button', { name: 'Deep space', exact: true }).click()
-      await page.getByRole('button', { name: 'Liquid orb', exact: true }).click()
-      await page.keyboard.press('Escape')
+      check(
+        'the simulated presence controls are not present in a production window',
+        (await page.getByRole('group', { name: /demo presence state/i }).count()) === 0,
+      )
     }
 
     // --- command bar and presence -----------------------------------------
@@ -144,12 +140,15 @@ async function main(): Promise<void> {
     // design, so the presence console is not reachable while they are up.
     // The command goes to Core, and the acknowledgement names an event the
     // Core log can be checked against.
+    // The Core row states the event sequence in words. Reading it from the
+    // rendered DOM rather than from an object is the point: this checks that the
+    // fact actually reaches a person.
     const readSeq = (p: Page) =>
       p.evaluate(() => {
-        const row = [...document.querySelectorAll('.core-facts > div')].find(
-          (r) => r.querySelector('dt')?.textContent === 'Event log',
+        const row = [...document.querySelectorAll('.runtime-row')].find(
+          (r) => r.querySelector('dt')?.textContent === 'Core',
         )
-        return Number(/seq (\d+)/.exec(row?.textContent ?? '')?.[1] ?? 0)
+        return Number(/event (\d+)/.exec(row?.textContent ?? '')?.[1] ?? 0)
       })
     const seqBefore = await readSeq(page)
     await page.getByLabel('Command Freya').fill('what should we build first')
@@ -185,10 +184,13 @@ async function main(): Promise<void> {
       (await page.locator('.presence').getAttribute('data-state')) !== 'working',
     )
 
-    await page.getByRole('group', { name: /demo presence state/i }).getByRole('button', { name: 'Working' }).click()
+    // Presence is derived from Core, so with Core ready and no provider work in
+    // flight the only honest state is idle — and nothing in the window can change
+    // that, because the controls that could are not rendered.
     check(
-      'demo presence control drives the state',
-      (await page.locator('.presence').getAttribute('data-state')) === 'working',
+      'a ready Core with no work in flight reads as idle',
+      (await page.locator('.presence').getAttribute('data-state')) === 'idle',
+      (await page.locator('.presence').getAttribute('data-state')) ?? '',
     )
 
     // --- the Core is real ------------------------------------------------
@@ -197,20 +199,21 @@ async function main(): Promise<void> {
     const coreReady = async (p: Page) => {
       await p.waitForFunction(
         () => {
-          const el = document.querySelector('.panel-meta-value[data-lifecycle]')
-          return el !== null && el.textContent === 'ready'
+          const rows = [...document.querySelectorAll('.runtime-row')]
+          const core = rows.find((r) => r.querySelector('dt')?.textContent === 'Core')
+          return core?.querySelector('dd b')?.textContent === 'Ready'
         },
         undefined,
         { timeout: 20_000 },
       )
     }
     await coreReady(page)
-    check('core reaches ready and says so', true)
+    check('core reaches ready and the window says Ready', true)
 
     const coreFacts = async (p: Page) =>
       p.evaluate(() =>
         Object.fromEntries(
-          [...document.querySelectorAll('.core-facts > div')].map((row) => [
+          [...document.querySelectorAll('.runtime-row')].map((row) => [
             row.querySelector('dt')?.textContent ?? '',
             row.querySelector('dd')?.textContent ?? '',
           ]),
@@ -219,30 +222,57 @@ async function main(): Promise<void> {
 
     const firstFacts = await coreFacts(page)
     check(
-      'core reports a real event log and an idle inference count',
-      Number(/seq (\d+)/.exec(firstFacts['Event log'] ?? '')?.[1] ?? 0) > 0 &&
-        firstFacts['Inference'] === '0 this session · 0 durable',
-      JSON.stringify(firstFacts),
+      'the system area reports a real event sequence',
+      Number(/event (\d+)/.exec(firstFacts['Core'] ?? '')?.[1] ?? 0) > 0,
+      firstFacts['Core'] ?? '',
     )
     check(
-      'core is deny-by-default with no approval workflow',
-      firstFacts['Guard']?.startsWith('deny by default') === true,
-      firstFacts['Guard'],
+      'security reads as running before anything has stopped it',
+      firstFacts['Security']?.startsWith('Running') === true,
+      firstFacts['Security'] ?? '',
     )
     check(
-      'nanogpt is present but not live',
-      (firstFacts['Providers'] ?? '').includes('nanogpt: unconfigured'),
-      firstFacts['Providers'],
+      'the journal reads as healthy with no integrity fault',
+      firstFacts['Journal']?.startsWith('Healthy') === true,
+      firstFacts['Journal'] ?? '',
+    )
+    check(
+      'the governor is reported with its real grant count',
+      firstFacts['Governor']?.startsWith('Allowing explicit user turns') === true,
+      firstFacts['Governor'] ?? '',
+    )
+    check(
+      'a registered provider with no key is reported as unable to be called',
+      firstFacts['Models']?.startsWith('No API key') === true,
+      firstFacts['Models'] ?? '',
+    )
+
+    // Idle means idle, and the panel is quoting Core's counter rather than a
+    // hard-coded zero.
+    const usage = async (p: Page) =>
+      p.evaluate(() =>
+        [...document.querySelectorAll('.usage-row')].map((r) => r.textContent ?? '').join(' | '),
+      )
+    const firstUsage = await usage(page)
+    check(
+      'an idle window has spent no model calls',
+      /0 calls/.test(firstUsage),
+      firstUsage,
+    )
+    check(
+      'usage with nothing reported says so rather than showing zero tokens',
+      /no tokens reported/.test(firstUsage),
+      firstUsage,
     )
 
     // An idle window must cost nothing. Nothing here touched a provider, and
     // the panel is reporting Core's own counter rather than a hard-coded zero.
     await page.waitForTimeout(1200)
-    const idleFacts = await coreFacts(page)
+    const idleUsage = await usage(page)
     check(
       'an idle window spends no inference',
-      idleFacts['Inference'] === firstFacts['Inference'],
-      `${firstFacts['Inference']} -> ${idleFacts['Inference']}`,
+      idleUsage === firstUsage,
+      `${firstUsage} -> ${idleUsage}`,
     )
 
     // A renderer reload must reconnect to the Core that is already running, not
@@ -251,8 +281,8 @@ async function main(): Promise<void> {
     await page.reload()
     await coreReady(page)
     const afterReload = await coreFacts(page)
-    const seqPreReload = Number(/seq (\d+)/.exec(beforeReload['Event log'] ?? '')?.[1] ?? 0)
-    const seqPostReload = Number(/seq (\d+)/.exec(afterReload['Event log'] ?? '')?.[1] ?? 0)
+    const seqPreReload = Number(/event (\d+)/.exec(beforeReload['Core'] ?? '')?.[1] ?? 0)
+    const seqPostReload = Number(/event (\d+)/.exec(afterReload['Core'] ?? '')?.[1] ?? 0)
     check(
       'a renderer reload reconnects to the same Core, it does not restart it',
       seqPostReload >= seqPreReload && seqPostReload > 0,
@@ -261,8 +291,8 @@ async function main(): Promise<void> {
     // And the reload itself cost nothing.
     check(
       'a renderer reload spends no inference',
-      afterReload['Inference'] === beforeReload['Inference'],
-      `${beforeReload['Inference']} -> ${afterReload['Inference']}`,
+      (await usage(page)) === firstUsage,
+      `${firstUsage} -> ${await usage(page)}`,
     )
 
     // --- stop all, deliberately ------------------------------------------
@@ -270,7 +300,13 @@ async function main(): Promise<void> {
     // proves the accidental-click case: one press must stop nothing.
     // Reached from the Core panel, not from the dock: security controls should
     // not be one stray click away from every other surface.
-    await page.getByRole('button', { name: /open security/i }).click()
+    // Reached from the surface launcher rather than a Core-panel link: a healthy
+    // Core has nothing needing attention, so the panel correctly offers no
+    // shortcut — and STOP ALL should not be one stray click away anyway.
+    await page
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Security' })
+      .click()
     await page.waitForSelector('[role="dialog"][aria-label="Security"]')
     check(
       'the security surface shows Core deny-by-default, not a placeholder',
@@ -427,9 +463,17 @@ async function main(): Promise<void> {
       Math.abs(restoredHarness.x - expectedHarness.x) < 2 &&
         Math.abs(restoredHarness.y - expectedHarness.y) < 2,
     )
+    // Layout is restored; presence is not, and cannot be. It is derived from
+    // Core, so a fresh window shows whatever Core's durable state actually is.
+    //
+    // This app was stopped before it quit, so the honest answer is `locked` — and
+    // reading it straight from Core's latch across a process restart is a
+    // stronger claim than any value restored from a file could be.
+    await coreReady(restored)
     check(
-      'restores the presence state',
-      (await restored.locator('.presence').getAttribute('data-state')) === 'working',
+      'a relaunched window derives presence from the durable stop latch, not from a file',
+      (await restored.locator('.presence').getAttribute('data-state')) === 'locked',
+      (await restored.locator('.presence').getAttribute('data-state')) ?? '',
     )
 
     // --- the stop latch survived the process -----------------------------
@@ -437,12 +481,15 @@ async function main(): Promise<void> {
     const restoredFacts = await coreFacts(restored)
     check(
       'the stop latch is still set after a relaunch',
-      restoredFacts['Grants']?.includes('stopped') === true,
-      restoredFacts['Grants'],
+      restoredFacts['Security']?.startsWith('Stopped') === true,
+      restoredFacts['Security'] ?? '',
     )
     // The surface was closed before the quit, so reopening it is the point: a
     // fresh renderer must find Core already stopped, with no latch to set.
-    await restored.getByRole('button', { name: /open security/i }).click()
+    await restored
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Security' })
+      .click()
     await restored.waitForSelector('[role="dialog"][aria-label="Security"]')
     check(
       'a fresh window finds Core already stopped',
@@ -450,8 +497,8 @@ async function main(): Promise<void> {
     )
     check(
       'the durable call count did not change while the app was closed',
-      restoredFacts['Inference'] === idleFacts['Inference'],
-      `${idleFacts['Inference']} -> ${restoredFacts['Inference']}`,
+      (await usage(restored)) === firstUsage,
+      `${firstUsage} -> ${await usage(restored)}`,
     )
     check(
       'resuming clears the latch',
@@ -459,9 +506,9 @@ async function main(): Promise<void> {
         await restored.getByRole('button', { name: /resume core/i }).click()
         await restored.waitForFunction(
           () => {
-            const rows = [...document.querySelectorAll('.core-facts > div')]
-            const grants = rows.find((r) => r.querySelector('dt')?.textContent === 'Grants')
-            return grants !== undefined && !grants.textContent?.includes('stopped')
+            const rows = [...document.querySelectorAll('.runtime-row')]
+            const security = rows.find((r) => r.querySelector('dt')?.textContent === 'Security')
+            return security?.querySelector('dd b')?.textContent === 'Running'
           },
           undefined,
           { timeout: 10_000 },
@@ -535,6 +582,127 @@ async function main(): Promise<void> {
     )
 
     await third.close()
+
+    // =================================================================
+    // Phase 2: the command centre as a truthful projection
+    // =================================================================
+    {
+      const { app: fourth, page: p4 } = await launch(userData)
+
+      // --- the activity feed is Core's, and carries no command text -----
+      const activityRows = async () =>
+        p4.evaluate(() =>
+          [...document.querySelectorAll('.activity-row')].map((r) => r.querySelector('.activity-text')?.textContent ?? ''),
+        )
+
+      check(
+        'the activity feed is populated from durable Core events',
+        (await activityRows()).some((line) => /core started/i.test(line)),
+        JSON.stringify((await activityRows()).slice(0, 4)),
+      )
+      // The visible feed is the tail of a long journal, so this window submits
+      // its own command rather than hunting for an earlier one. That also
+      // exercises the live subscription in a window that was not present for the
+      // event, which is the case a naive renderer would get wrong.
+      const SECRET = 'phase2 activity feed must not leak this sentence'
+      await p4.getByLabel('Command Freya').fill(SECRET)
+      await p4.getByRole('search').locator('input').press('Enter')
+      await p4.waitForFunction(
+        () =>
+          [...document.querySelectorAll('.activity-row')].some((r) =>
+            /command received/i.test(r.textContent ?? ''),
+          ),
+        undefined,
+        { timeout: 15_000 },
+      )
+      check(
+        'the activity feed reports a command as a length, without quoting it',
+        (await activityRows()).some((line) => /command received \(\d+ characters\)/i.test(line)),
+        JSON.stringify((await activityRows()).slice(0, 3)),
+      )
+      // Scoped to the feed, deliberately. The person who typed it can see it in
+      // their own chat transcript — that is their text, in their window — but it
+      // must not have reached the audit activity, which is a projection of the
+      // durable journal. The journal itself holding no such text is asserted in
+      // tests/core/activity.test.ts, where the file can be read directly.
+      check(
+        'no command text reached the activity feed',
+        !(await activityRows()).join(' ').includes('phase2 activity feed'),
+      )
+
+      // And the durable security transitions, seen live by this window.
+      await p4
+        .getByRole('toolbar', { name: /work surfaces/i })
+        .getByRole('button', { name: 'Security' })
+        .click()
+      await p4.waitForSelector('[role="dialog"][aria-label="Security"]')
+      await p4.getByRole('button', { name: /stop all/i }).click()
+      await p4.waitForSelector('[role="alertdialog"][aria-label="Confirm stop all"]')
+      await p4.getByRole('button', { name: /yes, stop everything/i }).click()
+      await p4.waitForTimeout(500)
+      await p4.getByRole('button', { name: /resume core/i }).click()
+      await p4.waitForTimeout(700)
+      await p4.getByRole('button', { name: 'Close Security' }).click()
+      check(
+        'the activity feed reports the durable stop and resume',
+        (await activityRows()).some((line) => /stop all activated/i.test(line)) &&
+          (await activityRows()).some((line) => /stop all cleared/i.test(line)),
+        JSON.stringify((await activityRows()).slice(0, 6)),
+      )
+
+      // --- empty states are stated, not filled ----------------------------
+      check(
+        'the work panel says there is no active work',
+        await p4.getByText('No active work').isVisible(),
+      )
+      check(
+        'the attention panel says nothing needs a person',
+        await p4.getByText('Nothing needs you').isVisible(),
+      )
+      check(
+        'no invented missions, agents or telemetry are on screen',
+        !(await p4.content()).match(/Agent Alpha|Mission \d+ running|Archivist|Liaison/),
+      )
+
+      // --- singleton surfaces do not duplicate ---------------------------
+      const launcher = p4.getByRole('toolbar', { name: /work surfaces/i })
+      await launcher.getByRole('button', { name: 'Security' }).click()
+      await p4.waitForSelector('[role="dialog"][aria-label="Security"]')
+      await launcher.getByRole('button', { name: 'Security' }).click()
+      await p4.waitForTimeout(200)
+      // The second press focuses the focused surface, which minimises it; either
+      // way it must not have produced two Security windows.
+      check(
+        'pressing the launcher twice does not open two Security windows',
+        (await p4.locator('.surface-layer [role="dialog"][aria-label="Security"]').count()) <= 1,
+      )
+      await launcher.getByRole('button', { name: 'Security' }).click()
+      await p4.waitForTimeout(200)
+      check(
+        'the launcher brings a minimised singleton back',
+        (await p4.locator('.surface-layer [role="dialog"][aria-label="Security"]').count()) === 1,
+      )
+      await p4.getByRole('button', { name: 'Close Security' }).click()
+
+      // --- idle costs nothing, and says so --------------------------------
+      await p4.waitForTimeout(1500)
+      const usageText = await p4.evaluate(() =>
+        [...document.querySelectorAll('.usage-row')].map((r) => r.textContent ?? '').join(' | '),
+      )
+      check(
+        'an idle window has spent nothing after all of that',
+        usageText.includes('0 calls'),
+        usageText,
+      )
+      check(
+        'usage is presented as a lower bound only when something is unaccounted for',
+        !/unaccounted/i.test(usageText),
+        usageText,
+      )
+
+      await fourth.close()
+    }
+
     first = null
   } catch (error) {
     check('e2e run completed', false, error instanceof Error ? error.message : String(error))

@@ -12,6 +12,8 @@ import { emptyUsage } from './model/usage'
 import type { ModelProvider } from './model/provider'
 import { FakeModelProvider } from './model/fake-provider'
 import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
+import { describeActivity, mergeActivity } from './protocol/activity'
+import type { CoreActivityEvent } from './protocol/activity'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
 import type { CognitionGrantSpec } from './cognition/grants'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
@@ -89,6 +91,17 @@ export interface Core {
   handleCommand(envelope: CoreCommandEnvelope): Promise<CoreCommandResult>
   /** Subscribe to projection changes. Returns a disposer. */
   subscribe(listener: (status: CoreStatus) => void): () => void
+  /**
+   * Subscribe to durable events, as display-ready activity.
+   *
+   * The renderer never sees `EventFabric`. It sees this, which is a fixed shape
+   * with no payload field, so a future event carrying text cannot leak through
+   * by accident. A subscriber receives the current feed immediately, which is
+   * what makes a renderer that attaches late agree with one that never left.
+   */
+  onActivity(listener: (activity: CoreActivityEvent[]) => void): () => void
+  /** The current activity feed, newest last, capped. */
+  activity(): CoreActivityEvent[]
   readonly lifecycle: CoreLifecycle
 }
 
@@ -123,6 +136,9 @@ class FreyaCore implements Core {
     damagedBytes: number
   } | null = null
   private readonly listeners = new Set<(status: CoreStatus) => void>()
+  private readonly activityListeners = new Set<(activity: CoreActivityEvent[]) => void>()
+  /** Display-ready activity, rebuilt from the log on every start. */
+  private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
   private disposeState: () => void = () => {}
   private stopped = false
@@ -180,7 +196,29 @@ class FreyaCore implements Core {
     this.integrity = describeRecovery(store)
 
     this.fabric = await EventFabric.open({ store, now: this.options.now, newId: this.options.newId })
-    this.state = await this.fabric.replay(initialCoreState(), reduceCoreState)
+
+    // Replayed once, deriving both state and activity from the same events in
+    // the same order.
+    //
+    // Rebuilding the feed from the log rather than starting empty is what makes
+    // a Core that has been running for a week still able to say what it did, and
+    // it is why a renderer attaching late agrees with one that never left: there
+    // is one function mapping an event to a row, whether it came off disk or off
+    // the fabric.
+    // Assigned, not appended to: `mergeActivity` is immutable, so discarding
+    // its result would silently leave the replayed feed empty.
+    let replayed: CoreActivityEvent[] = []
+    this.state = await this.fabric.replay(initialCoreState(), (draft, event) => {
+      const described = describeActivity({
+        type: event.type,
+        sequence: event.sequence,
+        at: Date.parse(event.occurredAt),
+        payload: event.payload as unknown as Record<string, unknown>,
+      })
+      if (described !== null) replayed = mergeActivity(replayed, [described])
+      return reduceCoreState(draft, event)
+    })
+    this.activityFeed = replayed
 
     // Corruption found by *this* start, against corruption already recorded in
     // the journal. The second is what makes the fault survive: after recovery
@@ -238,6 +276,7 @@ class FreyaCore implements Core {
     // State follows the log, for both replay and live appends.
     this.disposeState = this.fabric.subscribe((event) => {
       this.state = reduceCoreState(this.state, event)
+      this.recordActivity(event)
       this.notify()
     })
 
@@ -330,6 +369,48 @@ class FreyaCore implements Core {
       startedAt: this.startedAt,
       integrity: this.integrity,
     })
+  }
+
+  activity(): CoreActivityEvent[] {
+    return [...this.activityFeed]
+  }
+
+  onActivity(listener: (activity: CoreActivityEvent[]) => void): () => void {
+    this.activityListeners.add(listener)
+    try {
+      listener([...this.activityFeed])
+    } catch (error) {
+      console.error('[freya.core] activity subscriber threw', error)
+    }
+    return () => {
+      this.activityListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Fold a durable event into the activity feed.
+   *
+   * Runs on the same subscription that reduces state, so the feed and the
+   * projection are derived from the same event at the same moment and cannot
+   * disagree about what happened.
+   */
+  private recordActivity(event: AnyCoreEvent): void {
+    const described = describeActivity({
+      type: event.type,
+      sequence: event.sequence,
+      at: Date.parse(event.occurredAt),
+      payload: event.payload as unknown as Record<string, unknown>,
+    })
+    if (described === null) return
+    this.activityFeed = mergeActivity(this.activityFeed, [described])
+    for (const listener of [...this.activityListeners]) {
+      try {
+        listener([...this.activityFeed])
+      } catch (error) {
+        console.error('[freya.core] activity listener threw', error)
+        this.activityListeners.delete(listener)
+      }
+    }
   }
 
   subscribe(listener: (status: CoreStatus) => void): () => void {

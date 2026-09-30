@@ -29,7 +29,10 @@ export function PresenceStates({ state }: { state: PresenceState }) {
             type="button"
             className="presence-chip"
             aria-pressed={candidate === state}
-            onClick={() => shellStore.dispatch({ type: 'presence.set', state: candidate })}
+            // `presence.simulate`, not `presence.set`. There is no ungated
+            // setter any more: this is the only way to move presence without
+            // Core, and the store refuses it outside development.
+            onClick={() => shellStore.dispatch({ type: 'presence.simulate', state: candidate })}
           >
             {PRESENCE_TONE[candidate].label}
           </button>

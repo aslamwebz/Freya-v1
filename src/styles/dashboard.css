@@ -472,3 +472,299 @@
   font-size: 11px;
   line-height: 1.3;
 }
+
+/* ============================================================ Phase 2 */
+
+/*
+ * The system area.
+ *
+ * Six rows, each a label, a value and a sentence. The tone is carried by a small
+ * coloured rule rather than by tinting the whole panel, because a dashboard that
+ * glows red everywhere is a dashboard where red stops meaning anything.
+ */
+.core-facts.runtime {
+  gap: 0;
+}
+
+.runtime-row {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 12px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.runtime-row:last-child {
+  border-bottom: 0;
+}
+
+.runtime-row dt {
+  color: var(--ink-3);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  font-size: 10px;
+  padding-top: 1px;
+}
+
+.runtime-row dd {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+
+.runtime-row dd b {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.runtime-row dd span {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ink-3);
+}
+
+/* Tone is a 2px rule on the left edge, so the eye can scan for problems without
+   the panel shouting about the things that are fine. */
+.runtime-row {
+  border-left: 2px solid transparent;
+  padding-left: 10px;
+  margin-left: -12px;
+}
+
+.runtime-row[data-tone='ok'] {
+  border-left-color: rgba(63, 208, 122, 0.5);
+}
+
+.runtime-row[data-tone='info'] {
+  border-left-color: rgba(63, 150, 255, 0.4);
+}
+
+.runtime-row[data-tone='warn'] {
+  border-left-color: rgba(242, 180, 65, 0.6);
+}
+
+.runtime-row[data-tone='bad'] {
+  border-left-color: var(--red);
+}
+
+.runtime-row[data-tone='bad'] dd b {
+  color: var(--red);
+}
+
+.panel-meta-value[data-attention='urgent'],
+.panel-meta-value[data-attention='high'] {
+  color: var(--amber);
+}
+
+/* --------------------------------------------------------- providers */
+
+.provider-line {
+  margin: 8px 0 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  align-items: baseline;
+  font-size: 11.5px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.provider-line b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.provider-line span {
+  color: var(--ink-2);
+}
+
+.provider-line em {
+  grid-column: 1 / -1;
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--ink-3);
+  line-height: 1.35;
+}
+
+.provider-line[data-tone='warn'] b {
+  color: var(--amber);
+}
+
+.provider-line[data-tone='bad'] b {
+  color: var(--red);
+}
+
+/* -------------------------------------------------------------- usage */
+
+/*
+ * Usage honesty.
+ *
+ * A row is dimmed and marked as a floor whenever anything is unaccounted for.
+ * The caveat is always rendered, never available on hover, because the moment
+ * that matters is the moment someone reads a number and believes it.
+ */
+.usage-rows {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.usage-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  font-size: 11.5px;
+}
+
+.usage-row > span {
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  align-self: center;
+}
+
+.usage-row b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.usage-row em {
+  grid-column: 1 / -1;
+  font-style: normal;
+  color: var(--ink-2);
+}
+
+.usage-caveat {
+  grid-column: 1 / -1;
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--amber);
+}
+
+.usage-row[data-exact='false'] b {
+  color: var(--ink-2);
+}
+
+/* ------------------------------------------------------- empty states */
+
+/*
+ * The honest empty state.
+ *
+ * A real sentence and a real reason, not a dash or a spinner. This panel saying
+ * "No active work" is the correct state of a system that has no work subsystem,
+ * and it is more informative than three fabricated milestones would be.
+ */
+.empty-state {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.empty-state b {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.empty-state span {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+/* ----------------------------------------------------------- attention */
+
+.attention-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-start;
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.02);
+  border-left: 2px solid var(--amber);
+}
+
+.attention-row[data-severity='critical'] {
+  border-left-color: var(--red);
+}
+
+.attention-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+
+.attention-row-head b {
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.attention-row p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+/* ------------------------------------------------------------ activity */
+
+.activity-rows {
+  display: grid;
+  gap: 0;
+}
+
+.activity-row {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 11.5px;
+  padding: 5px 0;
+}
+
+.activity-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  transform: translateY(-1px);
+}
+
+.activity-row[data-tone='good'] .activity-dot {
+  background: var(--green);
+}
+
+.activity-row[data-tone='bad'] .activity-dot {
+  background: var(--red);
+}
+
+.activity-row[data-tone='busy'] .activity-dot {
+  background: var(--blue);
+}
+
+.activity-row[data-tone='warn'] .activity-dot {
+  background: var(--amber);
+}
+
+.activity-text {
+  color: var(--ink-2);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.activity-ago {
+  color: var(--ink-3);
+  font-size: 10.5px;
+  white-space: nowrap;
+}

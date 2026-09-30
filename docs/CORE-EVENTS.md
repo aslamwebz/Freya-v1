@@ -315,6 +315,9 @@ Metadata only, as described above. Two details worth naming:
   Brain's honesty and it is exactly what an audit reader needs to see: the
   difference between "Freya learned this" and "Freya learned two contradictory
   things". Neither relation replaces the other.
+- **User-authored archive reasons and relation predicates stay inside the encrypted
+  Brain.** The audit event carries only a fixed operation marker plus ids/counts;
+  semantic text is not duplicated into the plaintext journal.
 
 Every Brain payload is validated by the same `PAYLOAD_RULES` table as everything
 else, reading named fields rather than passing the object through — so a

@@ -10,6 +10,7 @@ import {
   FailingModelProvider,
 } from '../../core/model/fake-provider'
 import { MemoryConversationStore } from '../../core/conversation/memory-store'
+import { MemoryBrainStore } from '../../core/brain/memory-store'
 import { ownerAuthority } from '../../core/testing'
 import { EncryptedConversationStore } from '../../core/conversation/encrypted-store'
 import { testConversationKey } from './testKey'
@@ -732,6 +733,64 @@ describe('J — the identity cannot be changed by a model', () => {
     const rendered = renderIdentity(FREYA_IDENTITY, [])
     expect(rendered).not.toMatch(/you may (stop|grant|override)/i)
     expect(rendered).toMatch(/respect the owner's authority/i)
+  })
+})
+
+describe('Phase 4 experience isolation', () => {
+  it('keeps recalled-context metadata attached to the correct concurrent turn', async () => {
+    class TwoTurnBarrierProvider extends FakeModelProvider {
+      contacts = 0
+      private releaseGate!: () => void
+      private readonly gate = new Promise<void>((resolve) => {
+        this.releaseGate = resolve
+      })
+
+      override async complete(
+        request: Parameters<FakeModelProvider['complete']>[0],
+        options: Parameters<FakeModelProvider['complete']>[1],
+      ) {
+        this.contacts += 1
+        if (this.contacts === 2) this.releaseGate()
+        await this.gate
+        return super.complete(request, options)
+      }
+    }
+
+    const provider = new TwoTurnBarrierProvider()
+    const brainStore = new MemoryBrainStore()
+    const c = await started({ providers: [provider], brainStore })
+
+    const memory = await c.handleCommand({
+      command: 'brain.memory.write',
+      requestId: 'remember-1',
+      payload: {
+        kind: 'semantic',
+        subject: 'reference marker',
+        content: 'remembered-keyword belongs to the first conversation only',
+        confidence: 'high',
+        sensitivity: 'normal',
+      },
+    })
+    expect(memory.ok).toBe(true)
+
+    const firstConversation = await newConversation(c)
+    const secondConversation = await newConversation(c)
+
+    // Different conversations are allowed to overlap. The provider barrier makes
+    // both turns reach the provider before either can finish, which is the race
+    // that singleton experience bookkeeping used to corrupt.
+    const first = submit(c, firstConversation, 'please use remembered-keyword', 'parallel-a')
+    const second = submit(c, secondConversation, 'tell me about an unrelated zebra', 'parallel-b')
+    const outcomes = await Promise.all([first, second])
+    expect(outcomes.every((outcome) => outcome.outcome === 'completed')).toBe(true)
+    expect(provider.contacts).toBe(2)
+
+    const experiences = [...brainStore.state().experiences.values()]
+    const firstExperience = experiences.find((item) => item.conversationId === firstConversation)
+    const secondExperience = experiences.find((item) => item.conversationId === secondConversation)
+
+    expect(firstExperience?.observations).toContain('used 1 recalled item(s) as reference')
+    expect(secondExperience?.observations).toContain('no reference memory was used')
   })
 })
 

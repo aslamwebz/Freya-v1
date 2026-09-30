@@ -327,15 +327,17 @@ export class ConversationService {
   private activeTurnView(): ActiveTurnView | null {
     const conversationId = this.activeConversationId
     if (conversationId === null) return null
-    const turnId = this.mind.activeTurnId(conversationId)
-    if (turnId === null) return null
+    const active = this.mind.activeTurn(conversationId)
+    if (active === null) return null
     return {
-      turnId,
+      turnId: active.turnId,
       conversationId,
-      startedAt: this.now().toISOString(),
-      // Live registry read, so "generating" means a provider is executing rather
-      // than meaning a turn record exists.
-      providerExecuting: this.gateway.activeCallCount() > 0,
+      // Stable for the lifetime of the turn. Rebuilding a projection must not
+      // make it look as though the same response started again just now.
+      startedAt: active.startedAt,
+      // Request-scoped live truth: another conversation using a provider cannot
+      // make this one appear to be generating.
+      providerExecuting: this.gateway.isProviderRequestInFlight(active.turnId),
     }
   }
 

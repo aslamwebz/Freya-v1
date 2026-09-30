@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'
 import { join } from 'node:path'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
 import { ElectronCoreHost } from './coreHost'
@@ -101,10 +101,67 @@ function shutdownCoreAndThen(finish: () => void): void {
  * Window
  * ------------------------------------------------------------------ */
 
+/**
+ * Which screen the person asked for, or null to let the platform choose.
+ *
+ * `--display=N`, or `FREYA_DISPLAY=N`, where **N counts secondary displays from
+ * 1**. So `--display=1` is the first non-primary monitor, and `--display=0` means
+ * "no preference" rather than "the primary one, expressed as a zero index" —
+ * which is the reading that makes `--display=1` do the obvious thing.
+ *
+ * Counting from the *secondary* list rather than from `getAllDisplays()` is the
+ * part that matters. Electron does not promise an ordering, so index 0 is not
+ * reliably the primary; on this machine it is not. Without the sort, the same
+ * flag could open on either screen depending on enumeration order.
+ *
+ * Deliberately opt-in and never persisted. Which screen someone wants Freya on is
+ * a property of the machine and the moment — the same person develops with a
+ * second monitor and presents with one — so putting it in the workspace file
+ * would make the window open somewhere surprising on a later launch.
+ */
+function requestedSecondaryCount(): number | null {
+  const flag = process.argv.find((arg) => arg.startsWith('--display='))
+  const raw = flag?.slice('--display='.length) ?? process.env.FREYA_DISPLAY
+  if (raw === undefined || raw === '') return null
+  const parsed = Number(raw)
+  if (!Number.isInteger(parsed) || parsed < 1) return null
+  return parsed - 1
+}
+
+/**
+ * Bounds for the requested display, or null to let the platform choose.
+ *
+ * `workArea` rather than `bounds`, so a window aimed at a secondary monitor does
+ * not start underneath its taskbar.
+ */
+function boundsForRequestedDisplay(): Electron.Rectangle | null {
+  const wanted = requestedSecondaryCount()
+  if (wanted === null) return null
+
+  const secondary = screen
+    .getAllDisplays()
+    .filter((display) => display.id !== screen.getPrimaryDisplay().id)
+    .sort((a, b) => a.bounds.x - b.bounds.x)
+
+  const display = secondary[wanted]
+  // Out of range — a single-monitor machine, or `--display=3` on a two-screen
+  // desk — must not fail the launch. It falls back to the platform's choice.
+  if (!display) return null
+
+  const area = display.workArea
+  const width = Math.min(1680, area.width)
+  const height = Math.min(1020, area.height)
+  return {
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + (area.height - height) / 2),
+    width,
+    height,
+  }
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
-    width: 1680,
-    height: 1020,
+    ...(boundsForRequestedDisplay() ?? { width: 1680, height: 1020 }),
     minWidth: 1024,
     minHeight: 680,
     show: false,

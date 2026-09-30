@@ -34,9 +34,10 @@ export default tseslint.config(
     },
   },
   {
-    // The e2e runner and the live model probe are CLIs: reporting their own
-    // progress is their output, not a stray log.
-    files: ['electron/**/*.ts', 'tests/**/*.ts', 'scripts/**/*.ts', '*.mjs'],
+    // The e2e runner, the live model probe and the launch scripts are CLIs:
+    // reporting their own progress is their output, not a stray log. The glob
+    // reaches into `scripts/` as well as the root — `*.mjs` alone does not.
+    files: ['electron/**/*.ts', 'tests/**/*.ts', 'scripts/**/*.{ts,mjs}', '*.mjs'],
     languageOptions: {
       globals: { ...globals.node },
     },

@@ -57,6 +57,23 @@ export async function loadConversationKey(dataPath: string): Promise<Conversatio
     }
   }
 
+  // Electron can report encryption as available on Linux while falling back to
+  // `basic_text`, whose wrapping key is derived from a hard-coded plaintext
+  // password rather than an OS secret store. That is not a security boundary
+  // Freya is willing to describe as encrypted persistence.
+  if (
+    process.platform === 'linux' &&
+    typeof safeStorage.getSelectedStorageBackend === 'function' &&
+    safeStorage.getSelectedStorageBackend() === 'basic_text'
+  ) {
+    return {
+      key: null,
+      reason:
+        'Electron selected the insecure basic_text storage backend, so Freya will ' +
+        'keep conversation history in memory only rather than persist its key',
+    }
+  }
+
   const path = `${dataPath}.key`
   try {
     if (existsSync(path)) {

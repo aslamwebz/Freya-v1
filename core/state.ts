@@ -85,8 +85,10 @@ export function initialCoreState(): CoreState {
   }
 }
 
-function without(ids: readonly string[], id: string): string[] {
-  return ids.filter((candidate) => candidate !== id)
+function withoutOne(ids: readonly string[], id: string): string[] {
+  const index = ids.indexOf(id)
+  if (index < 0) return ids as string[]
+  return [...ids.slice(0, index), ...ids.slice(index + 1)]
 }
 
 /** True when the journal itself records that it was found corrupt. */
@@ -202,9 +204,10 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
         ...state,
         durableUsage: accumulateAttempt(state.durableUsage),
         // Reached. Whatever happens next, this call has to be accounted for.
-        pendingRequests: state.pendingRequests.includes(event.payload.requestId)
-          ? state.pendingRequests
-          : [...state.pendingRequests, event.payload.requestId],
+        // A request id is correlation metadata, not a uniqueness constraint.
+        // Preserve multiplicity so two concurrent attempts carrying the same id
+        // cannot cause one terminal event to settle both.
+        pendingRequests: [...state.pendingRequests, event.payload.requestId],
       }
 
     // Reported usage is added to the running total. A call that reported nothing
@@ -217,7 +220,7 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
           inputTokens: event.payload.inputTokens,
           outputTokens: event.payload.outputTokens,
         }),
-        pendingRequests: without(state.pendingRequests, event.payload.requestId),
+        pendingRequests: withoutOne(state.pendingRequests, event.payload.requestId),
       }
 
     case 'model.request.failed':
@@ -240,7 +243,7 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
           inputTokens: null,
           outputTokens: null,
         }),
-        pendingRequests: without(state.pendingRequests, event.payload.requestId),
+        pendingRequests: withoutOne(state.pendingRequests, event.payload.requestId),
       }
 
     // Cancellation, which is not failure and has opposite accounting from it.
@@ -253,7 +256,7 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
     // which of the two happened.
     case 'model.request.cancelled': {
       const hadStarted = state.pendingRequests.includes(event.payload.requestId)
-      const pendingRequests = without(state.pendingRequests, event.payload.requestId)
+      const pendingRequests = withoutOne(state.pendingRequests, event.payload.requestId)
 
       if (!event.payload.providerContacted) {
         // Refused at the door, so no provider was ever asked. If a start had

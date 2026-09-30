@@ -136,6 +136,7 @@ export class NanoGptProvider implements ModelProvider {
 
     const controller = new AbortController()
     let cancelled: ModelRequestCancelled | null = null
+    let timedOut = false
 
     const onExternalAbort = (): void => {
       // Recorded rather than thrown from the listener: an exception here would
@@ -150,7 +151,8 @@ export class NanoGptProvider implements ModelProvider {
     options.signal.addEventListener('abort', onExternalAbort, { once: true })
 
     const timer = setTimeout(() => {
-      controller.abort(new ModelRequestCancelled('nanogpt request timed out'))
+      timedOut = true
+      controller.abort(new Error('nanogpt request timed out'))
     }, this.timeoutMs)
     // A pending call must not be the reason the process refuses to exit. Shutdown
     // cancels explicitly; this is only the backstop for a call nobody waited for.
@@ -199,6 +201,10 @@ export class NanoGptProvider implements ModelProvider {
       if (options.signal.aborted) {
         throw new ModelRequestCancelled('the request was cancelled by the owner')
       }
+      // A provider timeout is a provider failure, not an owner cancellation.
+      // Modern fetch implementations may reject with AbortSignal.reason, so the
+      // timeout reason itself must not be a ModelRequestCancelled instance.
+      if (timedOut) throw new Error('nanogpt request timed out')
       throw error
     } finally {
       clearTimeout(timer)

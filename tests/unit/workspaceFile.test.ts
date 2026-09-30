@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -190,6 +190,89 @@ describe('WorkspaceFile — the debounced path', () => {
   })
 })
 
+describe('WorkspaceFile — the stale-write race', () => {
+  /**
+   * The failure this guards against: a debounced write is still in flight when
+   * the user quits, so `flushSync` publishes the newer payload — and the older
+   * write then lands on top of it and resurrects a layout the user moved past.
+   */
+  it('an in-flight debounced write cannot overwrite the final flush', async () => {
+    const file = makeFile({ writeDelayMs: 0, maxBytes: 4 * 1024 * 1024 })
+
+    // A large payload, so the async write is demonstrably still running when
+    // the flush happens rather than having already finished.
+    file.schedule({ schema: 1, nav: 'stale', filler: 'x'.repeat(600_000) })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+
+    file.schedule({ schema: 1, nav: 'fresh' })
+    file.flushSync()
+
+    // Let every abandoned write finish trying to publish.
+    await new Promise((resolve) => setTimeout(resolve, 400))
+
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ schema: 1, nav: 'fresh' })
+  })
+
+  it('holds across many rounds of in-flight writes and flushes', async () => {
+    const file = makeFile({ writeDelayMs: 0, maxBytes: 8 * 1024 * 1024 })
+
+    for (let round = 0; round < 6; round += 1) {
+      file.schedule({ schema: 1, nav: `stale-${round}`, filler: 'y'.repeat(200_000) })
+      await new Promise((resolve) => setTimeout(resolve, 2))
+      file.schedule({ schema: 1, nav: `fresh-${round}` })
+      file.flushSync()
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ schema: 1, nav: 'fresh-5' })
+  })
+
+  it('leaves no temp file behind when a stale write is abandoned', async () => {
+    const file = makeFile({ writeDelayMs: 0, maxBytes: 4 * 1024 * 1024 })
+    file.schedule({ schema: 1, nav: 'stale', filler: 'z'.repeat(400_000) })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    file.schedule({ schema: 1, nav: 'fresh' })
+    file.flushSync()
+    await new Promise((resolve) => setTimeout(resolve, 400))
+
+    const leftovers = (await readdir(dir)).filter((name) => name.endsWith('.tmp'))
+    expect(leftovers).toEqual([])
+  })
+
+  it('dispose abandons an in-flight write rather than letting it publish', async () => {
+    const file = makeFile({ writeDelayMs: 0, maxBytes: 4 * 1024 * 1024 })
+    file.schedule({ schema: 1, nav: 'only', filler: 'w'.repeat(400_000) })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    file.dispose()
+    await new Promise((resolve) => setTimeout(resolve, 400))
+
+    await expect(stat(path)).rejects.toThrow()
+    expect((await readdir(dir)).filter((name) => name.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('gives every write its own temp file, so two writers cannot share one', async () => {
+    const file = makeFile({ writeDelayMs: 0, maxBytes: 4 * 1024 * 1024 })
+    file.schedule({ schema: 1, nav: 'first', filler: 'a'.repeat(300_000) })
+    file.schedule({ schema: 1, nav: 'second', filler: 'b'.repeat(300_000) })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+
+    // Only the newest payload is ever published, and nothing is left over.
+    expect(JSON.parse(await readFile(path, 'utf8')).nav).toBe('second')
+    expect((await readdir(dir)).filter((name) => name.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('a flush with nothing queued leaves the file alone', async () => {
+    const file = makeFile({ writeDelayMs: 0 })
+    file.schedule({ schema: 1, nav: 'home' })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const before = await readFile(path, 'utf8')
+
+    file.flushSync()
+
+    expect(await readFile(path, 'utf8')).toBe(before)
+  })
+})
+
 describe('WorkspaceFile — loading', () => {
   it('returns null on a first launch with no file', async () => {
     expect(await makeFile().load()).toBeNull()
@@ -212,5 +295,42 @@ describe('WorkspaceFile — loading', () => {
     file.flushSync()
 
     expect(await makeFile().load()).toEqual(payload)
+  })
+})
+
+describe('WorkspaceFile — measuring the limit in bytes', () => {
+  it('refuses to load a file that only exceeds the limit in bytes', async () => {
+    // Three-byte characters: short as a string, long on disk.
+    const payload = { title: 'アイリス' }
+    const text = JSON.stringify(payload)
+    expect(text.length).toBeLessThan(20)
+    expect(Buffer.byteLength(text, 'utf8')).toBeGreaterThan(20)
+
+    await writeFile(path, text, 'utf8')
+    expect(await makeFile({ maxBytes: 20 }).load()).toBeNull()
+  })
+
+  it('applies the identical measure when writing and when loading', () => {
+    const payload = { title: 'アイリス' }
+    const text = JSON.stringify(payload)
+    const exact = Buffer.byteLength(text, 'utf8')
+
+    // Accepted at exactly the byte limit, on both sides.
+    const file = makeFile({ maxBytes: exact })
+    expect(file.serialise(payload)).not.toBeNull()
+    expect(file.schedule(payload)).toBe(true)
+  })
+
+  it('a non-ASCII layout is not silently rejected on the next launch', async () => {
+    const payload = { schema: 1, nav: 'vault', title: 'ナレッジ' }
+    const text = JSON.stringify(payload)
+    const limit = Buffer.byteLength(text, 'utf8')
+
+    const written = makeFile({ maxBytes: limit, writeDelayMs: 0 })
+    expect(written.schedule(payload)).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+
+    // The same limit on read: what was written must load back.
+    expect(await makeFile({ maxBytes: limit }).load()).toEqual(payload)
   })
 })

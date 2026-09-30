@@ -656,6 +656,17 @@ describe('G — Core shutdown', () => {
     const stopping = c.stop('app quitting')
     await waitFor(() => c.lifecycle === 'stopping')
 
+    const brainStatus = await c.handleCommand({
+      command: 'brain.status.read',
+      requestId: 'brain-during-stop',
+    })
+    const voiceStatus = await c.handleCommand({
+      command: 'voice.status.read',
+      requestId: 'voice-during-stop',
+    })
+    expect(brainStatus.ok).toBe(true)
+    expect(voiceStatus.ok).toBe(true)
+
     const attemptedResume = await c.handleCommand({
       command: 'security.resume',
       requestId: 'resume-during-stop',

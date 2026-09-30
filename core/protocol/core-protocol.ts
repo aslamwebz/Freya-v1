@@ -121,7 +121,12 @@ export interface CoreStatus {
     approvalWorkflow: 'unavailable'
   }
   governor: {
-    status: 'ready' | 'deny_all'
+    /**
+     * `unknown` is not the same as `deny_all`. A Core that has not finished
+     * booting has no answer, and reporting "denying everything" there would
+     * claim a stop latch that may well not be set.
+     */
+    status: 'ready' | 'deny_all' | 'unknown'
     grantsActive: number
   }
   providers: ProviderStatus[]

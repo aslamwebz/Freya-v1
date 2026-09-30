@@ -393,7 +393,8 @@ function degradedStatus(
       activatedBy: state.stopAll.activatedBy,
     },
     guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
-    governor: { status: 'deny_all', grantsActive: 0 },
+    // Booting has no answer. Degraded genuinely cannot serve, so it denies.
+    governor: { status: lifecycle === 'degraded' ? 'deny_all' : 'unknown', grantsActive: 0 },
     // No log means no providers, and saying so is safer than listing any.
     providers: [],
     sessionUsage: { calls: 0, inputTokens: null, outputTokens: null },

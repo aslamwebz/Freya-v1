@@ -118,7 +118,7 @@ const NOT_READY: CoreStatus = {
   coreStartedAt: null,
   stopAll: { active: false, activatedAt: null, activatedBy: null },
   guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
-  governor: { status: 'deny_all', grantsActive: 0 },
+  governor: { status: 'unknown', grantsActive: 0 },
   providers: [],
   sessionUsage: { calls: 0, inputTokens: null, outputTokens: null },
   durableUsage: { calls: 0, inputTokens: null, outputTokens: null },

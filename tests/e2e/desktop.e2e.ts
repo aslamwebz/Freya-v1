@@ -180,6 +180,26 @@ async function main(): Promise<void> {
       `${firstFacts['Inference']} -> ${idleFacts['Inference']}`,
     )
 
+    // A renderer reload must reconnect to the Core that is already running, not
+    // start a second one. The sequence continuing across a reload is the proof.
+    const beforeReload = await coreFacts(page)
+    await page.reload()
+    await coreReady(page)
+    const afterReload = await coreFacts(page)
+    const seqBefore = Number(/seq (\d+)/.exec(beforeReload['Event log'] ?? '')?.[1] ?? 0)
+    const seqAfter = Number(/seq (\d+)/.exec(afterReload['Event log'] ?? '')?.[1] ?? 0)
+    check(
+      'a renderer reload reconnects to the same Core, it does not restart it',
+      seqAfter >= seqBefore && seqAfter > 0,
+      `seq ${seqBefore} -> ${seqAfter} across reload`,
+    )
+    // And the reload itself cost nothing.
+    check(
+      'a renderer reload spends no inference',
+      afterReload['Inference'] === beforeReload['Inference'],
+      `${beforeReload['Inference']} -> ${afterReload['Inference']}`,
+    )
+
     // STOP ALL is derived from the log, so a relaunch must find it still latched.
     await page.getByRole('button', { name: 'Stop all' }).click()
     await page.waitForFunction(

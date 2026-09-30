@@ -27,6 +27,7 @@ export default defineConfig({
       'tests/unit/**/*.test.ts',
       'tests/unit/**/*.test.tsx',
       'tests/core/**/*.test.ts',
+      'tests/host/**/*.test.ts',
     ],
     setupFiles: ['tests/unit/setup.ts'],
     restoreMocks: true,

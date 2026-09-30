@@ -41,8 +41,18 @@ function requireCore(): ElectronCoreHost {
  * necessarily close a window first.
  *
  * The timeout exists so a wedged renderer can never make the app unquittable.
+ *
+ * ## This is about the workspace, and only the workspace
+ *
+ * Closing a window is not the application quitting. On macOS a user can close
+ * every window and leave the process running, and the `activate` handler will
+ * make a new one; the Core those windows talk to must be the same Core, with
+ * the same event sequence and the same latched security state.
+ *
+ * So this function flushes the layout and nothing else. Core is stopped by
+ * {@link shutdownCoreAndThen}, which only `app.quit()` reaches.
  */
-function collectAndThen(finish: () => void): void {
+function collectWorkspaceAndThen(finish: () => void): void {
   const answered = new Promise<void>((resolve) => {
     pendingCollect = resolve
   })
@@ -59,21 +69,32 @@ function collectAndThen(finish: () => void): void {
     pendingCollect = null
   }
 
-  void answered
-    .finally(() => {
-      clearTimeout(timer)
-      pendingCollect = null
-      workspace?.flushSync()
-    })
-    .then(async () => {
-      // Core closes before the process does, so its last event is durable.
-      // A failure here must not stop the app quitting.
-      await coreHost?.stop('app quitting').catch((error: unknown) => {
+  void answered.finally(() => {
+    clearTimeout(timer)
+    pendingCollect = null
+    workspace?.flushSync()
+    finish()
+  })
+}
+
+/**
+ * The application is really quitting.
+ *
+ * Collect the layout, then close Core so its last event is durable, and only
+ * then let the process go. A failure to close Core cleanly must not prevent the
+ * app from quitting — a user who asked to quit gets to quit.
+ */
+function shutdownCoreAndThen(finish: () => void): void {
+  collectWorkspaceAndThen(() => {
+    void (coreHost?.stop('app quitting') ?? Promise.resolve())
+      .catch((error: unknown) => {
         console.error('[freya] core failed to stop cleanly', error)
       })
-      quitting = true
-      finish()
-    })
+      .finally(() => {
+        quitting = true
+        finish()
+      })
+  })
 }
 
 /* ------------------------------------------------------------------ *
@@ -142,7 +163,9 @@ function createWindow(): BrowserWindow {
   window.on('close', (event) => {
     if (quitting || !workspace) return
     event.preventDefault()
-    collectAndThen(() => window.destroy())
+    // A window closing is not the app quitting. Core keeps running, and a new
+    // window will attach to this same instance.
+    collectWorkspaceAndThen(() => window.destroy())
   })
 
   return window
@@ -217,7 +240,7 @@ app.on('before-quit', (event) => {
   // A quit can arrive without the window's close event ever firing, so this
   // hook has to do the collect itself and then re-enter the quit.
   event.preventDefault()
-  collectAndThen(() => app.quit())
+  shutdownCoreAndThen(() => app.quit())
 })
 
 // Refuse any renderer request for a capability Freya has not granted.

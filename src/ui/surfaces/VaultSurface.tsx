@@ -198,6 +198,18 @@ export function VaultSurface() {
               {projection.counts.rejected > 0 ? ` · ${projection.counts.rejected} refused` : ''}
             </dd>
           </div>
+          {/* Withdrawn memories are not in the listing, and saying so is the point:
+              a person who withdrew something is entitled to know it went somewhere
+              rather than nowhere. */}
+          {projection.counts.withdrawn > 0 ? (
+            <div>
+              <dt>Withdrawn</dt>
+              <dd>
+                {projection.counts.withdrawn} kept on disk, no longer recalled. Freya never deletes a
+                memory — forgetting and tampering must not look alike.
+              </dd>
+            </div>
+          ) : null}
           <div>
             <dt>World</dt>
             <dd>

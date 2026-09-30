@@ -50,6 +50,7 @@ const DURABLE: BrainProjection = {
     admitted: 1,
     conflicted: 1,
     rejected: 4,
+    withdrawn: 0,
     experiences: 7,
   },
   recentAdmissions: [

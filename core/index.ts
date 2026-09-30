@@ -690,6 +690,7 @@ class FreyaCore implements Core {
           admitted: 0,
           conflicted: 0,
           rejected: 0,
+          withdrawn: 0,
           experiences: 0,
         },
         recentAdmissions: [],

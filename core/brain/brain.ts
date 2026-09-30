@@ -24,6 +24,7 @@ import {
   type MemoryKind,
   type MemoryRecord,
   type MemoryStatus,
+  RECALLABLE_STATUSES,
   type Provenance,
   type RecallBudget,
   type RecallPack,
@@ -143,13 +144,20 @@ export interface BrainProjection {
     admitted: number
     conflicted: number
     rejected: number
+    /** Withdrawn deliberately. Archived, not deleted — but not in the listing. */
+    withdrawn: number
     experiences: number
   }
   /**
-   * The most recent admissions, newest first.
+   * The memories Freya currently holds, newest first.
    *
-   * Capped and content-free: subject and kind only, plus the reason. A listing is
-   * something a person scans, so it must not be a second copy of every memory.
+   * Recallable statuses only, so the listing answers the question the window is
+   * for — "what does she think she knows". A withdrawn memory drops off it, because
+   * listing it beside the ones she still holds would claim she knows it.
+   *
+   * It is *not* deleted, and it is not hidden silently: `counts.withdrawn` says how
+   * many were withdrawn, so a person who withdraws something can see that it went
+   * somewhere rather than nowhere.
    */
   recentAdmissions: readonly {
     memoryId: string
@@ -554,7 +562,7 @@ export class Brain {
     const conflicted = memories.filter((memory) => memory.status === 'conflicted')
 
     const recentAdmissions = memories
-      .filter((memory) => memory.status !== 'rejected')
+      .filter((memory) => RECALLABLE_STATUSES.includes(memory.status))
       .sort((a, b) => (b.admittedAt === a.admittedAt
         ? a.memoryId.localeCompare(b.memoryId)
         : b.admittedAt.localeCompare(a.admittedAt)))
@@ -610,6 +618,9 @@ export class Brain {
         // becomes a memory, so counting memories would report zero refusals on a
         // Brain that had refused plenty.
         rejected: countRefusals(state),
+        // Counted rather than dropped. A withdrawn memory is not in the listing, and
+        // a person who withdrew it is entitled to know it went somewhere.
+        withdrawn: memories.filter((memory) => memory.status === 'archived').length,
         experiences: state.experiences.size,
       },
       recentAdmissions,

@@ -190,3 +190,148 @@ over the systems list.
 A window manager that lets you lose the navigation is a window manager you will
 fight. The dock sits above the surface layer for the same reason, and so does the
 design lab.
+
+---
+
+# Phase 1 corrections
+
+The decisions below were made during the Phase 1 correction pass. Each one
+replaced something that looked right and was not.
+
+## D9 — Identity is assigned, never accepted as a parameter
+
+Core originally handed out a `CognitionService`, and that service's
+`createGrant` took a `createdBy` while its `request` took an `actor`, an
+`origin`, a `cause` and a `background` flag. Every one of those was a value the
+caller chose.
+
+That is a boundary that only works if everyone inside it is careful, and the
+whole point of a boundary is that it works when someone is not. A future agent
+could have called `createGrant(createdBy: 'owner')` and the journal would have
+recorded the owner as having authorised it.
+
+Replaced with authority objects whose principal is fixed at issuance and whose
+methods reflect that principal. The owner's has grant governance; a worker's does
+not; a worker's request type has no `user_turn` in it. A caller can name a
+*kind* of intent and nothing else — Core derives the origin, the cause and
+whether it is background.
+
+## D10 — The security module exports no principal factory
+
+`core/security/guard.ts` exported `ownerPrincipal(capabilities)`. That was a hole
+with a tidy signature: any module inside Core could call it and be the owner, and
+the code doing it would have looked like ordinary use of the security module
+rather than an escalation.
+
+Trusted principals are now built in one place — the Cognition Service — and the
+guard exports only the policy that judges a principal it is handed. A `Principal`
+is still a plain interface, so a determined caller can write the literal; what is
+gone is the official-looking constructor. That is the difference between an
+escalation that reads like normal code and one that does not, and in a codebase
+whose security depends on review, it is the difference that matters.
+
+## D11 — A grant's token budget is reserved before the call, and never refunded
+
+The budget was measured against `usage.outputTokens` — what the provider
+*reported*. Two failures followed. A provider that reported nothing looked free,
+and the ceiling never actually moved, because reporting usage is not spending
+it.
+
+The service now durably reserves the requested allowance **before** the provider
+is called, and never refunds it. A crash or a missing usage report must not hand
+it back, because a refund is how a finite budget becomes an infinite one.
+Reported usage is recorded separately, because a report is not a correction.
+
+## D12 — Authorisation and reservation are one indivisible step
+
+Found by the adversarial pass, not by reading the code. Ten concurrent requests
+of 300 tokens against a 1000-token grant were all allowed, and the grant finished
+3000 tokens over.
+
+"How much is left?" and "take that much" were two steps, and every caller read
+the same remaining figure before any of them had reserved. Serialising the event
+log did not help and never would: the fabric guarantees unique sequences, not a
+correct decision.
+
+The fix is a lock **per grant**, held across the Governor's evaluation and the
+reservation, released before the provider is called so inference is not
+serialised. Different grants proceed in parallel.
+
+## D13 — Event appends are serialised
+
+Related to D12 and independently wrong. Concurrent callers all computed
+`sequence + 1` before any of them had written, so the log could be handed a
+duplicate and reject a write that had already partly happened.
+
+The whole body of `append` — assignment, durable write, publication — now runs
+one at a time. The queue never rejects, so one failed append gives its number
+back and the append behind it still lands.
+
+## D14 — The journal is validated, not pattern-matched
+
+Recovery accepted anything that vaguely resembled an envelope. A security journal
+is only as trustworthy as its least validated byte, so every line is now checked
+against the event vocabulary, the schema version, a positive strictly
+increasing sequence, a real principal id, well-formed correlation ids, and a
+payload matching its own type.
+
+The principal check is the one that matters: it is what stops a hand-written
+line from acting as `owner`.
+
+A damaged line truncates the log from that point, including valid events after
+it. That is deliberate — a journal with a hole in it cannot be replayed into
+security state, because the gap could hide the revocation that followed.
+
+## D15 — The journal does not contain command text
+
+`command.received` stored the user's command verbatim. It now stores the command
+id, its length, and where it came from.
+
+A security journal is read by people, shipped in backups, and kept far longer
+than a conversation. The journal needs only enough to answer "did this happen,
+and was it this long". Conversation content belongs in conversation storage,
+which will have its own retention rules.
+
+## D16 — The echo provider is not a model
+
+Core registered a `FakeModelProvider` unconditionally, so a build with no
+credentials answered from a canned string of the user's own prompt and looked
+like it was working. That is the worst possible failure for this system: it
+looks like intelligence and is an echo.
+
+Production registers NanoGPT and nothing else. Absent or disabled means no
+configured provider, and a request fails with that reason rather than falling
+back. The echo provider is opt-in under a name that says what it is, is listed
+last so it cannot shadow a real provider, and prefixes its output so a
+screenshot cannot be mistaken for a reply.
+
+## D17 — Core belongs to the process, not the window
+
+Closing a window ran the same path as quitting, so a closed window stopped Core.
+On macOS, where the app outlives its last window, the next window got a brand new
+Core over a replayed log — which quietly undoes the point of a durable one.
+
+Window close now flushes the workspace and nothing else. Only `app.quit()`
+reaches the Core shutdown.
+
+## D18 — STOP ALL takes two presses
+
+A single button next to a resume button is one stray click from halting every
+inference Freya can do, and the latch is durable, so a misclick does not wear
+off.
+
+The first press arms, the second confirms, and the armed state expires on its own
+after a few seconds so a loaded trigger cannot sit on screen unattended. Resuming
+is one explicit press, because refusing to restart is the safe failure and being
+unable to is not.
+
+## D19 — A command is not a presence transition
+
+Submitting a command used to move Freya into `working`, which spun the presence
+ring for a command that did no work. Nothing about a submission is a reason to
+change state, so it no longer is one.
+
+The same pass removed the local acknowledgement. The command bar now waits for
+Core's reply and reports what Core said — including when Core refused it, or could
+not be reached. An acknowledgement the UI writes itself is one the user cannot
+check.

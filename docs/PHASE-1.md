@@ -36,18 +36,23 @@ This is enforced structurally, not by convention: see *No-bypass*.
 ```
 core/                    Electron-free. No React, no Electron, no browser globals.
   index.ts                the Core facade: lifecycle and the command surface
+  authority.ts            what a caller may say. No identity fields anywhere.
+  testing.ts              the ONE cast that reaches an authority object
   state.ts                the one pure reducer every projection is built from
   protocol/               types shared with the renderer (import type only)
-  events/                 envelope, store interface, JSONL store, fabric
-  security/               principals, capabilities, policy
+  events/                 envelope, validation, JSONL store, serialised fabric
+  security/guard.ts       the policy. It judges a principal; it mints none.
   cognition/              grants, governor, service
-  model/                  provider contract, fake, NanoGPT, gateway
+  model/                  provider contract, NanoGPT, gateway, dev-only echo
   projections/            Core status derived from durable state
 
-electron/coreHost.ts      owns the Core instance, exposes the typed RPC
+electron/coreHost.ts      owns the Core instance for the life of the process
+electron/preload.ts       the bridge, checking command names against a subset
 src/platform/host.ts      the bridge's shape, declared once for the renderer
 src/platform/coreClient.ts  the renderer's mirror, with a real disposer
-src/ui/dashboard/CorePanel.tsx  the only place Core is shown
+src/ui/commandPath.ts     the single command submission path
+src/ui/dashboard/CorePanel.tsx    compact Core status
+src/ui/surfaces/SecuritySurface.tsx  posture, and the stop/resume controls
 ```
 
 `core/` has its own tsconfig with `lib: ES2023` and no DOM, so a browser global
@@ -123,17 +128,47 @@ Everything in the table below is built, wired and verified.
 
 | Area | State | Where |
 | --- | --- | --- |
-| Event fabric | done | `core/events/`, 20 tests |
+| Event fabric | done | `core/events/` |
+| Event validation + recovery | done | `core/events/validate.ts`, `core/events/jsonl-store.ts` |
 | State + projection | done | `core/state.ts`, `core/projections/` |
-| Guard | done | `core/security/guard.ts`, 14 tests |
+| Guard | done | `core/security/guard.ts` |
+| Authority boundary | done | `core/authority.ts`, `core/testing.ts` |
 | STOP ALL | done | durable latch, proven across a relaunch in e2e |
-| Governor + grants | done | `core/cognition/`, 26 tests |
-| Cognition service | done | `core/cognition/service.ts`, 19 tests |
-| Gateway + providers | done | `core/model/` |
-| RPC + UI | done | `electron/coreHost.ts`, `src/platform/`, CorePanel |
-| E2E | done | 31 checks, including Core state after a relaunch |
+| Governor + grants | done | `core/cognition/governor.ts`, `grants.ts` |
+| Token budget | done | durably reserved before the call, never refunded |
+| Cognition service | done | `core/cognition/service.ts` |
+| Gateway + providers | done | `core/model/` — NanoGPT only in production |
+| Process-scoped Core | done | `electron/coreHost.ts`, `electron/main.ts` |
+| RPC + command path | done | `electron/preload.ts`, `src/ui/commandPath.ts` |
+| Security surface | done | `src/ui/surfaces/SecuritySurface.tsx` |
+| Live probe | done | `npm run core:model-probe` |
 
-`npm run verify` is green: typecheck, lint, 219 unit tests, build, 31/31 e2e.
+See [COGNITION-POLICY.md](COGNITION-POLICY.md) for the authority boundary and
+budget semantics, and [CORE-EVENTS.md](CORE-EVENTS.md) for the journal, its
+ordering guarantees and its recovery policy.
+
+---
+
+## What the correction pass found
+
+Two defects that reading the code had missed, both now fixed and both with
+regression tests:
+
+- **A budget race.** Ten concurrent requests of 300 tokens against a
+  1000-token grant were all allowed, finishing 3000 tokens over. Check and
+  reserve were two steps, and every caller read the same remaining figure before
+  any of them had reserved. Serialising the event log could not have fixed it —
+  unique sequences are not a correct decision. Authorisation and reservation are
+  now one step under a per-grant lock.
+- **An identity hole with a tidy signature.** `guard.ts` exported
+  `ownerPrincipal(capabilities)`, so any Core module could be the owner in code
+  that read like ordinary use of the security module. Trusted principals are now
+  built in one place.
+
+The rest were found by reading: a caller could assert identity through the
+`CognitionCall` fields, a grant's token ceiling was never actually consumed, the
+echo provider stood in for a model, closing a window stopped Core, and command
+text sat in the audit journal.
 
 ---
 

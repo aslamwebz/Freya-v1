@@ -287,9 +287,50 @@ a component.** It does not add a window manager, a store, or a persistence path.
 
 ---
 
-## 6. Deliberately absent
+## 6. The Core layer
 
-`Phase 0 does not implement`: any model provider, agents, missions, search,
-vault, PTYs, browser automation, connectors, the cognition governor, or the
-security engine. There are no stub classes for them. The only thing present is
-the boundary they will connect through.
+Phase 1 added a process that exists outside the renderer and outside React:
+
+```
+electron/main.ts          owns one Core, for the life of the process
+  └ core/                 Electron-free. No React, no browser globals.
+      index.ts            the facade: lifecycle, and the command surface
+      authority.ts        what a caller may say — no identity fields anywhere
+      state.ts            the one pure reducer every projection is built from
+      events/             envelope, validation, JSONL store, serialised fabric
+      security/guard.ts   the policy. It judges a principal; it mints none.
+      cognition/          grants, the Governor, the service that owns both
+      model/              the provider contract, NanoGPT, the gateway
+      projections/        Core's account of itself, derived from the log
+```
+
+Three properties worth stating, because they are enforced rather than intended:
+
+- **Core's public interface has no cognition surface.** No service, no gateway,
+  no grant store, no policy object. Cognition is reachable only through an
+  authority object with a principal already baked in, whose methods match the
+  authority it was issued. See [COGNITION-POLICY.md](COGNITION-POLICY.md).
+- **Core belongs to the process, not the window.** Closing a window flushes the
+  workspace and nothing else. Only `app.quit()` stops Core, so a new window
+  reconnects to the same instance with the same event sequence and the same
+  latched security state.
+- **The renderer holds a mirror, never a copy.** Every value it shows came over
+  IPC, and Core overwrites it whenever its own state moves. With no Core the
+  panels say so rather than showing a healthy-looking zero.
+
+The bridge declares its whole surface once, in `src/platform/host.ts`. Adding a
+function to `electron/preload.ts` without adding it there is a type error, which
+is the point: the bridge should not be able to grow unnoticed.
+
+---
+
+## 7. Deliberately absent
+
+Phase 1 does not implement: chat or conversation, streaming, speech
+transcription, Searcher, Vault, Missions, Work, the Run engine, agents, swarms,
+PTYs, terminal, Foundry, connectors, Office, learning, or self-modification.
+There are no stub classes for them.
+
+A submitted command reaches Core, is made durable, and stops there. The
+acknowledgement says so explicitly, because a user told a command was received
+will otherwise wait for a reply that is not coming.

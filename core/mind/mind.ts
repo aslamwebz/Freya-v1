@@ -232,21 +232,20 @@ export class MindService {
   private readonly onTurnExperience: ((experience: TurnExperience) => Promise<void>) | null
 
   /**
-   * Measurements gathered during the current turn, for its experience record.
+   * Experience measurements are keyed by turn, not stored in singleton fields.
    *
-   * Per-turn and never read after the terminal event: the `finally` in `runTurn`
-   * clears it, so a stale value cannot be attached to a later turn. Null means "no
-   * answer reached a provider", which is a different experience from "an answer came
-   * back" and worth recording as such.
+   * Phase 3 only forbids two simultaneous turns in the *same* conversation.
+   * Different conversations can therefore overlap. A singleton "current turn"
+   * buffer lets one conversation overwrite another's recall/request metadata and
+   * produces a plausible but false Experience record. This map keeps the
+   * bookkeeping attached to the turn that produced it.
    */
-  private pendingExperience: {
+  private readonly experienceByTurn = new Map<string, {
+    startedAt: string
     referenceUsed: boolean
     referenceItemCount: number
     requestLength: number
-  } | null = null
-
-  /** When this turn began, for its experience record. */
-  private turnStartedAt: string | null = null
+  }>()
 
   /**
    * One actively running turn per conversation.
@@ -348,6 +347,12 @@ export class MindService {
 
     const turnId = input.turnId || this.newId()
     this.activeTurns.set(input.conversationId, { turnId, startedAt })
+    this.experienceByTurn.set(turnId, {
+      startedAt,
+      referenceUsed: false,
+      referenceItemCount: 0,
+      requestLength: text.length,
+    })
     // Before any await, so the window is told a turn is running before it can
     // possibly finish. A projection that only arrived afterwards would make the
     // generating state unreachable.
@@ -444,6 +449,16 @@ export class MindService {
         throw error
       }
 
+      // Record what context was actually assembled before the provider is asked.
+      // This remains true for failure/cancellation outcomes too; a turn does not
+      // need to complete successfully for its Experience metadata to be accurate.
+      this.experienceByTurn.set(turnId, {
+        startedAt,
+        referenceUsed: compiled.reference.included,
+        referenceItemCount: compiled.reference.itemCount,
+        requestLength: text.length,
+      })
+
       // --- 5. exactly one authorised cognition ------------------------------
       const outcome = await this.authority.request({
         kind: 'user_turn',
@@ -476,12 +491,6 @@ export class MindService {
 
       // --- 6. the answer, stored before anyone is told it exists ------------
       const endedAt = this.now().toISOString()
-      this.pendingExperience = {
-        referenceUsed: compiled.reference.included,
-        referenceItemCount: compiled.reference.itemCount,
-        requestLength: text.length,
-      }
-      this.turnStartedAt = startedAt
       const assistantMessage: ConversationMessage = {
         messageId: this.newId(),
         conversationId: input.conversationId,
@@ -520,10 +529,9 @@ export class MindService {
       // itself marked active would make every later send fail.
       this.activeTurns.delete(input.conversationId)
       this.onTurnStateChange()
-      // Cleared after the terminal event, so a stale measurement cannot be attached
-      // to whatever runs next.
-      this.pendingExperience = null
-      this.turnStartedAt = null
+      // Cleared after the terminal event so this turn can never leak measurements
+      // into a later one.
+      this.experienceByTurn.delete(turnId)
     }
   }
 
@@ -553,11 +561,12 @@ export class MindService {
    * answer and never will.
    */
   private async refuse(input: MindSubmitInput, reason: string): Promise<MindTurnResult> {
+    const refusedTurnId = input.turnId || this.newId()
     await this.fabric.append(
       'conversation.turn.denied',
       {
         conversationId: input.conversationId,
-        turnId: input.turnId || this.newId(),
+        turnId: refusedTurnId,
         userMessageId: null,
         assistantMessageId: null,
         contentLength: input.text.trim().length,
@@ -567,10 +576,10 @@ export class MindService {
         outcome: 'denied',
         reason,
       },
-      { actor: 'owner', correlationId: input.turnId || this.newId() },
+      { actor: 'owner', correlationId: refusedTurnId },
     )
     return {
-      turnId: input.turnId,
+      turnId: refusedTurnId,
       conversationId: input.conversationId,
       outcome: 'denied',
       reason,
@@ -646,6 +655,7 @@ private async finishTurn(
     )
 
     const providerContacted = detail.providerContacted ?? outcome === 'completed'
+    const experience = this.experienceByTurn.get(turn.turnId)
 
     // Experience is recorded after the terminal event, so the journal and the store
     // are already truthful about this turn and the Brain's account of it is the last
@@ -653,7 +663,7 @@ private async finishTurn(
     await this.recordExperience({
       conversationId: input.conversationId,
       turnId: turn.turnId,
-      startedAt: detail.startedAt ?? this.turnStartedAt ?? turn.startedAt,
+      startedAt: detail.startedAt ?? experience?.startedAt ?? turn.startedAt,
       endedAt,
       outcome,
       reason: storedReason,
@@ -663,10 +673,10 @@ private async finishTurn(
       // got. A cancelled turn that had already reached a provider was very probably
       // billed, and cancelling does not make it free.
       providerContacted,
-      requestLength: this.pendingExperience?.requestLength ?? 0,
+      requestLength: experience?.requestLength ?? 0,
       answerLength: assistantMessage?.content.length ?? 0,
-      referenceUsed: this.pendingExperience?.referenceUsed ?? false,
-      referenceItemCount: this.pendingExperience?.referenceItemCount ?? 0,
+      referenceUsed: experience?.referenceUsed ?? false,
+      referenceItemCount: experience?.referenceItemCount ?? 0,
       answerPersisted: assistantMessage !== null,
     })
 

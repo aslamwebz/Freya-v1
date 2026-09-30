@@ -3,8 +3,8 @@
  * Launch Freya on a chosen display.
  *
  *   node scripts/launch.mjs              platform decides
- *   node scripts/launch.mjs 2            the second monitor
- *   node scripts/launch.mjs 1            the first secondary monitor
+ *   node scripts/launch.mjs 1            primary monitor
+ *   node scripts/launch.mjs 2            first secondary monitor
  *
  * Why a script rather than `FREYA_DISPLAY=2 electron .`: that form works in a
  * POSIX shell and silently does nothing in `cmd.exe`, and on Windows it does
@@ -12,8 +12,9 @@
  * wrong screen and you only find out by looking at it. One code path for every
  * platform.
  *
- * Counts secondary displays from 1. `1` is the first non-primary monitor,
- * matching `--display=N` in `electron/main.ts`, so the flag and this agree.
+ * Uses human display numbering: 1 is primary, 2 is the first secondary, 3 is
+ * the next secondary, and so on. This matches `--display=N` in
+ * `electron/main.ts`.
  */
 
 import { spawn } from 'node:child_process'

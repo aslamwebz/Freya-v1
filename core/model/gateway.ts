@@ -211,6 +211,18 @@ export class ModelGateway {
   }
 
   /**
+   * The contact gate is runtime authority, not UI state.
+   *
+   * Core and the Cognition Service read this so a gate closed by STOP ALL (or by
+   * a failed attempt to persist STOP ALL) is reflected as deny-all before a
+   * request can reach provider selection. The reason is diagnostic only; it
+   * grants no authority and cannot reopen the gate.
+   */
+  gateStatus(): { open: boolean; reason: string | null } {
+    return { open: this.gateOpen, reason: this.gateReason }
+  }
+
+  /**
    * Stop everything, now.
    *
    * Closes the contact gate, moves the cognition generation on, and aborts every
@@ -221,9 +233,11 @@ export class ModelGateway {
    * else — will let a new one begin.
    */
   cancelAll(reason: string): number {
+    const gateChanged = this.gateOpen
     this.gateOpen = false
     this.gateReason = reason
     this.epoch += 1
+    if (gateChanged) this.onActivityChange()
     let aborted = 0
     for (const call of [...this.active.values()]) {
       call.cancellationReason = reason
@@ -241,8 +255,10 @@ export class ModelGateway {
    * this changes is whether a *new* request may begin.
    */
   resume(): void {
+    if (this.gateOpen) return
     this.gateOpen = true
     this.gateReason = null
+    this.onActivityChange()
   }
 
   /**

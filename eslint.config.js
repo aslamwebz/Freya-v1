@@ -34,12 +34,13 @@ export default tseslint.config(
     },
   },
   {
-    files: ['electron/**/*.ts', 'tests/**/*.ts'],
+    // The e2e runner and the live model probe are CLIs: reporting their own
+    // progress is their output, not a stray log.
+    files: ['electron/**/*.ts', 'tests/**/*.ts', 'scripts/**/*.ts', '*.mjs'],
     languageOptions: {
       globals: { ...globals.node },
     },
     rules: {
-      // The e2e runner reports its own progress; it is a CLI, not a library.
       'no-console': 'off',
     },
   },

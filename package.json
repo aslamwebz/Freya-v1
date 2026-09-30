@@ -2,7 +2,7 @@
   "name": "freya",
   "version": "0.1.0",
   "private": true,
-  "description": "Freya — a voice-first personal intelligence environment. Phase 0 desktop shell.",
+  "description": "Freya \u2014 a voice-first personal intelligence environment. Phase 0 desktop shell.",
   "main": "dist-electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -17,6 +17,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "node --experimental-strip-types tests/e2e/desktop.e2e.ts",
+    "core:model-probe": "node scripts/core-model-probe.mjs",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:e2e"
   },
   "dependencies": {

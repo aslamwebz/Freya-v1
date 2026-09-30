@@ -131,6 +131,12 @@ export class EncryptedConversationStore implements ConversationStore {
   private readonly turnsById = new Map<string, ConversationTurn>()
 
   private sequence = 0
+  /**
+   * Serialises encrypted appends so sequence assignment, disk order and the
+   * in-memory fold are one ordered operation. Two conversations may submit at
+   * once; that must not be able to put seq 12 on disk before seq 11.
+   */
+  private writeTail: Promise<void> = Promise.resolve()
   private closed = false
   /** Set when any record on disk could not be believed. Reported, never hidden. */
   private degradedReason: string | null = null
@@ -244,6 +250,23 @@ export class EncryptedConversationStore implements ConversationStore {
       return
     }
 
+    // Authentication protects the contents of one record; sequence continuity
+    // protects the log as a whole. Without this, an attacker who cannot forge a
+    // tag could still duplicate, delete or reorder already-authenticated lines
+    // and make replay produce a different conversation.
+    const expectedSequence = this.sequence + 1
+    if (!Number.isInteger(record.seq) || record.seq !== expectedSequence) {
+      this.degrade(
+        `conversation record sequence ${String(record.seq)} is out of order; expected ${expectedSequence}`,
+      )
+      return
+    }
+
+    // Consume the expected position before decryption. If this one ciphertext was
+    // damaged, later correctly ordered records may still be salvaged; deleting or
+    // reordering a line creates a sequence gap and therefore cannot be hidden.
+    this.sequence = record.seq
+
     let body: RecordBody
     try {
       body = this.open_(record)
@@ -252,7 +275,6 @@ export class EncryptedConversationStore implements ConversationStore {
       return
     }
 
-    this.sequence = Math.max(this.sequence, record.seq)
     this.apply_(body)
   }
 
@@ -319,12 +341,26 @@ export class EncryptedConversationStore implements ConversationStore {
 
   /* ------------------------------------------------------------- writing */
 
-  private async write(body: RecordBody): Promise<void> {
+  private write(body: RecordBody): Promise<void> {
     if (this.closed) {
-      throw new ConversationStoreError('store-unavailable', 'conversation store is closed')
+      return Promise.reject(
+        new ConversationStoreError('store-unavailable', 'conversation store is closed'),
+      )
     }
-    this.sequence += 1
-    const seq = this.sequence
+
+    const task = () => this.writeOne(body)
+    const result = this.writeTail.then(task, task)
+    // One failed append must not poison the queue. The caller still receives the
+    // rejection, while the next write gets a chance to run.
+    this.writeTail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
+  private async writeOne(body: RecordBody): Promise<void> {
+    const seq = this.sequence + 1
     const nonce = randomBytes(NONCE_BYTES)
     const cipher = createCipheriv(ALGORITHM, this.key, nonce)
     cipher.setAAD(aadFor(this.context, { version: SCHEMA_VERSION, kind: body.kind, seq }))
@@ -352,9 +388,10 @@ export class EncryptedConversationStore implements ConversationStore {
         `conversation record could not be written: ${describe(error)}`,
       )
     }
-    // Applied only after the bytes are on disk. A turn whose answer is in memory
-    // but not on disk would be exactly the "complete but not durable" state the
-    // whole ordering of this phase exists to prevent.
+
+    // Sequence becomes real only after its bytes are durable. A failed append
+    // cannot consume a number and leave an artificial gap for the next write.
+    this.sequence = seq
     this.apply_(body)
   }
 
@@ -451,6 +488,7 @@ export class EncryptedConversationStore implements ConversationStore {
 
   async close(): Promise<void> {
     this.closed = true
+    await this.writeTail
   }
 
   private summarise(conversation: Conversation): ConversationSummary {

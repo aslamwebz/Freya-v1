@@ -27,7 +27,8 @@ export interface CoreState {
   durableUsage: ModelUsage
   /** User commands Core has received. */
   commandCount: number
-  lastCommand: { text: string; at: string; requestId: string } | null
+  /** Metadata about the last command. Never its content: that is not here. */
+  lastCommand: { commandId: string; contentLength: number; at: string } | null
   faults: string[]
 }
 
@@ -78,7 +79,11 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
       return {
         ...state,
         commandCount: state.commandCount + 1,
-        lastCommand: { text: event.payload.text, at: event.occurredAt, requestId: event.correlationId },
+        lastCommand: {
+          commandId: event.payload.commandId,
+          contentLength: event.payload.contentLength,
+          at: event.occurredAt,
+        },
       }
 
     case 'cognition.grant.created':
@@ -103,6 +108,7 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
                 ...grant,
                 usage: {
                   calls: event.payload.callsUsed,
+                  outputTokenBudgetReserved: event.payload.outputTokenBudgetReserved,
                   inputTokens: event.payload.inputTokens,
                   outputTokens: event.payload.outputTokens,
                 },

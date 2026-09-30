@@ -195,8 +195,12 @@ describe('Cognition Governor — grants', () => {
     expect(withGrant(g).outcome).toBe('deny')
   })
 
-  it('denies when the token budget cannot cover the request', () => {
-    const g = grant({ usage: { ...emptyGrantUsage(), calls: 1, inputTokens: 900, outputTokens: 450 } })
+  it('denies when the reserved budget cannot cover the request', () => {
+    // Reported usage does not move the budget; the reservation does. So a grant
+    // with 450 of 500 reserved cannot serve another 100-token request.
+    const g = grant({
+      usage: { calls: 1, outputTokenBudgetReserved: 450, inputTokens: 900, outputTokens: 450 },
+    })
     expect(withGrant(g, { maxOutputTokens: 100 })).toMatchObject({ outcome: 'deny' })
   })
 
@@ -205,11 +209,33 @@ describe('Cognition Governor — grants', () => {
     expect(withGrant(g, { maxOutputTokens: 100 })).toMatchObject({ outcome: 'allow' })
   })
 
-  it('treats unknown token usage as spent rather than as free', () => {
-    // A provider that did not report output tokens must not be read as zero.
-    const g = grant({ usage: { calls: 1, inputTokens: null, outputTokens: null } })
-    expect(withGrant(g, { maxOutputTokens: 100 })).toMatchObject({ outcome: 'allow' })
-    const tight = grant({ maxOutputTokens: 0, usage: { calls: 1, inputTokens: null, outputTokens: null } })
+  it('measures the token budget against what was reserved, not what was reported', () => {
+    // A provider that reported nothing has reserved nothing extra, but the
+    // allowance it was granted is already spent. Unknown usage must not read as
+    // zero *and* must not be able to claw budget back.
+    const g = grant({
+      maxOutputTokens: 1000,
+      usage: { calls: 1, outputTokenBudgetReserved: 300, inputTokens: null, outputTokens: null },
+    })
+    expect(withGrant(g, { maxOutputTokens: 700 })).toMatchObject({ outcome: 'allow' })
+    expect(withGrant(g, { maxOutputTokens: 701 })).toMatchObject({ outcome: 'deny' })
+  })
+
+  it('does not refund reserved budget when a provider reports less than reserved', () => {
+    // The provider said it used 10 of the 300 it was allowed. The budget still
+    // shows 300 reserved: actual usage is a report, not a correction.
+    const g = grant({
+      maxOutputTokens: 1000,
+      usage: { calls: 1, outputTokenBudgetReserved: 300, inputTokens: 5, outputTokens: 10 },
+    })
+    expect(withGrant(g, { maxOutputTokens: 701 })).toMatchObject({ outcome: 'deny' })
+  })
+
+  it('exhausts a grant whose reserved budget is already at the ceiling', () => {
+    const tight = grant({
+      maxOutputTokens: 0,
+      usage: { calls: 1, outputTokenBudgetReserved: 0, inputTokens: null, outputTokens: null },
+    })
     expect(withGrant(tight, { maxOutputTokens: 100 })).toMatchObject({ outcome: 'deny' })
   })
 

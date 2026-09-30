@@ -1,10 +1,16 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCore, type Core, type CoreOptions } from '../../core/index'
-import { FakeModelProvider, FailingModelProvider, FaultedModelProvider } from '../../core/model/fake-provider'
+import {
+  FakeModelProvider,
+  FailingModelProvider,
+  FaultedModelProvider,
+  SilentModelProvider,
+  HangingModelProvider,
+} from '../../core/model/fake-provider'
 import type { CognitionCall } from '../../core/cognition/service'
 import type { CoreStatus } from '../../core/protocol/core-protocol'
 
@@ -385,5 +391,195 @@ describe('providers', () => {
     await c.status()
     await c.stop('test')
     expect(fake.calls).toBe(0)
+  })
+})
+
+describe('the output token budget', () => {
+  /**
+   * These are service-level tests on purpose. A Governor test proves the rule;
+   * it does not prove that the service reserves before spending, which is the
+   * part that can silently be skipped.
+   */
+
+  const agentCall = (id: string, tokens: number) =>
+    call({
+      cognitionRequestId: id,
+      correlationId: id,
+      origin: 'agent',
+      cause: 'run_finished',
+      actor: 'agent:worker-1',
+      maxOutputTokens: tokens,
+    })
+
+  it('reserves the requested allowance before the provider is called', async () => {
+    const fake = new FakeModelProvider()
+    core = createCore(options({ providers: [fake] }))
+    await core.start()
+    await grant(core, { maxCalls: 5, maxOutputTokens: 1000 })
+
+    // At the moment the provider runs, the durable reservation already exists.
+    let reservedWhenCalled: number | null = null
+    const original = fake.complete.bind(fake)
+    ;(fake as unknown as { complete: typeof original }).complete = async (req) => {
+      reservedWhenCalled = core!.cognition.grants()[0]?.usage.outputTokenBudgetReserved ?? null
+      return original(req)
+    }
+
+    await core.cognition.request(agentCall('a', 300))
+
+    expect(reservedWhenCalled).toBe(300)
+    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(300)
+  })
+
+  it('exhausts the token budget across repeated real requests', async () => {
+    core = createCore(options())
+    await core.start()
+    // A call budget that will not be what stops us: 10 calls allowed, 1000
+    // output tokens, and every request asks for 300.
+    await grant(core, { maxCalls: 10, maxOutputTokens: 1000 })
+
+    for (const id of ['a', 'b', 'c']) {
+      expect((await core.cognition.request(agentCall(id, 300))).status).toBe('allowed')
+    }
+    // 900 of 1000 reserved. A fourth 300-token request does not fit.
+    const denied = await core.cognition.request(agentCall('d', 300))
+    expect(denied.status).toBe('denied')
+    expect(core.cognition.grants()[0]?.usage.calls).toBe(3)
+    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(900)
+
+    // A smaller request still fits in what is left.
+    expect((await core.cognition.request(agentCall('e', 100))).status).toBe('allowed')
+    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(1000)
+    expect((await core.cognition.request(agentCall('f', 1))).status).toBe('denied')
+  })
+
+  it('does not refund the reservation when the provider reports less', async () => {
+    const fake = new FakeModelProvider()
+    core = createCore(options({ providers: [fake] }))
+    await core.start()
+    await grant(core, { maxCalls: 10, maxOutputTokens: 1000 })
+
+    await core.cognition.request(agentCall('a', 400))
+    // The fake reports a small figure. The budget still shows 400 reserved:
+    // usage is a report, not a correction.
+    expect(fake.lastUsage).not.toBeNull()
+    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(400)
+    expect(core.cognition.grants()[0]?.usage.outputTokens).not.toBeNull()
+  })
+
+  it('keeps charging a provider that reports no usage at all', async () => {
+    const silent = new SilentModelProvider()
+    core = createCore(options({ providers: [silent] }))
+    await core.start()
+    await grant(core, { maxCalls: 10, maxOutputTokens: 1000 })
+
+    for (const id of ['a', 'b', 'c']) {
+      expect((await core.cognition.request(agentCall(id, 300))).status).toBe('allowed')
+    }
+    // Unknown usage must not read as free. The reservation is what moved.
+    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(900)
+    expect(core.cognition.grants()[0]?.usage.outputTokens).toBeNull()
+    expect((await core.cognition.request(agentCall('d', 300))).status).toBe('denied')
+  })
+
+  it('keeps the reservation when the provider fails', async () => {
+    const failing = new FailingModelProvider()
+    core = createCore(options({ providers: [failing] }))
+    await core.start()
+    await grant(core, { maxCalls: 10, maxOutputTokens: 1000 })
+
+    const outcome = await core.cognition.request(agentCall('a', 400))
+    expect(outcome.status).toBe('failed')
+    // The call never produced anything, and the allowance is still spent.
+    expect(core.cognition.grants()[0]?.usage.outputTokenBudgetReserved).toBe(400)
+    expect(core.cognition.grants()[0]?.usage.calls).toBe(1)
+  })
+
+  it('carries the reserved budget across a restart', async () => {
+    const first = createCore(options())
+    await first.start()
+    await grant(first, { maxCalls: 10, maxOutputTokens: 1000 })
+    for (const id of ['a', 'b']) {
+      await first.cognition.request(agentCall(id, 300))
+    }
+    await first.stop('test')
+
+    const second = createCore(options())
+    await second.start()
+    core = second
+
+    const recovered = second.cognition.grants().find((g) => g.id === 'grant-1')
+    expect(recovered?.usage.outputTokenBudgetReserved).toBe(600)
+    expect(recovered?.usage.calls).toBe(2)
+
+    // 400 left. One more 300 fits; the one after does not.
+    expect((await second.cognition.request(agentCall('c', 300))).status).toBe('allowed')
+    expect((await second.cognition.request(agentCall('d', 300))).status).toBe('denied')
+  })
+
+  it('charges a crashed Core for the call it never completed', async () => {
+    // A provider that never answers. The reservation is durable before the call
+    // goes out, so a process that dies mid-flight still spent it.
+    const hanging = new HangingModelProvider()
+    const first = createCore(options({ providers: [hanging] }))
+    await first.start()
+    await grant(first, { maxCalls: 10, maxOutputTokens: 1000 })
+
+    void first.cognition.request(agentCall('a', 500)).catch(() => undefined)
+    // Let the reservation land, then walk away without stopping cleanly.
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    await first.stop('killed mid-flight')
+
+    const second = createCore(options())
+    await second.start()
+    core = second
+    const recovered = second.cognition.grants().find((g) => g.id === 'grant-1')
+    expect(recovered?.usage.outputTokenBudgetReserved).toBe(500)
+  })
+})
+
+describe('the command journal', () => {
+  it('records that a command arrived without recording what it said', async () => {
+    core = createCore(options())
+    await core.start()
+    const path = join(dir, 'events.jsonl')
+    const secret = 'my bank password is hunter2 and my github token is ghp_abcdef'
+
+    const result = await core.handleCommand({
+      command: 'core.command.submit',
+      requestId: 'c1',
+      payload: { text: secret, origin: 'command-bar' },
+    })
+    expect(result.ok).toBe(true)
+
+    // The file on disk, not a projection of it.
+    const raw = await readFile(path, 'utf8')
+    expect(raw).not.toContain('hunter2')
+    expect(raw).not.toContain('ghp_abcdef')
+    expect(raw).not.toContain('bank password')
+    expect(raw).toContain('command.received')
+
+    // What is there is metadata a person can act on.
+    const received = raw
+      .split('\n')
+      .filter((line) => line.includes('command.received'))
+      .map((line) => JSON.parse(line) as { payload: Record<string, unknown> })
+    expect(received).toHaveLength(1)
+    expect(received[0]?.payload).toMatchObject({
+      contentLength: secret.length,
+      source: 'command-bar',
+    })
+    expect(received[0]?.payload).not.toHaveProperty('text')
+  })
+
+  it('keeps command text out of every state projection too', async () => {
+    core = createCore(options())
+    await core.start()
+    await core.handleCommand({
+      command: 'core.command.submit',
+      requestId: 'c1',
+      payload: { text: 'a secret plan', origin: 'command-bar' },
+    })
+    expect(JSON.stringify(core.status())).not.toContain('a secret plan')
   })
 })

@@ -74,10 +74,20 @@ export interface CoreEventPayloads {
   'core.stopping': { reason: string }
   'core.stopped': { durationMs: number }
 
+  /**
+   * The journal records that a command arrived, not what it said.
+   *
+   * An audit log is read by people, shipped in backups, and kept far longer
+   * than a conversation. Whatever a user types belongs in conversation storage,
+   * which has its own retention rules. The security journal needs only enough
+   * to answer "did this happen, and was it this long".
+   */
   'command.received': {
-    /** The user's text. This is the one place user content is durable. */
-    text: string
-    length: number
+    commandId: string
+    /** Characters in the submitted text. Metadata, not content. */
+    contentLength: number
+    /** Which surface submitted it, e.g. 'command-bar'. */
+    source: string
   }
 
   'guard.decision': {
@@ -124,6 +134,14 @@ export interface CoreEventPayloads {
     grantId: string
     requestId: string
     callsUsed: number
+    /**
+     * The output allowance taken out of the grant's budget, durably, *before*
+     * the provider was called. This is authorisation arithmetic, not usage: it
+     * moves even when the provider reports nothing, which is precisely why it
+     * cannot be conflated with the token figures below.
+     */
+    outputTokenBudgetReserved: number
+    /** What the provider reported, or null when it reported nothing. */
     inputTokens: number | null
     outputTokens: number | null
   }

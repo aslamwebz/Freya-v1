@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { JsonlEventStore } from '../../core/events/jsonl-store'
 import type { EventStore } from '../../core/events/store'
@@ -410,6 +410,210 @@ describe('concurrent appends', () => {
     // And Core is not wedged afterwards.
     const next = await fabric.append('core.stopping', { reason: 'ok-3' })
     expect(next.sequence).toBe(3)
+    await fabric.close()
+  })
+})
+
+describe('durable event validation', () => {
+  /** Write a raw log, bypassing the store, so recovery has something to judge. */
+  async function seed(...lines: string[]): Promise<void> {
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, lines.length === 0 ? '' : lines.join('\n') + '\n')
+  }
+
+  const good = (sequence: number, overrides: Record<string, unknown> = {}): string =>
+    JSON.stringify({
+      eventId: `evt-${sequence}`,
+      sequence,
+      type: 'core.stopping',
+      schemaVersion: CORE_EVENT_SCHEMA_VERSION,
+      occurredAt: new Date(1_700_000_000_000 + sequence * 1000).toISOString(),
+      source: 'core',
+      actor: 'system',
+      correlationId: `corr-${sequence}`,
+      causationId: null,
+      payload: { reason: 'validation fixture' },
+      ...overrides,
+    })
+
+  const open = () => JsonlEventStore.open(file)
+
+  it('accepts a well-formed log and preserves it', async () => {
+    await seed(good(1), good(2), good(3))
+    const store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1, 2, 3])
+    expect(store.lastTruncation()).toBeNull()
+    await store.close()
+  })
+
+  it('truncates a torn final write', async () => {
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, good(1) + '\n' + good(2).slice(0, 40))
+    const store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    expect(store.lastTruncation()?.reason).toMatch(/torn/i)
+    await store.close()
+  })
+
+  it('truncates an unparseable final line', async () => {
+    await seed(good(1), 'this is not json at all')
+    const store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    expect(store.lastTruncation()).not.toBeNull()
+    await store.close()
+  })
+
+  it('refuses an unknown event type', async () => {
+    await seed(good(1), good(2, { type: 'security.stop_all.activated_evil' }))
+    const store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    expect(store.lastTruncation()?.reason).toMatch(/unknown event type/i)
+    await store.close()
+  })
+
+  it('refuses an unsupported schema version', async () => {
+    await seed(good(1), good(2, { schemaVersion: 99 }))
+    const store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    expect(store.lastTruncation()?.reason).toMatch(/schema version/i)
+    await store.close()
+  })
+
+  it('refuses a forged principal', async () => {
+    // The check that matters most: a hand-written line must not be able to
+    // present itself as the owner.
+    await seed(good(1), good(2, { actor: 'owner; DROP TABLE' }))
+    const store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    expect(store.lastTruncation()?.reason).toMatch(/principal/i)
+    await store.close()
+  })
+
+  it('refuses a hostile source', async () => {
+    await seed(good(1), good(2, { source: 'somewhere-else' }))
+    const store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    expect(store.lastTruncation()?.reason).toMatch(/source/i)
+    await store.close()
+  })
+
+  it('refuses a non-positive or fractional sequence', async () => {
+    await seed(good(1), good(0))
+    let store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    await store.close()
+
+    await seed(good(1), good(1.5))
+    store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    await store.close()
+  })
+
+  it('refuses a duplicate sequence', async () => {
+    await seed(good(1), good(1))
+    const store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    expect(store.lastTruncation()?.reason).toMatch(/not greater than/i)
+    await store.close()
+  })
+
+  it('refuses a reversed sequence', async () => {
+    await seed(good(1), good(5), good(3))
+    const store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1, 5])
+    expect(store.lastTruncation()?.reason).toMatch(/not greater than/i)
+    await store.close()
+  })
+
+  it('refuses a malformed correlation id', async () => {
+    await seed(good(1), good(2, { correlationId: 'has spaces and\ttabs' }))
+    const store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    expect(store.lastTruncation()?.reason).toMatch(/correlationId/i)
+    await store.close()
+  })
+
+  it('refuses a payload that does not match its event type', async () => {
+    // Right type name, wrong shape: a stop event with no reason, and a grant
+    // whose ceilings are strings.
+    await seed(good(1), good(2, { payload: {} }))
+    let store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    expect(store.lastTruncation()?.reason).toMatch(/payload does not match/i)
+    await store.close()
+
+    await seed(
+      good(1),
+      JSON.stringify({
+        eventId: 'evt-2',
+        sequence: 2,
+        type: 'cognition.grant.created',
+        schemaVersion: CORE_EVENT_SCHEMA_VERSION,
+        occurredAt: new Date().toISOString(),
+        source: 'core',
+        actor: 'owner',
+        correlationId: 'corr-2',
+        causationId: null,
+        payload: {
+          grantId: 'g',
+          createdBy: 'owner',
+          expiresAt: new Date(Date.now() + 1000).toISOString(),
+          allowedOrigins: ['user'],
+          allowedCauses: ['user_message'],
+          goalId: null,
+          runId: null,
+          actor: null,
+          backgroundAllowed: false,
+          maxCalls: 'lots',
+          maxOutputTokens: 100,
+        },
+      }),
+    )
+    store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    await store.close()
+  })
+
+  it('truncates an invalid middle line and everything after it', async () => {
+    // The documented sharp edge: valid events after the damage are discarded
+    // too, because a journal with a hole in it cannot be replayed safely.
+    await seed(good(1), good(2, { type: 'not.a.real.event' }), good(3), good(4))
+    const store = await open()
+    expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
+    expect(store.lastTruncation()?.line).toBe(2)
+    // And the file really was shortened, so the next append lands cleanly.
+    const raw = await readFile(file, 'utf8')
+    expect(raw.trim().split('\n')).toHaveLength(1)
+    await store.close()
+  })
+
+  it('never replays a forged event as security state', async () => {
+    // The end-to-end claim: a log trying to activate STOP ALL with a bogus
+    // payload is truncated before replay can see it.
+    await seed(
+      good(1),
+      JSON.stringify({
+        eventId: 'evt-evil',
+        sequence: 2,
+        type: 'security.stop_all.activated',
+        schemaVersion: CORE_EVENT_SCHEMA_VERSION,
+        occurredAt: new Date().toISOString(),
+        source: 'core',
+        actor: 'owner',
+        correlationId: 'corr-evil',
+        causationId: null,
+        payload: { by: 'owner' },
+      }),
+    )
+    const store = await open()
+    const fabric = await EventFabric.open({ store })
+    // A reducer that behaves like the real one: the latch turns on for that one
+    // event type and nothing else.
+    const state = await fabric.replay({ stopped: false }, (acc, e) =>
+      e.type === 'security.stop_all.activated' ? { stopped: true } : acc,
+    )
+    expect(state.stopped).toBe(false)
+    expect(fabric.lastSequence).toBe(1)
     await fabric.close()
   })
 })

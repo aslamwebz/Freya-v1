@@ -9,12 +9,15 @@ import type { ProviderStatus } from '../protocol/core-protocol'
  * provider Phase 1 is willing to leave enabled.
  */
 export class FakeModelProvider implements ModelProvider {
-  readonly id = 'fake'
+  readonly id: string = 'fake'
   readonly kind = 'fake' as const
   readonly live = false
 
   /** Call count, so a test can prove a denial never reached a provider. */
   calls = 0
+
+  /** The last usage reported. A test seam, not part of any provider contract. */
+  lastUsage: { inputTokens: number; outputTokens: number } | null = null
 
   constructor(private readonly model = 'fake-echo-1') {}
 
@@ -31,14 +34,17 @@ export class FakeModelProvider implements ModelProvider {
 
   async complete(request: ModelRequest): Promise<ModelResult> {
     this.calls += 1
+    const inputTokens = countTokens(request.prompt)
+    const outputTokens = countTokens(request.prompt)
+    this.lastUsage = { inputTokens, outputTokens }
     return {
       requestId: request.requestId,
       providerId: this.id,
       model: this.model,
       // Deterministic: the same prompt always yields the same answer.
       text: `fake-echo: ${request.prompt}`,
-      inputTokens: countTokens(request.prompt),
-      outputTokens: countTokens(request.prompt),
+      inputTokens,
+      outputTokens,
     }
   }
 }
@@ -72,6 +78,45 @@ export class FailingModelProvider implements ModelProvider {
   async complete(_request: ModelRequest): Promise<ModelResult> {
     this.calls += 1
     throw new Error('provider is unavailable')
+  }
+}
+
+/**
+ * Answers normally but reports no token usage whatsoever.
+ *
+ * The dangerous provider: if unreported usage were read as zero, this one would
+ * hand out unlimited inference for free.
+ */
+export class SilentModelProvider extends FakeModelProvider {
+  override readonly id = 'silent'
+
+  override status(): ProviderStatus {
+    return { ...super.status(), id: this.id, model: 'silent-model' }
+  }
+
+  override async complete(request: ModelRequest): Promise<ModelResult> {
+    const result = await super.complete(request)
+    return { ...result, providerId: this.id, inputTokens: null, outputTokens: null }
+  }
+}
+
+/**
+ * Accepts the call and never answers.
+ *
+ * Models a provider that hangs. The reservation is already durable by the time
+ * this is reached, which is what makes a crash mid-flight charge the grant.
+ */
+export class HangingModelProvider extends FakeModelProvider {
+  override readonly id = 'hanging'
+
+  override status(): ProviderStatus {
+    return { ...super.status(), id: this.id, model: 'hanging-model' }
+  }
+
+  override complete(_request: ModelRequest): Promise<ModelResult> {
+    return new Promise<ModelResult>(() => {
+      /* never settles */
+    })
   }
 }
 

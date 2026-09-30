@@ -50,14 +50,38 @@ export interface CognitionGrant {
   parentGrantId: string | null
 }
 
+/**
+ * Two different quantities, deliberately not the same field.
+ *
+ * - `outputTokenBudgetReserved` is **authorisation arithmetic**: the allowance
+ *   taken out of the grant's budget before the provider is called. It moves
+ *   whether or not the call succeeds, whether or not the provider ever answers,
+ *   and it survives a crash. A grant with 1000 tokens and 300 reserved has 700
+ *   left, whatever the provider went on to do.
+ *
+ * - `outputTokens` is **reported usage**: what the provider said it consumed.
+ *   It stays `null` when the provider says nothing, because guessing would
+ *   make an unaccounted call look like a free one.
+ *
+ * Collapsing these is how a budget silently stops meaning anything, so they are
+ * separate fields with separate rules.
+ */
 export interface CognitionGrantUsage {
   calls: number
+  /** Allowance consumed by authorisation. Monotonic. Never refunded. */
+  outputTokenBudgetReserved: number
+  /** Usage the provider reported. `null` means it reported nothing. */
   inputTokens: number | null
   outputTokens: number | null
 }
 
 export function emptyGrantUsage(): CognitionGrantUsage {
-  return { calls: 0, inputTokens: null, outputTokens: null }
+  return { calls: 0, outputTokenBudgetReserved: 0, inputTokens: null, outputTokens: null }
+}
+
+/** How much of the grant's output allowance is still unreserved. */
+export function remainingOutputTokenBudget(grant: CognitionGrant): number {
+  return grant.maxOutputTokens - grant.usage.outputTokenBudgetReserved
 }
 
 export function isGrantActive(grant: CognitionGrant, now: Date): boolean {
@@ -155,14 +179,18 @@ export function checkGrant(grant: CognitionGrant, context: GrantContext, now: Da
       detail: `grant ${grant.id} has spent all ${grant.maxCalls} calls`,
     }
   }
-  const spent = grant.usage.outputTokens ?? 0
-  if (spent + context.maxOutputTokens > grant.maxOutputTokens) {
+  // The budget is measured against *reserved*, not against reported usage. A
+  // provider that reported nothing has therefore spent nothing against the
+  // budget — and the caller is about to reserve the full requested allowance,
+  // so the whole request has to fit in what is left.
+  const remaining = remainingOutputTokenBudget(grant)
+  if (context.maxOutputTokens > remaining) {
     return {
       ok: false,
       reason: 'token-budget-exhausted',
       detail:
-        `grant ${grant.id} has ${grant.maxOutputTokens - spent} output tokens left, ` +
-        `which will not cover ${context.maxOutputTokens}`,
+        `grant ${grant.id} has ${remaining} of ${grant.maxOutputTokens} output tokens ` +
+        `unreserved, which will not cover ${context.maxOutputTokens}`,
     }
   }
   return { ok: true }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { EventFabric } from './events/fabric'
 import type { EventStore } from './events/store'
 import { JsonlEventStore } from './events/jsonl-store'
@@ -68,10 +69,13 @@ class FreyaCore implements Core {
   private owner!: Principal
   private startedAt: string | null = null
   private readonly listeners = new Set<(status: CoreStatus) => void>()
+  private readonly newId: () => string
   private disposeState: () => void = () => {}
   private stopped = false
 
-  constructor(private readonly options: CoreOptions) {}
+  constructor(private readonly options: CoreOptions) {
+    this.newId = options.newId ?? (() => randomUUID())
+  }
 
   get lifecycle(): CoreLifecycle {
     return this.currentLifecycle
@@ -229,11 +233,18 @@ class FreyaCore implements Core {
             return { requestId, ok: false, refusal: { reason: decision.reason } }
           }
 
-          // Durable first. The renderer learns this happened because Core said
-          // so, not because the UI assumed it.
+          // Durable first, and deliberately thin: the journal records that a
+          // command of this length arrived, not what it said. The renderer
+          // learns this happened because Core said so, not because the UI
+          // assumed it.
+          const commandId = this.newId()
           const event = await this.fabric.append(
             'command.received',
-            { text, length: text.length },
+            {
+              commandId,
+              contentLength: text.length,
+              source: readString(envelope.payload, 'origin') ?? 'command-bar',
+            },
             { actor: 'owner', correlationId: requestId, source: 'renderer' },
           )
           return {

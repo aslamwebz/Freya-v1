@@ -226,10 +226,10 @@ export class CognitionService {
       { actor: call.actor, correlationId: call.correlationId },
     )
 
-    // The call is spent at authorisation, so a crash mid-flight cannot return
-    // the allowance to the budget.
+    // Reserve before spending. Both the call and the output allowance are
+    // taken durably here, so a crash mid-flight cannot hand either back.
     if (decision.grantId !== null) {
-      await this.consumeGrant(decision.grantId, requestId)
+      await this.reserveGrant(decision.grantId, requestId, call.maxOutputTokens)
     }
 
     const permit: GatewayPermit = {
@@ -243,6 +243,14 @@ export class CognitionService {
 
     try {
       const result = await this.gateway.execute(permit, call.prompt)
+      if (decision.grantId !== null) {
+        await this.reportProviderUsage(
+          decision.grantId,
+          requestId,
+          result.inputTokens,
+          result.outputTokens,
+        )
+      }
       return {
         status: 'allowed',
         requestId,
@@ -279,11 +287,29 @@ export class CognitionService {
     return null
   }
 
-  private async consumeGrant(grantId: string, requestId: string): Promise<void> {
+  /**
+   * Durably reserve this call's share of the grant's output allowance.
+   *
+   * Called *before* the provider is asked for anything, and never refunded. That
+   * ordering is the whole point: a grant with 1000 tokens and a 300-token
+   * request has 700 left the moment the reservation is durable, whether the
+   * provider answers, answers with a usage report, fails, or the process dies
+   * mid-flight. The budget therefore cannot be inflated by a provider that
+   * reports nothing, and cannot be reset by a crash.
+   *
+   * Reported usage is recorded separately afterwards, and only when the
+   * provider actually reported it.
+   */
+  private async reserveGrant(
+    grantId: string,
+    requestId: string,
+    maxOutputTokens: number,
+  ): Promise<void> {
     const grant = findGrant(this.state, grantId)
     if (!grant) return
     const usage: CognitionGrantUsage = {
       calls: grant.usage.calls + 1,
+      outputTokenBudgetReserved: grant.usage.outputTokenBudgetReserved + maxOutputTokens,
       inputTokens: grant.usage.inputTokens,
       outputTokens: grant.usage.outputTokens,
     }
@@ -293,8 +319,39 @@ export class CognitionService {
         grantId,
         requestId,
         callsUsed: usage.calls,
+        outputTokenBudgetReserved: usage.outputTokenBudgetReserved,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
+      },
+      { correlationId: requestId },
+    )
+  }
+
+  /**
+   * Record what the provider said it used, if it said anything.
+   *
+   * This is a report, not a budget movement. It never changes what the grant
+   * has left, and a provider that reports nothing leaves the grant untouched
+   * rather than having zero assumed on its behalf.
+   */
+  private async reportProviderUsage(
+    grantId: string,
+    requestId: string,
+    inputTokens: number | null,
+    outputTokens: number | null,
+  ): Promise<void> {
+    if (inputTokens === null && outputTokens === null) return
+    const grant = findGrant(this.state, grantId)
+    if (!grant) return
+    await this.fabric.append(
+      'cognition.grant.consumed',
+      {
+        grantId,
+        requestId,
+        callsUsed: grant.usage.calls,
+        outputTokenBudgetReserved: grant.usage.outputTokenBudgetReserved,
+        inputTokens: inputTokens ?? grant.usage.inputTokens,
+        outputTokens: outputTokens ?? grant.usage.outputTokens,
       },
       { correlationId: requestId },
     )

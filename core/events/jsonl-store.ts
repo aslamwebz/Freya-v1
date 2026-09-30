@@ -2,6 +2,7 @@ import { open, mkdir, readFile, truncate, type FileHandle } from 'node:fs/promis
 import { dirname } from 'node:path'
 import type { EventStore } from './store'
 import { CORE_EVENT_SCHEMA_VERSION, type AnyCoreEvent } from './envelope'
+import { parseDurableEvent, type ValidationFailure } from './validate'
 
 /**
  * An append-only JSONL event store.
@@ -18,11 +19,39 @@ import { CORE_EVENT_SCHEMA_VERSION, type AnyCoreEvent } from './envelope'
  *
  * Human-readable by construction: an audit journal that a person can read with
  * a text editor is worth more than query speed at these volumes.
+ *
+ * ## Recovery policy
+ *
+ * The log is a sequence of lines. Reading stops at the first line that is not
+ * a valid event, and everything from that point on is truncated away. In
+ * practice the only recoverable defects are at the tail, which is the only place
+ * a crash can leave damage:
+ *
+ * | Condition                      | What happens                                   |
+ * | ------------------------------ | ---------------------------------------------- |
+ * | torn final write (no newline)  | dropped, file truncated to the last good line   |
+ * | unparseable final line         | dropped, file truncated                        |
+ * | unknown event type             | dropped, file truncated                        |
+ * | unsupported schema version     | dropped, file truncated                        |
+ * | sequence not a positive int    | dropped, file truncated                        |
+ * | duplicate sequence             | dropped, file truncated                        |
+ * | reversed sequence              | dropped, file truncated                        |
+ * | payload does not match its type| dropped, file truncated                        |
+ * | invalid *middle* line          | dropped, and so is everything after it         |
+ *
+ * The invalid-middle case is the sharp edge: truncation discards valid events
+ * that followed. That is the deliberate choice. A journal with a hole in it
+ * cannot be replayed into security state safely — a gap could hide the
+ * revocation that followed it — so the safe reading of a damaged log is the
+ * prefix up to the damage, plus a recorded fault saying the log was truncated.
+ * Refusing to start at all would be safer still, and is what a deployment that
+ * cannot tolerate truncation should do; see `lastTruncation`.
  */
 export class JsonlEventStore implements EventStore {
   private handle: FileHandle | null = null
   private lastSeen = 0
   private recoveredBytes = 0
+  private truncation: ValidationFailure | null = null
 
   private constructor(private readonly file: string) {}
 
@@ -50,27 +79,44 @@ export class JsonlEventStore implements EventStore {
       throw error
     }
 
-    const events: AnyCoreEvent[] = []
     let goodBytes = 0
     let cursor = 0
+    let lineNumber = 0
+    let previous = 0
+    let last = 0
 
     while (cursor < raw.length) {
       const newline = raw.indexOf(0x0a, cursor)
-      if (newline === -1) break // no terminator: a torn final write
+      lineNumber += 1
+      // No terminator: the process died part-way through writing this line.
+      if (newline === -1) {
+        this.truncation = { line: lineNumber, reason: 'final write is torn: no line terminator' }
+        break
+      }
+
       const line = raw.subarray(cursor, newline).toString('utf8')
-      const parsed = parseLine(line)
-      if (parsed === null) break // corrupt or truncated: stop the log here
-      events.push(parsed)
+      const parsed = parseDurableEvent(line, previous)
+      if (!parsed.ok) {
+        this.truncation = { line: lineNumber, reason: parsed.reason }
+        break
+      }
+
+      previous = parsed.event.sequence
+      last = parsed.event.sequence
       goodBytes = newline + 1
       cursor = newline + 1
     }
 
     if (goodBytes !== raw.length) {
-      // Drop everything from the first unusable line onward.
+      // Drop everything from the first unusable line onward, including valid
+      // events that followed it. See the recovery policy above.
       await truncate(this.file, goodBytes)
+      this.recoveredBytes = goodBytes
+      this.lastSeen = last
+      return
     }
     this.recoveredBytes = goodBytes
-    this.lastSeen = events.reduce((max, event) => Math.max(max, event.sequence), 0)
+    this.lastSeen = last
   }
 
   async append(event: AnyCoreEvent): Promise<void> {
@@ -113,12 +159,15 @@ export class JsonlEventStore implements EventStore {
       throw error
     }
     const events: AnyCoreEvent[] = []
+    let previous = 0
     for (const line of raw.toString('utf8').split('\n')) {
       if (line.length === 0) continue
-      const parsed = parseLine(line)
-      // A torn tail is simply absent from the log; it is not an error to read.
-      if (parsed === null) break
-      events.push(parsed)
+      const parsed = parseDurableEvent(line, previous)
+      // Recovery already truncated at the first bad line, so reaching one here
+      // means the file changed under us. Stop rather than trust it.
+      if (!parsed.ok) break
+      previous = parsed.event.sequence
+      events.push(parsed.event)
     }
     return events
   }
@@ -137,6 +186,15 @@ export class JsonlEventStore implements EventStore {
     return this.recoveredBytes
   }
 
+  /**
+   * What recovery discarded, if anything. Non-null means the log was truncated,
+   * which a caller that cares about audit completeness must surface rather than
+   * quietly accept.
+   */
+  lastTruncation(): ValidationFailure | null {
+    return this.truncation
+  }
+
   async close(): Promise<void> {
     const handle = this.handle
     this.handle = null
@@ -148,33 +206,3 @@ function isMissing(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as { code?: string }).code === 'ENOENT'
 }
 
-/**
- * Parse one line, rejecting anything that is not a plausible event.
- *
- * A hand-edited or partially-written log must not be able to inject a sequence
- * number, a schema version, or a principal of its own choosing.
- */
-function parseLine(line: string): AnyCoreEvent | null {
-  if (line.trim().length === 0) return null
-  let value: unknown
-  try {
-    value = JSON.parse(line)
-  } catch {
-    return null
-  }
-  if (typeof value !== 'object' || value === null) return null
-  const event = value as Record<string, unknown>
-
-  if (typeof event.eventId !== 'string' || event.eventId.length === 0) return null
-  if (typeof event.type !== 'string' || event.type.length === 0) return null
-  if (typeof event.schemaVersion !== 'number') return null
-  if (typeof event.sequence !== 'number' || !Number.isInteger(event.sequence)) return null
-  if (typeof event.occurredAt !== 'string') return null
-  if (event.source !== 'core' && event.source !== 'renderer' && event.source !== 'system') return null
-  if (typeof event.actor !== 'string') return null
-  if (typeof event.correlationId !== 'string') return null
-  if (event.causationId !== null && typeof event.causationId !== 'string') return null
-  if (typeof event.payload !== 'object' || event.payload === null) return null
-
-  return event as unknown as AnyCoreEvent
-}

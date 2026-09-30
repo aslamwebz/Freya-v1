@@ -278,6 +278,33 @@ describe('every presence change goes through transition validation', () => {
     expect(after.presence.state).toBe('locked')
   })
 
+  it('a STOP ALL status overrides an already-listening UI immediately', () => {
+    const listening = apply([
+      { type: 'core.status', status: READY_CORE },
+      { type: 'voice.toggle', listening: true },
+    ])
+    expect(listening.presence.state).toBe('listening')
+
+    const stopped = reduce(listening, { type: 'core.status', status: STOPPED_CORE })
+    expect(stopped.presence.state).toBe('locked')
+    expect(stopped.presence.detail).toMatch(/stopped|refused/i)
+  })
+
+  it('a journal fault outranks an existing STOP ALL presentation', () => {
+    const locked = apply([{ type: 'core.status', status: STOPPED_CORE }])
+    expect(locked.presence.state).toBe('locked')
+
+    const errored = reduce(locked, { type: 'core.status', status: CORRUPT_CORE })
+    expect(errored.presence.state).toBe('error')
+    expect(errored.presence.detail).toMatch(/journal is corrupt/i)
+  })
+
+  it('a same-state Core update refreshes the human detail', () => {
+    const ready = apply([{ type: 'core.status', status: READY_CORE }])
+    expect(ready.presence.state).toBe('idle')
+    expect(ready.presence.detail).toBe('Standing by.')
+  })
+
   it('the microphone cannot listen while locked', () => {
     const locked = apply([{ type: 'core.status', status: STOPPED_CORE }])
     const after = reduce(locked, { type: 'voice.toggle', listening: true })

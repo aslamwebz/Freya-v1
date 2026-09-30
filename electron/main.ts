@@ -102,50 +102,53 @@ function shutdownCoreAndThen(finish: () => void): void {
  * ------------------------------------------------------------------ */
 
 /**
- * Which screen the person asked for, or null to let the platform choose.
+ * Which physical display number the person asked for, or null to let the
+ * platform choose.
  *
- * `--display=N`, or `FREYA_DISPLAY=N`, where **N counts secondary displays from
- * 1**. So `--display=1` is the first non-primary monitor, and `--display=0` means
- * "no preference" rather than "the primary one, expressed as a zero index" —
- * which is the reading that makes `--display=1` do the obvious thing.
+ * Display numbers are intentionally human-facing:
  *
- * Counting from the *secondary* list rather than from `getAllDisplays()` is the
- * part that matters. Electron does not promise an ordering, so index 0 is not
- * reliably the primary; on this machine it is not. Without the sort, the same
- * flag could open on either screen depending on enumeration order.
+ *   1 = primary display
+ *   2 = first secondary display
+ *   3 = second secondary display
  *
- * Deliberately opt-in and never persisted. Which screen someone wants Freya on is
- * a property of the machine and the moment — the same person develops with a
- * second monitor and presents with one — so putting it in the workspace file
- * would make the window open somewhere surprising on a later launch.
+ * Electron does not expose the labels Windows draws in Display Settings, so
+ * beyond the primary display we use a stable geometric order. The important
+ * case is the ordinary two-monitor desk: `--display=2` always means the one
+ * display that is not primary.
  */
-function requestedSecondaryCount(): number | null {
+function requestedDisplayNumber(): number | null {
   const flag = process.argv.find((arg) => arg.startsWith('--display='))
   const raw = flag?.slice('--display='.length) ?? process.env.FREYA_DISPLAY
   if (raw === undefined || raw === '') return null
   const parsed = Number(raw)
   if (!Number.isInteger(parsed) || parsed < 1) return null
-  return parsed - 1
+  return parsed
 }
 
 /**
  * Bounds for the requested display, or null to let the platform choose.
  *
- * `workArea` rather than `bounds`, so a window aimed at a secondary monitor does
+ * `workArea` rather than `bounds`, so a window aimed at another monitor does
  * not start underneath its taskbar.
  */
 function boundsForRequestedDisplay(): Electron.Rectangle | null {
-  const wanted = requestedSecondaryCount()
-  if (wanted === null) return null
+  const requested = requestedDisplayNumber()
+  if (requested === null) return null
 
+  const primary = screen.getPrimaryDisplay()
   const secondary = screen
     .getAllDisplays()
-    .filter((display) => display.id !== screen.getPrimaryDisplay().id)
-    .sort((a, b) => a.bounds.x - b.bounds.x)
+    .filter((display) => display.id !== primary.id)
+    .sort((a, b) => {
+      const horizontal = a.bounds.x - b.bounds.x
+      return horizontal !== 0 ? horizontal : a.bounds.y - b.bounds.y
+    })
 
-  const display = secondary[wanted]
-  // Out of range — a single-monitor machine, or `--display=3` on a two-screen
-  // desk — must not fail the launch. It falls back to the platform's choice.
+  const displays = [primary, ...secondary]
+  const display = displays[requested - 1]
+
+  // Out of range — e.g. display 2 on a single-monitor machine — falls back to
+  // the platform instead of preventing Freya from launching.
   if (!display) return null
 
   const area = display.workArea

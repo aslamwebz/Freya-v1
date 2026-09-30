@@ -211,6 +211,44 @@ describe('admission writes three records', () => {
   })
 })
 
+describe('memory conflicts', () => {
+  it('persists a contradiction on both memories so either side discloses it', async () => {
+    const { brain: b } = await open()
+    const first = await b.writeMemory({
+      kind: 'semantic',
+      subject: 'Project Alpha deadline',
+      content: 'the deadline is Friday',
+      source: 'owner-assertion',
+      sourceRef: null,
+      confidence: 'high',
+      sensitivity: 'normal',
+      entityRefs: ['project-alpha'],
+    })
+    const second = await b.writeMemory({
+      kind: 'semantic',
+      subject: 'Project Alpha deadline',
+      content: 'the deadline is Monday',
+      source: 'owner-assertion',
+      sourceRef: null,
+      confidence: 'high',
+      sensitivity: 'normal',
+      entityRefs: ['project-alpha'],
+    })
+
+    const firstId = first.memory?.memoryId as string
+    const secondId = second.memory?.memoryId as string
+    expect(b.state().memories.get(firstId)?.status).toBe('conflicted')
+    expect(b.state().memories.get(secondId)?.status).toBe('conflicted')
+    expect(b.state().memories.get(firstId)?.conflictsWith).toContain(secondId)
+    expect(b.state().memories.get(secondId)?.conflictsWith).toContain(firstId)
+
+    const projection = b.projection()
+    expect(projection.counts.conflicted).toBe(2)
+    expect(projection.conflicts.some((conflict) => conflict.memoryId === firstId)).toBe(true)
+    expect(projection.conflicts.some((conflict) => conflict.memoryId === secondId)).toBe(true)
+  })
+})
+
 describe('archiving', () => {
   it('stops recalling a withdrawn memory without deleting it', async () => {
     const { brain: b } = await open()
@@ -239,6 +277,26 @@ describe('archiving', () => {
   it('refuses to archive something that does not exist', async () => {
     const { brain: b } = await open()
     expect(await b.archiveMemory('nope', 'because')).toMatchObject({ outcome: 'rejected' })
+  })
+
+  it('keeps a private archive reason inside the Brain, not the audit journal', async () => {
+    const { brain: b } = await open()
+    const written = await b.writeMemory({
+      kind: 'semantic',
+      subject: 'the owner',
+      content: 'the owner drinks tea',
+      source: 'owner-assertion',
+      sourceRef: null,
+      confidence: 'high',
+      sensitivity: 'personal',
+    })
+    const memoryId = written.memory?.memoryId as string
+    const privateReason = 'private medical reason that must not reach audit logs'
+
+    await b.archiveMemory(memoryId, privateReason)
+
+    expect(b.state().memories.get(memoryId)?.admissionReason).toContain(privateReason)
+    expect(JSON.stringify(await readAllEvents())).not.toContain(privateReason)
   })
 })
 
@@ -332,7 +390,11 @@ describe('world', () => {
     expect(second.ok && second.conflictsWith.length).toBe(1)
     const current = [...b.state().relations.values()].filter((relation) => relation.validUntil === null)
     expect(current).toHaveLength(2)
-    expect(b.recall({ text: 'alpha' }).conflicts.length).toBeGreaterThan(0)
+    // Global conflict inspection belongs to the Brain projection. A RecallPack is
+    // deliberately scoped to selected memories so unrelated world state cannot
+    // leak into model context.
+    expect(b.projection().conflicts.length).toBeGreaterThan(0)
+    expect(b.recall({ text: 'alpha' }).conflicts).toEqual([])
   })
 
   it('keeps an observation as an observation, never promoted on its own', async () => {
@@ -494,6 +556,32 @@ describe('what reaches the journal', () => {
     expect(JSON.stringify(payload)).not.toMatch(/shellfish/)
     expect(payload).toMatchObject({ source: 'owner-assertion', kind: 'semantic' })
     expect(payload.contentLength).toBe('the owner is allergic to shellfish'.length)
+  })
+
+  it('does not copy a private relation predicate into the audit journal', async () => {
+    const { brain: b } = await open()
+    const subject = await b.rememberEntity({
+      type: 'person',
+      canonicalName: 'Private Person',
+      source: 'owner-assertion',
+      sourceRef: null,
+      epistemic: 'asserted',
+    })
+    const entityId = subject.ok ? subject.entityId : ''
+    const predicate = 'private-medical-relationship'
+
+    await b.relate({
+      subjectEntityId: entityId,
+      predicate,
+      literalValue: 'present',
+      source: 'owner-assertion',
+      sourceRef: null,
+      confidence: 'high',
+      epistemic: 'asserted',
+    })
+
+    expect(JSON.stringify(await readAllEvents())).not.toContain(predicate)
+    expect([...b.state().relations.values()][0]?.predicate).toBe(predicate)
   })
 
   it('measures an entity name rather than recording it', async () => {

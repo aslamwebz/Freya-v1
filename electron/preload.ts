@@ -7,6 +7,8 @@ import type {
 } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
+import { CONVERSATION_LIMITS } from '../core/conversation/types'
+import { VOICE_LIMITS } from '../core/voice/types'
 
 export interface RuntimeInfo {
   version: string
@@ -66,7 +68,26 @@ const api = {
         refusal: { reason: `unknown command: ${String(command)}` },
       })
     }
-    const envelope: CoreCommandEnvelope = { command, requestId: newRequestId(), payload }
+
+    // The context bridge is a capability boundary, not a generic serializer.
+    // Rebuild the payload from the small fields each renderer-reachable command
+    // actually owns. This prevents a compromised window from attaching a huge
+    // ignored blob to an otherwise valid command and making the main process
+    // structured-clone it before Core can reject it.
+    const bounded = rendererPayload(command, payload)
+    if (!bounded.ok) {
+      return Promise.resolve({
+        requestId: 'rejected',
+        ok: false,
+        refusal: { reason: bounded.reason },
+      })
+    }
+
+    const envelope: CoreCommandEnvelope = {
+      command,
+      requestId: newRequestId(),
+      ...(bounded.payload === undefined ? {} : { payload: bounded.payload }),
+    }
     return ipcRenderer.invoke('freya:core:submit', envelope)
   },
 
@@ -167,6 +188,127 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'voice.capture.end',
   'voice.capture.cancel',
 ])
+
+type RendererPayloadResult =
+  | { ok: true; payload?: unknown }
+  | { ok: false; reason: string }
+
+const MAX_ID_CHARS = 256
+const MAX_STOP_REASON_CHARS = 1_000
+const MAX_COMMAND_ORIGIN_CHARS = 128
+
+function rendererPayload(command: CoreCommandName, payload: unknown): RendererPayloadResult {
+  const record =
+    typeof payload === 'object' && payload !== null
+      ? (payload as Record<string, unknown>)
+      : null
+
+  const string = (key: string, max: number, required = true): string | null | undefined => {
+    const value = record?.[key]
+    if (value === undefined && !required) return undefined
+    if (typeof value !== 'string' || value.length === 0 || value.length > max) return null
+    return value
+  }
+
+  switch (command) {
+    case 'core.status.read':
+    case 'cognition.status.read':
+    case 'security.status.read':
+    case 'security.resume':
+    case 'conversation.list':
+    case 'voice.status.read':
+    case 'voice.capture.start':
+    case 'voice.capture.cancel':
+      return { ok: true }
+
+    case 'core.command.submit': {
+      const text = string('text', 4_000)
+      if (text === null || text === undefined) return { ok: false, reason: 'command text is invalid' }
+      const origin = string('origin', MAX_COMMAND_ORIGIN_CHARS, false)
+      if (origin === null) return { ok: false, reason: 'command origin is invalid' }
+      return { ok: true, payload: { text, ...(origin === undefined ? {} : { origin }) } }
+    }
+
+    case 'security.stopAll': {
+      const reason = string('reason', MAX_STOP_REASON_CHARS, false)
+      if (reason === null) return { ok: false, reason: 'STOP ALL reason is too large or invalid' }
+      return { ok: true, payload: reason === undefined ? undefined : { reason } }
+    }
+
+    case 'conversation.create': {
+      const title = string('title', CONVERSATION_LIMITS.maxTitleCharacters, false)
+      if (title === null) return { ok: false, reason: 'conversation title is too large or invalid' }
+      return { ok: true, payload: title === undefined ? undefined : { title } }
+    }
+
+    case 'conversation.read': {
+      const conversationId = string('conversationId', MAX_ID_CHARS)
+      if (conversationId === null || conversationId === undefined) {
+        return { ok: false, reason: 'conversation id is invalid' }
+      }
+      return { ok: true, payload: { conversationId } }
+    }
+
+    case 'conversation.turn.submit': {
+      const conversationId = string('conversationId', MAX_ID_CHARS)
+      const text = string('text', CONVERSATION_LIMITS.maxMessageCharacters)
+      if (conversationId === null || conversationId === undefined) {
+        return { ok: false, reason: 'conversation id is invalid' }
+      }
+      if (text === null || text === undefined) {
+        return { ok: false, reason: 'conversation message is too large or invalid' }
+      }
+      return { ok: true, payload: { conversationId, text } }
+    }
+
+    case 'conversation.turn.cancel': {
+      const turnId = string('turnId', MAX_ID_CHARS)
+      if (turnId === null || turnId === undefined) {
+        return { ok: false, reason: 'turn id is invalid' }
+      }
+      return { ok: true, payload: { turnId } }
+    }
+
+    case 'voice.capture.end': {
+      const sessionId = string('sessionId', MAX_ID_CHARS)
+      const audio = record?.audio
+      const durationMs = record?.durationMs
+      const cancelled = record?.cancelled
+
+      if (sessionId === null || sessionId === undefined) {
+        return { ok: false, reason: 'voice session id is invalid' }
+      }
+      if (!(audio instanceof Uint8Array)) {
+        return { ok: false, reason: 'voice audio payload is invalid' }
+      }
+      if (audio.byteLength > VOICE_LIMITS.maxAudioBytes) {
+        return { ok: false, reason: 'voice audio payload exceeds the capture limit' }
+      }
+      if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 0) {
+        return { ok: false, reason: 'voice capture duration is invalid' }
+      }
+      if (cancelled !== undefined && typeof cancelled !== 'boolean') {
+        return { ok: false, reason: 'voice cancellation flag is invalid' }
+      }
+
+      return {
+        ok: true,
+        payload: {
+          sessionId,
+          audio,
+          durationMs,
+          ...(cancelled === undefined ? {} : { cancelled }),
+        },
+      }
+    }
+
+    // Grant governance is intentionally not in CORE_COMMANDS. Keeping a default
+    // refusal here makes that property survive if the command vocabulary grows
+    // and someone forgets to add a bounded renderer shape at the same time.
+    default:
+      return { ok: false, reason: 'command has no renderer payload contract' }
+  }
+}
 
 /** A request id the renderer cannot choose, so it cannot collide or replay. */
 function newRequestId(): string {

@@ -54,8 +54,8 @@ export function ChatSurface() {
           <p className="chat-turn" data-role="freya">
             <b>Freya</b>
             <span className="chat-boundary">
-              Held. No model is connected in Phase 0, and the governor is not implemented, so this
-              message was never going to be generated. Inference spent: zero.
+              Held. Chat cognition is not connected in Phase 2. Core and the Governor exist, but
+              this surface does not request model inference yet. Inference spent: zero.
             </span>
           </p>
         ) : null}

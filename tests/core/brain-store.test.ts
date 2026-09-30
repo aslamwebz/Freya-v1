@@ -356,6 +356,13 @@ describe('chain integrity', () => {
 })
 
 describe('validation', () => {
+  it('does not echo arbitrary content used as an unknown record kind', () => {
+    const privateText = 'private-memory-text-in-a-kind'
+    const result = validateRecord({ kind: privateText })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).not.toContain(privateText)
+  })
+
   it('refuses a memory with no admission reason', () => {
     const record = { kind: 'memory-record', memory: memory('m1', 'something') } as unknown
     const broken = { kind: 'memory-record', memory: { ...memory('m1', 'something'), admissionReason: '' } }

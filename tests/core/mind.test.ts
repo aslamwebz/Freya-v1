@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCore, type Core, type CoreOptions } from '../../core/index'
@@ -129,6 +129,16 @@ async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<voi
 }
 
 describe('a damaged Brain does not disable cognition', () => {
+  it('never copies malformed Brain content into health or Event Fabric diagnostics', async () => {
+    const path = join(dir, 'events.jsonl')
+    const privateText = 'private-memory-text-in-a-damaged-header'
+    await writeFile(`${path}.brain`, `${JSON.stringify({ version: privateText })}\n`)
+    const c = await started({ brainKey: new Uint8Array(32).fill(43) })
+    expect(c.brain()?.health).toBe('degraded')
+    expect(c.brain()?.reason).not.toContain(privateText)
+    expect(await readFile(path, 'utf8')).not.toContain(privateText)
+  })
+
   it('starts with a corrupt first record and still answers one explicit turn', async () => {
     const path = join(dir, 'events.jsonl')
     await writeFile(`${path}.brain`, '{truncated')

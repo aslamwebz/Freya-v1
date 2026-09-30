@@ -179,7 +179,8 @@ export class EncryptedBrainStore implements BrainStore {
       }
       // Version before shape, so a future format names itself.
       if (stored.version !== BRAIN_RECORD_VERSION) {
-        this.degrade(`Brain record version ${String(stored.version)} is not this version`)
+        const version = Number.isSafeInteger(stored.version) ? String(stored.version) : 'unrecognised'
+        this.degrade(`Brain record version ${version} is not this version`)
         return
       }
       if (

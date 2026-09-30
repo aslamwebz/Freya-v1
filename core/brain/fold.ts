@@ -109,7 +109,7 @@ export function validateRecord(value: unknown): { ok: true; record: BrainRecord 
   const record = value as Record<string, unknown>
   const kind = record.kind
   if (typeof kind !== 'string' || !RECORD_KINDS.includes(kind as BrainRecordKind)) {
-    return { ok: false, reason: `a Brain record named an unknown kind: ${String(kind)}` }
+    return { ok: false, reason: 'a Brain record named an unknown kind' }
   }
 
   const ok = (): { ok: true; record: BrainRecord } => ({ ok: true, record: value as BrainRecord })
@@ -294,7 +294,7 @@ export function validateRecord(value: unknown): { ok: true; record: BrainRecord 
       return ok()
     }
     default:
-      return { ok: false, reason: `a Brain record named an unknown kind: ${String(kind)}` }
+      return { ok: false, reason: 'a Brain record named an unknown kind' }
   }
 }
 

@@ -175,9 +175,19 @@ export class ModelGateway {
     }
   }
 
-  /** Usage for this Core session. Never estimated. */
+  /**
+   * Usage for this Core session.
+   *
+   * A provider call that is still in flight has not reported its final token
+   * usage yet, so the visible total is necessarily a lower bound until it
+   * settles. The durable projection applies the same rule to replayed unfinished
+   * starts after a crash.
+   */
   usage(): ModelUsage {
-    return { ...this.sessionUsage }
+    return {
+      ...this.sessionUsage,
+      unknownUsageCalls: this.sessionUsage.unknownUsageCalls + this.activeCallCount(),
+    }
   }
 
   statuses(): ProviderStatus[] {
@@ -191,7 +201,11 @@ export class ModelGateway {
    * provably idle rather than merely quiet.
    */
   activeCallCount(): number {
-    return this.active.size
+    let count = 0
+    for (const call of this.active.values()) {
+      if (call.contacted) count += 1
+    }
+    return count
   }
 
   /**
@@ -318,6 +332,10 @@ export class ModelGateway {
       // mark and the call are one step, so it cannot be wrong about whether a
       // provider was asked.
       call.contacted = true
+      // This is the exact transition from "authorised/queued inside the
+      // gateway" to "the provider has been handed the request". Presence and
+      // usage become live only here, not when execute() merely begins.
+      this.onActivityChange()
       const result = await provider.complete(request, options)
 
       this.sessionUsage = accumulateUsage(this.sessionUsage, {
@@ -432,13 +450,14 @@ export class ModelGateway {
       cancellationReason: null,
     }
     this.active.set(call.slot, call)
-    this.onActivityChange()
     return call
   }
 
   private endCall(call: ActiveCall): void {
     if (!this.active.delete(call.slot)) return
-    this.onActivityChange()
+    // Pre-contact cancellations never became live provider work, so there is
+    // no visible active-count transition to publish for them.
+    if (call.contacted) this.onActivityChange()
   }
 }
 

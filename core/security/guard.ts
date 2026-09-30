@@ -26,26 +26,26 @@ export interface Principal {
   trusted: boolean
 }
 
-/** The owner: the human running Freya. The only principal that may govern. */
-export function ownerPrincipal(capabilities: readonly Capability[]): Principal {
-  return { id: 'owner', capabilities: new Set(capabilities), trusted: true }
-}
-
-/** Freya itself, acting on its own behalf. Deliberately narrow. */
-export function systemPrincipal(capabilities: readonly Capability[]): Principal {
-  return { id: 'system', capabilities: new Set(capabilities), trusted: true }
-}
-
 /**
- * A future agent or module identity.
+ * ## There is deliberately no exported principal factory
  *
- * Phase 1 creates none of these. The constructor exists so that the *shape* of
- * a worker identity is fixed before one is ever built: a worker gets
- * capabilities it was handed, is never `trusted`, and starts empty.
+ * An earlier version exported `ownerPrincipal`, `systemPrincipal` and
+ * `workerPrincipal` from here. That was a hole with a tidy signature: any module
+ * inside Core could call `ownerPrincipal(ALL_CAPABILITIES)` and be the owner,
+ * and the code doing it would have looked like ordinary use of the security
+ * module rather than an escalation.
+ *
+ * Trusted principals are now built in exactly one place — the Cognition
+ * Service, which hands out authority objects whose methods match the authority
+ * they were issued — and this module exports only the *policy* that judges a
+ * principal it is given. A `Principal` is a plain interface, so a determined
+ * caller can still write the literal; what is lost is the official-looking
+ * constructor, which is the difference between an escalation that reads like
+ * normal code and one that does not.
+ *
+ * A test of the policy builds its principals as literals, which is also clearer
+ * about what the policy is actually being handed.
  */
-export function workerPrincipal(id: string, capabilities: readonly Capability[] = []): Principal {
-  return { id: `agent:${id}`, capabilities: new Set(capabilities), trusted: false }
-}
 
 export function isPrincipalId(value: unknown): value is PrincipalId {
   if (typeof value !== 'string') return false

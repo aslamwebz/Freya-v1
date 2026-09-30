@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ElectronCoreHost } from '../../electron/coreHost'
@@ -119,5 +119,21 @@ describe('the Core host', () => {
     // rather than restarting — the durable record is what carries the state.
     expect(host!.status().lifecycle).toBe('ready')
     expect(host!.status().eventSequence).toBeGreaterThan(2)
+  })
+})
+
+describe('the renderer bridge refuses what a window should not name', () => {
+  it('does not include grant governance, which Core does support', async () => {
+    // Core can create and revoke grants. A window cannot. The list the preload
+    // bridge checks is a subset on purpose, so a compromised renderer has no
+    // path to grant authority even though the command exists.
+    const source = await readFile(
+      new URL('../../electron/preload.ts', import.meta.url),
+      'utf8',
+    )
+    const listed = source.slice(source.indexOf('CORE_COMMANDS'))
+    expect(listed).toContain("'security.stopAll'")
+    expect(listed).not.toContain("'cognition.grant.create'")
+    expect(listed).not.toContain("'cognition.grant.revoke'")
   })
 })

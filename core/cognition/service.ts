@@ -61,6 +61,21 @@ export class CognitionService {
   private readonly newId: () => string
   private readonly disposeFabric: () => void
 
+  /**
+   * One lock per grant, held only while a request is authorised and its
+   * reservation is made durable.
+   *
+   * Without this the budget has a hole in it. "How much is left?" and "take
+   * that much" are two steps, and ten concurrent callers all read the same
+   * remaining figure before any of them had reserved — so a 1000-token grant
+   * cheerfully authorised ten 300-token requests and finished 3000 tokens over.
+   *
+   * The lock is per grant, so unrelated grants still proceed in parallel, and
+   * it is released before the provider is called, because serialising inference
+   * would defeat the point of a gateway.
+   */
+  private readonly grantLocks = new Map<string, Promise<unknown>>()
+
   /** Kept current by the fabric subscription, so replay and live agree. */
   private state: CoreState
 
@@ -163,7 +178,7 @@ export class CognitionService {
    * other, so there is nothing for a worker to reach.
    */
   ownerAuthority(): OwnerAuthority {
-    const owner = this.ownerPrincipal()
+    const owner = this.ownerPrincipalFor()
     return {
       principalId: 'owner',
       request: (intent) => this.requestFor(owner, intent),
@@ -184,7 +199,15 @@ export class CognitionService {
     }
   }
 
-  private ownerPrincipal(): Principal {
+  /**
+   * The one place a trusted principal is built.
+   *
+   * Core needs an owner to evaluate command capabilities against, and it needs
+   * one for grant governance. Both come from here rather than from an exported
+   * factory in the security module, so there is a single construction site for
+   * authority in the whole of Core.
+   */
+  ownerPrincipalFor(): Principal {
     return { id: 'owner', capabilities: new Set(ALL_CAPABILITIES), trusted: true }
   }
 
@@ -236,6 +259,44 @@ export class CognitionService {
     )
 
     const nominated = this.nominateGrant(origin, cause, principal.id, background)
+
+    // Authorisation and reservation are one indivisible step per grant. The
+    // grantless user path has no shared budget, so it needs no lock.
+    return nominated === null
+      ? this.authoriseAndRun(principal, intent, shape, null, requestId, correlationId)
+      : this.withGrantLock(nominated, () =>
+          this.authoriseAndRun(principal, intent, shape, nominated, requestId, correlationId),
+        )
+  }
+
+  /** Hold the lock for a grant, and release it whatever happens. */
+  private withGrantLock<T>(grantId: string, task: () => Promise<T>): Promise<T> {
+    const prior = this.grantLocks.get(grantId) ?? Promise.resolve()
+    const run = prior.then(task, task)
+    this.grantLocks.set(
+      grantId,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    )
+    return run
+  }
+
+  /**
+   * Decide, reserve, and only then call. Every caller arrives here holding the
+   * grant's lock, so the budget it read is still the budget.
+   */
+  private async authoriseAndRun(
+    principal: Principal,
+    intent: CognitionIntent,
+    shape: (typeof INTENT_SHAPES)[keyof typeof INTENT_SHAPES],
+    nominated: string | null,
+    requestId: string,
+    correlationId: string,
+  ): Promise<CognitionOutcome> {
+    const { origin, cause, background } = shape
+    const maxOutputTokens = intent.maxOutputTokens
 
     const governorRequest: CognitionRequest = {
       cognitionRequestId: requestId,

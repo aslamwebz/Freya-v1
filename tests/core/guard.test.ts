@@ -4,16 +4,34 @@ import {
   DefaultGuard,
   isCapability,
   isPrincipalId,
-  ownerPrincipal,
-  systemPrincipal,
-  workerPrincipal,
   type Principal,
 } from '../../core/security/guard'
-import { CAPABILITIES, type Capability } from '../../core/protocol/core-protocol'
+import {
+  CAPABILITIES,
+  type Capability,
+  type PrincipalId,
+} from '../../core/protocol/core-protocol'
 
-const owner = ownerPrincipal([...CAPABILITIES])
-const weakOwner = ownerPrincipal([])
-const nobody = systemPrincipal([])
+/**
+ * Principals as literals.
+ *
+ * The security module no longer exports a factory, so a test of the policy
+ * builds the thing the policy is handed. Writing the `trusted` flag out by hand
+ * also makes each case's trust explicit, which a helper would have hidden.
+ */
+const asPrincipal = (
+  id: PrincipalId,
+  capabilities: readonly string[] = [],
+  trusted = true,
+): Principal => ({
+  id,
+  capabilities: new Set(capabilities as readonly Capability[]),
+  trusted,
+})
+
+const owner = asPrincipal('owner', CAPABILITIES)
+const weakOwner = asPrincipal('owner')
+const nobody = asPrincipal('system')
 
 describe('capability vocabulary', () => {
   it('is closed and typed', () => {
@@ -78,13 +96,13 @@ describe('DefaultGuard — deny by default', () => {
   })
 
   it('denies a capability outside the vocabulary', () => {
-    const principal: Principal = ownerPrincipal(['root' as Capability])
+    const principal: Principal = asPrincipal('owner', ['root' as Capability])
     const verdict = guard.evaluate(principal, 'root' as Capability)
     expect(verdict).toMatchObject({ allowed: false, outcome: 'deny' })
   })
 
   it('denies every capability to an untrusted principal, whatever it claims', () => {
-    const liar = workerPrincipal('impostor', [...CAPABILITIES])
+    const liar = asPrincipal('agent:impostor', CAPABILITIES, false)
     expect(liar.trusted).toBe(false)
     for (const capability of CAPABILITIES) {
       expect(guard.evaluate(liar, capability).allowed).toBe(false)
@@ -92,7 +110,7 @@ describe('DefaultGuard — deny by default', () => {
   })
 
   it('never grants a worker the ability to govern grants', () => {
-    const worker = workerPrincipal('smith', [...CAPABILITIES])
+    const worker = asPrincipal('agent:smith', CAPABILITIES, false)
     expect(guard.evaluate(worker, 'cognition.grant.manage').allowed).toBe(false)
   })
 

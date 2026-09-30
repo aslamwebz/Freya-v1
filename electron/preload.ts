@@ -83,6 +83,15 @@ const api = {
   },
 }
 
+/**
+ * The commands a renderer may name.
+ *
+ * Deliberately a *subset* of `CoreCommandName`. Core can create and revoke
+ * grants, but a window cannot: the bridge refuses those names, so a compromised
+ * renderer has no path to grant governance even though the command exists in
+ * Core. Adding a name here is a decision to hand a window a capability, and it
+ * should read like one.
+ */
 const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'core.status.read',
   'core.command.submit',

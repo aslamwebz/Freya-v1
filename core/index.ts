@@ -5,18 +5,16 @@ import { JsonlEventStore } from './events/jsonl-store'
 import type { AnyCoreEvent } from './events/envelope'
 import { initialCoreState, reduceCoreState, type CoreState } from './state'
 import { projectCoreStatus } from './projections/core-status'
-import { DefaultGuard, ownerPrincipal, type Guard, type Principal } from './security/guard'
+import { DefaultGuard, type Guard, type Principal } from './security/guard'
 import { CognitionService } from './cognition/service'
 import { ModelGateway, type GatewayRecorder } from './model/gateway'
 import type { ModelProvider } from './model/provider'
 import { FakeModelProvider } from './model/fake-provider'
 import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
-import { ALL_CAPABILITIES } from './protocol/core-protocol'
-import type { CognitionCause, CognitionOrigin } from './protocol/core-protocol'
+import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
 import type { CognitionGrantSpec } from './cognition/grants'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
 import type {
-  Capability,
   CoreCommandEnvelope,
   CoreCommandResult,
   CoreLifecycle,
@@ -148,7 +146,6 @@ class FreyaCore implements Core {
     this.state = await this.fabric.replay(initialCoreState(), reduceCoreState)
 
     this.guard = this.buildGuard()
-    this.owner = ownerPrincipal(this.allCapabilities())
 
     this.gateway = new ModelGateway({
       providers: this.buildProviders(),
@@ -160,6 +157,9 @@ class FreyaCore implements Core {
       { fabric: this.fabric, gateway: this.gateway, guard: this.guard, now: this.options.now },
       this.state,
     )
+    // The owner principal comes from the service, which is the only place in
+    // Core that builds a trusted one.
+    this.owner = this.service.ownerPrincipalFor()
 
     // State follows the log, for both replay and live appends.
     this.disposeState = this.fabric.subscribe((event) => {
@@ -381,9 +381,7 @@ class FreyaCore implements Core {
 
   /* ----------------------------------------------------------- private */
 
-  private allCapabilities(): Capability[] {
-    return [...ALL_CAPABILITIES]
-  }
+
 
   private buildGuard(): Guard {
     // Deny by default. Nothing is on an approval list, because no approval

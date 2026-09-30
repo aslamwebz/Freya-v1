@@ -121,25 +121,43 @@ async function main(): Promise<void> {
           }
         })
 
+      const stageBox = (p: Page) =>
+        p.evaluate(() => {
+          const host = document.querySelector('.presence-stage')
+          if (!host) return null
+          const box = host.getBoundingClientRect()
+          return { width: box.width, height: box.height }
+        })
+
       const initialFit = await backingMatchesBox(page)
+      const initialStageBox = await stageBox(page)
       check(
         'presence backing store matches its box before anything moves',
         initialFit !== null && initialFit.widthError < 0.02 && initialFit.heightError < 0.02,
         JSON.stringify(initialFit),
       )
 
-      // Folding the systems rail re-flows the columns without resizing the
-      // window. A window-resize listener alone never sees this, which is how the
-      // orb ends up drawn at the old size and stretched into the new one.
+      // The orb is an instrument, not a fluid dashboard tile. Folding or
+      // expanding the systems rail may move the surrounding layout, but it must
+      // not change the orb's own CSS dimensions.
       const railToggle = page.getByRole('button', { name: /systems rail|collapse|fold/i }).first()
       if ((await railToggle.count()) > 0) {
         await railToggle.click()
         await page.waitForTimeout(400)
         const foldedFit = await backingMatchesBox(page)
+        const foldedStageBox = await stageBox(page)
         check(
           'presence backing store still matches its box after the rail folds',
           foldedFit !== null && foldedFit.widthError < 0.02 && foldedFit.heightError < 0.02,
           JSON.stringify(foldedFit),
+        )
+        check(
+          'folding the systems rail does not resize the orb',
+          initialStageBox !== null &&
+            foldedStageBox !== null &&
+            Math.abs(foldedStageBox.width - initialStageBox.width) < 1 &&
+            Math.abs(foldedStageBox.height - initialStageBox.height) < 1,
+          `before ${JSON.stringify(initialStageBox)} after ${JSON.stringify(foldedStageBox)}`,
         )
         await railToggle.click()
         await page.waitForTimeout(300)

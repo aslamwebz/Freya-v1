@@ -67,6 +67,13 @@ export function App() {
       <div className="atmosphere" data-bg={background} aria-hidden="true" />
       <div className="atmosphere-veil" aria-hidden="true" />
 
+      {/* Presence is anchored to the application viewport, not to a dashboard
+          grid column. The systems rail and side panels may reflow around it,
+          but Freya's visual centre must not move when they do. */}
+      <div className="presence-overlay">
+        <Presence ringCanvas={ringCanvas} onReady={setPresenceHandle} />
+      </div>
+
       <div className="shell">
         <header className="header">
           <div className="brand">
@@ -106,7 +113,6 @@ export function App() {
             </div>
           ) : null}
 
-          <Presence ringCanvas={ringCanvas} onReady={setPresenceHandle} />
         </main>
 
         <div className="column column-right">

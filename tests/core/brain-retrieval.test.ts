@@ -153,7 +153,7 @@ describe('matching', () => {
     expect(pack.memories).toEqual([])
     // Candidates were still counted, so an empty pack is distinguishable from one
     // that searched nothing.
-    expect(pack.candidatesConsidered).toBe(0)
+    expect(pack.candidatesConsidered).toBe(2)
   })
 
   it('treats an empty query as recency, and says that is why', () => {

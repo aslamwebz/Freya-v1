@@ -60,7 +60,15 @@ export function projectCoreStatus(input: ProjectionInput): CoreStatus {
     // than a reading of the journal.
     activeProviderCalls: gateway.activeCallCount(),
     sessionUsage: gateway.usage(),
-    durableUsage: state.durableUsage,
+    // A durable start with no terminal event is an unfinished attempt. After a
+    // crash we cannot know how many tokens the provider consumed, so the
+    // recovered total is a lower bound until/unless a terminal event exists.
+    // pendingRequests preserves multiplicity, including repeated request ids.
+    durableUsage: {
+      ...state.durableUsage,
+      unknownUsageCalls:
+        state.durableUsage.unknownUsageCalls + state.pendingRequests.length,
+    },
     faults: [...state.faults],
   }
 }

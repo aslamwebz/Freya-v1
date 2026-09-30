@@ -44,6 +44,10 @@ export type ActivityKind =
   | 'provider.completed'
   | 'provider.failed'
   | 'provider.cancelled'
+  | 'conversation.created'
+  | 'conversation.turn.completed'
+  | 'conversation.turn.failed'
+  | 'voice.capture'
   | 'grant.created'
   | 'grant.revoked'
   | 'other'
@@ -213,6 +217,100 @@ export function describeActivity(event: {
         text: event.payload.providerContacted
           ? `Model request cancelled after reaching the provider: ${text(event.payload.reason)}. Its usage is unknown, so the totals are a lower bound.`
           : `Model request cancelled before the provider was contacted: ${text(event.payload.reason)}. Nothing was spent.`,
+        tone: 'warn',
+      }
+
+    /* --------------------------------------------------------- conversation */
+    //
+    // Metadata only, and the wording is chosen so a row can never be mistaken for
+    // a transcript. A turn's *size* is reported; its words are not here and cannot
+    // be added by accident, because the row is built from named fields.
+
+    case 'conversation.created':
+      return {
+        ...base,
+        kind: 'conversation.created',
+        text: 'Conversation created.',
+        tone: 'neutral',
+      }
+
+    case 'conversation.turn.started':
+      return {
+        ...base,
+        kind: 'provider.started',
+        text: `Turn started${modelSuffix(event.payload)}.`,
+        tone: 'busy',
+      }
+
+    case 'conversation.turn.completed':
+      return {
+        ...base,
+        kind: 'conversation.turn.completed',
+        text: `Turn completed${modelSuffix(event.payload)}.`,
+        tone: 'good',
+      }
+
+    case 'conversation.turn.cancelled':
+      return {
+        ...base,
+        kind: 'conversation.turn.failed',
+        text: `Turn cancelled: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'warn',
+      }
+
+    case 'conversation.turn.failed':
+      return {
+        ...base,
+        kind: 'conversation.turn.failed',
+        text: `Turn failed: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'bad',
+      }
+
+    case 'conversation.turn.denied':
+      return {
+        ...base,
+        kind: 'conversation.turn.failed',
+        text: `Turn not started: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'warn',
+      }
+
+    case 'conversation.turn.interrupted':
+      return {
+        ...base,
+        kind: 'conversation.turn.failed',
+        text: 'A turn was interrupted before it finished. It was not retried.',
+        tone: 'warn',
+      }
+
+    /* --------------------------------------------------------------- voice */
+    //
+    // A capture is a thing that happened. The audio is not here, the transcript is
+    // not here, and the duration is the only measurement worth showing.
+
+    case 'voice.capture.started':
+      return {
+        ...base,
+        kind: 'voice.capture',
+        text: 'Microphone opened. Local capture only.',
+        tone: 'busy',
+      }
+
+    case 'voice.capture.completed':
+      return {
+        ...base,
+        kind: 'voice.capture',
+        text:
+          event.payload.transcribed === true
+            ? `Local recording transcribed (${number(event.payload.durationMs, 0)}ms). Not sent anywhere.`
+            : `Local recording ended (${number(event.payload.durationMs, 0)}ms). No local speech engine was configured.`,
+        tone: 'neutral',
+      }
+
+    case 'voice.capture.cancelled':
+      return {
+        ...base,
+        kind: 'voice.capture',
+        text: `Local recording discarded: ${text(event.payload.reason, 'no reason given')}`,
         tone: 'warn',
       }
 

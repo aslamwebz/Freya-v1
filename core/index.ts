@@ -12,6 +12,15 @@ import { emptyUsage } from './model/usage'
 import type { ModelProvider } from './model/provider'
 import { FakeModelProvider } from './model/fake-provider'
 import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
+import { MindService } from './mind/mind'
+import { ConversationService } from './conversation/service'
+import type { ConversationStore } from './conversation/store'
+import { EncryptedConversationStore } from './conversation/encrypted-store'
+import { MemoryConversationStore } from './conversation/memory-store'
+import { VoiceService } from './voice/service'
+import type { VoiceTranscriber, VoiceSynthesizer } from './voice/types'
+import type { ContextBudget } from './mind/context-compiler'
+import type { ConversationProjection, ConversationTurnView, VoiceProjection } from './protocol/conversation'
 import { describeActivity, mergeActivity } from './protocol/activity'
 import type { CoreActivityEvent } from './protocol/activity'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
@@ -85,6 +94,25 @@ export interface CoreOptions {
    * never inferred from a debug flag, a test runner, or an absent credential.
    */
   developerEchoProvider?: boolean
+  /**
+   * The conversation master key, supplied by the host.
+   *
+   * Core never generates, derives or persists a key, and has no default. A Core
+   * constructed without one gets an **ephemeral** conversation store — real
+   * conversation, no persistence, reported as such — rather than a weaker store
+   * standing in for the encrypted one. The key does not leave this process: it is
+   * not in the renderer, not in a model request, not in the journal, and not in a
+   * log line.
+   */
+  conversationKey?: Uint8Array
+  /** Overrides the conversation store wholesale. For tests. */
+  conversationStore?: ConversationStore
+  /** A local speech-to-text engine. Absent means none is configured. */
+  voiceTranscriber?: VoiceTranscriber
+  /** A local text-to-speech engine. Absent means none is configured. */
+  voiceSynthesizer?: VoiceSynthesizer
+  /** Overrides the conversation context budget. For tests. */
+  contextBudget?: ContextBudget
 }
 
 /**
@@ -117,6 +145,18 @@ export interface Core {
   onActivity(listener: (activity: CoreActivityEvent[]) => void): () => void
   /** The current activity feed, newest last, capped. */
   activity(): CoreActivityEvent[]
+  /**
+   * Subscribe to the conversation projection.
+   *
+   * A mirror like the status: a window holds what Core last built and cannot write
+   * to it. Conversation *content* appears here because the transcript has to be
+   * rendered somewhere — the store, the keys and the filesystem do not.
+   */
+  onConversation(listener: (projection: ConversationProjection) => void): () => void
+  /** The current conversation projection. */
+  conversation(): Promise<ConversationProjection>
+  /** The current voice projection. */
+  voice(): VoiceProjection
   readonly lifecycle: CoreLifecycle
 }
 
@@ -157,6 +197,10 @@ class FreyaCore implements Core {
   private readonly newId: () => string
   private disposeState: () => void = () => {}
   private stopped = false
+  private conversationStore!: ConversationStore
+  private mind!: MindService
+  private conversations!: ConversationService
+  private voiceService!: VoiceService
 
   constructor(private readonly options: CoreOptions) {
     this.newId = options.newId ?? (() => randomUUID())
@@ -300,6 +344,43 @@ class FreyaCore implements Core {
     // Core that builds a trusted one.
     this.owner = this.service.ownerPrincipalFor()
 
+    // Conversation and voice, built after the owner exists because the Mind needs
+    // the owner's authority to create a turn's grant — and it must not be able to
+    // have any other.
+    this.conversationStore = await this.buildConversationStore()
+    this.mind = new MindService({
+      fabric: this.fabric,
+      store: this.conversationStore,
+      authority: this.service.ownerAuthority(),
+      gateway: this.gateway,
+      now: this.options.now,
+      newId: this.options.newId,
+      budget: this.options.contextBudget,
+      // The only fact about the outside world the Mind is told, and it is a fact
+      // about Freya rather than about any provider.
+      runtimeFacts: () => (this.state.stopAll.active ? ['Cognition is currently stopped.'] : []),
+    })
+    this.conversations = new ConversationService({
+      fabric: this.fabric,
+      store: this.conversationStore,
+      mind: this.mind,
+      gateway: this.gateway,
+      now: this.options.now,
+      newId: this.options.newId,
+      cognitionAvailability: () => this.cognitionAvailability(),
+      stopAll: () => ({
+        active: this.state.stopAll.active,
+        activatedAt: this.state.stopAll.activatedAt,
+      }),
+    })
+    this.voiceService = new VoiceService({
+      fabric: this.fabric,
+      transcriber: this.options.voiceTranscriber,
+      synthesizer: this.options.voiceSynthesizer,
+      now: this.options.now,
+      newId: this.options.newId,
+    })
+
     // State follows the log, for both replay and live appends.
     this.disposeState = this.fabric.subscribe((event) => {
       this.state = reduceCoreState(this.state, event)
@@ -339,6 +420,12 @@ class FreyaCore implements Core {
       )
       this.freshIntegrityFault = null
     }
+
+    // Interrupted turns are recovered before `core.ready`, so a window that
+    // attaches on a ready Core is never briefly shown a turn that was abandoned
+    // by a previous process. Nothing is retried and nothing is spent: a question on
+    // disk with no answer is the whole truth about a turn that did not finish.
+    await this.conversations.recoverInterruptedTurns()
 
     if (this.currentLifecycle === 'ready') {
       await this.fabric.append('core.ready', {}, { actor: 'system' })
@@ -382,6 +469,8 @@ class FreyaCore implements Core {
     const began = Date.now()
     try {
       if (this.fabric) {
+        // A microphone must not outlive the Core that opened it.
+        await this.voiceService?.abandon('the application is shutting down')
         this.gateway?.cancelAll(`core stopping: ${reason}`)
         await this.gateway?.drain(SHUTDOWN_DRAIN_MS)
         await this.fabric.append('core.stopping', { reason }, { actor: 'system' })
@@ -395,6 +484,7 @@ class FreyaCore implements Core {
       this.disposeState()
       this.service?.dispose()
       this.currentLifecycle = 'stopped'
+      await this.conversationStore?.close()
       await this.fabric?.close()
       this.notify()
     }
@@ -643,6 +733,215 @@ class FreyaCore implements Core {
           return { requestId, ok: true, status: this.status(), durableSequence: event.sequence }
         }
 
+        /* ------------------------------------------------- conversation */
+
+        case 'conversation.create': {
+          // A new conversation is an owner act, and the cheapest one there is: a
+          // local record and a journal line. No model, no credits.
+          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+          const result = await this.conversations.create(
+            readString(envelope.payload, 'title') ?? undefined,
+          )
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              conversation: { operation: 'refused', reason: result.reason },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            conversation: { operation: 'created', conversation: result.conversation },
+          }
+        }
+
+        case 'conversation.list': {
+          const result = await this.conversations.list()
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              conversation: { operation: 'refused', reason: result.reason },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            conversation: { operation: 'listed', conversations: result.conversations },
+          }
+        }
+
+        case 'conversation.read': {
+          const conversationId = readString(envelope.payload, 'conversationId')
+          if (conversationId === null) {
+            return { requestId, ok: false, refusal: { reason: 'conversationId is missing' } }
+          }
+          const result = await this.conversations.read(conversationId)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              conversation: { operation: 'refused', reason: result.reason },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            conversation: {
+              operation: 'read',
+              conversation: result.conversation,
+              messages: result.messages,
+            },
+          }
+        }
+
+        case 'conversation.turn.submit': {
+          // The one command that spends money, and it is reached from a window.
+          //
+          // The window supplies a conversation and some text. It does not supply a
+          // grant, a model, a token ceiling, a turn id or a provider — the Mind
+          // derives all of those and the Governor checks them. Everything below
+          // this line is Core deciding, not a renderer asking.
+          const decision = this.guard.evaluate(this.owner, 'cognition.request')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'cognition.request', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+
+          const conversationId = readString(envelope.payload, 'conversationId')
+          const text = readString(envelope.payload, 'text')
+          if (conversationId === null) {
+            return { requestId, ok: false, refusal: { reason: 'conversationId is missing' } }
+          }
+          if (text === null) {
+            return { requestId, ok: false, refusal: { reason: 'message text is missing' } }
+          }
+          // Bounded at the edge, before anything is stored or spent, so a paste of
+          // half a megabyte fails visibly here instead of becoming one request.
+          if (text.length > 8000) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: `the message is too long (${text.length} characters, limit 8000)` },
+            }
+          }
+
+          const result = await this.conversations.submitTurn({ conversationId, text, requestId })
+          if (!result.ok) {
+            return { requestId, ok: false, refusal: { reason: result.reason } }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            conversation: { operation: 'turn', turn: toTurnView(result.turn) },
+          }
+        }
+
+        case 'conversation.turn.cancel': {
+          // Scoped, and deliberately *not* a security stop. It aborts one provider
+          // request and latches nothing: the contact gate stays open, STOP ALL
+          // stays clear, and the next message can be sent straight away.
+          const decision = this.guard.evaluate(this.owner, 'cognition.request')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'cognition.request', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+          const turnId = readString(envelope.payload, 'turnId')
+          if (turnId === null) {
+            return { requestId, ok: false, refusal: { reason: 'turnId is missing' } }
+          }
+          const result = await this.conversations.cancelTurn(turnId)
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            conversation: { operation: 'cancelled', cancelled: result.cancelled },
+          }
+        }
+
+        /* -------------------------------------------------------- voice */
+
+        case 'voice.status.read':
+          return { requestId, ok: true, status: this.status() }
+
+        case 'voice.capture.start': {
+          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+          const result = await this.voiceService.beginCapture()
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              voice: { operation: 'refused', reason: result.reason },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            voice: {
+              operation: 'capture-started',
+              sessionId: result.session.sessionId,
+              startedAt: result.session.startedAt,
+            },
+          }
+        }
+
+        case 'voice.capture.end': {
+          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+          const sessionId = readString(envelope.payload, 'sessionId')
+          if (sessionId === null) {
+            return { requestId, ok: false, refusal: { reason: 'sessionId is missing' } }
+          }
+          const result = await this.voiceService.endCapture({
+            sessionId,
+            audio: readAudioBytes(envelope.payload),
+            durationMs: readNumber(envelope.payload, 'durationMs') ?? 0,
+            cancelled: readRaw(envelope.payload, 'cancelled') === true,
+          })
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            // A transcript, not a turn. Nothing has been sent and nothing has been
+            // spent; the window puts this text in a composer and waits for a Send.
+            voice: {
+              operation: 'capture-ended',
+              reason: result.reason,
+              text: result.text,
+              detail: result.detail,
+              transcribed: result.transcribed,
+              byteLength: result.byteLength,
+              durationMs: result.durationMs,
+            },
+          }
+        }
+
+        case 'voice.capture.cancel': {
+          await this.voiceService.abandon('the owner released the microphone')
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'cancelled' } }
+        }
+
         default:
           return reject(envelope, `unknown command: ${String(command)}`)
       }
@@ -654,6 +953,138 @@ class FreyaCore implements Core {
   }
 
   /* ----------------------------------------------------------- private */
+
+  /**
+   * The conversation store, and the only place the key is touched.
+   *
+   * Three outcomes, and no fourth:
+   *
+   *   - a key was supplied, so an encrypted store;
+   *   - no key, so an **ephemeral** in-memory store that says so;
+   *   - a store was injected, so that.
+   *
+   * There is deliberately no plaintext-on-disk path. A machine whose OS secure
+   * storage is unavailable gets a working conversation for the session and a
+   * truthful label, which is the only acceptable answer: silently writing
+   * someone's conversation history in the clear would be a worse bug than
+   * forgetting it.
+   */
+  private async buildConversationStore(): Promise<ConversationStore> {
+    if (this.options.conversationStore) return this.options.conversationStore
+    if (this.options.conversationKey) {
+      const path = this.fabric ? `${this.fabric.describe()}.conversations` : 'conversations.enc'
+      try {
+        return await EncryptedConversationStore.open({ path, key: this.options.conversationKey })
+      } catch (error) {
+        // A store that cannot be opened is not replaced with a weaker one. The
+        // conversation commands are refused and the UI says why.
+        console.error('[freya.core] encrypted conversation store unavailable', describe(error))
+        return new MemoryConversationStore({
+          mode: 'ephemeral',
+          faultReason: `encrypted conversation history is unavailable: ${describe(error)}`,
+        })
+      }
+    }
+    return new MemoryConversationStore({
+      mode: 'ephemeral',
+      faultReason:
+        'no secure conversation key is available on this machine, so this conversation is ' +
+        'being kept in memory only and will not survive a restart',
+    })
+  }
+
+  /**
+   * Whether a model could be reached at all right now, and why not.
+   *
+   * Reported so the window can say "no cognition provider is available" instead of
+   * letting someone press Send and wait. It is *not* a gate: a turn is still
+   * accepted, the user's words are still stored, and the turn still fails
+   * truthfully. Refusing before the person has spoken would be the model
+   * deciding what they are allowed to say.
+   */
+  private cognitionAvailability(): { available: boolean; reason: string | null } {
+    if (this.state.stopAll.active) {
+      return { available: false, reason: 'Freya is stopped. Every model request is refused.' }
+    }
+    if (!this.gateway.gateStatus().open) {
+      return {
+        available: false,
+        reason: this.gateway.gateStatus().reason ?? 'cognition is refused until the owner resumes',
+      }
+    }
+    if (this.gateway.statuses().some((provider) => provider.status === 'configured')) {
+      return { available: true, reason: null }
+    }
+    return {
+      available: false,
+      reason: 'No cognition provider is currently available, so Freya cannot answer yet.',
+    }
+  }
+
+  onConversation(listener: (projection: ConversationProjection) => void): () => void {
+    if (!this.conversations) {
+      // Before start, or after stop. A window that attaches then gets a truthful
+      // empty projection rather than nothing at all.
+      void this.projectionWhenReady().then((projection) => {
+        try {
+          listener(projection)
+        } catch {
+          /* a subscriber that throws is dropped by the service */
+        }
+      })
+      return () => {}
+    }
+    return this.conversations.subscribe(listener)
+  }
+
+  async conversation(): Promise<ConversationProjection> {
+    if (!this.conversations) return this.emptyConversationProjection()
+    return this.conversations.projection()
+  }
+
+  voice(): VoiceProjection {
+    if (!this.voiceService) {
+      return {
+        transcription: { available: false, engine: null, detail: 'Core has not started.' },
+        synthesis: { available: false, engine: null, detail: 'Core has not started.' },
+        capturing: false,
+        sessionId: null,
+        limits: {
+          maxDurationMs: 0,
+          maxAudioBytes: 0,
+          format: 'pcm-s16le',
+        },
+        localOnly: true,
+        faults: [],
+      }
+    }
+    return this.voiceService.projection()
+  }
+
+  /** Wait for the services, then project. Used by a window that attaches early. */
+  private async projectionWhenReady(): Promise<ConversationProjection> {
+    for (let attempt = 0; attempt < 50 && !this.conversations; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    return this.conversation()
+  }
+
+  private async emptyConversationProjection(): Promise<ConversationProjection> {
+    return {
+      persistence: { mode: 'unavailable', reason: 'Core has not started' },
+      conversations: [],
+      activeConversationId: null,
+      messages: [],
+      activeTurn: null,
+      cognition: { available: false, reason: 'Core has not started' },
+      stopAll: {
+        active: this.state.stopAll.active,
+        activatedAt: this.state.stopAll.activatedAt,
+      },
+      maxMessageCharacters: 0,
+      faults: ['Core has not started, so no conversation is available.'],
+    }
+  }
 
 
 
@@ -822,6 +1253,75 @@ function readGrantSpec(payload: unknown): CognitionGrantSpec | null {
     maxCalls: p.maxCalls as number,
     maxOutputTokens: p.maxOutputTokens as number,
     parentGrantId: typeof p.parentGrantId === 'string' ? p.parentGrantId : null,
+  }
+}
+
+
+function readNumber(payload: unknown, key: string): number | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const value = (payload as Record<string, unknown>)[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function readRaw(payload: unknown, key: string): unknown {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  return (payload as Record<string, unknown>)[key]
+}
+
+/**
+ * Audio bytes from a payload.
+ *
+ * Accepted as a `Uint8Array` (what structured clone delivers) or base64. The
+ * bytes go straight to a local engine and are dropped: never journalled, never
+ * written to disk, and never retained as "memory".
+ */
+function readAudioBytes(payload: unknown): Uint8Array | undefined {
+  const raw = readRaw(payload, 'audio')
+  if (raw instanceof Uint8Array) return raw
+  if (typeof raw === 'string') {
+    try {
+      return new Uint8Array(Buffer.from(raw, 'base64'))
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
+}
+
+/** The renderer-safe shape of a Mind turn result. */
+function toTurnView(turn: {
+  turnId: string
+  conversationId: string
+  outcome: string
+  reason: string | null
+  assistantMessage: {
+    messageId: string
+    role: 'user' | 'assistant'
+    content: string
+    createdAt: string
+    turnId: string
+  } | null
+  providerId: string | null
+  model: string | null
+  providerContacted: boolean
+}): ConversationTurnView {
+  return {
+    turnId: turn.turnId,
+    conversationId: turn.conversationId,
+    outcome: turn.outcome as ConversationTurnView['outcome'],
+    reason: turn.reason,
+    providerId: turn.providerId,
+    model: turn.model,
+    providerContacted: turn.providerContacted,
+    assistantMessage: turn.assistantMessage
+      ? {
+          messageId: turn.assistantMessage.messageId,
+          role: turn.assistantMessage.role,
+          content: turn.assistantMessage.content,
+          createdAt: turn.assistantMessage.createdAt,
+          turnId: turn.assistantMessage.turnId,
+        }
+      : null,
   }
 }
 

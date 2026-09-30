@@ -52,6 +52,25 @@ export const CORE_EVENT_TYPES = [
   'model.request.completed',
   'model.request.failed',
   'model.request.cancelled',
+
+  // Conversation — metadata only, never a word of what was said.
+  //
+  // The bodies live in the encrypted Conversation Store. What appears here is
+  // enough to answer "did a turn happen, how big was it, which provider answered,
+  // how did it end" and nothing more, because this file is audit surface: it is
+  // read, copied and backed up far more freely than the conversation itself.
+  'conversation.created',
+  'conversation.turn.started',
+  'conversation.turn.completed',
+  'conversation.turn.cancelled',
+  'conversation.turn.failed',
+  'conversation.turn.denied',
+  'conversation.turn.interrupted',
+
+  // Local voice — metadata only. Audio never reaches this file.
+  'voice.capture.started',
+  'voice.capture.completed',
+  'voice.capture.cancelled',
 ] as const
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number]
@@ -75,9 +94,39 @@ export interface CoreEventEnvelope<T extends CoreEventType = CoreEventType> {
   payload: CoreEventPayloads[T]
 }
 
+/**
+ * One conversation turn's durable metadata.
+ *
+ * Every field here is either an id, a count, or a word a person would say out
+ * loud. There is no field a message could hide in, and that is the whole
+ * property: adding a field to a conversation event is a visible change to the
+ * audit schema, not something that quietly starts retaining what someone typed.
+ */
+export interface ConversationTurnEvent {
+  conversationId: string
+  turnId: string
+  /** Null only when the turn was refused before the message could be stored. */
+  userMessageId: string | null
+  /** Null until an answer exists, exactly as in the conversation store. */
+  assistantMessageId: string | null
+  /**
+   * Size of the turn's largest stored message, in characters.
+   *
+   * A measurement, never the content. It is what lets an operator see that a turn
+   * was substantial, and it is the only trace of anyone's words that leaves Core.
+   */
+  contentLength: number
+  /** The single Model Gateway request for this turn, when it got that far. */
+  requestId: string | null
+  providerId: string | null
+  model: string | null
+  /** The terminal state, stated in the payload as well as implied by the type. */
+  outcome: string
+  reason: string | null
+}
+
 /** The payload each event type carries. */
-export interface CoreEventPayloads {
-  'core.started': { version: string; storeKind: string; recoveredSequence: number }
+export interface CoreEventPayloads {  'core.started': { version: string; storeKind: string; recoveredSequence: number }
   'core.ready': Record<string, never>
   'core.degraded': { reason: string }
   /**
@@ -232,6 +281,55 @@ export interface CoreEventPayloads {
      * happened and cost nothing; true means the figures stay a lower bound.
      */
     providerContacted: boolean
+  }
+
+  /* --------------------------------------------------------- conversation */
+
+  'conversation.created': {
+    conversationId: string
+    /** Length of the derived title. The title's text is not here. */
+    titleLength: number
+  }
+
+  /**
+   * Shared shape for every conversation turn outcome.
+   *
+   * One shape rather than five, because the differences between them are
+   * enumerated in `outcome` and keeping the rest identical is what makes the
+   * events comparable in an audit without five field lists to keep in step.
+   *
+   * `contentLength` counts characters. It is the only measurement of anyone's
+   * words that leaves Core, and it is what lets an operator see that a turn was
+   * substantial without the journal becoming a transcript.
+   */
+  'conversation.turn.started': ConversationTurnEvent
+  'conversation.turn.completed': ConversationTurnEvent
+  'conversation.turn.cancelled': ConversationTurnEvent
+  'conversation.turn.failed': ConversationTurnEvent
+  'conversation.turn.denied': ConversationTurnEvent
+  'conversation.turn.interrupted': ConversationTurnEvent
+
+  /* --------------------------------------------------------------- voice */
+
+  'voice.capture.started': {
+    sessionId: string
+    /** Chosen before any audio exists, so this is a format not a measurement. */
+    format: string
+    sampleRate: number
+  }
+  'voice.capture.completed': {
+    sessionId: string
+    /** Bytes of audio handled and then discarded. Never the audio itself. */
+    byteLength: number
+    durationMs: number
+    /** Whether a local engine produced a transcript. Never implies a model call. */
+    transcribed: boolean
+    transcriptLength: number
+  }
+  'voice.capture.cancelled': {
+    sessionId: string
+    byteLength: number
+    reason: string
   }
 }
 

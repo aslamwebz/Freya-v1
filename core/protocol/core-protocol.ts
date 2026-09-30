@@ -9,6 +9,8 @@
  * capability to change one.
  */
 
+import type { ConversationCommandOutcome, VoiceCommandOutcome } from './conversation'
+
 /* ------------------------------------------------------------ identity */
 
 /** A principal asking Core for something. Never carries credentials. */
@@ -235,6 +237,19 @@ export type CoreCommandName =
    */
   | 'cognition.grant.create'
   | 'cognition.grant.revoke'
+  /* ------------------------------------------------------ conversation */
+  | 'conversation.create'
+  | 'conversation.list'
+  | 'conversation.read'
+  /** The only door from a window into cognition. */
+  | 'conversation.turn.submit'
+  /** Scoped: stops one response. Does not latch STOP ALL. */
+  | 'conversation.turn.cancel'
+  /* -------------------------------------------------------------- voice */
+  | 'voice.status.read'
+  | 'voice.capture.start'
+  | 'voice.capture.end'
+  | 'voice.capture.cancel'
 
 export interface CoreCommandEnvelope {
   command: CoreCommandName
@@ -258,4 +273,21 @@ export interface CoreCommandResult {
    * effect is on disk instead of taking a boolean on trust.
    */
   durableSequence?: number
+  /**
+   * The conversation view of a conversation command's result.
+   *
+   * A separate slot rather than a wider `status`, because the two answer different
+   * questions and merging them would let a panel read a conversation out of a
+   * security projection. Nothing here is writable by the renderer: it is what
+   * Core built, and the next push overwrites it.
+   */
+  conversation?: ConversationCommandOutcome
+  /**
+   * The voice view of a voice command's result.
+   *
+   * Its own slot for the same reason the conversation slot exists: a window must
+   * never have to dig a transcript or a capture result out of a security
+   * projection, and two unrelated streams sharing one field is how that starts.
+   */
+  voice?: VoiceCommandOutcome
 }

@@ -39,7 +39,18 @@ import { ALL_CAPABILITIES, type Capability, type CognitionOrigin, type Cognition
 export type CognitionOutcome =
   | { status: 'allowed'; requestId: string; text: string; providerId: string; model: string }
   | { status: 'denied'; requestId: string; reason: string }
-  | { status: 'failed'; requestId: string; reason: string }
+  | {
+      status: 'failed'
+      requestId: string
+      reason: string
+      /**
+       * Whether a provider had already been asked. Carried rather than left for
+       * the caller to infer, because it decides whether the attempt may have cost
+       * anything — and a caller that guessed wrong would record a paid call as a
+       * free one.
+       */
+      providerContacted: boolean
+    }
   /**
    * Stopped rather than unsuccessful.
    *
@@ -47,7 +58,7 @@ export type CognitionOutcome =
    * request says nothing about whether the provider would have worked, and a
    * caller that saw `failed` would be reporting a defect that never happened.
    */
-  | { status: 'cancelled'; requestId: string; reason: string }
+  | { status: 'cancelled'; requestId: string; reason: string; providerContacted: boolean }
 
 /**
  * What a caller may say. `CognitionCall` does not exist any more: it had
@@ -416,14 +427,15 @@ export class CognitionService {
       // The reservation is unaffected either way: authorisation is not refunded
       // because the provider misbehaved, nor because none was available, nor
       // because the owner stopped it.
-      if (decision.grantId !== null && wasProviderContacted(error)) {
+      const contacted = wasProviderContacted(error)
+      if (decision.grantId !== null && contacted) {
         await this.reportProviderUsage(decision.grantId, requestId, null, null)
       }
       const reason = error instanceof Error ? error.message : 'unknown provider failure'
       if (isModelRequestCancelled(error)) {
-        return { status: 'cancelled', requestId, reason }
+        return { status: 'cancelled', requestId, reason, providerContacted: contacted }
       }
-      return { status: 'failed', requestId, reason }
+      return { status: 'failed', requestId, reason, providerContacted: contacted }
     }
   }
 

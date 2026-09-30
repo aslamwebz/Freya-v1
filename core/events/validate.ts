@@ -127,6 +127,116 @@ function isNullablePositiveInt(value: unknown): value is number | null {
  * the rest that a malformed record cannot reach a projection. A payload that
  * fails here ends the log rather than being partially believed.
  */
+/**
+ * The conversation turn rule.
+ *
+ * Declared as a function rather than a spread of six near-identical arrow bodies,
+ * because a shared schema that gets edited in one place and not the other is how
+ * a validation rule starts disagreeing with itself.
+ *
+ * `userMessageId` and `assistantMessageId` are nullable because a denied turn has
+ * no stored message and an interrupted turn has no answer — and a schema that
+ * pretended otherwise would push a fabrication into the audit.
+ */
+const CONVERSATION_TURN = (p: Record<string, unknown>): boolean =>
+  isEventId(p.conversationId) &&
+  isEventId(p.turnId) &&
+  isNullableString(p.userMessageId) &&
+  isNullableString(p.assistantMessageId) &&
+  isNonNegativeInt(p.contentLength) &&
+  isNullableString(p.requestId) &&
+  isNullableString(p.providerId) &&
+  isNullableString(p.model) &&
+  isNonEmptyString(p.outcome) &&
+  isNullableString(p.reason)
+
+/**
+ * Validate one parsed JSON value as a durable Core event.
+ *
+ * Returns the event, or `null` with the reason. `previousSequence` enforces
+ * strict monotonicity across the log; pass 0 for the first line.
+ */
+export function validateDurableEvent(
+  value: unknown,
+  previousSequence: number,
+): { ok: true; event: AnyCoreEvent } | { ok: false; reason: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ok: false, reason: 'not an object' }
+  }
+  const e = value as Record<string, unknown>
+
+  if (!isEventId(e.eventId)) return { ok: false, reason: 'eventId is missing or malformed' }
+
+  // The type must be one Core knows. A line naming a future event is refused
+  // rather than partially understood.
+  if (!isCoreEventType(e.type)) {
+    return { ok: false, reason: `unknown event type ${JSON.stringify(e.type)}` }
+  }
+  const type = e.type
+
+  if (e.schemaVersion !== CORE_EVENT_SCHEMA_VERSION) {
+    return { ok: false, reason: `unsupported schema version ${String(e.schemaVersion)}` }
+  }
+
+  // Positive, and strictly greater than everything before it. A duplicate or a
+  // reversal means the log is not the log we wrote.
+  if (!isPositiveInt(e.sequence)) {
+    return { ok: false, reason: `sequence is not a positive integer: ${String(e.sequence)}` }
+  }
+  if (e.sequence <= previousSequence) {
+    return {
+      ok: false,
+      reason: `sequence ${e.sequence} is not greater than the previous ${previousSequence}`,
+    }
+  }
+
+  if (!isInstant(e.occurredAt)) return { ok: false, reason: 'occurredAt is not an instant' }
+
+  if (typeof e.source !== 'string' || !SOURCES.has(e.source)) {
+    return { ok: false, reason: `source is not one of core/renderer/system: ${String(e.source)}` }
+  }
+
+  // The principal must be a real principal id. This is the check that stops a
+  // hand-written line from acting as `owner`.
+  if (!isPrincipalId(e.actor)) {
+    return { ok: false, reason: `actor is not a valid principal: ${String(e.actor)}` }
+  }
+
+  if (!isEventId(e.correlationId)) {
+    return { ok: false, reason: 'correlationId is missing or malformed' }
+  }
+  if (e.causationId !== null && !isEventId(e.causationId)) {
+    return { ok: false, reason: 'causationId is malformed' }
+  }
+
+  if (typeof e.payload !== 'object' || e.payload === null || Array.isArray(e.payload)) {
+    return { ok: false, reason: 'payload is not an object' }
+  }
+  if (!PAYLOAD_RULES[type](e.payload as Record<string, unknown>)) {
+    return { ok: false, reason: `payload does not match the shape of ${type}` }
+  }
+
+  return { ok: true, event: e as unknown as AnyCoreEvent }
+}
+
+/** Parse and validate one line. `null` means "not a usable event". */
+export function parseDurableEvent(
+  line: string,
+  previousSequence: number,
+): { ok: true; event: AnyCoreEvent } | { ok: false; reason: string } {
+  if (line.trim().length === 0) return { ok: false, reason: 'line is blank' }
+  let value: unknown
+  try {
+    value = JSON.parse(line)
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `line is not JSON: ${error instanceof Error ? error.message : 'parse error'}`,
+    }
+  }
+  return validateDurableEvent(value, previousSequence)
+}
+
 const PAYLOAD_RULES: {
   [K in CoreEventType]: (payload: Record<string, unknown>) => boolean
 } = {
@@ -221,91 +331,33 @@ const PAYLOAD_RULES: {
     isNonEmptyString(p.providerId) &&
     isNonEmptyString(p.reason) &&
     typeof p.providerContacted === 'boolean',
-}
 
-/**
- * Validate one parsed JSON value as a durable Core event.
- *
- * Returns the event, or `null` with the reason. `previousSequence` enforces
- * strict monotonicity across the log; pass 0 for the first line.
- */
-export function validateDurableEvent(
-  value: unknown,
-  previousSequence: number,
-): { ok: true; event: AnyCoreEvent } | { ok: false; reason: string } {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return { ok: false, reason: 'not an object' }
-  }
-  const e = value as Record<string, unknown>
+  /* --------------------------------------------------------- conversation */
 
-  if (!isEventId(e.eventId)) return { ok: false, reason: 'eventId is missing or malformed' }
+  'conversation.created': (p) =>
+    isEventId(p.conversationId) && isNonNegativeInt(p.titleLength),
 
-  // The type must be one Core knows. A line naming a future event is refused
-  // rather than partially understood.
-  if (!isCoreEventType(e.type)) {
-    return { ok: false, reason: `unknown event type ${JSON.stringify(e.type)}` }
-  }
-  const type = e.type
+  // One rule for all six turn outcomes, applied to each. A conversation event is
+  // metadata, and this is the list of what "metadata" is allowed to mean — a
+  // hand-edited line cannot smuggle a field the schema does not name, because the
+  // rule reads named fields rather than passing the object through.
+  'conversation.turn.started': CONVERSATION_TURN,
+  'conversation.turn.completed': CONVERSATION_TURN,
+  'conversation.turn.cancelled': CONVERSATION_TURN,
+  'conversation.turn.failed': CONVERSATION_TURN,
+  'conversation.turn.denied': CONVERSATION_TURN,
+  'conversation.turn.interrupted': CONVERSATION_TURN,
 
-  if (e.schemaVersion !== CORE_EVENT_SCHEMA_VERSION) {
-    return { ok: false, reason: `unsupported schema version ${String(e.schemaVersion)}` }
-  }
+  /* --------------------------------------------------------------- voice */
 
-  // Positive, and strictly greater than everything before it. A duplicate or a
-  // reversal means the log is not the log we wrote.
-  if (!isPositiveInt(e.sequence)) {
-    return { ok: false, reason: `sequence is not a positive integer: ${String(e.sequence)}` }
-  }
-  if (e.sequence <= previousSequence) {
-    return {
-      ok: false,
-      reason: `sequence ${e.sequence} is not greater than the previous ${previousSequence}`,
-    }
-  }
-
-  if (!isInstant(e.occurredAt)) return { ok: false, reason: 'occurredAt is not an instant' }
-
-  if (typeof e.source !== 'string' || !SOURCES.has(e.source)) {
-    return { ok: false, reason: `source is not one of core/renderer/system: ${String(e.source)}` }
-  }
-
-  // The principal must be a real principal id. This is the check that stops a
-  // hand-written line from acting as `owner`.
-  if (!isPrincipalId(e.actor)) {
-    return { ok: false, reason: `actor is not a valid principal: ${String(e.actor)}` }
-  }
-
-  if (!isEventId(e.correlationId)) {
-    return { ok: false, reason: 'correlationId is missing or malformed' }
-  }
-  if (e.causationId !== null && !isEventId(e.causationId)) {
-    return { ok: false, reason: 'causationId is malformed' }
-  }
-
-  if (typeof e.payload !== 'object' || e.payload === null || Array.isArray(e.payload)) {
-    return { ok: false, reason: 'payload is not an object' }
-  }
-  if (!PAYLOAD_RULES[type](e.payload as Record<string, unknown>)) {
-    return { ok: false, reason: `payload does not match the shape of ${type}` }
-  }
-
-  return { ok: true, event: e as unknown as AnyCoreEvent }
-}
-
-/** Parse and validate one line. `null` means "not a usable event". */
-export function parseDurableEvent(
-  line: string,
-  previousSequence: number,
-): { ok: true; event: AnyCoreEvent } | { ok: false; reason: string } {
-  if (line.trim().length === 0) return { ok: false, reason: 'line is blank' }
-  let value: unknown
-  try {
-    value = JSON.parse(line)
-  } catch (error) {
-    return {
-      ok: false,
-      reason: `line is not JSON: ${error instanceof Error ? error.message : 'parse error'}`,
-    }
-  }
-  return validateDurableEvent(value, previousSequence)
+  'voice.capture.started': (p) =>
+    isEventId(p.sessionId) && isNonEmptyString(p.format) && isPositiveInt(p.sampleRate),
+  'voice.capture.completed': (p) =>
+    isEventId(p.sessionId) &&
+    isNonNegativeInt(p.byteLength) &&
+    isNonNegativeInt(p.durationMs) &&
+    typeof p.transcribed === 'boolean' &&
+    isNonNegativeInt(p.transcriptLength),
+  'voice.capture.cancelled': (p) =>
+    isEventId(p.sessionId) && isNonNegativeInt(p.byteLength) && isNonEmptyString(p.reason),
 }

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import type { CoreCommandName, CoreStatus } from '../../../core/protocol/core-protocol'
-import { coreMirror, ensureCoreAttached, type CoreMirror } from '../../platform/coreClient'
+import type { CoreStatus } from '../../../core/protocol/core-protocol'
+import { coreMirror, ensureCoreAttached } from '../../platform/coreClient'
 import { Panel } from './primitives'
+import { openSurface } from '../surfaceActions'
 
 /**
  * The Core panel: Core's own account of itself.
@@ -38,21 +39,17 @@ export function CorePanel() {
       }
     >
       {status ? <CoreFacts status={status} /> : <p className="core-absent">No Core status yet.</p>}
+      {/* No controls here. Stopping and resuming live in the Security surface,
+          where they are deliberate rather than one click away. */}
       <div className="panel-foot core-foot">
-        <CoreButton
-          core={core}
-          command="security.stopAll"
-          disabled={status?.stopAll.active === true || !status}
-          label="Stop all"
-          title="Latch Core so it refuses cognition until resumed"
-        />
-        <CoreButton
-          core={core}
-          command="security.resume"
-          disabled={status?.stopAll.active !== true || !status}
-          label="Resume"
-          title="Clear the stop latch. Only the owner can do this."
-        />
+        <button
+          type="button"
+          className="link-pill"
+          onClick={() => openSurface('security')}
+        >
+          {status?.stopAll.active ? 'Core is stopped — open Security' : 'Open Security'}
+          <span aria-hidden="true">→</span>
+        </button>
       </div>
     </Panel>
   )
@@ -119,47 +116,3 @@ function CoreFacts({ status }: { status: CoreStatus }) {
   )
 }
 
-function CoreButton({
-  core,
-  command,
-  label,
-  title,
-  disabled,
-}: {
-  core: CoreMirror
-  command: CoreCommandName
-  label: string
-  title: string
-  disabled: boolean
-}) {
-  const [busy, setBusy] = useState(false)
-  const [note, setNote] = useState<string | null>(null)
-
-  return (
-    <>
-      <button
-        type="button"
-        className="link-pill"
-        title={title}
-        disabled={disabled || busy}
-        onClick={() => {
-          setBusy(true)
-          setNote(null)
-          // The panel does not decide the outcome: Core does, and the reply is
-          // what gets shown. A refused command says why.
-          void core
-            .submit(command, { reason: 'operator pressed the panel control' })
-            .then((result) => {
-              if (result.ok) setNote(null)
-              else setNote(result.refusal?.reason ?? result.error?.message ?? 'refused')
-            })
-            .catch((error: unknown) => setNote(String(error)))
-            .finally(() => setBusy(false))
-        }}
-      >
-        {label}
-      </button>
-      {note ? <span className="core-note">{note}</span> : null}
-    </>
-  )
-}

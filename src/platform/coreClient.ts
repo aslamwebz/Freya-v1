@@ -69,6 +69,20 @@ export function ensureCoreAttached(): Promise<CoreMirror> {
   return attachPromise
 }
 
+/**
+ * Forget the shared mirror and its bridge subscription.
+ *
+ * For tests, and for the one production case where the bridge object is
+ * replaced rather than mutated. Without it the singleton would hold a
+ * subscription to a bridge that is no longer there, and every later status
+ * would silently stop arriving — which is exactly the kind of failure that
+ * looks like "Core is idle" rather than "the subscription is dead".
+ */
+export function resetCoreMirror(): void {
+  shared = null
+  attachPromise = null
+}
+
 export function createCoreMirror(): CoreMirror {
   const listeners = new Set<(status: CoreStatus | null) => void>()
   let current: CoreStatus | null = null

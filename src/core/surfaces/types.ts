@@ -64,14 +64,15 @@ export interface SurfaceTypeDescriptor {
   minWidth: number
   minHeight: number
   /** Whether this type is functional in Phase 0 or a declared placeholder. */
-  status: 'working' | 'placeholder'
+  status: 'working' | 'real' | 'placeholder'
 }
 
 export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   chat: {
     type: 'chat',
     title: 'Chat',
-    summary: 'Conversation with Freya. Typed input is local; no model is attached in Phase 0.',
+    summary:
+      'Conversation with Freya. Commands reach Core and are recorded; model replies are not connected yet.',
     width: 520,
     height: 560,
     minWidth: 360,
@@ -111,7 +112,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   vault: {
     type: 'vault',
     title: 'Vault',
-    summary: 'Durable knowledge, Obsidian-compatible. Not implemented in Phase 0.',
+    summary: 'Durable knowledge, Obsidian-compatible. Not implemented yet.',
     width: 620,
     height: 540,
     minWidth: 400,
@@ -161,7 +162,7 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   office: {
     type: 'office',
     title: 'Office',
-    summary: 'A spatial view of live state. Not implemented in Phase 0.',
+    summary: 'A spatial view of live state. Not implemented yet.',
     width: 820,
     height: 580,
     minWidth: 480,
@@ -172,17 +173,17 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     type: 'security',
     title: 'Security',
     summary:
-      'Identity, capabilities, policy, approval and audit. The security engine is not implemented; Phase 0 holds no capabilities at all.',
+      'Live Core posture: the Guard default, STOP ALL, the Governor, providers and the audit log. Deny by default.',
     width: 620,
     height: 520,
     minWidth: 400,
     minHeight: 320,
-    status: 'placeholder',
+    status: 'real',
   },
   settings: {
     type: 'settings',
     title: 'Settings',
-    summary: 'Preferences for voice, appearance and storage. Not implemented in Phase 0.',
+    summary: 'Preferences for voice, appearance and storage. Not implemented yet.',
     width: 560,
     height: 480,
     minWidth: 380,

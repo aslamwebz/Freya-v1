@@ -3,6 +3,7 @@ import { surfaceTypes } from '../../core/surfaces/types'
 import { ChatSurface } from './ChatSurface'
 import { SearchSurface } from './SearchSurface'
 import { HarnessSurface } from './HarnessSurface'
+import { SecuritySurface } from './SecuritySurface'
 
 /**
  * Surface registry: type → body.
@@ -14,6 +15,7 @@ const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   chat: () => <ChatSurface />,
   search: () => <SearchSurface />,
   harness: () => <HarnessSurface />,
+  security: () => <SecuritySurface />,
 }
 
 /**
@@ -24,7 +26,7 @@ export function PlaceholderSurface({ type }: { type: SurfaceType }) {
   const descriptor = surfaceTypes[type]
   return (
     <div className="placeholder">
-      <p className="placeholder-status">Not implemented in Phase 0</p>
+      <p className="placeholder-status">Not implemented yet</p>
       <p className="placeholder-summary">{descriptor.summary}</p>
       <p className="placeholder-note">
         The window you are looking at is the real thing. Move it, resize it, pin it, minimise it,

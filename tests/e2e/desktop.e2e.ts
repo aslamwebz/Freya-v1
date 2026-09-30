@@ -236,18 +236,53 @@ async function main(): Promise<void> {
       `${beforeReload['Inference']} -> ${afterReload['Inference']}`,
     )
 
-    // STOP ALL is derived from the log, so a relaunch must find it still latched.
-    await page.getByRole('button', { name: 'Stop all' }).click()
+    // --- stop all, deliberately ------------------------------------------
+    // STOP ALL is in the Security surface, and it takes two presses. This also
+    // proves the accidental-click case: one press must stop nothing.
+    // Reached from the Core panel, not from the dock: security controls should
+    // not be one stray click away from every other surface.
+    await page.getByRole('button', { name: /open security/i }).click()
+    await page.waitForSelector('[role="dialog"][aria-label="Security"]')
+    check(
+      'the security surface shows Core deny-by-default, not a placeholder',
+      await page
+        .getByText(/anything not explicitly permitted is refused/i)
+        .first()
+        .isVisible(),
+    )
+    check(
+      'the security surface says an approval workflow does not exist',
+      await page.getByText(/no approval workflow exists/i).first().isVisible(),
+    )
+
+    await page.getByRole('button', { name: /stop all/i }).click()
+    await page.waitForSelector('[role="alertdialog"][aria-label="Confirm stop all"]')
+    check(
+      'one press on stop all does not stop anything',
+      (await page.locator('.security-posture b').textContent()) === 'RUNNING',
+    )
+    check(
+      'stopping asks for confirmation and warns that it is durable',
+      await page.getByText(/stays stopped after a restart/i).isVisible(),
+    )
+
+    await page.getByRole('button', { name: /yes, stop everything/i }).click()
     await page.waitForFunction(
-      () => {
-        const rows = [...document.querySelectorAll('.core-facts > div')]
-        const grants = rows.find((r) => r.querySelector('dt')?.textContent === 'Grants')
-        return grants?.textContent?.includes('stopped') === true
-      },
+      () => document.querySelector('.security-posture b')?.textContent === 'STOPPED',
       undefined,
       { timeout: 10_000 },
     )
-    check('stop all latches and is reported by the governor', true)
+    check('confirming stops Core', true)
+    check(
+      'the security surface says who stopped it',
+      await page.getByText(/by owner/i).first().isVisible(),
+    )
+
+    // Closed for now, so the surface-counting checks below are about the
+    // surfaces they are about. It comes back with the workspace after the
+    // relaunch, and the checks there confirm it does.
+    await page.getByRole('button', { name: 'Close Security' }).click()
+    await page.waitForSelector('[role="dialog"][aria-label="Security"]', { state: 'detached' })
 
     // --- open Search ------------------------------------------------------
     await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Search' }).click()
@@ -351,6 +386,14 @@ async function main(): Promise<void> {
       restoredFacts['Grants']?.includes('stopped') === true,
       restoredFacts['Grants'],
     )
+    // The surface was closed before the quit, so reopening it is the point: a
+    // fresh renderer must find Core already stopped, with no latch to set.
+    await restored.getByRole('button', { name: /open security/i }).click()
+    await restored.waitForSelector('[role="dialog"][aria-label="Security"]')
+    check(
+      'a fresh window finds Core already stopped',
+      (await restored.locator('.security-posture b').textContent()) === 'STOPPED',
+    )
     check(
       'the durable call count did not change while the app was closed',
       restoredFacts['Inference'] === idleFacts['Inference'],
@@ -359,7 +402,7 @@ async function main(): Promise<void> {
     check(
       'resuming clears the latch',
       await (async () => {
-        await restored.getByRole('button', { name: 'Resume' }).click()
+        await restored.getByRole('button', { name: /resume core/i }).click()
         await restored.waitForFunction(
           () => {
             const rows = [...document.querySelectorAll('.core-facts > div')]
@@ -372,6 +415,9 @@ async function main(): Promise<void> {
         return true
       })(),
     )
+    // Put the surface away again so the checks below count what they mean to.
+    await restored.getByRole('button', { name: 'Close Security' }).click()
+    await restored.waitForSelector('[role="dialog"][aria-label="Security"]', { state: 'detached' })
 
     // --- window chrome ---------------------------------------------------
     await restored.getByRole('button', { name: 'Close Harness' }).click()

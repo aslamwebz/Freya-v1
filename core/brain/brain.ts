@@ -180,6 +180,8 @@ export class Brain {
   private readonly now: () => Date
   private readonly newId: () => string
   private closed = false
+  private closing = false
+  private mutationTail: Promise<void> = Promise.resolve()
 
   constructor(options: BrainOptions) {
     this.store = options.store
@@ -394,98 +396,106 @@ export class Brain {
    * There is no path that writes a `memory-record` without the other two.
    */
   async writeMemory(request: MemoryWriteRequest): Promise<MemoryWriteOutcome> {
-    const now = this.timestamp()
-    const candidateId = this.newId()
-    const memoryId = this.newId()
-
-    const admission: AdmissionRequest = {
-      kind: request.kind,
-      subject: request.subject,
-      content: request.content,
-      source: request.source,
-      sourceRef: request.sourceRef,
-      observedAt: request.observedAt ?? now,
-      now,
-      proposedConfidence: request.confidence,
-      sensitivity: request.sensitivity,
-      tags: request.tags,
-      entityRefs: request.entityRefs,
-      structuredData: request.structuredData,
-      candidateId,
-      memoryId,
-      actor: request.actor,
-      conflictsWith: request.conflictsWith,
+    if (this.closing || this.closed) {
+      return { outcome: 'unavailable', memory: null, reason: 'the Brain is closing or closed', notes: [] }
     }
+    const task = async (): Promise<MemoryWriteOutcome> => {
+      const now = this.timestamp()
+      const candidateId = this.newId()
+      const memoryId = this.newId()
 
-    try {
-      // The candidate is written first and unconditionally. A refusal is a decision
-      // somebody may want to examine, and an examineable decision needs the proposal
-      // that produced it.
-      await this.write({ kind: 'memory-candidate', candidate: proposeCandidate(admission) })
-
-      const outcome = admit(admission, this.store.state())
-      const review = reviewOf(outcome, candidateId, now)
-      await this.write({ kind: 'memory-review', review })
-
-      if (outcome.decision !== 'admitted') {
-        await this.emit('brain.memory.reviewed', {
-          candidateId,
-          decision: outcome.decision,
-          reason: outcome.reason,
-        })
-        return { outcome: outcome.decision, memory: null, reason: outcome.reason, notes: [] }
+      const admission: AdmissionRequest = {
+        kind: request.kind,
+        subject: request.subject,
+        content: request.content,
+        source: request.source,
+        sourceRef: request.sourceRef,
+        observedAt: request.observedAt ?? now,
+        now,
+        proposedConfidence: request.confidence,
+        sensitivity: request.sensitivity,
+        tags: request.tags,
+        entityRefs: request.entityRefs,
+        structuredData: request.structuredData,
+        candidateId,
+        memoryId,
+        actor: request.actor,
+        conflictsWith: request.conflictsWith,
       }
 
-      const stored = await this.write({ kind: 'memory-record', memory: outcome.memory })
-      const memory = stored.memory
+      try {
+        // The candidate is written first and unconditionally. A refusal is a decision
+        // somebody may want to examine, and an examineable decision needs the proposal
+        // that produced it.
+        await this.write({ kind: 'memory-candidate', candidate: proposeCandidate(admission) })
 
-      // A contradiction is symmetric. Admission can discover that the new memory
-      // conflicts with an older one, but leaving the older record as plain
-      // "admitted" makes recall depend on which side happened to be selected.
-      // Persist the reciprocal edge so either side truthfully discloses the
-      // disagreement after a restart.
-      for (const otherId of memory.conflictsWith) {
-        const other = this.store.state().memories.get(otherId)
-        if (other === undefined || other.status === 'archived' || other.status === 'superseded') continue
-        const reciprocal = [...new Set([...other.conflictsWith, memory.memoryId])].sort()
-        if (other.status === 'conflicted' && reciprocal.length === other.conflictsWith.length) continue
-        await this.write({
-          kind: 'memory-record',
-          memory: {
-            ...other,
-            status: 'conflicted',
-            updatedAt: now,
-            conflictsWith: reciprocal,
-          },
-        })
-      }
+        const outcome = admit(admission, this.store.state())
+        const review = reviewOf(outcome, candidateId, now)
+        await this.write({ kind: 'memory-review', review })
 
-      await this.emit('brain.memory.admitted', {
-        memoryId: memory.memoryId,
-        kind: memory.kind,
-        source: memory.source,
-        confidence: memory.confidence,
-        status: memory.status,
-        conflictsWith: memory.conflictsWith.length,
-        contentLength: memory.content.length,
-      })
-      return {
-        outcome: 'admitted',
-        memory,
-        reason: memory.admissionReason,
-        notes: outcome.notes,
-      }
-    } catch (error) {
-      if (error instanceof BrainStoreError && error.code === 'store-unavailable') {
-        return {
-          outcome: 'unavailable',
-          memory: null,
-          reason: error.message,
-          notes: [],
+        if (outcome.decision !== 'admitted') {
+          await this.emit('brain.memory.reviewed', {
+            candidateId,
+            decision: outcome.decision,
+            reason: outcome.reason,
+          })
+          return { outcome: outcome.decision, memory: null, reason: outcome.reason, notes: [] }
         }
+
+        const stored = await this.write({ kind: 'memory-record', memory: outcome.memory })
+        const memory = stored.memory
+
+        // A contradiction is symmetric. Admission can discover that the new memory
+        // conflicts with an older one, but leaving the older record as plain
+        // "admitted" makes recall depend on which side happened to be selected.
+        // Persist the reciprocal edge so either side truthfully discloses the
+        // disagreement after a restart.
+        for (const otherId of memory.conflictsWith) {
+          const other = this.store.state().memories.get(otherId)
+          if (other === undefined || other.status === 'archived' || other.status === 'superseded') continue
+          const reciprocal = [...new Set([...other.conflictsWith, memory.memoryId])].sort()
+          if (other.status === 'conflicted' && reciprocal.length === other.conflictsWith.length) continue
+          await this.write({
+            kind: 'memory-record',
+            memory: {
+              ...other,
+              status: 'conflicted',
+              updatedAt: now,
+              conflictsWith: reciprocal,
+            },
+          })
+        }
+
+        await this.emit('brain.memory.admitted', {
+          memoryId: memory.memoryId,
+          kind: memory.kind,
+          source: memory.source,
+          confidence: memory.confidence,
+          status: memory.status,
+          conflictsWith: memory.conflictsWith.length,
+          contentLength: memory.content.length,
+        })
+        return {
+          outcome: 'admitted',
+          memory,
+          reason: memory.admissionReason,
+          notes: outcome.notes,
+        }
+      } catch (error) {
+        if (error instanceof BrainStoreError && ['store-unavailable', 'read-only', 'write-failed'].includes(error.code)) {
+          return {
+            outcome: 'unavailable',
+            memory: null,
+            reason: error.message,
+            notes: [],
+          }
+        }
+        throw error
       }
-      throw error
     }
+    const result = this.mutationTail.then(task, task)
+    this.mutationTail = result.then(() => undefined, () => undefined)
+    return result
   }
 
   /**
@@ -497,23 +507,31 @@ export class Brain {
    * record stays, its status says it was withdrawn, and retrieval stops returning it.
    */
   async archiveMemory(memoryId: string, reason: string): Promise<MemoryWriteOutcome> {
-    const memory = this.store.state().memories.get(memoryId)
-    if (memory === undefined) {
-      return { outcome: 'rejected', memory: null, reason: 'no such memory', notes: [] }
+    if (this.closing || this.closed) {
+      return { outcome: 'unavailable', memory: null, reason: 'the Brain is closing or closed', notes: [] }
     }
-    if (memory.status === 'archived') {
-      return { outcome: 'rejected', memory, reason: 'this memory is already archived', notes: [] }
+    const task = async (): Promise<MemoryWriteOutcome> => {
+      const memory = this.store.state().memories.get(memoryId)
+      if (memory === undefined) {
+        return { outcome: 'rejected', memory: null, reason: 'no such memory', notes: [] }
+      }
+      if (memory.status === 'archived') {
+        return { outcome: 'rejected', memory, reason: 'this memory is already archived', notes: [] }
+      }
+      const now = this.timestamp()
+      const archived: MemoryRecord = {
+        ...memory,
+        status: 'archived',
+        updatedAt: now,
+        admissionReason: `${memory.admissionReason}; archived ${now}: ${reason}`,
+      }
+      const written = await this.write({ kind: 'memory-record', memory: archived })
+      await this.emit('brain.memory.archived', { memoryId, reason: 'owner-requested' })
+      return { outcome: 'admitted', memory: written.memory, reason, notes: [] }
     }
-    const now = this.timestamp()
-    const archived: MemoryRecord = {
-      ...memory,
-      status: 'archived',
-      updatedAt: now,
-      admissionReason: `${memory.admissionReason}; archived ${now}: ${reason}`,
-    }
-    const written = await this.write({ kind: 'memory-record', memory: archived })
-    await this.emit('brain.memory.archived', { memoryId, reason: 'owner-requested' })
-    return { outcome: 'admitted', memory: written.memory, reason, notes: [] }
+    const result = this.mutationTail.then(task, task)
+    this.mutationTail = result.then(() => undefined, () => undefined)
+    return result
   }
 
   /**
@@ -688,6 +706,8 @@ export class Brain {
    * rather than every time the application launches.
    */
   async seed(definition: { identity: IdentityRoot; self: SelfDefinition }): Promise<boolean> {
+    // A corrupt log stays read-only; seeding must not stop the rest of Core.
+    if (this.store.health().health !== 'healthy') return false
     let wrote = false
     if (this.store.state().identity === null) {
       await this.write({ kind: 'identity-root', identity: definition.identity })
@@ -743,6 +763,8 @@ export class Brain {
   }
 
   async close(): Promise<void> {
+    this.closing = true
+    await this.mutationTail
     this.closed = true
     await this.store.close()
   }

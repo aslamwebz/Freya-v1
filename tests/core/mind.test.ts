@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCore, type Core, type CoreOptions } from '../../core/index'
@@ -127,6 +127,20 @@ async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<voi
     await new Promise((resolve) => setTimeout(resolve, 2))
   }
 }
+
+describe('a damaged Brain does not disable cognition', () => {
+  it('starts with a corrupt first record and still answers one explicit turn', async () => {
+    const path = join(dir, 'events.jsonl')
+    await writeFile(`${path}.brain`, '{truncated')
+    const provider = new FakeModelProvider()
+    const c = await started({ providers: [provider], brainKey: new Uint8Array(32).fill(43) })
+    expect(c.brain()?.health).toBe('degraded')
+    const id = await newConversation(c)
+    const result = await submit(c, id, 'hello')
+    expect(result.outcome).toBe('completed')
+    expect(provider.calls).toBe(1)
+  })
+})
 
 describe('A — an explicit user turn', () => {
   it('stores the question, spends one call, and stores the answer', async () => {

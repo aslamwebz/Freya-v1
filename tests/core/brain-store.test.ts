@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createCipheriv, createHash, randomBytes } from 'node:crypto'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EncryptedBrainStore } from '../../core/brain/encrypted-store'
@@ -110,6 +110,34 @@ async function editLine(index: number, transform: (line: string) => string): Pro
 }
 
 describe('encrypted Brain store', () => {
+  it('drains accepted writes on close and persists the validated snapshot', async () => {
+    const store = await openStore()
+    const record: BrainRecord = { kind: 'memory-record', memory: memory('snapshot', 'original') }
+    const pending = store.write(record)
+    record.memory.content = ''
+    const closing = store.close()
+    await expect(pending).resolves.toMatchObject({ memory: { content: 'original' } })
+    await closing
+    const reopened = await openStore()
+    expect(reopened.health().health).toBe('healthy')
+    expect(reopened.state().memories.get('snapshot')?.content).toBe('original')
+    await reopened.close()
+  })
+
+  it('reports an append failure and refuses queued writes after it', async () => {
+    const store = await openStore()
+    const path = join(dir, 'brain.enc')
+    await rename(path, join(dir, 'saved.enc'))
+    await mkdir(path)
+    const first = store.write({ kind: 'memory-record', memory: memory('lost', 'first') })
+    const second = store.write({ kind: 'memory-record', memory: memory('queued', 'second') })
+    const settled = await Promise.allSettled([first, second])
+    expect(settled.map((result) => result.status)).toEqual(['rejected', 'rejected'])
+    expect(store.health().health).toBe('degraded')
+    expect(store.state().sequence).toBe(0)
+    await store.close()
+  })
+
   it('never writes memory content in the clear', async () => {
     const store = await openStore()
     await store.write({ kind: 'memory-record', memory: memory('m1', SECRET) })
@@ -279,7 +307,7 @@ describe('chain integrity', () => {
     expect(moved.health().reason).toMatch(/different store/)
   })
 
-  it('keeps writing after a degraded open, and says why', async () => {
+  it('preserves a corrupt log and refuses appends that cannot survive replay', async () => {
     const store = await openStore()
     await store.write({ kind: 'memory-record', memory: memory('m1', 'first') })
     await store.close()
@@ -287,11 +315,14 @@ describe('chain integrity', () => {
 
     const reopened = await openStore()
     expect(reopened.health().health).toBe('degraded')
-    // A Brain that cannot read itself does not refuse to work. Losing memory is
-    // recoverable; refusing to answer is not something a disk error gets to decide.
+    const damaged = await readFile(join(dir, 'brain.enc'), 'utf8')
+    // Core can still answer, but appending beyond this break would acknowledge a
+    // durable memory that replay can never reach.
     await expect(
       reopened.write({ kind: 'world-entity', entity: entity('e9', 'Later') }),
-    ).resolves.toBeTruthy()
+    ).rejects.toMatchObject({ code: 'read-only' })
+    await reopened.close()
+    expect(await readFile(join(dir, 'brain.enc'), 'utf8')).toBe(damaged)
   })
 })
 

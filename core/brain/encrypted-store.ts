@@ -269,14 +269,15 @@ export class EncryptedBrainStore implements BrainStore {
     if (this.closed) {
       return Promise.reject(new BrainStoreError('store-unavailable', 'the Brain store is closed'))
     }
-    const checked = validateRecord(record)
+    const snapshot = JSON.parse(JSON.stringify(record)) as BrainRecord
+    const checked = validateRecord(snapshot)
     if (!checked.ok) return Promise.reject(new BrainStoreError('invalid-record', checked.reason))
-    assertRecordSize(record)
+    assertRecordSize(snapshot)
 
     // Serialised so that sequence assignment, the chain link, disk order and the
     // in-memory fold are one ordered operation. Two subsystems may write at once,
     // and that must not be able to put seq 12 on disk before seq 11.
-    const task = (): Promise<BrainRecord> => this.writeOne(record)
+    const task = (): Promise<BrainRecord> => this.writeOne(snapshot)
     const result = this.writeTail.then(task, task)
     // One failed write must not poison the queue for the next one.
     this.writeTail = result.then(
@@ -287,6 +288,9 @@ export class EncryptedBrainStore implements BrainStore {
   }
 
   private async writeOne(record: BrainRecord): Promise<BrainRecord> {
+    if (this.degraded !== null) {
+      throw new BrainStoreError('read-only', 'the Brain log is degraded and cannot safely accept writes')
+    }
     const seq = this.sequence + 1
     const prev = this.chainHead
     const nonce = randomBytes(NONCE_BYTES)
@@ -312,8 +316,11 @@ export class EncryptedBrainStore implements BrainStore {
     }
 
     try {
-      await appendFile(this.path, serialised, { encoding: 'utf8' })
+      await appendFile(this.path, serialised, { encoding: 'utf8', flush: true })
     } catch (error) {
+      // An OS append may have written only part of the line. Do not extend an
+      // uncertain tail or claim later memories will survive a restart.
+      this.degrade('a Brain append failed; the log must be reopened before writing')
       throw new BrainStoreError('write-failed', `a Brain record could not be written: ${describe(error)}`)
     }
 

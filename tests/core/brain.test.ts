@@ -212,6 +212,30 @@ describe('admission writes three records', () => {
 })
 
 describe('memory conflicts', () => {
+  it('drains an accepted admission before closing the durable Brain', async () => {
+    const { brain: b } = await open({ encrypted: true })
+    const pending = b.writeMemory({ kind: 'semantic', subject: 'owner', content: 'prefers tea', source: 'owner-assertion', sourceRef: null, confidence: 'high', sensitivity: 'normal' })
+    const closing = b.close()
+    expect((await pending).outcome).toBe('admitted')
+    await closing
+    const replayed = await EncryptedBrainStore.open({ path: join(dir, 'brain.enc'), key: testBrainKey() })
+    expect([...replayed.state().memories.values()].map((item) => item.content)).toEqual(['prefers tea'])
+    await replayed.close()
+  })
+
+  it('serializes concurrent admissions so neither contradiction is hidden', async () => {
+    const { brain: b } = await open({ encrypted: true })
+    const common = { kind: 'semantic' as const, subject: 'deadline', source: 'owner-assertion' as const, sourceRef: null, confidence: 'high' as const, sensitivity: 'normal' as const, entityRefs: ['project'] }
+    const [first, second] = await Promise.all([
+      b.writeMemory({ ...common, content: 'Friday' }),
+      b.writeMemory({ ...common, content: 'Monday' }),
+    ])
+    const firstId = first.memory!.memoryId
+    const secondId = second.memory!.memoryId
+    expect(b.state().memories.get(firstId)?.conflictsWith).toContain(secondId)
+    expect(b.state().memories.get(secondId)?.conflictsWith).toContain(firstId)
+  })
+
   it('persists a contradiction on both memories so either side discloses it', async () => {
     const { brain: b } = await open()
     const first = await b.writeMemory({

@@ -553,8 +553,12 @@ export function buildBrain(ctx: BuildContext): Brain {
       ['LATENCY', (t) => `${(0.9 + Math.abs(Math.sin(t * 0.5)) * 0.4).toFixed(2)} ms`],
     ],
     update(t, _dt, voice) {
-      group.rotation.y = t * 0.2
-      group.position.y = BRAIN_Y + Math.sin(t * 0.8) * 0.04
+      // The brain is the fixed centre of the Presence. Motion belongs in its
+      // scan/pulse materials and surrounding HUD, not in the whole brain object
+      // itself. Keeping this transform stable prevents the middle from visibly
+      // drifting even while the rest of the Presence remains alive.
+      group.rotation.set(0, 0, 0)
+      group.position.set(0, BRAIN_Y, 0)
       U(cortexMaterial).uTime!.value = t
       U(sliceMaterial).uTime!.value = t
       U(flowMaterial).uTime!.value = t

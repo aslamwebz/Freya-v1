@@ -429,3 +429,46 @@
   color: var(--ink);
   text-align: right;
 }
+
+/* ----------------------------------------------------------------- core */
+
+.core-facts dd {
+  /* Provider ids and fault text are longer than a label allows, and a status
+     panel that hides the thing you need to read is worse than a wrapped one. */
+  max-width: 62%;
+  overflow-wrap: anywhere;
+}
+
+.panel-meta-value[data-lifecycle='ready'] {
+  color: var(--ink);
+}
+
+.panel-meta-value[data-lifecycle='degraded'] {
+  color: var(--amber, #d8a657);
+}
+
+.core-absent {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.core-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.core-foot .link-pill:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.core-note {
+  /* A refusal is shown verbatim. A refusal that gets hidden is a refusal the
+     operator cannot act on. */
+  color: var(--amber, #d8a657);
+  font-size: 11px;
+  line-height: 1.3;
+}

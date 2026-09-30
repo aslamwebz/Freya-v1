@@ -126,6 +126,73 @@ async function main(): Promise<void> {
       (await page.locator('.presence').getAttribute('data-state')) === 'working',
     )
 
+    // --- the Core is real ------------------------------------------------
+    // Everything here is a value Core produced over IPC. The shell does not
+    // compute a lifecycle or keep a counter of its own.
+    const coreReady = async (p: Page) => {
+      await p.waitForFunction(
+        () => {
+          const el = document.querySelector('.panel-meta-value[data-lifecycle]')
+          return el !== null && el.textContent === 'ready'
+        },
+        undefined,
+        { timeout: 20_000 },
+      )
+    }
+    await coreReady(page)
+    check('core reaches ready and says so', true)
+
+    const coreFacts = async (p: Page) =>
+      p.evaluate(() =>
+        Object.fromEntries(
+          [...document.querySelectorAll('.core-facts > div')].map((row) => [
+            row.querySelector('dt')?.textContent ?? '',
+            row.querySelector('dd')?.textContent ?? '',
+          ]),
+        ),
+      )
+
+    const firstFacts = await coreFacts(page)
+    check(
+      'core reports a real event log and an idle inference count',
+      Number(/seq (\d+)/.exec(firstFacts['Event log'] ?? '')?.[1] ?? 0) > 0 &&
+        firstFacts['Inference'] === '0 this session · 0 durable',
+      JSON.stringify(firstFacts),
+    )
+    check(
+      'core is deny-by-default with no approval workflow',
+      firstFacts['Guard']?.startsWith('deny by default') === true,
+      firstFacts['Guard'],
+    )
+    check(
+      'nanogpt is present but not live',
+      (firstFacts['Providers'] ?? '').includes('nanogpt: unconfigured'),
+      firstFacts['Providers'],
+    )
+
+    // An idle window must cost nothing. Nothing here touched a provider, and
+    // the panel is reporting Core's own counter rather than a hard-coded zero.
+    await page.waitForTimeout(1200)
+    const idleFacts = await coreFacts(page)
+    check(
+      'an idle window spends no inference',
+      idleFacts['Inference'] === firstFacts['Inference'],
+      `${firstFacts['Inference']} -> ${idleFacts['Inference']}`,
+    )
+
+    // STOP ALL is derived from the log, so a relaunch must find it still latched.
+    await page.getByRole('button', { name: 'Stop all' }).click()
+    await page.waitForFunction(
+      () => {
+        const rows = [...document.querySelectorAll('.core-facts > div')]
+        const grants = rows.find((r) => r.querySelector('dt')?.textContent === 'Grants')
+        return grants?.textContent?.includes('stopped') === true
+      },
+      undefined,
+      { timeout: 10_000 },
+    )
+    check('stop all latches and is reported by the governor', true)
+
     // --- open Search ------------------------------------------------------
     await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Search' }).click()
     await page.waitForSelector('[role="dialog"][aria-label="Search"]')
@@ -218,6 +285,36 @@ async function main(): Promise<void> {
     check(
       'restores the presence state',
       (await restored.locator('.presence').getAttribute('data-state')) === 'working',
+    )
+
+    // --- the stop latch survived the process -----------------------------
+    await coreReady(restored)
+    const restoredFacts = await coreFacts(restored)
+    check(
+      'the stop latch is still set after a relaunch',
+      restoredFacts['Grants']?.includes('stopped') === true,
+      restoredFacts['Grants'],
+    )
+    check(
+      'the durable call count did not change while the app was closed',
+      restoredFacts['Inference'] === idleFacts['Inference'],
+      `${idleFacts['Inference']} -> ${restoredFacts['Inference']}`,
+    )
+    check(
+      'resuming clears the latch',
+      await (async () => {
+        await restored.getByRole('button', { name: 'Resume' }).click()
+        await restored.waitForFunction(
+          () => {
+            const rows = [...document.querySelectorAll('.core-facts > div')]
+            const grants = rows.find((r) => r.querySelector('dt')?.textContent === 'Grants')
+            return grants !== undefined && !grants.textContent?.includes('stopped')
+          },
+          undefined,
+          { timeout: 10_000 },
+        )
+        return true
+      })(),
     )
 
     // --- window chrome ---------------------------------------------------

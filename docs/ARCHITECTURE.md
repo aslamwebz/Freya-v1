@@ -95,11 +95,14 @@ State shape (`src/core/events.ts`):
 ShellState = {
   presence:   { state, since, activity, detail }
   surfaces:   { open, minimized, focused }   // a summary, not a second copy
-  viewport:   { width, height }
-  nav:        { active, section }
+  nav:        string
+  listening:  boolean
+  commandDraft: string
+  lastCommand: string | null
   dashboard:  { focus, work[], attention[], workforce[], activity[] }
-  runtime:    { version, platform, build }
-  attention:  { requested, count }
+  runtime:    { version, platform, userData, workspaceFile, dev }
+  attention:  { requested, lastNote }
+  notices:    Notice[]
 }
 ```
 

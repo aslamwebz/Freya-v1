@@ -112,7 +112,21 @@ export function createConversationMirror(): ConversationMirror {
     if (!bridge) {
       return { operation: 'refused', reason: 'the Core bridge is not available in this window' }
     }
-    const result = await bridge.coreSubmit(command as never, payload)
+    // A Core that cannot be reached is a *state the UI already models*, not an
+    // exception every call site has to remember to catch. Resolving with a refusal
+    // here is what stops a window that reloads mid-call from producing an unhandled
+    // rejection in a React effect instead of a sentence saying Freya is unreachable.
+    let result
+    try {
+      result = await bridge.coreSubmit(command as never, payload)
+    } catch (error) {
+      return {
+        operation: 'refused',
+        reason: `Freya Core could not be reached — ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      }
+    }
     // Nothing is patched locally from this reply. The status it carries is
     // published by the status subscription, and the transcript arrives as a
     // projection push — so the only thing read here is the conversation outcome
@@ -171,14 +185,8 @@ export function createConversationMirror(): ConversationMirror {
 
     async attachVoice(): Promise<() => void> {
       disposeVoice?.()
-      const bridge = host()
-      if (!bridge) {
-        publishVoice(null)
-        disposeVoice = () => {}
-        return disposeVoice
-      }
-      publishVoice(await bridge.coreVoice())
       disposeVoice = () => {}
+      await this.refreshVoice()
       return disposeVoice
     },
 
@@ -189,17 +197,40 @@ export function createConversationMirror(): ConversationMirror {
      * for it — the conversation projection already tells the window when a capture
      * is over, so a second channel for the same fact would be a second thing to
      * keep in step. The button asks.
+     *
+     * A failed read publishes `null` rather than rejecting. "I do not know whether
+     * a speech engine exists" is a state the UI already handles, and a rejected
+     * promise in a React effect is an unhandled rejection in somebody's console
+     * instead of a microphone button that says it does not know.
      */
     async refreshVoice(): Promise<void> {
       const bridge = host()
-      if (!bridge) return
-      publishVoice(await bridge.coreVoice())
+      if (!bridge) {
+        publishVoice(null)
+        return
+      }
+      try {
+        publishVoice(await bridge.coreVoice())
+      } catch {
+        publishVoice(null)
+      }
     },
 
     async voiceCaptureStart() {
       const bridge = host()
       if (!bridge) return { ok: false, sessionId: null, reason: 'no bridge' }
-      const result = await bridge.coreSubmit('voice.capture.start')
+      let result
+      try {
+        result = await bridge.coreSubmit('voice.capture.start')
+      } catch (error) {
+        return {
+          ok: false,
+          sessionId: null,
+          reason: `Freya Core could not be reached — ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        }
+      }
       const voice = result.voice as { operation: string; sessionId?: string; reason?: string } | undefined
       if (result.ok && voice?.operation === 'capture-started') {
         return { ok: true, sessionId: voice.sessionId ?? null, reason: null }

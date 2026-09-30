@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import type { CoreStatus } from '../../core/protocol/core-protocol'
+import type { ConversationProjection, VoiceProjection } from '../../core/protocol/conversation'
 import { App } from '../../src/ui/App'
 import { manager } from '../../src/ui/boot'
 import { shellStore } from '../../src/ui/store'
@@ -47,8 +48,11 @@ function stubLayout(): void {
 function installCoreBridge(over: {
   coreSubmit?: (command: string, payload?: unknown) => Promise<unknown>
   coreStatus?: () => Promise<unknown>
+  coreConversation?: () => Promise<unknown>
+  coreVoice?: () => Promise<unknown>
 } = {}): void {
   const listeners: ((status: unknown) => void)[] = []
+  const conversationListeners: ((projection: unknown) => void)[] = []
   window.freyaHost = {
     isDesktop: true,
     getRuntimeInfo: vi.fn(),
@@ -67,7 +71,46 @@ function installCoreBridge(over: {
         if (i >= 0) listeners.splice(i, 1)
       }
     }) as never,
+    // The conversation and voice channels exist in the bridge, so the shell's
+    // panels exercise the real path rather than discovering it is missing.
+    coreConversation: (over.coreConversation ?? (async () => CONVERSATION)) as never,
+    onCoreConversation: ((handler: (projection: unknown) => void) => {
+      conversationListeners.push(handler)
+      return () => {
+        const i = conversationListeners.indexOf(handler)
+        if (i >= 0) conversationListeners.splice(i, 1)
+      }
+    }) as never,
+    coreVoice: (over.coreVoice ?? (async () => VOICE)) as never,
   } as never
+}
+
+/** A conversation with nothing in it, and nothing claimed about cognition. */
+const CONVERSATION: ConversationProjection = {
+  persistence: { mode: 'encrypted', reason: null },
+  conversations: [],
+  activeConversationId: null,
+  messages: [],
+  activeTurn: null,
+  cognition: { available: true, reason: null },
+  stopAll: { active: false, activatedAt: null },
+  maxMessageCharacters: 8_000,
+  faults: [],
+}
+
+/** No local speech engine — the state most machines are actually in. */
+const VOICE: VoiceProjection = {
+  transcription: {
+    available: false,
+    engine: null,
+    detail: 'No local speech-to-text engine is configured.',
+  },
+  synthesis: { available: false, engine: null, detail: 'No local text-to-speech engine is configured.' },
+  capturing: false,
+  sessionId: null,
+  limits: { maxDurationMs: 30_000, maxAudioBytes: 4_194_304, format: 'pcm-s16le' },
+  localOnly: true,
+  faults: [],
 }
 
 /** A status with nothing claimed about it, so tests can assert against it. */
@@ -437,7 +480,10 @@ describe('Freya shell', () => {
     // window says so. What matters here is that the control is *press and hold*:
     // there is no way to leave a microphone open by clicking once and walking away.
     expect(mic).toHaveAttribute('aria-pressed', 'false')
-    expect(mic).toHaveAttribute('title', expect.stringMatching(/hold to record/i))
+    // The tooltip says the engine is missing rather than the generic line, because
+    // a person about to press this needs to know the recording will be discarded.
+    expect(mic).toHaveAttribute('title', expect.stringMatching(/no local speech engine/i))
+    expect(mic).toHaveAttribute('title', expect.stringMatching(/never uploaded/i))
 
     // And it is not a toggle dressed up as a push-to-talk: a click alone does
     // nothing, because `pointerdown` is what opens a device.

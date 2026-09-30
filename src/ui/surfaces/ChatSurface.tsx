@@ -54,8 +54,13 @@ export function ChatSurface() {
       dispose = attached.subscribe(setProjection)
     })
     void mirror.attachVoice().then(() => mirror.subscribeVoice(setVoice))
-    // Load the existing history so a surface opened on day seven is not empty.
-    void mirror.list()
+    // Load the existing history so a surface opened on day seven is not empty. A
+    // refusal is reported rather than thrown: the transcript below already renders
+    // whatever Core could tell us, and an unhandled rejection would only add a
+    // console error nobody reads.
+    void mirror.list().then((outcome) => {
+      if (outcome.operation === 'refused') setNotice(outcome.reason)
+    })
     return () => {
       cancelled = true
       dispose?.()

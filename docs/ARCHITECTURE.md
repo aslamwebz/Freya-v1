@@ -467,12 +467,20 @@ Four properties, each of which is load-bearing:
   while that is still current. Two refusal points bracket the single `await` in
   the window, and there is deliberately no `await` between marking the contact
   and making the call.
-- **Live work is a process fact.** `activeProviderCalls` is the size of the
-  gateway's registry. It is the only in-process record of live provider work, and
-  the journal is not a substitute for it.
+- **Live work is a process fact.** `activeProviderCalls` counts only registry
+  entries whose provider call is actually unresolved. Requests waiting before
+  provider contact remain tracked for cancellation/race safety but do not make
+  Presence claim paid work is running. The journal is not a substitute for this
+  process fact.
 - **Only the owner reopens the gate.** `resume()` restarts nothing and returns
   nothing; it changes whether a *new* request may begin. No provider, model or
   model-written agent can reach `cancelAll` or `resume`.
+- **A failed STOP write fails closed.** The contact gate is closed before the
+  durable STOP event is written. If that append fails, Core does **not** reopen
+  the gateway. The closed runtime gate is projected as Governor `deny_all`,
+  new cognition is refused before provider selection, and only a later explicit
+  owner `security.resume` may reopen the session gate. Shutdown and degraded
+  Core cannot be reopened through this path.
 
 Cancellation is journalled as `model.request.cancelled` with `providerContacted`
 stated, never inferred: a request refused at the door is not a call and any start

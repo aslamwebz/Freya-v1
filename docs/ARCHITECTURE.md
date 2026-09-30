@@ -368,6 +368,70 @@ Rules:
 **Not persisted:** dashboard demo fixtures, the presence canvas, transient
 animation values. They are derived, not stored.
 
+### 4.2 Two encrypted stores, two secrets
+
+Everything a person tells Freya is written to disk encrypted, in **two separate
+stores**, each with its own 256-bit secret and each wrapped separately by the OS
+secure storage:
+
+```
+  conversation  256-bit random  ─┐
+                                 ├─→ each wrapped separately
+  brain         256-bit random  ─┘     (DPAPI / Keychain / libsecret)
+```
+
+Independent secrets rather than one root with derived subkeys, and that is a
+deliberate trade. Deriving is tidier to manage, but recovering a root yields
+*every* domain at once — so "the conversation key leaked" stops being a bounded
+problem and becomes "Freya's entire memory leaked". Two secrets cost a migration
+and buy back a blast radius of one. The Brain is the longest-lived, most valuable
+state in the system, so it is the last thing that should be one key-compromise
+away from the conversation log.
+
+Phase 3's single `<data>.key` file is adopted **byte-identically** as the
+conversation secret on first run, so existing transcripts stay readable, and then
+left in place — a migration that can lose access to history on its failure path
+is not one worth shipping.
+
+When the OS secure storage is unavailable, or Electron selects the insecure
+`basic_text` backend, **no key is produced**. Core falls back to ephemeral stores
+that label themselves, and the Vault says `FORGETS ON QUIT` before anything can be
+typed into it. There is deliberately no path that writes a key beside the data it
+protects, or writes either store in the clear: a weaker store silently standing in
+for an encrypted one is a worse bug than forgetting a conversation, and it is the
+failure a person cannot detect.
+
+### 4.3 The Brain log is chained; the journal is not
+
+The Brain store appends AES-256-GCM records in which each line's header —
+including the previous line's digest — is authenticated as additional data:
+
+```
+  line N   =  { version, kind, seq, prev, context, nonce, cipher, tag }
+             \_____________ authenticated as AAD ____________/
+  prev(N)  =  sha256(line N-1, exactly as written)
+```
+
+A tag proves *this line* was not edited. Only a chain proves no line was removed,
+duplicated or reordered — which is what makes it distinguishable from a person
+being told to forget something and an attacker removing evidence. The security
+journal does **not** need this: it is append-only by construction and its integrity
+requirement is different (see §6.1).
+
+A broken sequence or chain is reported and **reading stops there** rather than
+skipping the line, because continuing would let a deleted record look like it was
+never there.
+
+**A Brain fault is never a security event.** It cannot grant cognition or clear a
+stop, and it does not *lose* authority either — unreadable long-term knowledge is
+neither permission nor lockout. `brain.degraded` is deliberately absent from
+`SECURITY_EVENT_TYPES` so a disk error cannot masquerade as a safety posture.
+
+**There is no delete.** Withdrawing a memory archives it: the record stays, its
+status changes, and retrieval stops returning it. The Vault lists what Freya holds
+and counts what was withdrawn, so it is visible that a memory went somewhere rather
+nowhere.
+
 ### 4.1 Surviving an immediate quit
 
 A renderer cannot push its final layout at quit time — an IPC sent during
@@ -396,11 +460,12 @@ The intended shape, stated so the seams can be checked against it:
 | System | Attaches by | Does **not** require |
 | --- | --- | --- |
 | Mind (conversation) | **built in Phase 3** — a `conversation.*` event family + a `chat` surface | any change to the window model |
+| Brain (memory, identity, self) | **built in Phase 4** — a `brain.*` event family + a `vault` surface | a second window implementation |
 | Searcher | a `searcher.*` event family + a surface registry entry | a second window implementation |
 | Work / Missions | `work.updated` / `mission.*` events + surface context | the store to know what a "mission" is |
 | Workforce | `workforce.*` events | agents running in the renderer |
 | Harness | surfaces that request a PTY from the main process | the renderer owning process handles |
-| Vault | a `vault.*` event family + capability-scoped file access | direct fs from the renderer |
+| Vault (files, Obsidian-compatible import) | **the `vault` surface is now the Brain**; a file-backed vault is a *future* capability-scoped access path | direct fs from the renderer |
 | Guard | every privileged call routed through main | the UI holding secrets |
 | Governor | budgets enforced in main | the UI being able to raise a budget |
 
@@ -426,6 +491,7 @@ electron/main.ts          owns one Core, for the life of the process
       mind/               the Mind, and the deterministic context compiler
       conversation/       conversation entities, stores, and the service
       identity/           the Identity Kernel: who Freya is, outside any model
+      brain/              identity root, self-model, world, memory, experience
       voice/              local-only voice abstractions and bounds
       projections/        Core's account of itself, derived from the log
 ```
@@ -619,24 +685,61 @@ a real level when a device is open and does not simulate a reply from it.
 
 ## 7. Deliberately absent
 
-Phase 3 implements a conversation, a Mind, an Identity Kernel, encrypted
-conversation storage, a local voice seam and push-to-talk capture.
+Phase 4 implements a conversation, a Mind, an Identity Kernel, encrypted
+conversation storage, a local voice seam, push-to-talk capture, and the Brain:
+an identity root, a persistent self-model, a world of entities and relations,
+admitted memory, and per-turn experience records.
 
-Neither Phase 1, 2 nor 3 implements: streaming, automatic summarisation, a
-persistent Self Model, semantic or episodic memory, embeddings, vector retrieval,
-the World graph, Experience, relationship graphs, the SQLCipher Brain, Searcher,
-web research, browser automation, Browser Relay, Vault, Missions execution, Work,
-the Run engine, agents, swarms, PTYs, terminal, Foundry, Relay, connectors/MCP,
-3D Office, learning, self-modification, or a local speech-engine binary adapter.
-There are no stub classes for them, and no panel that implies one is running.
+No phase 1–4 implements: streaming, automatic summarisation, embeddings, vector
+or semantic retrieval, self-modification, learning from conversation, Searcher,
+web research, browser automation, Browser Relay, Missions execution, Work, the Run
+engine, agents, swarms, PTYs, terminal, Foundry, Relay, connectors/MCP, 3D Office,
+an Obsidian-compatible file vault, or a local speech-engine binary adapter. There
+are no stub classes for them, and no panel that implies one is running.
+
+### 7.1 Absences inside the Brain that are decisions, not gaps
+
+The Brain is the subsystem most likely to be mistaken for a finished one, because
+it *looks* like a memory system and returns results. So the things it deliberately
+does not do are listed where they are hardest to rediscover:
+
+- **No fact-checking.** Admission decides how much a source class is worth, not
+  whether a claim is true. Nothing in Phase 4 verifies anything, so nothing is
+  stored as `verified`.
+- **No semantic retrieval.** Recall is a named sum of signals with a total order.
+  Conflict *detection* is correspondingly literal — same slot and a shared entity,
+  or an explicit declaration — because a rule that looked semantic would mark
+  unrelated memories as conflicting and suppress true ones.
+- **A turn never writes memory.** It reads only what was already admitted. This is
+  what stops a prompt injection from becoming a durable fact just by being sent.
+- **No deletion, ever.** Withdrawal archives.
+- **No `working` memory.** It is the Mind's volatile state, and a second copy would
+  go stale.
+- **No credentials.** The Brain may record *that* a key exists and where it is
+  kept. Guard and a future Vault own secrets.
+- **No model call anywhere in `core/brain/` or in the recall path.** Recall has to
+  be free, offline and reproducible; a score that drifts with a model's mood cannot
+  be audited or corrected.
+
+### 7.2 The four separations that matter most
+
+Each of these is enforced by types and tests rather than by convention:
+
+- **Model output is data, never instruction.** Recalled memory enters the compiled
+  packet *below the transcript*, as its own labelled message, never appended to the
+  system message — anything in a system message is instruction by construction.
+- **Content cannot classify itself.** The trust label is assigned by the admitting
+  pathway, which knew where the bytes came from. A window likewise cannot name a
+  source class: a renderer that could assert `owner-assertion` for itself could
+  launder a web page's contents in as something the owner said.
+- **Live authority is never duplicated into durable state.** Budgets, stop state
+  and grants are Guard's and Governor's truth, read fresh. A writable copy of the
+  most security-relevant facts in the system would go stale and then be believed.
+- **A Brain fault is not a security event.** See §4.3.
 
 A surface type may exist with `status: 'placeholder'`, in which case its window is
 real — movable, resizable, persisted — and its body says which system is missing
 and why. That is a declared boundary, not a fake.
-
-A surface type may exist with `status: 'placeholder'`, in which case its window
-is real — movable, resizable, persisted — and its body says which system is
-missing and why. That is a declared boundary, not a fake.
 
 A submitted **command** reaches Core, is made durable, and stops there. The
 acknowledgement says so explicitly, because a user told a command was received

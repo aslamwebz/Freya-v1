@@ -127,23 +127,20 @@
 
 /* Above the surface layer: the design lab and the state control have to stay
    reachable while windows are open. */
-.presence-controls {
+/* The presentation controls, at the top of the workspace. */
+.center-top {
   position: relative;
   z-index: 70;
   flex: none;
-  align-self: center;
-  margin-top: 10px;
-  margin-bottom: 2px;
-  width: min(560px, 100%);
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
   align-items: center;
 }
 
-.presence-states,
-.lab-panel {
-  width: 100%;
+.presence-states {
+  width: min(620px, 100%);
   padding: 10px 12px;
   border-radius: var(--radius);
   background: rgba(8, 8, 12, 0.6);
@@ -217,6 +214,104 @@
   gap: 6px;
 }
 
+.lab-hint {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  opacity: 0.7;
+}
+
+/*
+ * The panel is fixed and large, which is the whole point of the redesign.
+ *
+ * It used to sit inside the presence column, so folding the rail narrowed it and
+ * opening a window covered it. Sized against the viewport and lifted above the
+ * surface layer, it is the same size whatever else is on screen — the two things
+ * that made it unusable were both about it inheriting somebody else's layout.
+ */
+/*
+ * Non-modal on purpose.
+ *
+ * A blocking scrim would have made this requirement untestable: you cannot fold
+ * the rail or open a window while one is in the way, so you could never see that
+ * the panel is unaffected by them. The scrim dims the page and does not catch
+ * clicks; the panel catches its own.
+ */
+.lab-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: grid;
+  place-items: start center;
+  /*
+   * The left inset is a *fixed* 200px, not the rail's measured width.
+   *
+   * A fixed inset keeps the panel clear of the rail so the rail stays usable
+   * while the lab is open, and — because it does not read the rail — folding the
+   * rail cannot change the panel's size. That is the requirement, and reading
+   * the live width would have quietly reintroduced the coupling.
+   */
+  padding: clamp(56px, 9vh, 128px) var(--gutter) var(--gutter) 200px;
+  background: rgba(3, 4, 9, 0.55);
+  pointer-events: none;
+}
+
+.lab-panel {
+  pointer-events: auto;
+}
+
+/*
+ * The lab keeps the look it always had — the same radius, the same border, the
+ * same material — and only its size and position changed. The one deliberate
+ * departure is a more opaque backdrop, because a fixed panel with a window
+ * behind it has to stay readable.
+ */
+.lab-panel {
+  width: min(1360px, 92vw);
+  height: min(700px, 76vh);
+  overflow-y: auto;
+  padding: 16px 18px 18px;
+  border-radius: var(--radius);
+  background: rgba(8, 8, 12, 0.94);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--gold-line);
+  box-shadow: 0 32px 90px rgba(0, 0, 0, 0.7);
+}
+
+.lab-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.lab-bar b {
+  font: 400 10px/1 var(--font-display);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.lab-close {
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--ink-2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.lab-close:hover {
+  color: var(--ink);
+  border-color: var(--gold-line);
+}
+
 .lab-toggle {
   display: inline-flex;
   align-items: center;
@@ -242,15 +337,14 @@
   box-shadow: 0 0 8px currentColor;
 }
 
+/* The scrim carries the grid; the panel only fills it. */
 .lab-panel {
-  width: 100%;
   display: grid;
   gap: 10px;
-  max-height: 38vh;
-  overflow-y: auto;
+  align-content: start;
 }
 
-.lab-panel[hidden] {
+.lab-scrim[hidden] {
   display: none;
 }
 

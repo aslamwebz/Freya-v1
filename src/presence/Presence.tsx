@@ -1,13 +1,11 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
-import { PRESENCE_STATES, PRESENCE_TONE, type PresenceState } from '../core/presence'
-import { shellStore, useShell } from '../ui/store'
-import { DesignLab } from './DesignLab'
+import { PRESENCE_TONE, type PresenceState } from '../core/presence'
+import { useShell } from '../ui/store'
 import { PresenceView, type PresenceHandle } from './PresenceView'
 import { voiceEnvelope } from './voiceEnvelope'
 
 /**
- * The presence: Freya's visible state, and the design lab that controls how it
- * is drawn.
+ * The presence: Freya's visible state.
  *
  * Three inputs reach the stage and only three: the presence state from the
  * shell store, the voice envelope, and the design lab. Nothing here calls a
@@ -25,10 +23,24 @@ const ACTIVITY: Record<PresenceState, number> = {
   error: 0.45,
 }
 
-export function Presence({ ringCanvas }: { ringCanvas: RefObject<HTMLCanvasElement | null> }) {
+/**
+ * The centrepiece, and nothing else.
+ *
+ * The design lab and the presence controls used to live in here, which tied them
+ * to the width of this column. The lab is now a large fixed panel and the
+ * controls sit at the top of the workspace, so this renders the canvas and its
+ * readouts and nothing that wants to be somewhere else.
+ */
+export function Presence({
+  ringCanvas,
+  onReady,
+}: {
+  ringCanvas: RefObject<HTMLCanvasElement | null>
+  /** The stage handle, lifted so the lab can drive it from the top of the page. */
+  onReady: (handle: PresenceHandle | null) => void
+}) {
   const state = useShell((s) => s.presence.state)
   const listening = useShell((s) => s.listening)
-  const [handle, setHandle] = useState<PresenceHandle | null>(null)
   const [labels, setLabels] = useState<[string, string][]>([])
 
   // Turning the microphone on means "you are speaking", locally. Turning it off
@@ -44,10 +56,10 @@ export function Presence({ ringCanvas }: { ringCanvas: RefObject<HTMLCanvasEleme
   return (
     <div className="presence" data-state={state}>
       <PresenceView
-        activity={activity.current}
+        activity={activity.current ?? ACTIVITY.idle}
         ringCanvas={ringCanvas}
         onLabels={setLabels}
-        onReady={setHandle}
+        onReady={onReady}
       />
 
       <div className="hud-labels" aria-hidden="true">
@@ -59,58 +71,16 @@ export function Presence({ ringCanvas }: { ringCanvas: RefObject<HTMLCanvasEleme
       <p className="sr-only" role="status" aria-live="polite">
         Freya is {PRESENCE_TONE[state].label.toLowerCase()}.
       </p>
-
-      <div className="presence-controls">
-        <DesignLab
-          handle={handle}
-          onSimulateUser={() => voiceEnvelope.simulateUser()}
-          onSimulateReply={() => voiceEnvelope.simulateReply()}
-        />
-        <PresenceStates state={state} />
-      </div>
     </div>
   )
 }
+
 
 function Hud({ className, label, value }: { className: string; label: string; value: string }) {
   return (
     <div className={`hud-label ${className}`}>
       <b>{label}</b>
       <span>{value}</span>
-    </div>
-  )
-}
-
-/**
- * The deterministic state control.
- *
- * Phase 0 has no model, so presence cannot be driven by cognition. A visible,
- * local control is the honest version: the states, the transitions and the
- * rendering are real, and what drives them is declared rather than faked.
- */
-function PresenceStates({ state }: { state: PresenceState }) {
-  return (
-    <div className="presence-states">
-      <div className="presence-states-head">
-        <span className="demo-tag">Demo</span>
-        <span className="presence-states-title">Presence state</span>
-        <span className="presence-states-value" style={{ color: PRESENCE_TONE[state].accent }}>
-          {PRESENCE_TONE[state].label}
-        </span>
-      </div>
-      <div className="presence-states-body" role="group" aria-label="Demo presence state">
-        {PRESENCE_STATES.map((candidate) => (
-          <button
-            key={candidate}
-            type="button"
-            className="presence-chip"
-            aria-pressed={candidate === state}
-            onClick={() => shellStore.dispatch({ type: 'presence.set', state: candidate })}
-          >
-            {PRESENCE_TONE[candidate].label}
-          </button>
-        ))}
-      </div>
     </div>
   )
 }

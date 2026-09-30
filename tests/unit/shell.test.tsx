@@ -287,7 +287,16 @@ describe('Freya shell', () => {
       fireEvent.click(screen.getByRole('button', { name: /maximize search/i }))
     })
 
-    expect(manager.get(id)?.layout).toMatchObject({ x: 186, y: 88, width: 1414, height: 912 })
+    // Maximising fills whatever region windows may occupy: the whole window below
+    // the header. Read the frame from the manager rather than restating it, so
+    // this test cannot disagree with the geometry it is checking.
+    const frame = manager.workspaceFrame
+    expect(manager.get(id)?.layout).toMatchObject({
+      x: frame.x,
+      y: frame.y,
+      width: frame.width,
+      height: frame.height,
+    })
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /restore search/i }))
@@ -363,7 +372,15 @@ describe('Freya shell', () => {
     expect(notice).toContain('Freya Core received the command')
     expect(notice).toContain('event #42')
     expect(notice).toMatch(/not connected yet/i)
-    expect(screen.getByText(/Freya Core received the command/i)).toBeInTheDocument()
+    // Two surfaces show the same reply — the notice stack and the chat bar —
+    // and they must say the same thing, because both come from one reply.
+    const shown = screen.getAllByText(/Freya Core received the command/i)
+    expect(shown.length).toBeGreaterThanOrEqual(2)
+    for (const element of shown) {
+      expect(element.textContent).toContain('event #42')
+    }
+    // The transcript recorded the turn as well as the acknowledgement.
+    expect(screen.getAllByText('find the vault contract').length).toBeGreaterThanOrEqual(1)
   })
 
   it('shows a refusal as a refusal and never as a receipt', async () => {

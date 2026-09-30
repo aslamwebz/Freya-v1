@@ -96,6 +96,78 @@ export function SecuritySurface() {
         </span>
       </div>
 
+      <section className="security-section security-controls">
+        <h3>Controls</h3>
+        {stopped ? (
+          <div className="security-resume">
+            <p>
+              Core is stopped. Resuming allows cognition again; it does not create any grants, and
+              it is the only way out of a stop.
+            </p>
+            <button
+              type="button"
+              className="security-button security-resume-button"
+              disabled={busy}
+              onClick={() => void send('security.resume', 'resumed from the Security surface')}
+            >
+              {busy ? 'Resuming…' : 'Resume Core'}
+            </button>
+          </div>
+        ) : arm.armed ? (
+          <div className="security-armed" role="alertdialog" aria-label="Confirm stop all">
+            <p>
+              This stops every inference Freya can make, including scheduled work, and it stays
+              stopped after a restart until you resume it.
+            </p>
+            <div className="security-armed-row">
+              <button
+                ref={confirmRef}
+                type="button"
+                className="security-button security-stop-confirm"
+                disabled={busy}
+                onClick={() => {
+                  setArm({ armed: false, armedAt: null })
+                  void send('security.stopAll', 'confirmed from the Security surface')
+                }}
+              >
+                Yes, stop everything
+              </button>
+              <button
+                type="button"
+                className="security-button security-cancel"
+                onClick={() => setArm({ armed: false, armedAt: null })}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="security-stop">
+            <p>
+              In an emergency, stop everything. You will be asked to confirm, and only you can
+              resume.
+            </p>
+            <button
+              type="button"
+              className="security-button security-stop-arm"
+              disabled={busy}
+              onClick={() => setArm({ armed: true, armedAt: Date.now() })}
+            >
+              Stop all…
+            </button>
+          </div>
+        )}
+        {message ? (
+          <p className="security-message" role="alert">
+            {message}
+          </p>
+        ) : null}
+        {stopped && status.stopAll.activatedBy ? (
+          <p className="security-fineprint">
+            Stopped {status.stopAll.activatedAt ?? 'at an unknown time'} by {status.stopAll.activatedBy}.
+          </p>
+        ) : null}
+      </section>
       <section className="security-section">
         <h3>Guard</h3>
         <dl className="security-facts">
@@ -176,78 +248,6 @@ export function SecuritySurface() {
         ) : null}
       </section>
 
-      <section className="security-section security-controls">
-        <h3>Controls</h3>
-        {stopped ? (
-          <div className="security-resume">
-            <p>
-              Core is stopped. Resuming allows cognition again; it does not create any grants, and
-              it is the only way out of a stop.
-            </p>
-            <button
-              type="button"
-              className="security-button security-resume-button"
-              disabled={busy}
-              onClick={() => void send('security.resume', 'resumed from the Security surface')}
-            >
-              {busy ? 'Resuming…' : 'Resume Core'}
-            </button>
-          </div>
-        ) : arm.armed ? (
-          <div className="security-armed" role="alertdialog" aria-label="Confirm stop all">
-            <p>
-              This stops every inference Freya can make, including scheduled work, and it stays
-              stopped after a restart until you resume it.
-            </p>
-            <div className="security-armed-row">
-              <button
-                ref={confirmRef}
-                type="button"
-                className="security-button security-stop-confirm"
-                disabled={busy}
-                onClick={() => {
-                  setArm({ armed: false, armedAt: null })
-                  void send('security.stopAll', 'confirmed from the Security surface')
-                }}
-              >
-                Yes, stop everything
-              </button>
-              <button
-                type="button"
-                className="security-button security-cancel"
-                onClick={() => setArm({ armed: false, armedAt: null })}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="security-stop">
-            <p>
-              In an emergency, stop everything. You will be asked to confirm, and only you can
-              resume.
-            </p>
-            <button
-              type="button"
-              className="security-button security-stop-arm"
-              disabled={busy}
-              onClick={() => setArm({ armed: true, armedAt: Date.now() })}
-            >
-              Stop all…
-            </button>
-          </div>
-        )}
-        {message ? (
-          <p className="security-message" role="alert">
-            {message}
-          </p>
-        ) : null}
-        {stopped && status.stopAll.activatedBy ? (
-          <p className="security-fineprint">
-            Stopped {status.stopAll.activatedAt ?? 'at an unknown time'} by {status.stopAll.activatedBy}.
-          </p>
-        ) : null}
-      </section>
     </div>
   )
 }

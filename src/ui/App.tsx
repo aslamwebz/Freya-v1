@@ -4,7 +4,6 @@ import { startShell } from './boot'
 import { CommandBar } from './shell/CommandBar'
 import { Navigation } from './shell/Navigation'
 import { TopBar } from './shell/TopBar'
-import { SurfaceDock } from './shell/SurfaceDock'
 import {
   ActivityPanel,
   AttentionPanel,
@@ -15,6 +14,11 @@ import {
 } from './dashboard/Panels'
 import { CorePanel } from './dashboard/CorePanel'
 import { Presence } from '../presence/Presence'
+import { DesignLab } from '../presence/DesignLab'
+import { PresenceStatesConnected } from './dashboard/PresenceStates'
+import { voiceEnvelope } from '../presence/voiceEnvelope'
+import type { PresenceHandle } from '../presence/PresenceView'
+import { ChatBar } from './shell/ChatBar'
 import { SurfaceLayer } from './surfaces/SurfaceLayer'
 import { toggleSurface } from './surfaceActions'
 import { FreyaMark } from './icons'
@@ -27,6 +31,9 @@ export function App() {
 
   useEffect(() => onLabChange((lab) => setBackground(lab.bg)), [])
   const [failure, setFailure] = useState<string | null>(null)
+  // The stage handle, lifted: the design lab now lives at the top of the
+  // workspace and still has to be able to drive the presence.
+  const [presenceHandle, setPresenceHandle] = useState<PresenceHandle | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -79,8 +86,18 @@ export function App() {
         </div>
 
         <main className="column column-center">
-          <Presence ringCanvas={ringCanvas} />
-          <SurfaceDock onToggle={toggleSurface} />
+          {/* Presentation controls, at the top: how Freya is drawn is a
+              top-of-workspace concern, not something buried under the canvas. */}
+          <div className="center-top">
+            <DesignLab
+              handle={presenceHandle}
+              onSimulateUser={() => voiceEnvelope.simulateUser()}
+              onSimulateReply={() => voiceEnvelope.simulateReply()}
+            />
+            <PresenceStatesConnected />
+          </div>
+
+          <Presence ringCanvas={ringCanvas} onReady={setPresenceHandle} />
         </main>
 
         <div className="column column-right">
@@ -89,6 +106,11 @@ export function App() {
           <WorkforcePanel />
           <ActivityPanel />
         </div>
+
+        {/* The chat bar is a row of its own across the whole workspace, not a
+            strip wedged into the middle column. It needs the width: a surface
+            switcher and a transcript and an input do not fit in 412px. */}
+        <ChatBar onToggle={toggleSurface} />
       </div>
 
       <SurfaceLayer />

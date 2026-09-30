@@ -550,6 +550,9 @@
 
 .security-surface {
   padding: 18px 20px 24px;
+  /* The controls section reorders itself to the top; the rest keeps its order. */
+  display: flex;
+  flex-direction: column;
   height: 100%;
   overflow-y: auto;
   user-select: text;
@@ -705,8 +708,14 @@
 }
 
 .security-controls {
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
-  padding-top: 16px;
+  /* Above the chat bar, not below it. Windows are laptop-sized and centred, so
+     the bottom strip of any window sits under the bar; a control placed there
+     cannot be clicked at all. The primary control also belongs at the top of a
+     panel, which is the older reason and the better one. */
+  order: -1;
+  padding-bottom: 16px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 .security-controls p {
@@ -771,4 +780,201 @@
   margin-top: 8px !important;
   font-size: 10.5px !important;
   color: var(--ink-3) !important;
+}
+
+/* ------------------------------------------------------------- chat bar */
+
+.chatbar {
+  /* A row of the shell, from after the rail to the right edge. Column 1 is the
+     rail itself, and a chat bar drawn across it would sit on top of the
+     navigation. */
+  grid-column: 2 / -1;
+  position: relative;
+  z-index: 65;
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  width: 100%;
+  margin: 0 var(--gutter) 14px 0;
+  padding: 8px;
+  border-radius: 16px;
+  background: rgba(8, 8, 12, 0.72);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--gold-line);
+  box-shadow: var(--glass-inset), var(--glass-shadow);
+}
+
+.chatbar-switcher {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 2px;
+}
+
+.chatbar-surface {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--ink-2);
+  border: 1px solid transparent;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+
+.chatbar-surface .icon {
+  width: 20px;
+  height: 20px;
+}
+
+.chatbar-surface:hover {
+  color: var(--ink);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.chatbar-surface[aria-pressed='true'] {
+  color: var(--gold-hi);
+  border-color: var(--gold-line);
+  background: var(--gold-soft);
+}
+
+.chatbar-surface[data-focused] {
+  box-shadow: 0 0 0 1px var(--gold);
+}
+
+.chatbar-badge {
+  position: absolute;
+  right: 2px;
+  bottom: 1px;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-style: normal;
+  color: var(--ink-3);
+}
+
+.chatbar-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chatbar-log {
+  min-height: 54px;
+  max-height: 132px;
+  overflow-y: auto;
+  padding: 2px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  scrollbar-width: thin;
+}
+
+.chatbar-empty {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.chatbar-line {
+  margin: 0;
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.chatbar-who {
+  flex: none;
+  width: 34px;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.chatbar-line[data-role='you'] .chatbar-text {
+  color: var(--ink);
+}
+
+.chatbar-line[data-role='freya'] .chatbar-text {
+  color: var(--ink-2);
+}
+
+/* A refusal is never styled like a success. */
+.chatbar-line[data-refused] .chatbar-text,
+.chatbar-line[data-refused] .chatbar-who {
+  color: var(--amber, #d8a657);
+}
+
+.chatbar-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 6px;
+  border-radius: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.chatbar-mic,
+.chatbar-send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--ink-2);
+  border: 1px solid transparent;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+
+.chatbar-mic .icon,
+.chatbar-send .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.chatbar-mic:hover,
+.chatbar-send:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--gold-line);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.chatbar-mic[aria-pressed='true'] {
+  color: var(--gold-hi);
+  border-color: var(--gold);
+  background: var(--gold-soft);
+}
+
+.chatbar-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.chatbar-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 4px 2px;
+}
+
+.chatbar-input::placeholder {
+  color: var(--ink-3);
 }

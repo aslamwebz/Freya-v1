@@ -22,40 +22,32 @@ export const manager = new SurfaceManager({
 })
 
 /**
- * The region surfaces are allowed to occupy: the full window width, below the
- * header and above the chat bar.
+ * The region surfaces are allowed to occupy: the whole window, below the header.
  *
- * The frame is deliberately *not* the centre column. Windows open at least
- * laptop-sized, and no part of the dashboard is wide enough to hold one, so
- * bounding them to the middle column would cap every window at roughly a third
- * of a laptop screen. The dashboard columns are the backdrop; a window is
- * allowed to cover them, which is what a window is for.
+ * The frame is deliberately *not* the centre column and deliberately *not* the
+ * gap between the rail and the chat bar. Windows open at least a laptop screen
+ * wide, and on a laptop-sized display there is no arrangement of the dashboard
+ * columns that leaves room for one — bounding a window to the middle column caps
+ * it at roughly a third of a laptop screen, and leaving the rail and the chat bar
+ * out of the frame means a window sized honestly would sit permanently under
+ * both, with its bottom-right handle unreachable.
  *
- * The rail is excluded only when it is expanded. Collapsed, it is a strip of
- * icons and a window may sit over it — the icons stay reachable because the
- * window can always be dragged, minimised or closed.
+ * So a window may cover the dashboard, the rail and the chat bar. Two things are
+ * still protected, and they are the two you cannot get back by dragging: the
+ * header, so the command bar is never buried, and enough of a window on screen
+ * to grab it, which `clampPosition` enforces.
  *
- * Measured rather than hard-coded, so this stays correct across breakpoints and
- * across the rail folding.
+ * Measured rather than hard-coded, so this stays correct across breakpoints.
  */
 export function workspaceFrame() {
   const header = document.querySelector<HTMLElement>('.header')
-  const nav = document.querySelector<HTMLElement>('.nav')
-  const chat = document.querySelector<HTMLElement>('.chatbar')
   // `||` not `??`: a measured zero is not an absent element.
   const top = header?.offsetHeight || 88
-  const bottom = chat?.offsetHeight || 0
-  // An absent rail and a folded rail are different: absent means nothing has
-  // mounted yet, so assume the expanded width rather than placing windows under
-  // a rail that is about to appear. Folded means measured zero, and that is the
-  // answer.
-  const collapsed = nav?.dataset.collapsed === 'true'
-  const left = nav === null ? 186 : collapsed ? 0 : nav.offsetWidth || 186
   return {
-    x: left,
+    x: 0,
     y: top,
-    width: Math.max(320, window.innerWidth - left),
-    height: Math.max(240, window.innerHeight - top - bottom),
+    width: Math.max(320, window.innerWidth),
+    height: Math.max(240, window.innerHeight - top),
   }
 }
 

@@ -36,6 +36,17 @@ export function acknowledgementFor(
   )
 }
 
+/** The acknowledgement text, from the reply and nothing else. */
+function detailFor(result: {
+  ok: boolean
+  refusal?: { reason: string }
+  error?: { message: string }
+  durableSequence?: number
+}): string {
+  const reason = result.refusal?.reason ?? result.error?.message ?? 'no reason given'
+  return acknowledgementFor(result.ok, reason, result.durableSequence)
+}
+
 /**
  * Send a command to Core and report what it said.
  *
@@ -45,8 +56,13 @@ export function acknowledgementFor(
 export async function submitCommand(text: string, origin: string): Promise<boolean> {
   const value = text.trim()
   if (!value) return false
+  // The transcript shows what was sent, immediately — that is a fact about this
+  // window, not a claim about Core. The *reply* below is the part that has to
+  // wait for Core.
+  shellStore.dispatch({ type: 'chat.line', role: 'you', text: value })
   try {
     const result = await coreMirror().submit('core.command.submit', { text: value, origin })
+    shellStore.dispatch({ type: 'chat.line', role: 'freya', text: detailFor(result), refused: !result.ok })
     shellStore.dispatch({
       type: 'command.acknowledged',
       ok: result.ok,
@@ -59,13 +75,11 @@ export async function submitCommand(text: string, origin: string): Promise<boole
     })
     return result.ok
   } catch (error: unknown) {
-    shellStore.dispatch({
-      type: 'command.acknowledged',
-      ok: false,
-      detail: `Freya Core could not be reached — ${
-        error instanceof Error ? error.message : 'unknown error'
-      }`,
-    })
+    const detail = `Freya Core could not be reached — ${
+      error instanceof Error ? error.message : 'unknown error'
+    }`
+    shellStore.dispatch({ type: 'chat.line', role: 'freya', text: detail, refused: true })
+    shellStore.dispatch({ type: 'command.acknowledged', ok: false, detail })
     return false
   }
 }

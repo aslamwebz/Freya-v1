@@ -16,7 +16,8 @@
   /* The rail track collapses with the rail; the three dashboard columns do not
      move, so folding it shifts the whole grid rather than reflowing the panels. */
   grid-template-columns: var(--rail, 186px) minmax(330px, 420px) minmax(340px, 1fr) minmax(320px, 430px);
-  grid-template-rows: 88px minmax(0, 1fr);
+  /* header · the workspace · the chat bar */
+  grid-template-rows: 88px minmax(0, 1fr) auto;
   column-gap: var(--gutter);
   padding: 0 var(--gutter) 18px 0;
   opacity: 0;
@@ -620,7 +621,8 @@
   .shell {
     --rail: 78px;
     grid-template-columns: var(--rail) minmax(280px, 1fr) minmax(280px, 1fr);
-    grid-template-rows: 88px minmax(0, 1fr);
+    /* header · the workspace · the chat bar */
+  grid-template-rows: 88px minmax(0, 1fr) auto;
   }
   .column-left {
     display: none;
@@ -636,7 +638,7 @@
 
 @media (max-height: 760px) {
   .shell {
-    grid-template-rows: 76px minmax(0, 1fr);
+    grid-template-rows: 76px minmax(0, 1fr) auto;
   }
   .command {
     height: 48px;

@@ -127,9 +127,38 @@ export function DesignLab({
       >
         <span className="lab-dot" aria-hidden="true" />
         Design lab
+        <span className="lab-hint">presentation only</span>
       </button>
 
-      <div className="lab-panel" id="design-lab-panel" hidden={!open}>
+      {/*
+       * Fixed, and large.
+       *
+       * The panel used to live inside the presence column, so it was as wide as
+       * that column and resized with the rail. It is sized in viewport units
+       * against a fixed backdrop instead, which means folding the rail, opening
+       * a window, or resizing the workspace cannot change it — the two things
+       * that made it unusable before were both about it depending on layout.
+       */}
+      <div className="lab-scrim" hidden={!open}>
+        <div className="lab-panel" id="design-lab-panel" role="dialog" aria-label="Design lab">
+        {/*
+          The panel covers the toggle that opened it, so it has to carry its own
+          way out. Escape works too, but a control you cannot see is not a way
+          out, and this one is a panel somebody can get stuck behind.
+        */}
+        <div className="lab-bar">
+          <b>Design lab</b>
+          <button
+            type="button"
+            className="lab-close"
+            aria-label="Close the design lab"
+            title="Close (Esc)"
+            onClick={() => setOpen(false)}
+          >
+            Close
+          </button>
+        </div>
+
         <p className="lab-note">
           Presentation only. These choices change how Freya looks, never what she does, and they are
           stored locally on this machine.
@@ -186,6 +215,7 @@ export function DesignLab({
           >
             Shuffle
           </button>
+        </div>
         </div>
       </div>
     </div>

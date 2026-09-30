@@ -324,6 +324,30 @@ describe('world', () => {
     expect(b.state().entities.size).toBe(1)
   })
 
+  it('does not merge a canonical entity merely because its name matches an alias', async () => {
+    const { brain: b } = await open()
+    const first = await b.rememberEntity({
+      type: 'project',
+      canonicalName: 'Mercury Project',
+      aliases: ['Mercury'],
+      source: 'owner-assertion',
+      sourceRef: null,
+      epistemic: 'asserted',
+    })
+    const second = await b.rememberEntity({
+      type: 'place',
+      canonicalName: 'Mercury',
+      source: 'owner-assertion',
+      sourceRef: null,
+      epistemic: 'asserted',
+    })
+
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    expect(second.ok && first.ok ? second.entityId : null).not.toBe(first.ok ? first.entityId : null)
+    expect(b.state().entities.size).toBe(2)
+  })
+
   it('refuses a relation with no object, or with both an object and a literal', async () => {
     const { brain: b } = await open()
     const subject = await b.rememberEntity({

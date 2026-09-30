@@ -33,6 +33,7 @@ export class FakeModelProvider implements ModelProvider {
     this.calls += 1
     return {
       requestId: request.requestId,
+      providerId: this.id,
       model: this.model,
       // Deterministic: the same prompt always yields the same answer.
       text: `fake-echo: ${request.prompt}`,
@@ -47,17 +48,22 @@ export class FakeModelProvider implements ModelProvider {
  * contained rather than fatal.
  */
 export class FailingModelProvider implements ModelProvider {
-  readonly id = 'failing'
+  readonly id: string = 'failing'
   readonly kind = 'fake' as const
   readonly live = false
   calls = 0
 
+  /**
+   * Reports `configured`, not `faulted`, so the gateway will route to it and
+   * the throw path is genuinely exercised. A provider that reports `faulted` is
+   * never selected at all, which is a different and separately tested path.
+   */
   status(): ProviderStatus {
     return {
       id: this.id,
       kind: this.kind,
-      status: 'faulted',
-      model: null,
+      status: 'configured',
+      model: 'failing-model',
       detail: 'Always fails. Used to prove failures are contained.',
       liveEnabled: false,
     }
@@ -66,6 +72,22 @@ export class FailingModelProvider implements ModelProvider {
   async complete(_request: ModelRequest): Promise<ModelResult> {
     this.calls += 1
     throw new Error('provider is unavailable')
+  }
+}
+
+/** Reports itself unusable, so the gateway declines to route to it. */
+export class FaultedModelProvider extends FailingModelProvider {
+  override readonly id = 'faulted'
+
+  override status(): ProviderStatus {
+    return {
+      id: this.id,
+      kind: this.kind,
+      status: 'faulted',
+      model: null,
+      detail: 'Reports itself unusable.',
+      liveEnabled: false,
+    }
   }
 }
 

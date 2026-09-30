@@ -158,4 +158,10 @@ export interface CoreCommandResult {
   refusal?: { reason: string }
   /** Present on an unexpected failure. Never carries a stack to the renderer. */
   error?: { message: string }
+  /**
+   * The durable sequence number of the event this command produced. Present only
+   * when the command actually appended something, so a renderer can verify the
+   * effect is on disk instead of taking a boolean on trust.
+   */
+  durableSequence?: number
 }

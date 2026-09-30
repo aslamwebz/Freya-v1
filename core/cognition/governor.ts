@@ -137,7 +137,3 @@ export function evaluateCognition(request: CognitionRequest, inputs: GovernorInp
   return { outcome: 'allow', reason: 'within grant', grantId: grant.id }
 }
 
-/** True for requests that nobody is waiting on. Used to keep the path closed. */
-export function isBackground(request: CognitionRequest): boolean {
-  return request.background || request.origin === 'system' || request.origin === 'goal'
-}

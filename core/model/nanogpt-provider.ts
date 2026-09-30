@@ -140,6 +140,7 @@ export class NanoGptProvider implements ModelProvider {
 
       return {
         requestId: request.requestId,
+        providerId: this.id,
         model: body.model ?? request.model ?? this.config.model,
         text: body.choices?.[0]?.message?.content ?? '',
         inputTokens: typeof body.usage?.prompt_tokens === 'number' ? body.usage.prompt_tokens : null,

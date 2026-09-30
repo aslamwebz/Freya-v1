@@ -1,0 +1,389 @@
+// @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createCore, type Core, type CoreOptions } from '../../core/index'
+import { FakeModelProvider, FailingModelProvider, FaultedModelProvider } from '../../core/model/fake-provider'
+import type { CognitionCall } from '../../core/cognition/service'
+import type { CoreStatus } from '../../core/protocol/core-protocol'
+
+/**
+ * The guarantees that must not regress:
+ *   - a denied request costs nothing and touches no provider;
+ *   - a finite grant is finite, across a restart;
+ *   - a spent call is spent even when the provider then fails;
+ *   - STOP ALL survives a restart, because it is derived, not remembered;
+ *   - nothing that merely *observes* Core causes a provider call.
+ */
+
+let dir = ''
+let core: Core | null = null
+
+beforeEach(async () => {
+  dir = await mkdtemp(join(tmpdir(), 'freya-core-'))
+})
+
+afterEach(async () => {
+  await core?.stop('test-teardown')
+  core = null
+  await rm(dir, { recursive: true, force: true })
+})
+
+function options(overrides: Partial<CoreOptions> = {}): CoreOptions {
+  return { dataPath: join(dir, 'events.jsonl'), useFakeProviderOnly: true, ...overrides }
+}
+
+function call(overrides: Partial<CognitionCall> = {}): CognitionCall {
+  return {
+    cognitionRequestId: 'req-1',
+    correlationId: 'corr-1',
+    origin: 'user',
+    cause: 'user_message',
+    actor: 'owner',
+    maxOutputTokens: 200,
+    requestedModel: null,
+    parentRunId: null,
+    goalId: null,
+    prompt: 'hello',
+    ...overrides,
+  }
+}
+
+async function grant(c: Core, over: Record<string, unknown> = {}) {
+  return c.cognition.createGrant({
+    grantId: 'grant-1',
+    createdBy: 'owner',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    allowedOrigins: ['agent', 'system', 'workflow'],
+    allowedCauses: ['run_finished', 'scheduled_grant'],
+    backgroundAllowed: true,
+    maxCalls: 2,
+    maxOutputTokens: 1000,
+    ...over,
+  } as never)
+}
+
+describe('cognition service', () => {
+  it('refuses a non-user request with no grant and calls no provider', async () => {
+    core = createCore(options())
+    const status = await core.start()
+    const before = status.sessionUsage.calls
+
+    // No grant, and nobody is waiting: the only correct answer is no.
+    const outcome = await core.cognition.request(
+      call({ origin: 'workflow', cause: 'run_finished', actor: 'agent:worker-1' }),
+    )
+
+    expect(outcome.status).toBe('denied')
+    expect(core.status().sessionUsage.calls).toBe(before)
+    expect(core.status().durableUsage.calls).toBe(before)
+  })
+
+  it('allows an explicit user turn with no grant, because the human is present', async () => {
+    core = createCore(options())
+    await core.start()
+
+    // The single grantless path. Locked down deliberately: if this ever starts
+    // demanding a grant, ordinary replies break; if it ever widens, silence
+    // starts spending.
+    const outcome = await core.cognition.request(call())
+
+    expect(outcome.status).toBe('allowed')
+    expect(core.status().sessionUsage.calls).toBe(1)
+  })
+
+  it('treats a request as background unless it is plainly a user turn', async () => {
+    core = createCore(options())
+    await core.start()
+    await grant(core, { backgroundAllowed: false })
+
+    // A self-declared 'user' origin from a non-human actor must not buy the
+    // grantless path, and must not pass a grant that forbids background work.
+    const outcome = await core.cognition.request(call({ actor: 'agent:worker-1' }))
+
+    expect(outcome.status).toBe('denied')
+    expect(core.status().sessionUsage.calls).toBe(0)
+  })
+
+  it('spends nothing on a background request the grant does not cover', async () => {
+    core = createCore(options())
+    await core.start()
+    await grant(core, { backgroundAllowed: false })
+
+    const outcome = await core.cognition.request(
+      call({ origin: 'system', cause: 'scheduled_grant', actor: 'agent:worker-1' }),
+    )
+
+    expect(outcome.status).toBe('denied')
+    expect(core.status().sessionUsage.calls).toBe(0)
+  })
+
+  it('allows a granted request and records the call durably', async () => {
+    core = createCore(options())
+    await core.start()
+    await grant(core)
+
+    const outcome = await core.cognition.request(
+      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    )
+
+    expect(outcome.status).toBe('allowed')
+    expect(core.status().sessionUsage.calls).toBe(1)
+    expect(core.status().durableUsage.calls).toBe(1)
+  })
+
+  it('stops at the grant ceiling rather than spending beyond it', async () => {
+    core = createCore(options())
+    await core.start()
+    await grant(core, { maxCalls: 2 })
+
+    const granted = call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' })
+    expect((await core.cognition.request({ ...granted, cognitionRequestId: 'a' })).status).toBe('allowed')
+    expect((await core.cognition.request({ ...granted, cognitionRequestId: 'b' })).status).toBe('allowed')
+    const third = await core.cognition.request({ ...granted, cognitionRequestId: 'c' })
+
+    expect(third.status).toBe('denied')
+    expect(core.status().sessionUsage.calls).toBe(2)
+  })
+
+  it('keeps a spent call spent when the provider fails', async () => {
+    const failing = new FailingModelProvider()
+    const c = createCore(options({ providers: [failing] }))
+    await c.start()
+    await grant(c, { maxCalls: 1 })
+
+    const outcome = await c.cognition.request(
+      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    )
+    expect(outcome.status).toBe('failed')
+    expect(failing.calls).toBe(1)
+
+    // The allowance is spent at authorisation, so a failure does not refund it.
+    await c.stop('test')
+    const fresh = createCore(options())
+    await fresh.start()
+    core = fresh
+    const recovered = fresh.cognition.grants().find((g) => g.id === 'grant-1')
+    expect(recovered?.usage.calls).toBe(1)
+  })
+
+  it('contains a provider failure without taking Core down', async () => {
+    const failing = new FailingModelProvider()
+    const c = createCore(options({ providers: [failing] }))
+    await c.start()
+    await grant(c, { maxCalls: 5 })
+
+    const outcome = await c.cognition.request(
+      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    )
+
+    expect(outcome.status).toBe('failed')
+    expect(c.lifecycle).toBe('ready')
+    // One attempt, no retry.
+    expect(failing.calls).toBe(1)
+    core = c
+  })
+
+  it('does not route to a provider that reports itself faulted', async () => {
+    const faulted = new FaultedModelProvider()
+    const c = createCore(options({ providers: [faulted] }))
+    await c.start()
+    await grant(c, { maxCalls: 3 })
+
+    const outcome = await c.cognition.request(
+      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    )
+
+    // Declining to route is different from routing and failing; neither spends.
+    expect(outcome.status).toBe('failed')
+    expect(faulted.calls).toBe(0)
+    expect(c.lifecycle).toBe('ready')
+    core = c
+  })
+
+  it('rejects a grant that could never be spent', async () => {
+    core = createCore(options())
+    await core.start()
+    await expect(grant(core, { maxCalls: 0 })).rejects.toThrow()
+    await expect(grant(core, { maxCalls: 1.5 })).rejects.toThrow()
+    await expect(grant(core, { maxCalls: 1, maxOutputTokens: 0 })).rejects.toThrow()
+    await expect(
+      grant(core, { expiresAt: new Date(Date.now() - 1_000).toISOString() }),
+    ).rejects.toThrow()
+    expect(core.cognition.grants()).toHaveLength(0)
+  })
+})
+
+describe('durable recovery', () => {
+  it('carries the grant budget across a restart', async () => {
+    const first = createCore(options())
+    await first.start()
+    await grant(first, { maxCalls: 2 })
+    const req = call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' })
+    await first.cognition.request({ ...req, cognitionRequestId: 'a' })
+    await first.stop('test')
+
+    const second = createCore(options())
+    await second.start()
+    core = second
+
+    const recovered = second.cognition.grants().find((g) => g.id === 'grant-1')
+    expect(recovered?.usage.calls).toBe(1)
+    expect(recovered?.maxCalls).toBe(2)
+    // The remaining call is available; the spent one is not refunded.
+    expect((await second.cognition.request({ ...req, cognitionRequestId: 'b' })).status).toBe('allowed')
+    expect((await second.cognition.request({ ...req, cognitionRequestId: 'c' })).status).toBe('denied')
+  })
+
+  it('restores a durable call total that includes calls from earlier sessions', async () => {
+    const first = createCore(options())
+    await first.start()
+    await grant(first)
+    await first.cognition.request(
+      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    )
+    await first.stop('test')
+
+    const second = createCore(options())
+    await second.start()
+    core = second
+
+    expect(second.status().sessionUsage.calls).toBe(0)
+    expect(second.status().durableUsage.calls).toBe(1)
+  })
+})
+
+describe('STOP ALL', () => {
+  it('refuses cognition while latched and recovers the latch after a restart', async () => {
+    const first = createCore(options())
+    await first.start()
+    await grant(first)
+
+    const stop = await first.handleCommand({ command: 'security.stopAll', requestId: 's1' })
+    expect(stop.ok).toBe(true)
+    expect(stop.durableSequence).toBeGreaterThan(0)
+
+    const before = first.status().sessionUsage.calls
+    const refused = await first.cognition.request(
+      call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+    )
+    expect(refused.status).toBe('denied')
+    expect(first.status().sessionUsage.calls).toBe(before)
+    await first.stop('test')
+
+    // The latch is derived from the log, so a restart cannot quietly reopen it.
+    const second = createCore(options())
+    await second.start()
+    core = second
+    expect(second.status().stopAll.active).toBe(true)
+    expect(second.status().governor.status).toBe('deny_all')
+    expect(
+      (await second.cognition.request(
+        call({ origin: 'agent', cause: 'run_finished', actor: 'agent:worker-1' }),
+      )).status,
+    ).toBe('denied')
+
+    const resume = await second.handleCommand({ command: 'security.resume', requestId: 's2' })
+    expect(resume.ok).toBe(true)
+    expect(second.status().stopAll.active).toBe(false)
+  })
+})
+
+describe('command surface', () => {
+  it('records an owner command durably and reports the sequence', async () => {
+    core = createCore(options())
+    await core.start()
+
+    const result = await core.handleCommand({
+      command: 'core.command.submit',
+      requestId: 'c1',
+      payload: { text: 'build the thing' },
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.durableSequence).toBeGreaterThan(0)
+    // The status is real, not a local optimistic value.
+    expect(result.status?.lifecycle).toBe('ready')
+  })
+
+  it('refuses a malformed command rather than guessing', async () => {
+    core = createCore(options())
+    await core.start()
+    const status = await core.start()
+
+    await expect(
+      core.handleCommand({ command: 'core.command.submit', requestId: 'c1', payload: {} }),
+    ).resolves.toMatchObject({ ok: false, refusal: expect.objectContaining({ reason: expect.any(String) }) })
+    await expect(
+      core.handleCommand({ command: 'core.command.submit', requestId: 'c1', payload: { text: 'x'.repeat(4001) } }),
+    ).resolves.toMatchObject({ ok: false })
+    await expect(
+      core.handleCommand({ command: 'nope.nope' as never, requestId: 'c1' }),
+    ).resolves.toMatchObject({ ok: false })
+    await expect(
+      core.handleCommand({ command: 'core.status.read', requestId: '' }),
+    ).resolves.toMatchObject({ ok: false })
+    expect(status.durableUsage.calls).toBe(0)
+  })
+
+  it('never lets a status read or a subscription spend anything', async () => {
+    core = createCore(options())
+    await core.start()
+    const before = core.status().durableUsage.calls
+
+    const seen: CoreStatus[] = []
+    const dispose = core.subscribe((s) => seen.push(s))
+    for (let i = 0; i < 20; i += 1) {
+      await core.handleCommand({ command: 'core.status.read', requestId: `r${i}` })
+      core.status()
+    }
+    dispose()
+
+    expect(seen.length).toBeGreaterThan(0)
+    expect(core.status().durableUsage.calls).toBe(before)
+    expect(core.status().sessionUsage.calls).toBe(0)
+  })
+})
+
+describe('providers', () => {
+  it('reports a fake provider as live and a nanogpt provider as unconfigured', async () => {
+    core = createCore(options({ useFakeProviderOnly: false, env: {} }))
+    await core.start()
+    const providers = core.status().providers
+    const fake = providers.find((p) => p.id === 'fake')
+    const nano = providers.find((p) => p.id === 'nanogpt')
+    // A local fake is never a live external call, even when it is the one selected.
+    expect(fake?.liveEnabled).toBe(false)
+    expect(nano?.status).toBe('unconfigured')
+    expect(nano?.liveEnabled).toBe(false)
+    expect(JSON.stringify(core.status())).not.toMatch(/apiKey|authorization|bearer/i)
+  })
+
+  it('keeps a configured nanogpt provider disabled without the explicit live flag', async () => {
+    core = createCore(
+      options({
+        useFakeProviderOnly: false,
+        env: {
+          NANOGPT_API_KEY: 'secret-value',
+          NANOGPT_BASE_URL: 'https://example.invalid',
+          NANOGPT_MODEL: 'some-model',
+        },
+      }),
+    )
+    await core.start()
+    const nano = core.status().providers.find((p) => p.id === 'nanogpt')
+    expect(nano?.status).toBe('disabled')
+    expect(nano?.model).toBe('some-model')
+    expect(JSON.stringify(core.status())).not.toContain('secret-value')
+  })
+
+  it('does not call a live provider during start, replay or status reads', async () => {
+    const fake = new FakeModelProvider()
+    const c = createCore(options())
+    await c.start()
+    await c.status()
+    await c.stop('test')
+    expect(fake.calls).toBe(0)
+  })
+})

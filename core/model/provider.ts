@@ -22,6 +22,8 @@ export interface ModelRequest {
 
 export interface ModelResult {
   requestId: string
+  /** Which provider answered. Known only after the call. */
+  providerId: string
   model: string
   text: string
   /** Null when the provider did not report them. Never estimated. */

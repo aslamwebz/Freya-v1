@@ -101,7 +101,8 @@ export interface CoreEventPayloads {
     parentRunId: string | null
     goalId: string | null
   }
-  'cognition.allowed': { requestId: string; grantId: string | null; providerId: string }
+  // No provider is named here: authorization happens before one is chosen.
+  'cognition.allowed': { requestId: string; grantId: string | null }
   'cognition.denied': { requestId: string; reason: string; grantId: string | null }
   'cognition.authorization_required': { requestId: string; reason: string }
 

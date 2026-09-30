@@ -2,11 +2,7 @@ import type { Presence, PresenceState } from './presence'
 import { PRESENCE_DETAIL, canTransition } from './presence'
 import type { CoreStatus } from '../../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../../core/protocol/activity'
-import {
-  countInFlightProviderCalls,
-  projectDesktop,
-  type DesktopProjection,
-} from './desktopProjection'
+import { projectDesktop, type DesktopProjection } from './desktopProjection'
 import type { SurfaceEvent, SurfaceSummary } from './surfaces/manager'
 
 /**
@@ -131,7 +127,6 @@ export function initialState(): ShellState {
       core: null,
       activity: [],
       listening: false,
-      inFlightProviderCalls: 0,
       now: Date.now(),
     }),
     // `dev` starts false and is only ever set true by the host, which knows how
@@ -186,13 +181,17 @@ function withPresence(
  *
  * One place, so the panels cannot drift apart, and cheap enough to run on every
  * Core push: it is a pure function over two small inputs.
+ *
+ * The activity feed is a view of history, and history is not used to decide
+ * whether anything is running now. `activeProviderCalls` is read from Core's own
+ * status, which Core reads from the Model Gateway's live request registry — so
+ * `working` is a fact about this process rather than an inference about a log.
  */
 function project(state: ShellState): ShellState {
   const desktop = projectDesktop({
     core: state.core,
     activity: state.activity,
     listening: state.listening,
-    inFlightProviderCalls: countInFlightProviderCalls(state.activity),
     now: Date.now(),
   })
 

@@ -58,6 +58,10 @@ const ABSENT: CoreStatus = {
   guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
   governor: { status: 'unknown', grantsActive: 0 },
   providers: [],
+  // No Core is reachable, so no provider request is executing in this window's
+  // Core. Zero rather than unknown, because the whole point of the field is to
+  // say "nothing is being spent right now".
+  activeProviderCalls: 0,
   sessionUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
   durableUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
   faults: ['core is not reachable from this window'],

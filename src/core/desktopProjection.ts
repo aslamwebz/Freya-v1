@@ -134,39 +134,10 @@ export interface ProjectionInput {
    * because a person pressed the microphone control in this window.
    */
   listening: boolean
-  /**
-   * Real provider work in flight, counted from durable events.
-   *
-   * This is the *only* thing that can justify a `working` presence. It is zero
-   * while Freya is idle, which is why idle Freya cannot look busy.
-   */
-  inFlightProviderCalls: number
   now: number
 }
 
 const NEUTRAL: StatusFact['tone'] = 'info'
-
-/** The provider requests Core has started and not yet finished answering. */
-export function countInFlightProviderCalls(activity: ActivityFact[]): number {
-  let started = 0
-  for (const item of activity) {
-    // A provider request cannot survive a Core process restart. The durable
-    // journal may contain a start with no matching finish if the old process
-    // died mid-call, so a new core.started is an explicit session boundary.
-    if (item.id.startsWith('core.started:')) {
-      started = 0
-      continue
-    }
-    if (item.id.startsWith('model.request.started:')) started += 1
-    else if (
-      item.id.startsWith('model.request.completed:') ||
-      item.id.startsWith('model.request.failed:')
-    ) {
-      started -= 1
-    }
-  }
-  return started < 0 ? 0 : started
-}
 
 /**
  * Presence, derived.
@@ -175,15 +146,28 @@ export function countInFlightProviderCalls(activity: ActivityFact[]): number {
  * that cannot be trusted outranks a microphone that is switched on, because the
  * whole point of failing closed is that other signals do not soften it.
  *
- * `thinking` and `working` are reachable *only* from real in-flight provider
- * work. There is no other door into them, which is why a submitted command
- * cannot put Freya into `working`: recording a command is not doing work.
+ * `thinking` and `working` are reachable *only* from Core's live provider count.
+ * There is no other door into them, which is why a submitted command cannot put
+ * Freya into `working`: recording a command is not doing work.
+ *
+ * That count comes from `CoreStatus.activeProviderCalls`, which Core reads from
+ * the Model Gateway's active request registry. It is a count of requests being
+ * executed *right now*, and nothing here reconstructs it from history. The
+ * obvious alternative — replaying `model.request.started` against
+ * `completed`/`failed`/`cancelled` in the activity feed — is what this replaced,
+ * and it was wrong in a way that showed: a Core that died mid-call leaves a
+ * start with no finish in the journal forever, so the feed said "working" long
+ * after anything had stopped, and said it with no way to tell from the outside.
  */
 export function derivePresence(input: ProjectionInput): {
   state: PresenceState
   detail: string
 } {
-  const { core, listening, inFlightProviderCalls } = input
+  const { core, listening } = input
+  // The live count, or zero when Core has not reported. Not optional and not
+  // guessed: without a Core there is nothing executing, and a number here would
+  // be a claim about a process that may not exist.
+  const activeProviderCalls = core?.activeProviderCalls ?? 0
 
   if (core === null) {
     return { state: 'idle', detail: 'Starting Freya.' }
@@ -212,12 +196,22 @@ export function derivePresence(input: ProjectionInput): {
     return { state: 'idle', detail: 'Core is starting.' }
   }
 
-  if (listening) {
-    return { state: 'listening', detail: 'Microphone open.' }
+  // Above the microphone, and deliberately. A window that has a request running
+  // is doing something whether or not anyone is speaking to it, and reporting
+  // that as merely "listening" would understate the one fact the user cannot
+  // otherwise see: something is being paid for.
+  if (activeProviderCalls > 0) {
+    return {
+      state: 'working',
+      detail:
+        activeProviderCalls === 1
+          ? 'A model request is in flight.'
+          : `${activeProviderCalls} model requests are in flight.`,
+    }
   }
 
-  if (inFlightProviderCalls > 0) {
-    return { state: 'working', detail: 'A model request is in flight.' }
+  if (listening) {
+    return { state: 'listening', detail: 'Microphone open.' }
   }
 
   return { state: 'idle', detail: 'Standing by.' }

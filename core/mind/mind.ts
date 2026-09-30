@@ -172,7 +172,7 @@ export class MindService {
    * attached to the wrong questions; a visible refusal costs one click and cannot
    * reorder a transcript.
    */
-  private readonly activeTurns = new Map<string, string>()
+  private readonly activeTurns = new Map<string, { turnId: string; startedAt: string }>()
 
   constructor(options: MindServiceOptions) {
     this.fabric = options.fabric
@@ -193,8 +193,14 @@ export class MindService {
   }
 
   /** The running turn for a conversation, or null. */
+  activeTurn(conversationId: string): { turnId: string; startedAt: string } | null {
+    const active = this.activeTurns.get(conversationId)
+    return active ? { ...active } : null
+  }
+
+  /** Compatibility helper for cancellation/tests that only need the id. */
   activeTurnId(conversationId: string): string | null {
-    return this.activeTurns.get(conversationId) ?? null
+    return this.activeTurns.get(conversationId)?.turnId ?? null
   }
 
   /**
@@ -234,7 +240,7 @@ export class MindService {
     }
 
     const turnId = input.turnId || this.newId()
-    this.activeTurns.set(input.conversationId, turnId)
+    this.activeTurns.set(input.conversationId, { turnId, startedAt })
     // Before any await, so the window is told a turn is running before it can
     // possibly finish. A projection that only arrived afterwards would make the
     // generating state unreachable.

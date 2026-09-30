@@ -43,24 +43,53 @@ describe('event reducer', () => {
     expect(idle.presence.state).toBe('idle')
   })
 
-  it('records a submitted command, moves presence to working, and raises a notice', () => {
-    const state = apply([{ type: 'command.submit', text: '  summarise my notes  ' }])
-
-    expect(state.lastCommand).toBe('summarise my notes')
-    expect(state.commandDraft).toBe('')
-    expect(state.presence.state).toBe('working')
-    expect(state.notices).toHaveLength(1)
-    expect(state.notices[0]?.text).toContain('no model is attached')
+  it('records nothing on a submit, because the reducer is not the command path', () => {
+    // `command.submit` is a request that the command path handles. The reducer
+    // only ever records what Core replied, so a command cannot look accepted
+    // before Core has answered.
+    const state = apply([{ type: 'command.submit', text: 'summarise my notes' }])
+    expect(state.notices).toHaveLength(0)
+    expect(state.presence.state).toBe('idle')
   })
 
-  it('ignores an empty command', () => {
-    const before = initialState()
-    expect(reduce(before, { type: 'command.submit', text: '   ' })).toBe(before)
+  it('does not move presence to working for a command nothing is working on', () => {
+    // Phase 0 put Freya into 'working' here, which spun the presence ring for a
+    // command that did nothing at all. Execution is still not connected, so
+    // 'working' would be a claim about the world.
+    const state = apply([
+      {
+        type: 'command.acknowledged',
+        ok: true,
+        detail: 'Freya Core received the command and recorded it (event #7).',
+        durableSequence: 7,
+      },
+    ])
+    expect(state.presence.state).toBe('idle')
+    expect(state.commandDraft).toBe('')
+    expect(state.notices[0]?.text).toContain('Freya Core received the command')
+    // The sequence is shown, so the claim is checkable rather than reassuring.
+    expect(state.notices[0]?.text).toContain('event #7')
+  })
+
+  it('shows Core refusal as a refusal, and does not claim success', () => {
+    const state = apply([
+      {
+        type: 'command.acknowledged',
+        ok: false,
+        detail: 'Freya Core refused the command — command text is too long',
+      },
+    ])
+    expect(state.notices[0]?.tone).toBe('urgent')
+    expect(state.notices[0]?.text).toMatch(/refused/i)
+    expect(state.notices[0]?.text).not.toMatch(/received the command/i)
   })
 
   it('keeps the notice stack bounded', () => {
     const state = apply(
-      Array.from({ length: 9 }, (_, i) => ({ type: 'command.submit', text: `n${i}` }) as ShellEvent),
+      Array.from(
+        { length: 9 },
+        (_, i) => ({ type: 'command.acknowledged', ok: true, detail: `n${i}` }) as ShellEvent,
+      ),
     )
     expect(state.notices.length).toBeLessThanOrEqual(4)
   })
@@ -136,11 +165,16 @@ describe('event reducer', () => {
 describe('every presence change goes through transition validation', () => {
   it('a submitted command cannot unlock a locked Freya', () => {
     const locked = apply([{ type: 'presence.set', state: 'locked' }])
-    const after = reduce(locked, { type: 'command.submit', text: 'open the vault' })
+    const after = reduce(locked, {
+      type: 'command.acknowledged',
+      ok: true,
+      detail: 'Freya Core received the command and recorded it.',
+    })
 
+    // A command, acknowledged or not, is not a presence transition. Nothing
+    // about a submission can move a locked Freya, because nothing about a
+    // submission is a reason to change state.
     expect(after.presence.state).toBe('locked')
-    // The command itself is still recorded; only the presence is refused.
-    expect(after.lastCommand).toBe('open the vault')
   })
 
   it('the microphone cannot listen while locked', () => {

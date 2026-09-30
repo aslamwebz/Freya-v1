@@ -113,11 +113,47 @@ async function main(): Promise<void> {
     // --- command bar and presence -----------------------------------------
     // Checked before any surface is opened: surfaces float above the shell by
     // design, so the presence console is not reachable while they are up.
+    // The command goes to Core, and the acknowledgement names an event the
+    // Core log can be checked against.
+    const readSeq = (p: Page) =>
+      p.evaluate(() => {
+        const row = [...document.querySelectorAll('.core-facts > div')].find(
+          (r) => r.querySelector('dt')?.textContent === 'Event log',
+        )
+        return Number(/seq (\d+)/.exec(row?.textContent ?? '')?.[1] ?? 0)
+      })
+    const seqBefore = await readSeq(page)
     await page.getByLabel('Command Freya').fill('what should we build first')
     await page.getByRole('search').locator('input').press('Enter')
+    await page.waitForSelector('text=/Freya Core received the command/i', { timeout: 15_000 })
+    const receipt = await page.locator('text=/Freya Core received the command/i').first().textContent()
     check(
-      'accepts a typed command locally',
-      await page.getByText(/no model is attached/i).first().isVisible(),
+      'the command bar is acknowledged by Core, not by the UI',
+      /Freya Core received the command/.test(receipt ?? ''),
+      receipt ?? '',
+    )
+    check(
+      'the acknowledgement is explicit that nothing will execute it',
+      /not connected yet/i.test(receipt ?? ''),
+      receipt ?? '',
+    )
+    const seqAfter = await readSeq(page)
+    check(
+      'submitting a command advances the durable Core event sequence',
+      seqAfter > seqBefore,
+      `seq ${seqBefore} -> ${seqAfter}`,
+    )
+    // The receipt claims a specific event. Check the claim rather than trust it.
+    const claimed = Number(/event #(\d+)/.exec(receipt ?? '')?.[1] ?? 0)
+    check(
+      'the event number the UI quotes is one Core actually assigned',
+      claimed > 0 && claimed <= seqAfter,
+      `claimed #${claimed}, log is at seq ${seqAfter}`,
+    )
+    // A command is not work, so presence must not claim otherwise.
+    check(
+      'submitting a command does not put Freya into a working state',
+      (await page.locator('.presence').getAttribute('data-state')) !== 'working',
     )
 
     await page.getByRole('group', { name: /demo presence state/i }).getByRole('button', { name: 'Working' }).click()
@@ -186,12 +222,12 @@ async function main(): Promise<void> {
     await page.reload()
     await coreReady(page)
     const afterReload = await coreFacts(page)
-    const seqBefore = Number(/seq (\d+)/.exec(beforeReload['Event log'] ?? '')?.[1] ?? 0)
-    const seqAfter = Number(/seq (\d+)/.exec(afterReload['Event log'] ?? '')?.[1] ?? 0)
+    const seqPreReload = Number(/seq (\d+)/.exec(beforeReload['Event log'] ?? '')?.[1] ?? 0)
+    const seqPostReload = Number(/seq (\d+)/.exec(afterReload['Event log'] ?? '')?.[1] ?? 0)
     check(
       'a renderer reload reconnects to the same Core, it does not restart it',
-      seqAfter >= seqBefore && seqAfter > 0,
-      `seq ${seqBefore} -> ${seqAfter} across reload`,
+      seqPostReload >= seqPreReload && seqPostReload > 0,
+      `seq ${seqPreReload} -> ${seqPostReload} across reload`,
     )
     // And the reload itself cost nothing.
     check(

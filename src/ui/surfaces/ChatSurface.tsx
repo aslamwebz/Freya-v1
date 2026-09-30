@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { useShell, shellStore } from '../store'
+import { useShell } from '../store'
+import { submitCommand } from '../commandPath'
 
 interface Turn {
   id: number
@@ -26,7 +27,9 @@ export function ChatSurface() {
     const turn: Turn = { id: turnId, role: 'you', text }
     setTurns((current) => [...current, turn])
     setDraft('')
-    shellStore.dispatch({ type: 'command.submit', text })
+    // The same path as the command bar: Core records it, and the acknowledgement
+    // says what Core said. The local turn below is presentation only.
+    void submitCommand(text, 'chat-surface')
   }
 
   return (

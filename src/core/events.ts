@@ -14,7 +14,13 @@ export type ShellEvent =
   | { type: 'presence.set'; state: PresenceState; detail?: string }
   | { type: 'presence.activity'; value: number }
   | { type: 'nav.select'; section: string }
+  /**
+   * Ask the Core client to submit. Carries no acknowledgement: the reply comes
+   * back as `command.acknowledged`, from Core, not from this dispatch.
+   */
   | { type: 'command.submit'; text: string }
+  /** What Core replied. `ok` is Core's verdict, not an optimistic guess. */
+  | { type: 'command.acknowledged'; ok: boolean; detail: string; durableSequence?: number }
   | { type: 'voice.toggle'; listening: boolean }
   | { type: 'attention.requested'; count: number }
   | { type: 'workspace.restored'; nav: string; presence: PresenceState }
@@ -118,16 +124,23 @@ export function reduce(state: ShellState, event: ShellEvent): ShellState {
       return { ...withPresence(state, 'idle'), listening: false }
     }
 
-    case 'command.submit': {
-      const text = event.text.trim()
-      if (!text) return state
-      // Submitting work must not unlock a locked Freya.
-      const next = withPresence(state, 'working')
+    /**
+     * The result of submitting a command to Core.
+     *
+     * The shell store records what Core *said*, and nothing else. There is no
+     * path here that sets an acknowledgement before Core has replied, so a
+     * command cannot look accepted while Core is still deciding — or refused
+     * it.
+     */
+    case 'command.acknowledged': {
       return {
-        ...next,
+        ...state,
         commandDraft: '',
-        lastCommand: text,
-        notices: notice(state, `Queued locally: “${text.slice(0, 48)}” — no model is attached in Phase 0.`, 'neutral'),
+        notices: notice(
+          state,
+          event.detail,
+          event.ok ? 'neutral' : 'urgent',
+        ),
       }
     }
 

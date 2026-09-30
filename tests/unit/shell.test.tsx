@@ -36,6 +36,53 @@ function stubLayout(): void {
   })
 }
 
+/**
+ * Put a Core bridge on the window, with the given `coreSubmit`.
+ *
+ * The default is a Core that accepts and reports a sequence, so a test that does
+ * not care about the reply still exercises the real path rather than a stub that
+ * skips it.
+ */
+function installCoreBridge(over: {
+  coreSubmit?: (command: string, payload?: unknown) => Promise<unknown>
+  coreStatus?: () => Promise<unknown>
+} = {}): void {
+  const listeners: ((status: unknown) => void)[] = []
+  window.freyaHost = {
+    isDesktop: true,
+    getRuntimeInfo: vi.fn(),
+    loadWorkspace: vi.fn(),
+    saveWorkspace: vi.fn(),
+    onCollect: vi.fn(),
+    coreSubmit: (async (command: string, payload?: unknown) =>
+      over.coreSubmit
+        ? over.coreSubmit(command, payload)
+        : { requestId: 'r1', ok: true, durableSequence: 7 }) as never,
+    coreStatus: (over.coreStatus ?? (async () => CORE_STATUS)) as never,
+    onCoreStatus: ((handler: (status: unknown) => void) => {
+      listeners.push(handler)
+      return () => {
+        const i = listeners.indexOf(handler)
+        if (i >= 0) listeners.splice(i, 1)
+      }
+    }) as never,
+  } as never
+}
+
+/** A status with nothing claimed about it, so tests can assert against it. */
+const CORE_STATUS = {
+  lifecycle: 'ready',
+  eventSequence: 7,
+  coreStartedAt: '2026-03-01T12:00:00.000Z',
+  stopAll: { active: false, activatedAt: null, activatedBy: null },
+  guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
+  governor: { status: 'ready', grantsActive: 0 },
+  providers: [],
+  sessionUsage: { calls: 0, inputTokens: null, outputTokens: null },
+  durableUsage: { calls: 0, inputTokens: null, outputTokens: null },
+  faults: [],
+}
+
 async function boot() {
   render(<App />)
   await screen.findByText('FREYA')
@@ -264,18 +311,94 @@ describe('Freya shell', () => {
     expect(manager.surfaces[0]?.type).toBe('harness')
   })
 
-  it('routes a submitted command through the store without calling anything', async () => {
+  it('shows no acknowledgement before Core has replied', async () => {
     await boot()
-    const input = screen.getByLabelText(/command freya/i)
+    // A Core that never answers. The point of this test is the wait.
+    const pending = new Promise<never>(() => {})
+    installCoreBridge({ coreSubmit: () => pending })
 
     await act(async () => {
-      fireEvent.change(input, { target: { value: 'find the vault contract' } })
+      fireEvent.change(screen.getByLabelText(/command freya/i), {
+        target: { value: 'find the vault contract' },
+      })
       fireEvent.submit(screen.getByRole('search'))
     })
 
-    expect(shellStore.getState().lastCommand).toBe('find the vault contract')
-    expect(shellStore.getState().presence.state).toBe('working')
-    expect(screen.getByText(/no model is attached/i)).toBeInTheDocument()
+    expect(shellStore.getState().notices).toHaveLength(0)
+    expect(screen.queryByText(/Freya Core received/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/refused/i)).not.toBeInTheDocument()
+  })
+
+  it('acknowledges exactly what Core said when it accepts a command', async () => {
+    await boot()
+    const submit = vi.fn(async () => ({
+      requestId: 'r1',
+      ok: true,
+      status: undefined,
+      durableSequence: 42,
+    }))
+    installCoreBridge({ coreSubmit: submit })
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/command freya/i), {
+        target: { value: 'find the vault contract' },
+      })
+      fireEvent.submit(screen.getByRole('search'))
+    })
+
+    // The command went to Core, not into a local event and nowhere else.
+    expect(submit).toHaveBeenCalledWith('core.command.submit', {
+      text: 'find the vault contract',
+      origin: 'command-bar',
+    })
+    // The reply says Core received it, names the event, and is explicit that
+    // nothing will act on it yet.
+    const notice = shellStore.getState().notices[0]?.text ?? ''
+    expect(notice).toContain('Freya Core received the command')
+    expect(notice).toContain('event #42')
+    expect(notice).toMatch(/not connected yet/i)
+    expect(screen.getByText(/Freya Core received the command/i)).toBeInTheDocument()
+  })
+
+  it('shows a refusal as a refusal and never as a receipt', async () => {
+    await boot()
+    installCoreBridge({
+      coreSubmit: async () => ({
+        requestId: 'r1',
+        ok: false,
+        refusal: { reason: 'command text is too long' },
+      }),
+    })
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/command freya/i), {
+        target: { value: 'a very long command' },
+      })
+      fireEvent.submit(screen.getByRole('search'))
+    })
+
+    const notices = shellStore.getState().notices
+    expect(notices[0]?.tone).toBe('urgent')
+    expect(notices[0]?.text).toMatch(/refused/i)
+    expect(notices[0]?.text).toContain('command text is too long')
+    expect(notices[0]?.text).not.toMatch(/received the command/i)
+  })
+
+  it('reports an unreachable Core rather than swallowing the command', async () => {
+    await boot()
+    installCoreBridge({
+      coreSubmit: () => Promise.reject(new Error('ipc channel closed')),
+    })
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/command freya/i), {
+        target: { value: 'anything' },
+      })
+      fireEvent.submit(screen.getByRole('search'))
+    })
+
+    expect(shellStore.getState().notices[0]?.text).toMatch(/could not be reached/i)
+    expect(shellStore.getState().notices[0]?.tone).toBe('urgent')
   })
 
   it('moves the mic control between idle and listening', async () => {

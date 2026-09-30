@@ -24,32 +24,26 @@ export const manager = new SurfaceManager({
 })
 
 /**
- * The region surfaces are allowed to occupy: the whole window, below the header.
+ * The workspace spans the window below the header and above the chat bar.
  *
- * The frame is deliberately *not* the centre column and deliberately *not* the
- * gap between the rail and the chat bar. Windows open at least a laptop screen
- * wide, and on a laptop-sized display there is no arrangement of the dashboard
- * columns that leaves room for one — bounding a window to the middle column caps
- * it at roughly a third of a laptop screen, and leaving the rail and the chat bar
- * out of the frame means a window sized honestly would sit permanently under
- * both, with its bottom-right handle unreachable.
- *
- * So a window may cover the dashboard, the rail and the chat bar. Two things are
- * still protected, and they are the two you cannot get back by dragging: the
- * header, so the command bar is never buried, and enough of a window on screen
- * to grab it, which `clampPosition` enforces.
- *
- * Measured rather than hard-coded, so this stays correct across breakpoints.
+ * The bar includes the surface launcher. Opening a surface over it hides that
+ * launcher and places the bottom resize handles beneath its higher stacking
+ * layer. Measure its actual top so this also works at responsive breakpoints.
+ * Surfaces may still be dragged across the dashboard; the initial size and
+ * position fit in the usable workspace.
  */
 export function workspaceFrame() {
   const header = document.querySelector<HTMLElement>('.header')
-  // `||` not `??`: a measured zero is not an absent element.
   const top = header?.offsetHeight || 88
+  const barTop = document.querySelector('.chatbar')?.getBoundingClientRect().top
+  const bottom = barTop !== undefined && barTop > top
+    ? Math.min(window.innerHeight, barTop)
+    : window.innerHeight
   return {
     x: 0,
     y: top,
     width: Math.max(320, window.innerWidth),
-    height: Math.max(240, window.innerHeight - top),
+    height: Math.max(240, bottom - top),
   }
 }
 

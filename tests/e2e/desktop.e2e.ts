@@ -191,6 +191,15 @@ async function main(): Promise<void> {
     first = app
 
     check('application boots', await page.locator('.app[data-ready="true"]').isVisible())
+    const displaySwitches = await app.evaluate(({ app }) => ({
+      freya: app.commandLine.getSwitchValue('freya-display'),
+      chromium: app.commandLine.hasSwitch('display'),
+      x11: process.env.DISPLAY ?? null,
+    }))
+    check('monitor selection uses only the Freya-owned display switch',
+      displaySwitches.freya === E2E_DISPLAY && !displaySwitches.chromium)
+    check('monitor selection preserves the inherited X11 DISPLAY',
+      displaySwitches.x11 === (process.env.DISPLAY ?? null))
     check('renders the command centre', await page.getByText('FREYA').first().isVisible())
     check('presence canvas is present', (await page.locator('.presence-canvas').count()) === 1)
 
@@ -597,6 +606,12 @@ async function main(): Promise<void> {
     const asOpened = await boxOf(page, 'Search')
     const hb = await handle.boundingBox()
     if (!hb) throw new Error('no resize handle box')
+    check(
+      'the resize handle remains reachable above the chat bar',
+      await page.evaluate((box) => document.elementFromPoint(
+        box.x + box.width / 2, box.y + box.height / 2,
+      )?.classList.contains('edge-se') === true, hb),
+    )
     // A window opens at the laptop floor, which in this frame is already the
     // whole region — so there is nothing to grow into. Dragging the corner
     // *inwards* is the direction with room, and it still proves the handle is

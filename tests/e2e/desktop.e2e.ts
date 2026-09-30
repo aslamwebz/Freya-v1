@@ -162,18 +162,29 @@ async function main(): Promise<void> {
       `${Math.round(moved.width)}x${Math.round(moved.height)} -> ${Math.round(resized.width)}x${Math.round(resized.height)}`,
     )
 
-    // --- open a second surface, then minimise the first -------------------
-    await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Harness' }).click()
-    await page.waitForSelector('[role="dialog"][aria-label="Harness"]')
-    check('opens a second surface alongside the first', (await page.locator('[role="dialog"]').count()) === 2)
-
+    // --- minimise the first, then open a second --------------------------
+    // Order matters here. The drag above leaves Search sitting over the dock,
+    // and a surface that covers a button correctly stops the click reaching it.
+    // So the surface is minimised before the dock is used, rather than the dock
+    // being made clickable by moving the surface somewhere less awkward.
     await page.getByRole('button', { name: 'Minimize Search' }).click()
     await page.waitForSelector('[role="dialog"][aria-label="Search"]', { state: 'detached' })
-    check('minimising hides the surface without destroying it', (await page.locator('[role="dialog"]').count()) === 1)
+    const searchStillInDock = await page
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Search' })
+      .isEnabled()
+    check(
+      'minimising hides the surface without destroying it',
+      (await page.locator('[role="dialog"]').count()) === 0 && searchStillInDock,
+    )
 
-    // Restore it from the dock so both are on screen for the restart.
+    await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Harness' }).click()
+    await page.waitForSelector('[role="dialog"][aria-label="Harness"]')
+
+    // Restore Search from the dock so both are on screen for the restart.
     await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Search' }).click()
     await page.waitForSelector('[role="dialog"][aria-label="Search"]')
+    check('opens a second surface alongside the first', (await page.locator('[role="dialog"]').count()) === 2)
 
     const expectedSearch = await boxOf(page, 'Search')
     const expectedHarness = await boxOf(page, 'Harness')

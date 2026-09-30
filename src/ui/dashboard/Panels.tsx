@@ -191,10 +191,6 @@ export function RuntimePanel() {
           </dd>
         </div>
         <div>
-          <dt>Inference</dt>
-          <dd>0 calls · idle Freya costs nothing</dd>
-        </div>
-        <div>
           <dt>Layout</dt>
           <dd>{runtime.workspaceFile ? 'workspace.json' : 'browser storage'}</dd>
         </div>

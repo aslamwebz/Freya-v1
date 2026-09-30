@@ -1,4 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type {
+  CoreCommandEnvelope,
+  CoreCommandName,
+  CoreCommandResult,
+  CoreStatus,
+} from '../core/protocol/core-protocol'
 
 export interface RuntimeInfo {
   version: string
@@ -13,10 +19,17 @@ export interface RuntimeInfo {
 /**
  * The entire privileged surface of the Freya desktop host.
  *
- * Four functions and one flag: `getRuntimeInfo`, `loadWorkspace`,
- * `saveWorkspace`, `onCollect`, and `isDesktop`. No ipcRenderer passthrough,
- * no remote module, no eval. A renderer compromise gets an attacker exactly
- * what this file exposes.
+ * Four functions and one flag for the workspace, three for the Core, and one
+ * flag: `getRuntimeInfo`, `loadWorkspace`, `saveWorkspace`, `onCollect`,
+ * `coreSubmit`, `coreStatus`, `onCoreStatus`, and `isDesktop`. No
+ * ipcRenderer passthrough, no remote module, no eval. A renderer compromise gets
+ * an attacker exactly what this file exposes.
+ *
+ * The Core functions are named individually rather than exposing a channel
+ * string, so the renderer cannot invent a command name at the bridge. The
+ * command list is checked here as well as in Core: the renderer is the owner's
+ * UI, not the authority, and an unrecognised name is refused before it can be
+ * serialised into an IPC message.
  */
 const api = {
   isDesktop: true as const,
@@ -35,6 +48,53 @@ const api = {
       void api.saveWorkspace(handler())
     })
   },
+
+  /**
+   * Send one Core command.
+   *
+   * `requestId` is generated here rather than supplied, so the renderer cannot
+   * collide two requests or replay an id it once saw.
+   */
+  coreSubmit: (command: CoreCommandName, payload?: unknown): Promise<CoreCommandResult> => {
+    if (!CORE_COMMANDS.has(command)) {
+      return Promise.resolve({
+        requestId: 'rejected',
+        ok: false,
+        refusal: { reason: `unknown command: ${String(command)}` },
+      })
+    }
+    const envelope: CoreCommandEnvelope = { command, requestId: newRequestId(), payload }
+    return ipcRenderer.invoke('freya:core:submit', envelope)
+  },
+
+  coreStatus: (): Promise<CoreStatus> => ipcRenderer.invoke('freya:core:status'),
+
+  /**
+   * Watch Core status. Returns a disposer, which `onCollect` conspicuously
+   * lacks: a subscription you cannot cancel is a leak you have to design around,
+   * and React effects need one to run cleanup.
+   */
+  onCoreStatus: (handler: (status: CoreStatus) => void): (() => void) => {
+    const listener = (_event: unknown, status: CoreStatus): void => handler(status)
+    ipcRenderer.on('freya:core:status', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:status', listener)
+    }
+  },
+}
+
+const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
+  'core.status.read',
+  'core.command.submit',
+  'cognition.status.read',
+  'security.status.read',
+  'security.stopAll',
+  'security.resume',
+])
+
+/** A request id the renderer cannot choose, so it cannot collide or replay. */
+function newRequestId(): string {
+  return `r${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 contextBridge.exposeInMainWorld('freyaHost', api)

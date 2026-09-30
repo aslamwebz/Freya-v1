@@ -1,15 +1,20 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
+import { ElectronCoreHost } from './coreHost'
+import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
 const DEV_SERVER = process.env.FREYA_DEV_SERVER
 const WORKSPACE_FILE = 'workspace.json'
+const CORE_LOG_FILE = 'core-events.jsonl'
 
 let mainWindow: BrowserWindow | null = null
 /** Null until the app is ready; every handler that needs it is registered after. */
 let workspace: WorkspaceFile | null = null
+/** One Core per process. Survives renderer reloads; dies only with the app. */
+let coreHost: ElectronCoreHost | null = null
 /** Resolves when the renderer has answered the closing-time request. */
 let pendingCollect: (() => void) | null = null
 let quitting = false
@@ -20,6 +25,11 @@ const COLLECT_TIMEOUT_MS = 750
 function requireWorkspace(): WorkspaceFile {
   if (!workspace) throw new Error('workspace file used before the app was ready')
   return workspace
+}
+
+function requireCore(): ElectronCoreHost {
+  if (!coreHost) throw new Error('core used before the app was ready')
+  return coreHost
 }
 
 /**
@@ -49,13 +59,21 @@ function collectAndThen(finish: () => void): void {
     pendingCollect = null
   }
 
-  void answered.finally(() => {
-    clearTimeout(timer)
-    pendingCollect = null
-    workspace?.flushSync()
-    quitting = true
-    finish()
-  })
+  void answered
+    .finally(() => {
+      clearTimeout(timer)
+      pendingCollect = null
+      workspace?.flushSync()
+    })
+    .then(async () => {
+      // Core closes before the process does, so its last event is durable.
+      // A failure here must not stop the app quitting.
+      await coreHost?.stop('app quitting').catch((error: unknown) => {
+        console.error('[freya] core failed to stop cleanly', error)
+      })
+      quitting = true
+      finish()
+    })
 }
 
 /* ------------------------------------------------------------------ *
@@ -83,6 +101,15 @@ function createWindow(): BrowserWindow {
   })
 
   window.once('ready-to-show', () => window.show())
+
+  // The host pushes the current status on attach, so a freshly loaded or
+  // reloaded renderer knows the Core state without polling for it.
+  const detachCore = coreHost?.attach((status) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:status', status)
+  })
+  window.on('closed', () => {
+    detachCore?.()
+  })
 
   if (DEV_SERVER) {
     void window.loadURL(DEV_SERVER)
@@ -137,6 +164,11 @@ function registerIpc(): void {
   }))
 
   ipcMain.handle('freya:workspace:load', () => requireWorkspace().load())
+  ipcMain.handle('freya:core:submit', (_event, envelope: CoreCommandEnvelope) =>
+    requireCore().submit(envelope),
+  )
+  ipcMain.handle('freya:core:status', () => requireCore().status())
+
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)
     if (!accepted) {
@@ -155,8 +187,21 @@ app.whenReady().then(() => {
   workspace = new WorkspaceFile({
     path: join(app.getPath('userData'), WORKSPACE_FILE),
   })
+  coreHost = new ElectronCoreHost(join(app.getPath('userData'), CORE_LOG_FILE), {
+    NANOGPT_API_KEY: process.env.NANOGPT_API_KEY,
+    NANOGPT_BASE_URL: process.env.NANOGPT_BASE_URL,
+    NANOGPT_MODEL: process.env.NANOGPT_MODEL,
+    FREYA_ALLOW_LIVE_MODEL: process.env.FREYA_ALLOW_LIVE_MODEL,
+  })
   registerIpc()
   mainWindow = createWindow()
+
+  // Deliberately not awaited before the window opens: a slow or unwritable log
+  // should degrade Core, not hold the app off the screen. A window created
+  // before Core is ready attaches and simply receives the status when it lands.
+  void coreHost.start().catch((error: unknown) => {
+    console.error('[freya] core failed to start', error)
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()

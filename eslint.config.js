@@ -4,7 +4,8 @@ import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'dist-electron/**', 'node_modules/**', 'References/**'],
+    // `.scratch` is gitignored working space, not part of the build.
+    ignores: ['dist/**', 'dist-electron/**', 'node_modules/**', 'References/**', '.scratch/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

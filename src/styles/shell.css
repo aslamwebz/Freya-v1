@@ -367,9 +367,16 @@
 
 .column-center {
   position: relative;
-  /* Deliberately no z-index: the presence and its controls must be able to sit
-     on either side of the surface layer, so this must not be a stacking
-     context. Panels in the flanking columns keep theirs. */
+  /* The dock is wider than this column and deliberately floats over the
+     flanking ones, so this column must paint above them or their content
+     swallows clicks meant for the dock.
+
+     One step is enough: the flanking columns are at 5, and the surface layer
+     (40) and the header/presence chrome (70+) stay above, so surfaces still
+     float over the dock exactly as before. The old comment claimed this was
+     not a stacking context, but `position: relative` plus an inherited
+     z-index had made it one regardless. */
+  z-index: 6;
   align-items: stretch;
   overflow: visible;
   padding: 0;

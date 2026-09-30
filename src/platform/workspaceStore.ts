@@ -1,12 +1,7 @@
 import { WORKSPACE_STORAGE_KEY, parseWorkspace, type WorkspaceSnapshot } from '../core/workspace'
+import { hostBridge, type RuntimeInfo } from './host'
 
-export interface RuntimeInfo {
-  version: string
-  platform: string
-  userData: string
-  workspaceFile: string
-  dev: boolean
-}
+export type { RuntimeInfo }
 
 export interface WorkspaceStore {
   readonly kind: 'desktop' | 'browser'
@@ -14,32 +9,7 @@ export interface WorkspaceStore {
   save(snapshot: WorkspaceSnapshot): Promise<void>
 }
 
-interface FreyaHostBridge {
-  isDesktop: true
-  getRuntimeInfo(): Promise<{
-    version: string
-    electron: string
-    platform: string
-    arch: string
-    userData: string
-    workspaceFile: string
-    dev: boolean
-  }>
-  loadWorkspace(): Promise<unknown>
-  saveWorkspace(payload: unknown): Promise<boolean>
-  /** The host asks for the current layout as the window is closing. */
-  onCollect(handler: () => unknown): void
-}
 
-declare global {
-  interface Window {
-    freyaHost?: FreyaHostBridge
-  }
-}
-
-export function hostBridge(): FreyaHostBridge | undefined {
-  return typeof window === 'undefined' ? undefined : window.freyaHost
-}
 
 /**
  * Answer the host's closing-time request for the current layout.

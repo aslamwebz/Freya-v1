@@ -13,6 +13,7 @@ import {
   WorkforcePanel,
   WorkPanel,
 } from './dashboard/Panels'
+import { CorePanel } from './dashboard/CorePanel'
 import { Presence } from '../presence/Presence'
 import { SurfaceLayer } from './surfaces/SurfaceLayer'
 import { toggleSurface } from './surfaceActions'
@@ -83,6 +84,7 @@ export function App() {
         </main>
 
         <div className="column column-right">
+          <CorePanel />
           <RuntimePanel />
           <WorkforcePanel />
           <ActivityPanel />

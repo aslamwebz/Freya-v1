@@ -84,7 +84,7 @@ export class JsonlEventStore implements EventStore {
       throw new Error(`unsupported event schema version ${event.schemaVersion}`)
     }
     const handle = this.handle
-    await handle.write(`${JSON.stringify(event)}\n`, 'utf8')
+    await handle.write(JSON.stringify(event) + '\n')
     // Durable before the promise resolves. A subscriber must never be able to
     // observe an event that a replay would not produce.
     await handle.sync()

@@ -235,10 +235,22 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       ? (payload as Record<string, unknown>)
       : null
 
+  /**
+   * A bounded optional string.
+   *
+   * `undefined` and `''` are the same thing for an *optional* field: both mean
+   * "not supplied". Conflating them matters because an empty recall query is a real
+   * request — it asks for Freya's most recent memories — and treating the empty
+   * string as malformed made an ordinary button press fail as a bad payload. A
+   * *required* field still refuses an empty string, because there a blank value is
+   * a mistake rather than an absence.
+   */
   const string = (key: string, max: number, required = true): string | null | undefined => {
     const value = record?.[key]
-    if (value === undefined && !required) return undefined
-    if (typeof value !== 'string' || value.length === 0 || value.length > max) return null
+    if (value === undefined) return required ? null : undefined
+    if (typeof value !== 'string') return null
+    if (value.length === 0) return required ? null : undefined
+    if (value.length > max) return null
     return value
   }
 

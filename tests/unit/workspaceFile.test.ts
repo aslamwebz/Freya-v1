@@ -2,12 +2,12 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { WorkspaceFile } from '../../electron/workspaceFile'
+import { WorkspaceFile, type WorkspaceFileOptions } from '../../electron/workspaceFile'
 
 let dir: string
 let path: string
 
-function makeFile(overrides: { maxBytes?: number; writeDelayMs?: number } = {}) {
+function makeFile(overrides: Omit<WorkspaceFileOptions, 'path'> = {}) {
   return new WorkspaceFile({ path, ...overrides })
 }
 
@@ -240,14 +240,42 @@ describe('WorkspaceFile — the stale-write race', () => {
   })
 
   it('dispose abandons an in-flight write rather than letting it publish', async () => {
-    const file = makeFile({ writeDelayMs: 0, maxBytes: 4 * 1024 * 1024 })
+    let markWriteStarted!: () => void
+    let releaseWrite!: () => void
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve
+    })
+    const mayFinishWriting = new Promise<void>((resolve) => {
+      releaseWrite = resolve
+    })
+
+    const file = makeFile({
+      writeDelayMs: 0,
+      maxBytes: 4 * 1024 * 1024,
+      writeFileAsync: async (target, text) => {
+        markWriteStarted()
+        await mayFinishWriting
+        await writeFile(target, text, 'utf8')
+      },
+    })
+
     file.schedule({ schema: 1, nav: 'only', filler: 'w'.repeat(400_000) })
-    await new Promise((resolve) => setTimeout(resolve, 5))
+
+    // Do not guess how long the filesystem takes. Hold the write open until we
+    // know dispose() has invalidated its generation, then let it finish.
+    await writeStarted
     file.dispose()
-    await new Promise((resolve) => setTimeout(resolve, 400))
+    releaseWrite()
+
+    const deadline = Date.now() + 2000
+    for (;;) {
+      const leftovers = (await readdir(dir)).filter((name) => name.endsWith('.tmp'))
+      if (leftovers.length === 0) break
+      if (Date.now() > deadline) throw new Error('timed out waiting for stale temp cleanup')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
 
     await expect(stat(path)).rejects.toThrow()
-    expect((await readdir(dir)).filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 
   it('gives every write its own temp file, so two writers cannot share one', async () => {

@@ -23,16 +23,24 @@ import { dirname } from 'node:path'
 export const DEFAULT_MAX_BYTES = 512 * 1024
 export const DEFAULT_WRITE_DELAY_MS = 400
 
+export type WorkspaceFileAsyncWriter = (path: string, text: string) => Promise<void>
+
 export interface WorkspaceFileOptions {
   path: string
   maxBytes?: number
   writeDelayMs?: number
+  /**
+   * I/O seam used by the race tests to hold an async write in flight
+   * deterministically. Production uses node:fs/promises.writeFile.
+   */
+  writeFileAsync?: WorkspaceFileAsyncWriter
 }
 
 export class WorkspaceFile {
   readonly path: string
   private readonly maxBytes: number
   private readonly writeDelayMs: number
+  private readonly writeFileAsync: WorkspaceFileAsyncWriter
   private timer: NodeJS.Timeout | null = null
   /** The serialised text waiting to be written, or null if nothing is queued. */
   private pending: string | null = null
@@ -49,6 +57,8 @@ export class WorkspaceFile {
     this.path = options.path
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
     this.writeDelayMs = options.writeDelayMs ?? DEFAULT_WRITE_DELAY_MS
+    this.writeFileAsync =
+      options.writeFileAsync ?? ((target, text) => writeFile(target, text, 'utf8'))
   }
 
   /** A temp path unique to one write, so no two writers can share a file. */
@@ -119,7 +129,7 @@ export class WorkspaceFile {
     const temp = this.tempFor(generation)
     try {
       await mkdir(dirname(this.path), { recursive: true })
-      await writeFile(temp, text, 'utf8')
+      await this.writeFileAsync(temp, text)
     } catch (error) {
       console.error('[freya] workspace save failed', error)
       return

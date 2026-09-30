@@ -244,11 +244,13 @@ export class Brain {
     }
 
     const state = this.store.state()
-    const existing = findEntityByName(state, name)
+    const existing = findEntityByCanonicalName(state, name)
     if (existing !== undefined) {
-      // Idempotent on name. Re-observing something known is not a new entity, and
-      // creating a second one would make "how many people does Freya know" a
-      // question with no stable answer.
+      // Idempotent only on canonical name. An alias is evidence that two labels
+      // may refer to the same entity, not proof. Auto-merging a new canonical
+      // entity merely because it equals somebody else's alias would silently
+      // collapse ambiguous names — exactly the kind of inference the World model
+      // is supposed to preserve rather than guess.
       return { ok: true, entityId: existing.entityId }
     }
 
@@ -746,12 +748,17 @@ export class Brain {
   }
 }
 
-/** Name matching is case- and whitespace-insensitive, so "Ada" and "ada " are one. */
-function findEntityByName(state: BrainState, name: string): WorldEntity | undefined {
+/**
+ * Canonical-name matching is case- and whitespace-insensitive.
+ *
+ * Aliases are deliberately not an identity key. "Mercury" may be an alias for a
+ * project and also the canonical name of a place; merging those records would turn
+ * ambiguity into false certainty.
+ */
+function findEntityByCanonicalName(state: BrainState, name: string): WorldEntity | undefined {
   const wanted = normaliseName(name)
   for (const entity of state.entities.values()) {
     if (normaliseName(entity.canonicalName) === wanted) return entity
-    if (entity.aliases.some((alias) => normaliseName(alias) === wanted)) return entity
   }
   return undefined
 }

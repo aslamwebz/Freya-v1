@@ -277,8 +277,9 @@ function compileReference(
 } {
   const items = knowledge?.items ?? []
   const conflicts = knowledge?.conflicts ?? []
+  const alreadyOmitted = knowledge?.omittedCount ?? 0
   if (items.length === 0 && conflicts.length === 0) {
-    return { rendered: null, itemCount: 0, estimatedTokens: 0, omittedCount: knowledge?.omittedCount ?? 0 }
+    return { rendered: null, itemCount: 0, estimatedTokens: 0, omittedCount: alreadyOmitted }
   }
 
   const lines: string[] = [
@@ -288,8 +289,22 @@ function compileReference(
     '',
   ]
   let cost = estimateTokens(lines.join('\n'))
+
+  // Reference is optional. Even its framing must fit in the caller's remaining
+  // context budget; otherwise the whole block disappears rather than letting a
+  // header about omitted memories push the packet over its hard ceiling.
+  if (allowance <= 0 || cost > allowance) {
+    return {
+      rendered: null,
+      itemCount: 0,
+      estimatedTokens: 0,
+      omittedCount: alreadyOmitted + items.length,
+    }
+  }
+
   let count = 0
-  let omitted = knowledge?.omittedCount ?? 0
+  let includedConflicts = 0
+  let omitted = alreadyOmitted
 
   for (const item of items) {
     const line = `- [${item.sourceLabel}, ${item.confidenceLabel}] ${item.subject}: ${item.content}`
@@ -309,14 +324,22 @@ function compileReference(
     if (cost + lineCost > allowance) continue
     cost += lineCost
     lines.push(line)
+    includedConflicts += 1
   }
 
-  if (count === 0 && conflicts.length === 0) {
+  if (count === 0 && includedConflicts === 0) {
     return { rendered: null, itemCount: 0, estimatedTokens: 0, omittedCount: omitted }
   }
+
   if (omitted > 0) {
-    lines.push('', `(${omitted} further note${omitted === 1 ? '' : 's'} were not included.)`)
-    cost += estimateTokens(lines[lines.length - 1] ?? '')
+    const marker = `(${omitted} further note${omitted === 1 ? '' : 's'} were not included.)`
+    const markerCost = estimateTokens(marker)
+    // The omitted count is already returned structurally. The prose marker is
+    // cosmetic and may only be added when it also fits.
+    if (cost + markerCost <= allowance) {
+      lines.push('', marker)
+      cost += markerCost
+    }
   }
 
   return { rendered: lines.join('\n'), itemCount: count, estimatedTokens: cost, omittedCount: omitted }

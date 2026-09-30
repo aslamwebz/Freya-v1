@@ -214,6 +214,41 @@ in memory for the duration of the call and is never written.
 **Credentials.** The NanoGPT key is read into a closure at construction and is
 never returned by `status()`, never logged, and never recorded in an event.
 
+**What Freya learned.** The Brain holds the most valuable long-term state in the
+system and the journal is the least-protected place it could go: audit logs get
+read, copied, exported into backups and forwarded to whoever is debugging. So
+every `brain.*` event carries ids, counts, source classes and lengths — never a
+memory's text, and never an entity's name:
+
+```
+  brain.memory.admitted      memoryId, kind, source, confidence, status,
+                             conflictsWith, contentLength
+  brain.world.entity_noted   entityId, entityType, nameLength, sourceType
+  brain.world.observed       observationId, sourceType, statedLength
+```
+
+An entity's name is *measured*, not recorded. A person's name in an audit log is a
+copy of it in the one place Freya does not protect as well as the Brain.
+
+**Recall.** There is deliberately no `brain.recalled` event. Recall happens
+constantly, and journalling it would turn the log into a permanent record of what
+Freya connected to what — every association, for as long as the journal is kept.
+The Vault shows recall on demand instead.
+
+---
+
+## Brain events are not security events
+
+`brain.degraded` records that the Brain's own hash chain or record log could not be
+believed. It is **not** in `SECURITY_EVENT_TYPES`, and must never be.
+
+A Brain fault cannot grant cognition, clear a stop or widen a budget — and, less
+obviously, it does not *lose* authority either. Unreadable long-term knowledge is
+neither permission nor lockout. Reporting it in the security stream would let a
+disk error masquerade as a safety posture, and let a real safety problem look
+like a disk error. Core keeps running, conversations keep working, and the Brain's
+own health is reported in its own projection.
+
 ---
 
 ## The event types
@@ -264,6 +299,26 @@ chosen.
 `started` increments the durable call total, because it records an attempt.
 Token totals accumulate only from `completed`, and stay `null` — not zero — when
 a provider reports no usage.
+
+### Brain
+`brain.seeded` · `brain.memory.admitted` · `brain.memory.reviewed` ·
+`brain.memory.archived` · `brain.world.entity_noted` · `brain.world.related` ·
+`brain.world.observed` · `brain.experience.recorded` · `brain.degraded`
+
+Metadata only, as described above. Two details worth naming:
+
+- **`brain.seeded` is written once, not once per launch.** Seeding is idempotent,
+  and re-announcing it would put a "seeded" event in the journal for a Brain that
+  was seeded weeks ago — which a reader would reasonably ask about.
+- **`brain.world.related` carries `conflictingRelations`.** A non-zero count means
+  the Brain now holds two *current* claims that disagree. That is a fact about the
+  Brain's honesty and it is exactly what an audit reader needs to see: the
+  difference between "Freya learned this" and "Freya learned two contradictory
+  things". Neither relation replaces the other.
+
+Every Brain payload is validated by the same `PAYLOAD_RULES` table as everything
+else, reading named fields rather than passing the object through — so a
+hand-edited line cannot smuggle in a field the schema does not name.
 
 ---
 

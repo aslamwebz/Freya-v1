@@ -39,8 +39,8 @@ Other scripts:
   flushed synchronously when the window closes. No cloud, no account.
 - **A typed event model** — one event union, one reducer, one store.
 - **A sealed renderer** — `contextIsolation: true`, `sandbox: true`, no Node in
-  the renderer, a five-function preload bridge, and every permission request
-  denied, and five functions of preload bridge.
+  the renderer, a four-function preload bridge, and every permission request
+  denied, and a four-function preload bridge.
 
 ## Documentation
 

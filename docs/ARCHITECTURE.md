@@ -58,9 +58,9 @@ interface.
 - can be thrown away and rebuilt without touching long-running work.
 
 `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`. The preload
-script exposes exactly five functions (`getRuntimeInfo`, `loadWorkspace`,
-`saveWorkspace`, `onCollect`) and nothing else. No remote module, no
-`ipcRenderer` passthrough, no eval.
+script exposes four functions and one flag — `getRuntimeInfo`,
+`loadWorkspace`, `saveWorkspace`, `onCollect`, `isDesktop` — and nothing else. No
+remote module, no `ipcRenderer` passthrough, no eval.
 
 **Why the UI can be disposable.** Long-running Freya work (missions, agent
 sessions, PTYs) will live in the *main* process, keyed by `surface.id` and
@@ -234,12 +234,14 @@ Rules:
   over the systems list.
 - **The size limit is enforced before writing, not only on read.** A limit
   checked when loading protects the next launch but still lets an unbounded
-  payload reach the disk. The measurement is in UTF-8 bytes, not string
-  length, because a layout with non-ASCII titles is larger on disk than
-  `.length` suggests.
-- Writes are atomic (temp file + rename) and serialised through a promise
-  chain, so two overlapping debounced writes cannot publish each other's
-  half-written file.
+  payload reach the disk. It is measured in UTF-8 bytes in **both** directions:
+  measuring the write in bytes and the read in string length means a payload
+  can be accepted and then silently rejected on the next launch.
+- Writes are atomic (temp file + rename), serialised through a promise chain,
+  and generation-stamped. A write may only publish if it is still the newest
+  one, and the check and the rename happen together with nothing between them —
+  otherwise a debounced write already in flight when the user quits would land
+  on top of the final flush and resurrect an older layout.
 
 **Not persisted:** dashboard demo fixtures, the presence canvas, transient
 animation values. They are derived, not stored.
@@ -260,8 +262,8 @@ through one `collectAndThen`, which:
 5. releases the close.
 
 A 750ms timeout guarantees the app can always be quit even if the renderer is
-wedged. The five preload functions are the whole of it: the host can ask, and
-the renderer can answer with something only it knows.
+wedged. The preload bridge is the whole of it: the host can ask, and the
+renderer can answer with something only it knows.
 
 ---
 

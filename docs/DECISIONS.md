@@ -30,7 +30,7 @@ browser surfaces, local-first operation.
    surfaces will embed browser views. A pinned Chromium means the visual
    design and backdrop-filter behaviour are identical on every machine, which
    a system webview cannot promise.
-3. **It is replaceable.** The renderer reaches main through a five-function
+3. **It is replaceable.** The renderer reaches main through a four-function
    preload bridge. If binary size ever matters more, the same renderer
    moves to Tauri by rewriting one file.
 

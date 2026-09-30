@@ -22,6 +22,7 @@ import { existsSync } from 'node:fs'
  */
 
 const ROOT = resolve(import.meta.dirname, '..', '..')
+const E2E_CONVERSATION_KEY = Buffer.alloc(32, 0x5a).toString('base64')
 const results: { name: string; ok: boolean; detail?: string }[] = []
 
 function check(name: string, ok: boolean, detail?: string): void {
@@ -35,7 +36,13 @@ async function launch(
 ): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
     args: [ROOT, `--user-data-dir=${userData}`],
-    env: { ...process.env, NODE_ENV: 'production', ...env },
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      FREYA_E2E: '1',
+      FREYA_E2E_CONVERSATION_KEY: E2E_CONVERSATION_KEY,
+      ...env,
+    },
   })
   const page = await app.firstWindow()
   const diagnostics: string[] = []

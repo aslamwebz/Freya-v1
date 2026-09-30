@@ -88,8 +88,6 @@ export class PresenceStage {
   private clock = new THREE.Clock()
   private elapsed = 0
   private disposed = false
-  private pointerX = 0
-  private pointerY = 0
   private nextReadout = 0
 
   private voice: VoiceLevels = { user: 0, ai: 0, morph: 0 }
@@ -156,15 +154,6 @@ export class PresenceStage {
     this.lab = { bg: 'space', piece: 'orb', style: 'current', rings: '1' }
     this.applyLab(this.lab)
 
-    this.onPointerMove = this.onPointerMove.bind(this)
-    window.addEventListener('pointermove', this.onPointerMove, { passive: true })
-  }
-
-  /* --------------------------------------------------------------- input */
-
-  private onPointerMove(event: PointerEvent): void {
-    this.pointerX = event.clientX / window.innerWidth - 0.5
-    this.pointerY = event.clientY / window.innerHeight - 0.5
   }
 
   /* ------------------------------------------------------------- pieces */
@@ -350,7 +339,6 @@ export class PresenceStage {
   dispose(): void {
     this.disposed = true
     this.stop()
-    window.removeEventListener('pointermove', this.onPointerMove)
     this.scene.traverse((object) => {
       const mesh = object as THREE.Mesh
       mesh.geometry?.dispose()
@@ -395,8 +383,10 @@ export class PresenceStage {
       if (piece.group.visible && piece !== this.pieces[this.lab.piece]) piece.update(time, delta, this.voice, this.activity)
     }
 
-    this.world.rotation.y += (this.pointerX * 0.3 - this.world.rotation.y) * 0.04
-    this.world.rotation.x += (this.pointerY * 0.06 - this.world.rotation.x) * 0.04
+    // Presence is anchored to the stage. Pointer movement belongs to the UI,
+    // not to Freya's spatial identity: clicking or expanding the systems rail
+    // must never tilt or shift the centerpiece relative to its rings.
+    this.world.rotation.set(0, 0, 0)
 
     this.bloom.strength = 0.55 + this.activity * 0.4
     this.composer.render(delta)

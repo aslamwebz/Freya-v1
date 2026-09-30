@@ -741,6 +741,7 @@ describe('Phase 4 experience isolation', () => {
   it('keeps recalled-context metadata attached to the correct concurrent turn', async () => {
     class TwoTurnBarrierProvider extends FakeModelProvider {
       contacts = 0
+      readonly requests: Parameters<FakeModelProvider['complete']>[0][] = []
       private releaseGate!: () => void
       private readonly gate = new Promise<void>((resolve) => {
         this.releaseGate = resolve
@@ -751,6 +752,7 @@ describe('Phase 4 experience isolation', () => {
         options: Parameters<FakeModelProvider['complete']>[1],
       ) {
         this.contacts += 1
+        this.requests.push(request)
         if (this.contacts === 2) this.releaseGate()
         await this.gate
         return super.complete(request, options)
@@ -797,6 +799,15 @@ describe('Phase 4 experience isolation', () => {
     }
     await brainStore.write({ kind: 'memory-record', memory: recalledMemory })
 
+    const directRecall = await c.handleCommand({
+      command: 'brain.recall',
+      requestId: 'parallel-recall',
+      payload: { query: 'remembered-keyword' },
+    })
+    expect(
+      (directRecall.brain as { operation: string; recall?: { items: unknown[] } }).recall?.items,
+    ).toHaveLength(1)
+
     const firstConversation = await newConversation(c)
     const secondConversation = await newConversation(c)
 
@@ -808,6 +819,13 @@ describe('Phase 4 experience isolation', () => {
     const outcomes = await Promise.all([first, second])
     expect(outcomes.every((outcome) => outcome.outcome === 'completed')).toBe(true)
     expect(provider.contacts).toBe(2)
+
+    const firstRequest = provider.requests.find(
+      (request) => request.messages.at(-1)?.content.includes('remembered-keyword'),
+    )
+    expect(
+      firstRequest?.messages.some((message) => message.content.includes("Notes from Freya's memory")),
+    ).toBe(true)
 
     const experiences = [...brainStore.state().experiences.values()]
     const firstExperience = experiences.find((item) => item.conversationId === firstConversation)

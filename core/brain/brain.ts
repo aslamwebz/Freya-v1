@@ -5,7 +5,7 @@ import {
   reviewOf,
   type AdmissionRequest,
 } from './admission'
-import { recall } from './retrieval'
+import { brainConflicts, recall } from './retrieval'
 import {
   BrainStoreError,
   type BrainHealth,
@@ -335,7 +335,7 @@ export class Brain {
     await this.write({ kind: 'world-relation', relation })
     await this.emit('brain.world.related', {
       subjectEntityId: relation.subjectEntityId,
-      predicate: relation.predicate,
+      predicate: 'stored-in-brain',
       conflictingRelations: conflicting.length,
     })
     return { ok: true, relationId: relation.relationId, conflictsWith: relation.conflictsWith }
@@ -436,6 +436,28 @@ export class Brain {
 
       const stored = await this.write({ kind: 'memory-record', memory: outcome.memory })
       const memory = stored.memory
+
+      // A contradiction is symmetric. Admission can discover that the new memory
+      // conflicts with an older one, but leaving the older record as plain
+      // "admitted" makes recall depend on which side happened to be selected.
+      // Persist the reciprocal edge so either side truthfully discloses the
+      // disagreement after a restart.
+      for (const otherId of memory.conflictsWith) {
+        const other = this.store.state().memories.get(otherId)
+        if (other === undefined || other.status === 'archived' || other.status === 'superseded') continue
+        const reciprocal = [...new Set([...other.conflictsWith, memory.memoryId])].sort()
+        if (other.status === 'conflicted' && reciprocal.length === other.conflictsWith.length) continue
+        await this.write({
+          kind: 'memory-record',
+          memory: {
+            ...other,
+            status: 'conflicted',
+            updatedAt: now,
+            conflictsWith: reciprocal,
+          },
+        })
+      }
+
       await this.emit('brain.memory.admitted', {
         memoryId: memory.memoryId,
         kind: memory.kind,
@@ -488,7 +510,7 @@ export class Brain {
       admissionReason: `${memory.admissionReason}; archived ${now}: ${reason}`,
     }
     const written = await this.write({ kind: 'memory-record', memory: archived })
-    await this.emit('brain.memory.archived', { memoryId, reason })
+    await this.emit('brain.memory.archived', { memoryId, reason: 'owner-requested' })
     return { outcome: 'admitted', memory: written.memory, reason, notes: [] }
   }
 
@@ -555,7 +577,7 @@ export class Brain {
   projection(): BrainProjection {
     const health = this.store.health()
     const state = this.store.state()
-    const pack = recall(state, { text: '' }, { maxEstimatedTokens: 0, maxItems: 1 })
+    const conflicts = brainConflicts(state)
 
     const memories = [...state.memories.values()]
     const admitted = memories.filter((memory) => memory.status === 'admitted')
@@ -624,7 +646,7 @@ export class Brain {
         experiences: state.experiences.size,
       },
       recentAdmissions,
-      conflicts: pack.conflicts,
+      conflicts,
       sequence: state.sequence,
     }
   }

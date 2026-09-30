@@ -73,8 +73,10 @@ export function recall(state: BrainState, query: RecallQuery, budget?: RecallBud
   const itemLimit = Math.max(0, Math.min(askedLimit, limits.maxItems))
 
   const scored: { memory: MemoryRecord; score: number; reasons: RecallReason[] }[] = []
+  let candidatesConsidered = 0
   for (const memory of candidates) {
     if (kinds !== null && !kinds.has(memory.kind)) continue
+    candidatesConsidered += 1
 
     // Sensitivity is a filter the caller sets by passing what it wants; the Brain
     // never decides on its own that something is too private to recall, and never
@@ -135,7 +137,7 @@ export function recall(state: BrainState, query: RecallQuery, budget?: RecallBud
       confidence: item.confidence,
       verificationStatus: state.memories.get(item.memoryId)?.provenance.verificationStatus ?? 'unknown',
     })),
-    candidatesConsidered: scored.length,
+    candidatesConsidered,
     omittedCount: omitted,
     budget: limits,
     estimatedTokens: usedTokens,

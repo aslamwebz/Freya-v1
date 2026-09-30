@@ -763,7 +763,9 @@ class FreyaCore implements Core {
       (this.lifecycle === 'stopping' || this.lifecycle === 'stopped') &&
       command !== 'core.status.read' &&
       command !== 'security.status.read' &&
-      command !== 'cognition.status.read'
+      command !== 'cognition.status.read' &&
+      command !== 'voice.status.read' &&
+      command !== 'brain.status.read'
     ) {
       return reject(envelope, `core is ${this.lifecycle} and cannot accept mutating commands`)
     }

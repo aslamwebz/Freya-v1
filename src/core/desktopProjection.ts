@@ -150,6 +150,13 @@ const NEUTRAL: StatusFact['tone'] = 'info'
 export function countInFlightProviderCalls(activity: ActivityFact[]): number {
   let started = 0
   for (const item of activity) {
+    // A provider request cannot survive a Core process restart. The durable
+    // journal may contain a start with no matching finish if the old process
+    // died mid-call, so a new core.started is an explicit session boundary.
+    if (item.id.startsWith('core.started:')) {
+      started = 0
+      continue
+    }
     if (item.id.startsWith('model.request.started:')) started += 1
     else if (
       item.id.startsWith('model.request.completed:') ||

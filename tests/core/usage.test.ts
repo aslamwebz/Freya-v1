@@ -318,6 +318,18 @@ describe('a failed provider attempt has unknown usage', () => {
     expect(c.status().durableUsage.unknownUsageCalls).toBe(0)
     // Never actually called.
     expect(faulted.calls).toBe(0)
+
+    // The grant's provider usage must not record a gap either. Declaring
+    // `unknown` here would claim something might have been spent when no
+    // provider was ever reached, so nothing can have been.
+    const grant = ownerAuthority(c).grants().find((g) => g.id === 'g1')
+    expect(grant?.usage.calls).toBe(1)
+    expect(grant?.usage.unknownUsageCalls).toBe(0)
+    expect(grant?.usage.inputTokens).toBeNull()
+    expect(grant?.usage.outputTokens).toBeNull()
+    // The authorisation reservation is spent regardless — it is charged before
+    // the provider is ever consulted, and a failure is not a refund.
+    expect(grant?.usage.outputTokenBudgetReserved).toBe(100)
   })
 
   it('counts a call and an unknown when the provider throws', async () => {

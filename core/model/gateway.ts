@@ -170,14 +170,54 @@ export class ModelGateway {
       // exactly one attempt.
       const reason = error instanceof Error ? error.message : 'unknown provider failure'
       await this.recorder.failed({ requestId: permit.requestId, providerId: provider.id, reason })
-      throw error instanceof Error ? error : new Error(reason)
+      // Marked, because this is the path where a provider *was* reached and the
+      // caller has to be able to tell that from a request that never got that
+      // far. The two have opposite billing consequences and nothing else about
+      // the error reveals which one it was.
+      throw markProviderContact(error instanceof Error ? error : new Error(reason), true)
     }
   }
+}
+
+/** Carried by every error the gateway throws, so contact is explicit. */
+export interface ProviderContact {
+  /** True when a provider was reached before the failure. */
+  readonly providerContacted: boolean
+}
+
+function markProviderContact<T extends object>(error: T, contacted: boolean): T & ProviderContact {
+  Object.defineProperty(error, 'providerContacted', {
+    value: contacted,
+    enumerable: false,
+    configurable: true,
+  })
+  return error as T & ProviderContact
+}
+
+/**
+ * Whether a provider was reached before this failure.
+ *
+ * Both paths fail, and they must be told apart by something structural: a
+ * provider that was contacted may have been billed for work it never finished
+ * reporting, while a request that never found a provider was never billed at
+ * all. `providerContacted` is written by the gateway on the way out, so callers
+ * do not have to know which error type the gateway chose to throw.
+ *
+ * Defaults to `true` for anything unrecognised, because the cost of guessing
+ * wrong in the other direction is a paid request recorded as free.
+ */
+export function wasProviderContacted(error: unknown): boolean {
+  if (typeof error === 'object' && error !== null && 'providerContacted' in error) {
+    return (error as ProviderContact).providerContacted === true
+  }
+  return true
 }
 
 export class ProviderUnavailableError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'ProviderUnavailableError'
+    // Structurally: nothing was reached, so nothing can have been billed.
+    markProviderContact(this, false)
   }
 }

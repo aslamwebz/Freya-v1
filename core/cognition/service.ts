@@ -2,6 +2,7 @@ import type { EventFabric } from '../events/fabric'
 import { randomUUID } from 'node:crypto'
 import { isGrantActive, type CognitionGrant, type CognitionGrantSpec } from './grants'
 import { evaluateCognition, type CognitionRequest } from './governor'
+import { wasProviderContacted } from '../model/gateway'
 import type { ModelGateway, GatewayPermit, GatewayRecorder } from '../model/gateway'
 import type { CoreState } from '../state'
 import { findGrant, reduceCoreState } from '../state'
@@ -376,14 +377,20 @@ export class CognitionService {
         model: result.model,
       }
     } catch (error) {
-      // The grant still needs to hear about this attempt.
+      // Only a grant that was actually put at risk needs its usage marked.
       //
-      // A request that was authorised and then failed was almost certainly
-      // paid for — a timeout is not free — so the grant's reported usage records
-      // an explicit `unknown` rather than being left to look untouched. The
-      // reservation stays spent either way: authorisation is not refunded
-      // because the provider misbehaved.
-      if (decision.grantId !== null) {
+      // The gateway fails in two quite different ways. A request that never
+      // found a provider cannot have been billed, and recording `unknown` for it
+      // would declare a gap that does not exist — as though something had been
+      // spent. A request that reached a provider and then failed almost certainly
+      // was billed, so it does get an explicit gap.
+      //
+      // Which one this was comes from the gateway's own `providerContacted`
+      // marker, not from the provider's name or kind.
+      //
+      // The reservation is unaffected either way: authorisation is not refunded
+      // because the provider misbehaved, nor because none was available.
+      if (decision.grantId !== null && wasProviderContacted(error)) {
         await this.reportProviderUsage(decision.grantId, requestId, null, null)
       }
       return {

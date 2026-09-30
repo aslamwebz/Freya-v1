@@ -187,11 +187,24 @@ So the outcomes are:
 | **reached, then failed** | **+1** | **unchanged** | **+1** |
 
 The distinction between the first and last rows is the one that is easy to get
-wrong, and it is not carried by a provider's name. The gateway writes
-`model.request.started` when it reaches a provider, and also writes
-`model.request.failed` when it cannot reach one at all; the durable accounting
-tells them apart by whether that `started` was ever recorded. Nothing is
-inferred from `providerId`, `kind`, or whether the name sounds live.
+wrong, and it is not carried by a provider's name. It is carried twice, by two
+independent mechanisms, because the two accounting paths replay at different
+times:
+
+- **Durable accounting** replays the journal, so it compares the
+  `model.request.failed` against the `model.request.started` for that request.
+- **The grant, live** is told by the gateway itself, which tags every error it
+  throws with `providerContacted`. A request that found no provider is tagged
+  `false`, so the grant records no gap; anything unrecognised is treated as
+  contacted, because the cost of guessing the other way is a paid request
+  recorded as free.
+
+Neither path looks at `providerId`, `kind`, or whether the name sounds live.
+
+The **authorisation reservation is unaffected by all of this.** A grant that was
+never used because no provider existed still shows its call and its output
+allowance as spent: authorisation is charged before any provider is consulted,
+and a failure — or an absent provider — is not a refund.
 
 This holds in all three places that count: the gateway's session usage, the
 durable usage recovered by replaying the journal, and the grant's reported

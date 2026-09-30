@@ -219,6 +219,65 @@ describe('authenticated encryption', () => {
     expect(record2?.messages[0]?.content).toBe(SECRET_ASSISTANT)
   })
 
+  it('rejects a duplicated authenticated record instead of replaying it twice', async () => {
+    const path = join(dir, 'duplicate.enc')
+    const store = await EncryptedConversationStore.open({ path, key })
+    await seed(store)
+    await store.close()
+
+    const lines = (await readFile(path, 'utf8')).split('\n').filter((l) => l.trim().length > 0)
+    // Duplicate a genuine, correctly authenticated user-message record. AEAD by
+    // itself cannot detect replay because the copied line is still authentic.
+    lines.push(lines[1] as string)
+    await writeFile(path, lines.join('\n') + '\n', 'utf8')
+
+    const reopened = await EncryptedConversationStore.open({ path, key })
+    expect(reopened.faultReason).toMatch(/sequence|out of order/i)
+    const record = await reopened.readConversation('c1')
+    expect(record?.messages.map((m) => m.content)).toEqual([SECRET_USER, SECRET_ASSISTANT])
+  })
+
+  it('detects reordered authenticated records instead of accepting a new history', async () => {
+    const path = join(dir, 'reordered.enc')
+    const store = await EncryptedConversationStore.open({ path, key })
+    await seed(store)
+    await store.close()
+
+    const lines = (await readFile(path, 'utf8')).split('\n').filter((l) => l.trim().length > 0)
+    ;[lines[1], lines[2]] = [lines[2] as string, lines[1] as string]
+    await writeFile(path, lines.join('\n') + '\n', 'utf8')
+
+    const reopened = await EncryptedConversationStore.open({ path, key })
+    expect(reopened.faultReason).toMatch(/sequence|out of order/i)
+    const record = await reopened.readConversation('c1')
+    // The reordered turn-start is not allowed to become history that happened
+    // before its user message, and later records behind the resulting gap are
+    // not silently treated as a clean transcript.
+    expect(record?.messages.map((m) => m.content)).toEqual([SECRET_USER])
+    expect(record?.turns).toEqual([])
+  })
+
+  it('serialises concurrent appends so file order matches authenticated sequence order', async () => {
+    const path = join(dir, 'concurrent.enc')
+    const store = await EncryptedConversationStore.open({ path, key })
+    await store.putConversation(conversation())
+
+    await Promise.all(
+      Array.from({ length: 24 }, (_unused, i) =>
+        store.appendMessage(message(`m-${i}`, 'user', `concurrent message ${i}`, `t-${i}`)),
+      ),
+    )
+    await store.close()
+
+    const lines = (await readFile(path, 'utf8')).split('\n').filter((l) => l.trim().length > 0)
+    const sequences = lines.map((line) => (JSON.parse(line) as { seq: number }).seq)
+    expect(sequences).toEqual(Array.from({ length: 25 }, (_unused, i) => i + 1))
+
+    const reopened = await EncryptedConversationStore.open({ path, key })
+    expect(reopened.faultReason).toBeNull()
+    expect((await reopened.readConversation('c1'))?.messages).toHaveLength(24)
+  })
+
   it('gives every record a unique nonce, even for identical content', async () => {
     const path = join(dir, 'nonces.enc')
     const store = await EncryptedConversationStore.open({ path, key })

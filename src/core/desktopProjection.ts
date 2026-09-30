@@ -150,8 +150,11 @@ const NEUTRAL: StatusFact['tone'] = 'info'
 export function countInFlightProviderCalls(activity: ActivityFact[]): number {
   let started = 0
   for (const item of activity) {
-    if (item.id.startsWith('provider:started')) started += 1
-    else if (item.id.startsWith('provider:completed') || item.id.startsWith('provider:failed')) {
+    if (item.id.startsWith('model.request.started:')) started += 1
+    else if (
+      item.id.startsWith('model.request.completed:') ||
+      item.id.startsWith('model.request.failed:')
+    ) {
       started -= 1
     }
   }

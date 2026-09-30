@@ -487,16 +487,21 @@ async function main(): Promise<void> {
       .getByRole('button', { name: 'Security' })
       .click()
     await page.waitForSelector('[role="dialog"][aria-label="Security"]')
+    const securityDialog = page.getByRole('dialog', { name: 'Security' })
+    const denyByDefault = securityDialog.getByText(/anything not explicitly permitted is refused/i)
+    const noApproval = securityDialog.getByText(/no approval workflow exists/i)
+    // The surface shell can exist one tick before its Core subscription delivers
+    // the first projection after a renderer reload. Wait for the facts rather
+    // than sampling that transition and turning scheduler timing into a failure.
+    await denyByDefault.waitFor({ state: 'visible', timeout: 10_000 })
+    await noApproval.waitFor({ state: 'visible', timeout: 10_000 })
     check(
       'the security surface shows Core deny-by-default, not a placeholder',
-      await page
-        .getByText(/anything not explicitly permitted is refused/i)
-        .first()
-        .isVisible(),
+      await denyByDefault.isVisible(),
     )
     check(
       'the security surface says an approval workflow does not exist',
-      await page.getByText(/no approval workflow exists/i).first().isVisible(),
+      await noApproval.isVisible(),
     )
 
     await page.getByRole('button', { name: /stop all/i }).click()

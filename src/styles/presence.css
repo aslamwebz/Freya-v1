@@ -17,6 +17,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
+  align-items: center;
   flex: 1;
   min-height: 340px;
   width: 100%;
@@ -34,8 +35,20 @@
  */
 .presence-stage {
   position: relative;
-  flex: 1;
-  min-height: 0;
+
+  /*
+   * The Presence is a fixed instrument in the workspace, not a fluid dashboard
+   * panel. Its box is derived only from the application viewport, so changing
+   * the systems rail or neighbouring panel widths may move the centre column
+   * but cannot stretch or shrink Freya's orb.
+   *
+   * The viewport clamps are only for genuinely different window sizes. They do
+   * not depend on the centre column's width.
+   */
+  flex: 0 0 auto;
+  width: clamp(520px, 42vw, 680px);
+  height: clamp(420px, 56vh, 580px);
+  align-self: center;
 }
 
 .presence-canvas {

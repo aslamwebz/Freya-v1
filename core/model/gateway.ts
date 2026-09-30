@@ -124,6 +124,8 @@ interface ActiveCall {
    * so a cancellation always knows whether the provider had it.
    */
   contacted: boolean
+  /** True only while provider.complete() itself is still unresolved. */
+  providerInFlight: boolean
   /** Why the owner stopped everything, when they did. */
   cancellationReason: string | null
 }
@@ -203,7 +205,7 @@ export class ModelGateway {
   activeCallCount(): number {
     let count = 0
     for (const call of this.active.values()) {
-      if (call.contacted) count += 1
+      if (call.providerInFlight) count += 1
     }
     return count
   }
@@ -332,11 +334,13 @@ export class ModelGateway {
       // mark and the call are one step, so it cannot be wrong about whether a
       // provider was asked.
       call.contacted = true
+      call.providerInFlight = true
       // This is the exact transition from "authorised/queued inside the
       // gateway" to "the provider has been handed the request". Presence and
       // usage become live only here, not when execute() merely begins.
       this.onActivityChange()
       const result = await provider.complete(request, options)
+      this.markProviderSettled(call)
 
       this.sessionUsage = accumulateUsage(this.sessionUsage, {
         inputTokens: result.inputTokens,
@@ -351,6 +355,11 @@ export class ModelGateway {
       })
       return result
     } catch (error) {
+      // Whether the provider returned or rejected, the live external work is
+      // over before we write its terminal event. Keep historical "contacted"
+      // separate from "in flight" so Presence and temporary usage uncertainty
+      // do not linger while the journal is being updated.
+      this.markProviderSettled(call)
       const providerId = provider?.id ?? permit.providerId
       if (isModelRequestCancelled(error) || call.controller.signal.aborted) {
         return this.settleCancellation(call, providerId, error)
@@ -447,17 +456,21 @@ export class ModelGateway {
       epoch: this.epoch,
       controller: new AbortController(),
       contacted: false,
+      providerInFlight: false,
       cancellationReason: null,
     }
     this.active.set(call.slot, call)
     return call
   }
 
+  private markProviderSettled(call: ActiveCall): void {
+    if (!call.providerInFlight) return
+    call.providerInFlight = false
+    this.onActivityChange()
+  }
+
   private endCall(call: ActiveCall): void {
-    if (!this.active.delete(call.slot)) return
-    // Pre-contact cancellations never became live provider work, so there is
-    // no visible active-count transition to publish for them.
-    if (call.contacted) this.onActivityChange()
+    this.active.delete(call.slot)
   }
 }
 

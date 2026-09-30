@@ -1,7 +1,9 @@
 import {
+  flattenMessages,
   isModelRequestCancelled,
   ModelRequestCancelled,
   type ModelCallOptions,
+  type ModelMessage,
   type ModelProvider,
   type ModelRequest,
   type ModelResult,
@@ -52,6 +54,14 @@ export interface GatewayPermit {
   providerId: string
   maxOutputTokens: number
   model: string | null
+  /**
+   * The compiled instruction set, when a Mind assembled one.
+   *
+   * Optional so a plain user turn still works unchanged; when present it is the
+   * canonical content and `prompt` below is derived from it rather than authored
+   * beside it.
+   */
+  messages?: readonly ModelMessage[]
 }
 
 /** Injected so gateway events land on the durable fabric, not on a side channel. */
@@ -248,6 +258,45 @@ export class ModelGateway {
   }
 
   /**
+   * Abort exactly one request, by request id.
+   *
+   * This is the everyday "stop generating this answer" path, and it is
+   * deliberately nothing like {@link cancelAll}:
+   *
+   *   - the contact gate stays **open**, so Freya can still think about the next
+   *     message;
+   *   - the cognition generation does not move, so nothing else is affected;
+   *   - no other request is touched, aborted or refunded;
+   *   - an already-spent reservation stays spent, and usage accounting is exactly
+   *     the conservative cancellation accounting used for a STOP ALL.
+   *
+   * STOP ALL stops Freya's *authority* to think. This stops one *answer*. A
+   * button that latched a security stop would make the security control
+   * unusable, and one that silently refunded the call would make it dishonest.
+   *
+   * Returns how many requests were aborted: 0 when the id is not currently
+   * executing, which is the normal case for a double-click.
+   */
+  cancelRequest(requestId: string, reason: string): number {
+    let aborted = 0
+    for (const call of this.active.values()) {
+      if (call.requestId !== requestId) continue
+      call.cancellationReason = reason
+      call.controller.abort(new ModelRequestCancelled(reason))
+      aborted += 1
+    }
+    return aborted
+  }
+
+  /** Whether a request id is currently executing. For Mind's bookkeeping only. */
+  hasActiveRequest(requestId: string): boolean {
+    for (const call of this.active.values()) {
+      if (call.requestId === requestId) return true
+    }
+    return false
+  }
+
+  /**
    * Re-open the contact gate after an explicit owner resume.
    *
    * It restores permission and nothing else. No request is restarted, no
@@ -297,6 +346,9 @@ export class ModelGateway {
    */
   async execute(permit: GatewayPermit, prompt: string): Promise<ModelResult> {
     const call = this.beginCall(permit)
+    // Derived once, from the compiled messages, so the two request shapes cannot
+    // drift apart and a provider cannot be shown something the caller did not.
+    const flattened = permit.messages ? flattenMessages(permit.messages) : prompt
     let provider: ModelProvider | null = null
     try {
       // First refusal point. Nothing durable has been said about a provider yet,
@@ -339,7 +391,12 @@ export class ModelGateway {
 
       const request: ModelRequest = {
         requestId: permit.requestId,
-        prompt,
+        // The Mind's compiled packet when there is one, otherwise the single user
+        // prompt this has always sent. The flattened form is derived here, so a
+        // provider that only takes a string and one that takes messages are
+        // looking at the same content.
+        messages: permit.messages ?? [{ role: 'user', content: flattened }],
+        prompt: flattened,
         maxOutputTokens: permit.maxOutputTokens,
         model,
       }

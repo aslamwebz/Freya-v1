@@ -169,7 +169,13 @@ export class NanoGptProvider implements ModelProvider {
         body: JSON.stringify({
           model: request.model ?? this.config.model,
           max_tokens: request.maxOutputTokens,
-          messages: [{ role: 'user', content: request.prompt }],
+          // The compiled packet, sent as the structured turns it is. Identity
+          // arrives as a system message, history as user/assistant turns, and
+          // this provider has no idea any of it was assembled by Freya.
+          messages: request.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
         }),
       })
 

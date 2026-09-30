@@ -276,7 +276,13 @@ export class CognitionService {
       { actor: principal.id, correlationId, source: 'core' },
     )
 
-    const nominated = this.nominateGrant(origin, cause, principal.id, background)
+    // An explicitly named grant is used as-is; otherwise nominate by scanning.
+    // Naming one is not a bypass — the Governor below still checks that grant
+    // against this request's derived shape and its own ceilings — it only removes
+    // the ambiguity of "whichever matching grant happens to be first".
+    const nominated =
+      intent.grantId ??
+      this.nominateGrant(origin, cause, principal.id, background)
 
     // Authorisation and reservation are one indivisible step per grant. The
     // grantless user path has no shared budget, so it needs no lock.
@@ -370,6 +376,9 @@ export class CognitionService {
       providerId: 'auto',
       maxOutputTokens,
       model: intent.requestedModel ?? null,
+      // Present only when a Mind compiled a packet. Absent, the request keeps
+      // the single-prompt shape it has always had.
+      ...(intent.messages === undefined ? {} : { messages: intent.messages }),
     }
 
     try {

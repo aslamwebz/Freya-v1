@@ -1,6 +1,7 @@
 import type { CognitionCause, CognitionOrigin } from './protocol/core-protocol'
 import type { CognitionGrant, CognitionGrantSpec } from './cognition/grants'
 import type { CognitionOutcome } from './cognition/service'
+import type { ModelMessage } from './model/provider'
 
 /**
  * The authority boundary.
@@ -57,6 +58,29 @@ export interface CognitionIntent {
   goalId?: string | null
   correlationId?: string
   cognitionRequestId?: string
+  /**
+   * Which owner-created grant to be judged against.
+   *
+   * This selects an *allowance to check*, and nothing more. It cannot widen
+   * anything: the Governor still verifies the grant against the request's
+   * derived origin, cause, actor and background flag, and still enforces the
+   * call and token ceilings. A caller naming a grant it was not given gets a
+   * refusal, exactly as omitting this field and letting nomination fall to a
+   * different grant would.
+   *
+   * It exists because nomination by scanning is ambiguous. One conversation turn
+   * per grant means the wrong match is a turn that is charged to somebody else's
+   * allowance, and "whichever grant was created first" is not a policy.
+   */
+  grantId?: string
+  /**
+   * A pre-compiled instruction set from Core's Context Compiler.
+   *
+   * Content, not authority: the roles are a closed union chosen by trusted Core
+   * code, and the Governor is unaffected by it. When present it is canonical and
+   * `prompt` becomes the flattened form of the same content.
+   */
+  messages?: readonly ModelMessage[]
 }
 
 /** What Core derives from an intent. Callers never supply these. */

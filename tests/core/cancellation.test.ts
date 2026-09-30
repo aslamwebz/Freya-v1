@@ -309,7 +309,7 @@ describe('B — the authorisation to provider-contact race', () => {
     controller.abort()
     await expect(
       provider.complete(
-        { requestId: 'a', prompt: 'p', maxOutputTokens: 1, model: null },
+        { requestId: 'a', prompt: 'p', messages: [{ role: 'user' as const, content: 'p' }], maxOutputTokens: 1, model: null },
         { signal: controller.signal },
       ),
     ).rejects.toThrow(/cancelled/i)
@@ -737,7 +737,7 @@ describe('H — no provider contact', () => {
     expect(nanogpt.status().status).toBe('disabled')
     await expect(
       nanogpt.complete(
-        { requestId: 'a', prompt: 'p', maxOutputTokens: 1, model: null },
+        { requestId: 'a', prompt: 'p', messages: [{ role: 'user' as const, content: 'p' }], maxOutputTokens: 1, model: null },
         { signal: new AbortController().signal },
       ),
     ).rejects.toThrow(/not enabled/i)

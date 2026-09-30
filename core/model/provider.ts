@@ -17,9 +17,40 @@ import type { ProviderStatus } from '../protocol/core-protocol'
  * makes "stop" mean something.
  */
 
+/**
+ * A provider role.
+ *
+ * A closed union, and the set is controlled by Core's Context Compiler rather
+ * than by whatever the renderer typed. A renderer can supply the *content* of a
+ * user message; it cannot choose a role, and in particular cannot present its
+ * own text as an assistant turn or as system instructions.
+ */
+export type ModelMessageRole = 'system' | 'user' | 'assistant'
+
+export interface ModelMessage {
+  readonly role: ModelMessageRole
+  readonly content: string
+}
+
 export interface ModelRequest {
   /** Echoed back in the result so a caller can correlate without a closure. */
   requestId: string
+  /**
+   * The compiled instruction set, in provider order.
+   *
+   * Canonical. Identity, history and the current turn arrive here already
+   * assembled by Core's Context Compiler, so a provider never has to know how
+   * Freya is built, and never has to parse one long string to recover the
+   * structure the user actually had.
+   */
+  messages: readonly ModelMessage[]
+  /**
+   * The same content flattened into one string, for providers that take a
+   * single prompt.
+   *
+   * Derived from `messages` by the gateway, never authored separately, so the
+   * two cannot disagree about what was said.
+   */
   prompt: string
   maxOutputTokens: number
   model: string | null
@@ -90,7 +121,7 @@ export function isModelRequestCancelled(error: unknown): boolean {
 }
 
 /**
- * Refuse immediately if the call has already been cancelled.
+ * Throw immediately if the call has already been cancelled.
  *
  * The first statement of every cancellable call in this codebase. It is a
  * function rather than a habit because the window it closes is exactly the one
@@ -100,4 +131,20 @@ export function isModelRequestCancelled(error: unknown): boolean {
  */
 export function throwIfAborted(signal: AbortSignal, message: string): void {
   if (signal.aborted) throw new ModelRequestCancelled(message)
+}
+
+/**
+ * Flatten compiled messages into one prompt.
+ *
+ * The result is a *serialisation*, not the truth: `ModelRequest.messages` is
+ * canonical and `prompt` exists for providers that only accept a string. Role
+ * prefixes are included so a flattened transcript still reads as a transcript
+ * rather than as one undifferentiated wall of text.
+ */
+export function flattenMessages(messages: readonly ModelMessage[]): string {
+  return messages
+    .map((message) =>
+      message.role === 'user' ? message.content : `[${message.role}] ${message.content}`,
+    )
+    .join('\n\n')
 }

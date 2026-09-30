@@ -11,6 +11,7 @@ import {
 } from '../../core/model/fake-provider'
 import { MemoryConversationStore } from '../../core/conversation/memory-store'
 import { MemoryBrainStore } from '../../core/brain/memory-store'
+import type { MemoryRecord } from '../../core/brain/types'
 import { ownerAuthority } from '../../core/testing'
 import { EncryptedConversationStore } from '../../core/conversation/encrypted-store'
 import { testConversationKey } from './testKey'
@@ -760,18 +761,41 @@ describe('Phase 4 experience isolation', () => {
     const brainStore = new MemoryBrainStore()
     const c = await started({ providers: [provider], brainStore })
 
-    const memory = await c.handleCommand({
-      command: 'brain.memory.write',
-      requestId: 'remember-1',
-      payload: {
-        kind: 'semantic',
-        subject: 'reference marker',
-        content: 'remembered-keyword belongs to the first conversation only',
+    // Seed one already-admitted record directly into the injected test store.
+    // Admission itself is covered by brain-admission/brain tests; this test isolates
+    // the concurrency property of Mind -> recall -> Experience bookkeeping.
+    const at = '2026-04-01T09:00:00.000Z'
+    const recalledMemory: MemoryRecord = {
+      memoryId: 'parallel-memory',
+      kind: 'semantic',
+      subject: 'reference marker',
+      content: 'remembered-keyword belongs to the first conversation only',
+      structuredData: {},
+      createdAt: at,
+      updatedAt: at,
+      source: 'owner-assertion',
+      provenance: {
+        sourceType: 'owner-assertion',
+        sourceRef: null,
+        observedAt: at,
+        recordedAt: at,
+        actor: 'owner',
+        verificationStatus: 'asserted',
         confidence: 'high',
-        sensitivity: 'normal',
+        evidenceSummary: null,
       },
-    })
-    expect(memory.ok).toBe(true)
+      confidence: 'high',
+      status: 'admitted',
+      sensitivity: 'normal',
+      tags: [],
+      entityRefs: [],
+      supersedes: null,
+      conflictsWith: [],
+      expiresAt: null,
+      admittedAt: at,
+      admissionReason: 'test fixture already admitted through the Brain boundary',
+    }
+    await brainStore.write({ kind: 'memory-record', memory: recalledMemory })
 
     const firstConversation = await newConversation(c)
     const secondConversation = await newConversation(c)

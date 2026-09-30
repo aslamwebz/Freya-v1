@@ -1,4 +1,11 @@
-import type { ModelProvider, ModelRequest, ModelResult } from './provider'
+import {
+  throwIfAborted,
+  ModelRequestCancelled,
+  type ModelCallOptions,
+  type ModelProvider,
+  type ModelRequest,
+  type ModelResult,
+} from './provider'
 import type { ProviderStatus } from '../protocol/core-protocol'
 
 /**
@@ -103,15 +110,52 @@ export class NanoGptProvider implements ModelProvider {
     }
   }
 
-  async complete(request: ModelRequest): Promise<ModelResult> {
+  /**
+   * One call, cancellable, with a timeout.
+   *
+   * Two things can end this request, and they are composed rather than raced:
+   * the provider's own timeout, and the gateway's signal. Both reach the same
+   * internal controller, so `fetch` sees one cancellation and there is exactly
+   * one exit. Whichever fired first is reported as the reason, because "the owner
+   * stopped everything" and "the provider was too slow" are different facts
+   * about different events.
+   *
+   * There is no retry here and no retry above. An aborted request is finished.
+   */
+  async complete(request: ModelRequest, options: ModelCallOptions): Promise<ModelResult> {
     if (this.config === null || !this.config.liveEnabled) {
       // Unreachable via the gateway, which only selects a `configured`
       // provider. Kept so a direct call cannot spend anything.
       throw new Error('nanogpt live inference is not enabled')
     }
 
+    // Before anything that costs money. The gateway has already checked, and
+    // this is the check that cannot be skipped: it is the last statement before
+    // the request leaves the process.
+    throwIfAborted(options.signal, 'cancelled before the provider was contacted')
+
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    let cancelled: ModelRequestCancelled | null = null
+
+    const onExternalAbort = (): void => {
+      // Recorded rather than thrown from the listener: an exception here would
+      // be raised on whoever happened to be running, not on the request.
+      cancelled = new ModelRequestCancelled(
+        options.signal.reason instanceof Error
+          ? options.signal.reason.message
+          : 'the request was cancelled by the owner',
+      )
+      controller.abort(cancelled)
+    }
+    options.signal.addEventListener('abort', onExternalAbort, { once: true })
+
+    const timer = setTimeout(() => {
+      controller.abort(new ModelRequestCancelled('nanogpt request timed out'))
+    }, this.timeoutMs)
+    // A pending call must not be the reason the process refuses to exit. Shutdown
+    // cancels explicitly; this is only the backstop for a call nobody waited for.
+    unref(timer)
+
     try {
       const response = await this.fetchImpl(`${this.config.baseUrl}/v1/chat/completions`, {
         method: 'POST',
@@ -127,6 +171,7 @@ export class NanoGptProvider implements ModelProvider {
         }),
       })
 
+      if (cancelled !== null) throw cancelled
       if (!response.ok) {
         // The status is safe to record; the body may echo the request.
         throw new Error(`nanogpt responded ${response.status}`)
@@ -147,8 +192,24 @@ export class NanoGptProvider implements ModelProvider {
         outputTokens:
           typeof body.usage?.completion_tokens === 'number' ? body.usage.completion_tokens : null,
       }
+    } catch (error) {
+      // An external cancellation stays a cancellation even though `fetch` sees it
+      // as a transport abort, so a stop is never recorded as a provider failure.
+      if (cancelled !== null) throw cancelled
+      if (options.signal.aborted) {
+        throw new ModelRequestCancelled('the request was cancelled by the owner')
+      }
+      throw error
     } finally {
       clearTimeout(timer)
+      options.signal.removeEventListener('abort', onExternalAbort)
     }
+  }
+}
+
+/** Do not let a timeout timer hold the Node event loop open. */
+function unref(timer: ReturnType<typeof setTimeout>): void {
+  if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
+    ;(timer as { unref: () => void }).unref()
   }
 }

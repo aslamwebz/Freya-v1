@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCore, type Core, type CoreOptions } from '../../core/index'
 import { ModelGateway, type GatewayRecorder } from '../../core/model/gateway'
+import { JsonlEventStore } from '../../core/events/jsonl-store'
+import type { EventStore } from '../../core/events/store'
 import type { ModelProvider } from '../../core/model/provider'
 import { BlockingModelProvider, FakeModelProvider } from '../../core/model/fake-provider'
 import { NanoGptProvider } from '../../core/model/nanogpt-provider'
@@ -405,6 +407,59 @@ describe('D — the durable stop', () => {
     const stillStopped = await stopAll(core, 's2')
     expect(stillStopped.ok).toBe(true)
     expect(core.status().stopAll.active).toBe(true)
+  })
+})
+
+describe('D2 — STOP persistence failure stays fail-closed', () => {
+  it('keeps cognition denied until an explicit owner resume reopens the gate', async () => {
+    const path = join(dir, 'events.jsonl')
+    const base = await JsonlEventStore.open(path)
+    const provider = new FakeModelProvider()
+
+    const store: EventStore = {
+      append: async (event) => {
+        if (event.type === 'security.stop_all.activated') {
+          throw new Error('simulated STOP persistence failure')
+        }
+        await base.append(event)
+      },
+      readAll: () => base.readAll(),
+      readAfter: (sequence) => base.readAfter(sequence),
+      lastSequence: () => base.lastSequence(),
+      describe: () => 'test:fail-stop-append',
+      close: () => base.close(),
+    }
+
+    core = createCore(options({ providers: [provider], eventStore: store }))
+    await core.start()
+
+    const stopped = await stopAll(core)
+    expect(stopped.ok).toBe(false)
+    expect(stopped.error?.message).toMatch(/simulated STOP persistence failure/)
+
+    // The durable latch could not be written, but runtime authority still fails
+    // closed and says so. Nothing may reach the provider in this condition.
+    expect(core.status().stopAll.active).toBe(false)
+    expect(core.status().governor.status).toBe('deny_all')
+    expect(core.status().faults.join(' ')).toMatch(/fail-closed/i)
+
+    const refused = await ownerAuthority(core).request(
+      userTurn({ cognitionRequestId: 'after-failed-stop' }),
+    )
+    expect(refused.status).toBe('denied')
+    expect(provider.calls).toBe(0)
+
+    // Only an explicit owner resume reopens the runtime gate. There is no
+    // durable STOP event to clear, so this changes session authority only.
+    const opened = await resume(core, 'resume-after-failed-stop')
+    expect(opened.ok).toBe(true)
+    expect(core.status().governor.status).toBe('ready')
+
+    const fresh = await ownerAuthority(core).request(
+      userTurn({ cognitionRequestId: 'after-explicit-resume' }),
+    )
+    expect(fresh.status).toBe('allowed')
+    expect(provider.calls).toBe(1)
   })
 })
 

@@ -332,7 +332,11 @@ export class CognitionService {
 
     const decision = evaluateCognition(governorRequest, {
       grants: this.state.grants,
-      stopAllActive: this.state.stopAll.active,
+      // A durable STOP latch is not the only way cognition can be
+      // fail-closed. If persisting STOP ALL itself fails, the gateway stays
+      // closed and the Governor must refuse new work until the owner explicitly
+      // resumes. This keeps "deny_all" true in behaviour, not only in status.
+      stopAllActive: this.state.stopAll.active || !this.gateway.gateStatus().open,
       now: this.now(),
       journalTrustworthy: this.journalTrustworthy(),
     })

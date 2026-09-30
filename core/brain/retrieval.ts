@@ -297,8 +297,17 @@ function collectConflicts(
           : 'this memory is contradicted by another stored record, which is not in this pack',
     })
   }
-  // Memory-to-memory conflicts first, then relations that contradict each other.
-  for (const [relationId, group] of contradictedRelationGroups(state)) {
+  // Relation conflicts belong in a recall pack only when the selected memories
+  // actually reference the entity those relations describe. Otherwise a question
+  // about one subject can leak an unrelated private contradiction into the model
+  // context merely because it exists somewhere in the Brain.
+  const selectedEntities = new Set<string>()
+  for (const item of memories) {
+    for (const entityId of state.memories.get(item.memoryId)?.entityRefs ?? []) {
+      selectedEntities.add(entityId)
+    }
+  }
+  for (const [relationId, group] of contradictedRelationGroups(state, selectedEntities)) {
     out.push({
       memoryId: relationId,
       conflictsWith: group.filter((id) => id !== relationId),
@@ -308,10 +317,52 @@ function collectConflicts(
   return out
 }
 
-function contradictedRelationGroups(state: BrainState): [string, string[]][] {
+/**
+ * Bounded conflict projection for the Brain surface.
+ *
+ * Unlike a RecallPack this is intentionally global: the Brain surface is where the
+ * owner inspects known contradictions. It never includes memory contents, only ids
+ * and a fixed diagnostic sentence.
+ */
+export function brainConflicts(
+  state: BrainState,
+  limit = BRAIN_LIMITS.maxItemsInProjection,
+): RecallPack['conflicts'] {
+  const out: RecallPack['conflicts'][number][] = []
+  const memories = [...state.memories.values()]
+    .filter((memory) => RECALLABLE_STATUSES.includes(memory.status))
+    .sort((a, b) => a.memoryId.localeCompare(b.memoryId))
+
+  for (const memory of memories) {
+    const against = memory.conflictsWith.filter((id) => state.memories.has(id))
+    if (against.length === 0) continue
+    out.push({
+      memoryId: memory.memoryId,
+      conflictsWith: against,
+      detail: 'this memory is contradicted by another stored record',
+    })
+    if (out.length >= Math.max(0, limit)) return out
+  }
+
+  for (const [relationId, group] of contradictedRelationGroups(state)) {
+    out.push({
+      memoryId: relationId,
+      conflictsWith: group.filter((id) => id !== relationId),
+      detail: 'these stored facts about the same subject and predicate disagree, and all are current',
+    })
+    if (out.length >= Math.max(0, limit)) break
+  }
+  return out
+}
+
+function contradictedRelationGroups(
+  state: BrainState,
+  entityFilter?: ReadonlySet<string>,
+): [string, string[]][] {
   const slots = new Map<string, string[]>()
   for (const relation of state.relations.values()) {
     if (relation.validUntil !== null) continue
+    if (entityFilter !== undefined && !entityFilter.has(relation.subjectEntityId)) continue
     const slot = `${relation.subjectEntityId} ${relation.predicate}`
     const list = slots.get(slot) ?? []
     list.push(relation.relationId)

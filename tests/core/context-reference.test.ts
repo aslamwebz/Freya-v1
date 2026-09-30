@@ -194,6 +194,47 @@ describe('reporting', () => {
     expect(identityCost + blockCost).toBeLessThanOrEqual(3_000)
   })
 
+  it('drops the entire reference block when even its framing does not fit', () => {
+    const baseline = compileContext({
+      identity: FREYA_IDENTITY,
+      history: [],
+      currentUserMessage: current(),
+      referenceKnowledge: null,
+    })
+    const ceiling = baseline.estimatedTokens + 8
+
+    const compiled = compileContext(
+      {
+        identity: FREYA_IDENTITY,
+        history: [],
+        currentUserMessage: current(),
+        referenceKnowledge: {
+          items: [],
+          conflicts: ['a deliberately long unresolved conflict '.repeat(20)],
+        },
+      },
+      { maxEstimatedTokens: ceiling, maxHistoryMessages: 0 },
+    )
+
+    expect(compiled.estimatedTokens).toBeLessThanOrEqual(ceiling)
+    expect(compiled.reference.included).toBe(false)
+  })
+
+  it('never lets the omitted-notes marker itself cross the allowance', () => {
+    const many: ReferenceKnowledge = {
+      items: Array.from({ length: 20 }, (_unused, i) => ({
+        subject: `subject-${i}`,
+        content: 'bounded remembered claim '.repeat(12),
+        sourceLabel: 'owner-assertion',
+        confidenceLabel: 'high',
+      })),
+      omittedCount: 4,
+    }
+    const compiled = compile(many, { maxEstimatedTokens: 900, maxHistoryMessages: 2 })
+    expect(compiled.estimatedTokens).toBeLessThanOrEqual(900)
+    expect(compiled.reference.omittedCount).toBeGreaterThan(0)
+  })
+
   it('still fails closed when identity and the question do not fit', () => {
     // Reference material is never a reason to answer a truncated question. If the
     // irreducible part does not fit, nothing is sent at all.

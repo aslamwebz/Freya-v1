@@ -216,10 +216,19 @@ export class EncryptedConversationStore implements ConversationStore {
       this.degrade('a conversation record is not valid JSON')
       return
     }
+    if (typeof record !== 'object' || record === null) {
+      this.degrade('a conversation record is not an object')
+      return
+    }
+    // Version is checked *before* the shape, so a record from a future format
+    // produces a diagnostic that says which of the two problems it is. Folded into
+    // the shape check it would report only "unrecognised shape", which sends
+    // somebody looking for corruption that is not there.
+    if (record.version !== SCHEMA_VERSION) {
+      this.degrade(`conversation record version ${String(record.version)} is not this version`)
+      return
+    }
     if (
-      typeof record !== 'object' ||
-      record === null ||
-      record.version !== SCHEMA_VERSION ||
       typeof record.kind !== 'string' ||
       typeof record.seq !== 'number' ||
       typeof record.context !== 'string' ||
@@ -228,10 +237,6 @@ export class EncryptedConversationStore implements ConversationStore {
       typeof record.tag !== 'string'
     ) {
       this.degrade('a conversation record has an unrecognised shape')
-      return
-    }
-    if (record.version !== SCHEMA_VERSION) {
-      this.degrade(`conversation record version ${record.version} is not this version`)
       return
     }
     if (record.context !== this.context) {

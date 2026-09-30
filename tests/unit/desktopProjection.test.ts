@@ -47,7 +47,8 @@ function input(over: Partial<ProjectionInput> = {}): ProjectionInput {
 }
 
 function activity(id: string, at = 1_800_000_000_000): ActivityFact {
-  const sequence = Number(id.split(':')[1] ?? 0)
+  const parts = id.split(':')
+  const sequence = Number(parts[parts.length - 1] ?? 0)
   return { id, text: 'something happened', at, tone: 'neutral', sequence }
 }
 
@@ -155,15 +156,15 @@ describe('in-flight provider counting', () => {
   it('counts started minus finished', () => {
     expect(
       countInFlightProviderCalls([
-        activity('provider:started:1'),
-        activity('provider:started:2'),
-        activity('provider:completed:3'),
+        activity('model.request.started:1'),
+        activity('model.request.started:2'),
+        activity('model.request.completed:3'),
       ]),
     ).toBe(1)
   })
 
   it('never goes negative on a feed that started mid-stream', () => {
-    expect(countInFlightProviderCalls([activity('provider:completed:9')])).toBe(0)
+    expect(countInFlightProviderCalls([activity('model.request.completed:9')])).toBe(0)
   })
 })
 
@@ -229,8 +230,8 @@ describe('attention', () => {
 
 describe('the whole projection', () => {
   it('is deterministic for the same input', () => {
-    const one = projectDesktop(input({ activity: [activity('provider:started:1')] }))
-    const two = projectDesktop(input({ activity: [activity('provider:started:1')] }))
+    const one = projectDesktop(input({ activity: [activity('model.request.started:1')] }))
+    const two = projectDesktop(input({ activity: [activity('model.request.started:1')] }))
     expect(one).toEqual(two)
   })
 

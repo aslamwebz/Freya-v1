@@ -60,35 +60,76 @@ because it would wait behind itself.
 
 ## Recovery policy
 
-Reading stops at the first line that is not a valid event, and everything from
-that point on is truncated away.
+Reading stops at the first byte that is not a valid event, and everything from
+that point on is truncated away. What recovery *reports* depends on why it
+stopped, because two of the reasons are not the same kind of thing at all.
 
-| Condition | What happens |
+### The two kinds of damage
+
+**A torn tail is a crash.** The log ends part-way through a line, with no
+terminator. Those bytes were never committed, so the complete prefix before them
+is the whole truth. The Core starts `ready` and says so in
+`CoreStatus.integrity` — `integrity: 'torn'`, with the discarded byte count.
+
+**Anything else is corruption.** A *complete* line that fails validation was not
+produced by an interrupted write. It means the journal contains something this
+code did not write, or was edited, or arrived out of order. The Core starts
+`degraded`, reports `integrity: 'corrupt'` with the line number and the reason,
+and **refuses all cognition** — see below.
+
+| Condition | Kind | What happens |
+| --- | --- | --- |
+| final line has no terminator | torn | dropped; file truncated; Core is `ready` |
+| unparseable line | corrupt | dropped; file truncated; Core is `degraded` |
+| unknown event type | corrupt | as above |
+| unsupported schema version | corrupt | as above |
+| sequence not a positive integer | corrupt | as above |
+| duplicate sequence | corrupt | as above |
+| reversed sequence | corrupt | as above |
+| invalid principal id | corrupt | as above |
+| malformed correlation or causation id | corrupt | as above |
+| payload not matching its own type | corrupt | as above |
+| **invalid line in the middle** | corrupt | **dropped, and so is every valid event after it** |
+
+The middle-line case is the sharp edge and it is deliberate. Truncation discards
+events that were fine, because a journal with a hole in it cannot be replayed
+into security state: the gap could be hiding the revocation that came after it.
+
+### Why corruption denies everything
+
+A corrupt log still replays — the surviving prefix is real — but it is not the
+*whole* history. If a STOP ALL was written after the damaged line, truncation
+discards it, and a Core that replayed naively would come up **healthy and
+unstopped**: reporting exactly the state the user tried to leave behind by
+stopping.
+
+So the Governor checks journal trust before anything else, above the replayed
+latch itself. A Core that cannot vouch for its log denies every request with
+`journal-not-trustworthy`, and the projection reports `governor.status` as
+`deny_all` regardless of what the latch says.
+
+The remedy is to repair or remove the log. Recovery truncates the damaged
+segment on disk, so a subsequent start reads a clean prefix and comes up `ready`.
+A *running* Core does not upgrade itself, because it cannot know the file changed
+underneath it.
+
+### Reading the report
+
+`JsonlEventStore.recoveryReport()` returns:
+
+| Field | Meaning |
 | --- | --- |
-| torn final write (no newline) | dropped; file truncated to the last good line |
-| unparseable line | dropped; file truncated |
-| unknown event type | dropped; file truncated |
-| unsupported schema version | dropped; file truncated |
-| sequence not a positive integer | dropped; file truncated |
-| duplicate sequence | dropped; file truncated |
-| reversed sequence | dropped; file truncated |
-| invalid principal id | dropped; file truncated |
-| malformed correlation or causation id | dropped; file truncated |
-| payload not matching its own type | dropped; file truncated |
-| **invalid line in the middle** | **dropped, and so is every valid event after it** |
+| `tornTail` | the log ended mid-line |
+| `corruption` | the line number and reason, or `null` |
+| `eventsRead` | complete events read and believed |
+| `bytesDiscarded` | bytes dropped, including any torn tail |
+| `trustworthy` | `false` whenever `corruption` is set |
 
-The last row is the sharp edge, and it is deliberate. Truncation discards
-events that were fine. That is the safe choice: a journal with a hole in it
-cannot be replayed into security state, because the gap could be hiding the
-revocation that came after it. The safe reading of a damaged log is the prefix
-up to the damage, plus a record that the log was truncated.
+`CoreStatus.integrity` carries the same facts in a form a person can read, and it
+is always present. A healthy journal says so explicitly, because the absence of a
+warning is not the same thing as a warning that is absent — and the integrity
+block is not folded into `CoreStatus.faults`, which is an advisory list.
 
-A deployment that cannot tolerate truncation should refuse to start instead;
-`JsonlEventStore.lastTruncation()` reports what was dropped so a caller can make
-that decision.
-
-In practice only the tail is recoverable, because the tail is the only place a
-crash can leave damage.
 
 ---
 
@@ -154,9 +195,18 @@ and they are the reason the validator checks principal ids.
 `cognition.authorization_required` · `cognition.grant.created` ·
 `cognition.grant.revoked` · `cognition.grant.consumed`
 
-`cognition.grant.consumed` carries `outputTokenBudgetReserved` — the
-authorisation reservation — separately from `inputTokens`/`outputTokens`, which
-are the provider's report. See [COGNITION-POLICY.md](COGNITION-POLICY.md#4-the-token-budget-is-reserved-before-the-call-and-never-refunded).
+Two separate events, because conflating them is what made the accounting wrong:
+
+- `cognition.grant.reserved` — written *before* the provider is called. Carries
+  this call's share of the output allowance. The reducer **adds** it to the
+  grant's total, so two callers cannot overwrite each other's reservation.
+- `cognition.grant.usage_reported` — written after. Carries what the provider
+  said for that one call, with nulls when it said nothing. The reducer adds
+  those figures to the grant's reported totals.
+
+`model.request.started` counts a call and nothing else — it is the only record
+that a provider was reached — and `model.request.completed` accumulates what was
+reported. See [COGNITION-POLICY.md](COGNITION-POLICY.md#4-the-token-budget-is-reserved-before-the-call-and-never-refunded).
 
 `cognition.allowed` does not name a provider: authorisation happens before one is
 chosen.

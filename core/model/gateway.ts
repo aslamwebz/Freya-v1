@@ -1,4 +1,5 @@
 import type { ModelProvider, ModelRequest, ModelResult } from './provider'
+import { accumulateAttempt, accumulateUsage, emptyUsage } from './usage'
 import type { ModelUsage, ProviderStatus } from '../protocol/core-protocol'
 
 /**
@@ -71,9 +72,11 @@ export class ModelGateway {
   private readonly recorder: GatewayRecorder
   private readonly now: () => Date
 
-  private calls = 0
-  private inputTokens: number | null = null
-  private outputTokens: number | null = null
+  /**
+   * Session usage. An attempt is counted when the call is made, and whatever the
+   * provider reported is accumulated on top — never substituted for the total.
+   */
+  private sessionUsage: ModelUsage = emptyUsage()
 
   constructor(options: ModelGatewayOptions) {
     this.recorder = options.recorder
@@ -85,7 +88,7 @@ export class ModelGateway {
 
   /** Usage for this Core session. Never estimated. */
   usage(): ModelUsage {
-    return { calls: this.calls, inputTokens: this.inputTokens, outputTokens: this.outputTokens }
+    return { ...this.sessionUsage }
   }
 
   statuses(): ProviderStatus[] {
@@ -126,7 +129,11 @@ export class ModelGateway {
       startedAt: this.now().toISOString(),
     })
 
-    this.calls += 1
+    // An attempt is an attempt even if the provider never answers, so the call
+    // is counted here and the reported figures are added when they arrive. It
+    // records no gap in reporting: the provider has not declined to report, it
+    // simply has not answered yet.
+    this.sessionUsage = accumulateAttempt(this.sessionUsage)
 
     try {
       const request: ModelRequest = {
@@ -136,7 +143,10 @@ export class ModelGateway {
         model,
       }
       const result = await provider.complete(request)
-      this.addUsage(result.inputTokens, result.outputTokens)
+      this.sessionUsage = accumulateUsage(this.sessionUsage, {
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+      })
       await this.recorder.completed({
         requestId: permit.requestId,
         providerId: provider.id,
@@ -152,13 +162,6 @@ export class ModelGateway {
       await this.recorder.failed({ requestId: permit.requestId, providerId: provider.id, reason })
       throw error instanceof Error ? error : new Error(reason)
     }
-  }
-
-  private addUsage(input: number | null, output: number | null): void {
-    if (input === null || this.inputTokens === null) this.inputTokens = input
-    else this.inputTokens += input
-    if (output === null || this.outputTokens === null) this.outputTokens = output
-    else this.outputTokens += output
   }
 }
 

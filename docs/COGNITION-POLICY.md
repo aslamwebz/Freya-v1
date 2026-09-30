@@ -138,6 +138,37 @@ Reported usage is recorded afterwards and separately. It never moves the budget.
 If it did, a provider reporting less than it was allowed would hand the
 difference back, and a provider reporting nothing at all would be free.
 
+### Reported usage accumulates, and is never a total on its own
+
+`outputTokenBudgetReserved` is authorisation arithmetic. The provider's report is
+a different quantity and is tracked separately, with one rule that the earlier
+version got wrong: **a report is added to the running total, never substituted
+for it.**
+
+```ts
+usage = {
+  calls: 2,
+  inputTokens: 30,          // sum of what the two calls reported
+  outputTokens: 30,
+  unknownUsageCalls: 0,     // calls that reported nothing, or only part of it
+}
+```
+
+`unknownUsageCalls` is the explicit representation of "we do not know", chosen
+over the two alternatives:
+
+- **treating an unreported call as zero** would make an unaccounted call look
+  like a free one, and would silently refund real spend;
+- **making the whole total `null` if any call was unknown** would throw away the
+  calls that *were* accounted for, which is information too.
+
+So the totals are a **declared lower bound** whenever `unknownUsageCalls` is
+above zero, and any caller presenting them as exact must check it first. Nothing
+is ever estimated.
+
+This is entirely independent of the authorisation budget: a provider reporting
+one token does not buy back the 300 it was authorised to use.
+
 ### Authorisation and reservation are one indivisible step
 
 They used to be two, and that was a hole in the budget. Ten concurrent requests

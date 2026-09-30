@@ -2,7 +2,11 @@ import { open, mkdir, readFile, truncate, type FileHandle } from 'node:fs/promis
 import { dirname } from 'node:path'
 import type { EventStore } from './store'
 import { CORE_EVENT_SCHEMA_VERSION, type AnyCoreEvent } from './envelope'
-import { parseDurableEvent, type ValidationFailure } from './validate'
+import {
+  HEALTHY_RECOVERY,
+  parseDurableEvent,
+  type RecoveryReport,
+} from './validate'
 
 /**
  * An append-only JSONL event store.
@@ -51,7 +55,7 @@ export class JsonlEventStore implements EventStore {
   private handle: FileHandle | null = null
   private lastSeen = 0
   private recoveredBytes = 0
-  private truncation: ValidationFailure | null = null
+  private recovery: RecoveryReport = HEALTHY_RECOVERY
 
   private constructor(private readonly file: string) {}
 
@@ -64,8 +68,15 @@ export class JsonlEventStore implements EventStore {
   }
 
   /**
-   * Read the log, discard any torn tail, and truncate the file so the next
-   * append starts on a clean boundary.
+   * Read the log, discard anything from the first unusable byte, and truncate
+   * the file so the next append starts on a clean boundary.
+   *
+   * A crash and a corrupted journal are told apart here, because they mean
+   * different things to everything downstream. A log that ends mid-line was
+   * interrupted while being written and the surviving prefix is the whole truth.
+   * A *complete* line that fails validation was not produced by an interrupted
+   * write, and the journal cannot be believed past that point — which is
+   * recorded as corruption rather than as an ordinary truncation.
    */
   private async recover(): Promise<void> {
     let raw: Buffer
@@ -84,39 +95,55 @@ export class JsonlEventStore implements EventStore {
     let lineNumber = 0
     let previous = 0
     let last = 0
+    let eventsRead = 0
+    let tornTail = false
+    let corruption: RecoveryReport['corruption'] = null
 
     while (cursor < raw.length) {
       const newline = raw.indexOf(0x0a, cursor)
       lineNumber += 1
-      // No terminator: the process died part-way through writing this line.
+
       if (newline === -1) {
-        this.truncation = { line: lineNumber, reason: 'final write is torn: no line terminator' }
+        // No terminator. The process died part-way through this line, so these
+        // bytes were never committed and the prefix before them is the truth.
+        tornTail = true
         break
       }
 
       const line = raw.subarray(cursor, newline).toString('utf8')
       const parsed = parseDurableEvent(line, previous)
       if (!parsed.ok) {
-        this.truncation = { line: lineNumber, reason: parsed.reason }
+        // A complete line that will not validate. Not a crash.
+        corruption = { line: lineNumber, reason: parsed.reason }
         break
       }
 
       previous = parsed.event.sequence
       last = parsed.event.sequence
+      eventsRead += 1
       goodBytes = newline + 1
       cursor = newline + 1
     }
 
     if (goodBytes !== raw.length) {
-      // Drop everything from the first unusable line onward, including valid
-      // events that followed it. See the recovery policy above.
+      // Drop everything from the first unusable byte onward, including valid
+      // events that followed it. A gap in a security journal cannot be replayed
+      // safely, so the safe reading of a damaged log is the prefix plus a record
+      // that it was damaged.
       await truncate(this.file, goodBytes)
-      this.recoveredBytes = goodBytes
-      this.lastSeen = last
-      return
     }
+
     this.recoveredBytes = goodBytes
     this.lastSeen = last
+    this.recovery = {
+      tornTail,
+      corruption,
+      eventsRead,
+      bytesDiscarded: raw.length - goodBytes,
+      // A torn tail is ordinary. Corruption is not, and nothing above may treat
+      // it as though it were.
+      trustworthy: corruption === null,
+    }
   }
 
   async append(event: AnyCoreEvent): Promise<void> {
@@ -187,12 +214,12 @@ export class JsonlEventStore implements EventStore {
   }
 
   /**
-   * What recovery discarded, if anything. Non-null means the log was truncated,
-   * which a caller that cares about audit completeness must surface rather than
-   * quietly accept.
+   * What recovery found. Always present, and `trustworthy: false` is a real
+   * condition that Core must refuse to paper over: a journal that failed
+   * validation is not a journal that can be replayed into security state.
    */
-  lastTruncation(): ValidationFailure | null {
-    return this.truncation
+  recoveryReport(): RecoveryReport {
+    return this.recovery
   }
 
   async close(): Promise<void> {

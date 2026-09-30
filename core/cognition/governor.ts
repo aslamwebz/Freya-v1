@@ -61,6 +61,7 @@ export interface GovernorDecision {
  */
 export type DenialReason =
   | 'stop-all-active'
+  | 'journal-not-trustworthy'
   | 'not-user-initiated-and-no-grant'
   | 'grant-rejected'
   | 'grant-missing'
@@ -75,10 +76,26 @@ export interface GovernorInputs {
   grants: readonly CognitionGrant[]
   stopAllActive: boolean
   now: Date
+  /**
+   * Whether the event log can be believed.
+   *
+   * Checked before anything else, and above the STOP ALL latch, because it is
+   * worse: a journal that failed validation has a hole in it, and the segment
+   * that was discarded may have held the very STOP ALL that would otherwise have
+   * refused this request. A replayed latch cannot be trusted to be the whole
+   * latch, so a Core that cannot vouch for its log denies everything.
+   */
+  journalTrustworthy: boolean
 }
 
 export function evaluateCognition(request: CognitionRequest, inputs: GovernorInputs): GovernorDecision {
-  // STOP ALL outranks everything, including a valid grant.
+  // An untrustworthy journal outranks everything, including a valid grant and
+  // including the replayed latch itself.
+  if (!inputs.journalTrustworthy) {
+    return { outcome: 'deny', reason: 'journal-not-trustworthy', grantId: null }
+  }
+
+  // STOP ALL outranks everything else, including a valid grant.
   if (inputs.stopAllActive) {
     return { outcome: 'deny', reason: 'stop-all-active', grantId: null }
   }

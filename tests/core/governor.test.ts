@@ -45,8 +45,13 @@ function request(overrides: Partial<CognitionRequest> = {}): CognitionRequest {
   }
 }
 
+/**
+ * The journal defaults to trustworthy here so the existing cases stay about what
+ * they are about. The untrustworthy case has its own tests below, because it
+ * changes the answer for every request rather than any particular one.
+ */
 const allow = (grants: CognitionGrant[] = [], stopAllActive = false) =>
-  evaluateCognition(request(), { grants, stopAllActive, now: NOW })
+  evaluateCognition(request(), { grants, stopAllActive, now: NOW, journalTrustworthy: true })
 
 describe('Cognition Governor — explicit user cognition', () => {
   it('allows an explicit user-initiated turn with no grant', () => {
@@ -56,7 +61,7 @@ describe('Cognition Governor — explicit user cognition', () => {
   it('does not treat a non-user origin as user-initiated', () => {
     const decision = evaluateCognition(
       request({ origin: 'system', cause: 'world_changed' }),
-      { grants: [], stopAllActive: false, now: NOW },
+      { grants: [], stopAllActive: false, now: NOW, journalTrustworthy: true },
     )
     expect(decision.outcome).toBe('deny')
     expect(decision.reason).toBe('not-user-initiated-and-no-grant')
@@ -65,25 +70,25 @@ describe('Cognition Governor — explicit user cognition', () => {
   it('does not treat a background request as user-initiated', () => {
     const decision = evaluateCognition(
       request({ background: true }),
-      { grants: [], stopAllActive: false, now: NOW },
+      { grants: [], stopAllActive: false, now: NOW, journalTrustworthy: true },
     )
     expect(decision.outcome).toBe('deny')
   })
 
   it('refuses a zero or negative token request rather than assuming a default', () => {
     expect(allow().outcome).toBe('allow')
-    expect(evaluateCognition(request({ maxOutputTokens: 0 }), { grants: [], stopAllActive: false, now: NOW })).toMatchObject({
+    expect(evaluateCognition(request({ maxOutputTokens: 0 }), { grants: [], stopAllActive: false, now: NOW, journalTrustworthy: true })).toMatchObject({
       outcome: 'deny',
       reason: 'zero-token-request',
     })
     expect(
-      evaluateCognition(request({ maxOutputTokens: -5 }), { grants: [], stopAllActive: false, now: NOW }),
+      evaluateCognition(request({ maxOutputTokens: -5 }), { grants: [], stopAllActive: false, now: NOW, journalTrustworthy: true }),
     ).toMatchObject({ outcome: 'deny', reason: 'zero-token-request' })
   })
 
   it('refuses an absurd token request instead of quietly truncating it', () => {
     expect(
-      evaluateCognition(request({ maxOutputTokens: 1_000_000 }), { grants: [], stopAllActive: false, now: NOW }),
+      evaluateCognition(request({ maxOutputTokens: 1_000_000 }), { grants: [], stopAllActive: false, now: NOW, journalTrustworthy: true }),
     ).toMatchObject({ outcome: 'deny', reason: 'excessive-token-request' })
   })
 })
@@ -92,7 +97,7 @@ describe('Cognition Governor — unattended cognition', () => {
   it('denies background cognition with no grant', () => {
     const decision = evaluateCognition(
       request({ origin: 'system', cause: 'world_changed', authorization: { grantId: null, userInitiated: false }, background: true }),
-      { grants: [], stopAllActive: false, now: NOW },
+      { grants: [], stopAllActive: false, now: NOW, journalTrustworthy: true },
     )
     expect(decision.outcome).toBe('deny')
     expect(decision.reason).toBe('not-user-initiated-and-no-grant')
@@ -102,7 +107,7 @@ describe('Cognition Governor — unattended cognition', () => {
     const g = grant()
     const decision = evaluateCognition(
       request({ origin: 'system', background: true, authorization: { grantId: g.id, userInitiated: false } }),
-      { grants: [g], stopAllActive: false, now: NOW },
+      { grants: [g], stopAllActive: false, now: NOW, journalTrustworthy: true },
     )
     expect(decision).toMatchObject({ outcome: 'deny', reason: 'grant-rejected', grantId: 'grant-1' })
   })
@@ -111,7 +116,7 @@ describe('Cognition Governor — unattended cognition', () => {
     const g = grant({ backgroundAllowed: true, allowedOrigins: ['system'], allowedCauses: ['world_changed'] })
     const decision = evaluateCognition(
       request({ origin: 'system', cause: 'world_changed', background: true, authorization: { grantId: g.id, userInitiated: false } }),
-      { grants: [g], stopAllActive: false, now: NOW },
+      { grants: [g], stopAllActive: false, now: NOW, journalTrustworthy: true },
     )
     expect(decision.outcome).toBe('allow')
   })
@@ -119,7 +124,7 @@ describe('Cognition Governor — unattended cognition', () => {
 
 describe('Cognition Governor — STOP ALL', () => {
   it('denies even a fully valid user request while STOP ALL is active', () => {
-    const decision = evaluateCognition(request(), { grants: [], stopAllActive: true, now: NOW })
+    const decision = evaluateCognition(request(), { grants: [], stopAllActive: true, now: NOW, journalTrustworthy: true })
     expect(decision).toMatchObject({ outcome: 'deny', reason: 'stop-all-active' })
   })
 
@@ -127,7 +132,7 @@ describe('Cognition Governor — STOP ALL', () => {
     const g = grant({ backgroundAllowed: true, allowedOrigins: ['user'], allowedCauses: ['user_message'] })
     const decision = evaluateCognition(
       request({ background: true, authorization: { grantId: g.id, userInitiated: false } }),
-      { grants: [g], stopAllActive: true, now: NOW },
+      { grants: [g], stopAllActive: true, now: NOW, journalTrustworthy: true },
     )
     expect(decision.outcome).toBe('deny')
   })
@@ -137,7 +142,7 @@ describe('Cognition Governor — grants', () => {
   const withGrant = (g: CognitionGrant, overrides: Partial<CognitionRequest> = {}) =>
     evaluateCognition(
       request({ authorization: { grantId: g.id, userInitiated: false }, ...overrides }),
-      { grants: [g], stopAllActive: false, now: NOW },
+      { grants: [g], stopAllActive: false, now: NOW, journalTrustworthy: true },
     )
 
   it('allows a request inside a valid grant', () => {
@@ -199,7 +204,7 @@ describe('Cognition Governor — grants', () => {
     // Reported usage does not move the budget; the reservation does. So a grant
     // with 450 of 500 reserved cannot serve another 100-token request.
     const g = grant({
-      usage: { calls: 1, outputTokenBudgetReserved: 450, inputTokens: 900, outputTokens: 450 },
+      usage: { calls: 1, outputTokenBudgetReserved: 450, inputTokens: 900, outputTokens: 450, unknownUsageCalls: 0 },
     })
     expect(withGrant(g, { maxOutputTokens: 100 })).toMatchObject({ outcome: 'deny' })
   })
@@ -215,7 +220,7 @@ describe('Cognition Governor — grants', () => {
     // zero *and* must not be able to claw budget back.
     const g = grant({
       maxOutputTokens: 1000,
-      usage: { calls: 1, outputTokenBudgetReserved: 300, inputTokens: null, outputTokens: null },
+      usage: { calls: 1, outputTokenBudgetReserved: 300, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
     })
     expect(withGrant(g, { maxOutputTokens: 700 })).toMatchObject({ outcome: 'allow' })
     expect(withGrant(g, { maxOutputTokens: 701 })).toMatchObject({ outcome: 'deny' })
@@ -226,7 +231,7 @@ describe('Cognition Governor — grants', () => {
     // shows 300 reserved: actual usage is a report, not a correction.
     const g = grant({
       maxOutputTokens: 1000,
-      usage: { calls: 1, outputTokenBudgetReserved: 300, inputTokens: 5, outputTokens: 10 },
+      usage: { calls: 1, outputTokenBudgetReserved: 300, inputTokens: 5, outputTokens: 10, unknownUsageCalls: 0 },
     })
     expect(withGrant(g, { maxOutputTokens: 701 })).toMatchObject({ outcome: 'deny' })
   })
@@ -234,7 +239,7 @@ describe('Cognition Governor — grants', () => {
   it('exhausts a grant whose reserved budget is already at the ceiling', () => {
     const tight = grant({
       maxOutputTokens: 0,
-      usage: { calls: 1, outputTokenBudgetReserved: 0, inputTokens: null, outputTokens: null },
+      usage: { calls: 1, outputTokenBudgetReserved: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
     })
     expect(withGrant(tight, { maxOutputTokens: 100 })).toMatchObject({ outcome: 'deny' })
   })
@@ -242,7 +247,7 @@ describe('Cognition Governor — grants', () => {
   it('denies a grant id that does not exist', () => {
     const decision = evaluateCognition(
       request({ authorization: { grantId: 'no-such-grant', userInitiated: false } }),
-      { grants: [grant()], stopAllActive: false, now: NOW },
+      { grants: [grant()], stopAllActive: false, now: NOW, journalTrustworthy: true },
     )
     expect(decision).toMatchObject({ outcome: 'deny', reason: 'grant-missing' })
   })
@@ -252,7 +257,7 @@ describe('Cognition Governor — grants', () => {
       const g = grant({ allowedOrigins: ['user'] })
       const decision = evaluateCognition(
         request({ origin: origin as CognitionOrigin, authorization: { grantId: g.id, userInitiated: false } }),
-        { grants: [g], stopAllActive: false, now: NOW },
+        { grants: [g], stopAllActive: false, now: NOW, journalTrustworthy: true },
       )
       expect(decision.outcome).toBe('deny')
     }

@@ -21,6 +21,7 @@ const STATUS: CoreStatus = {
   lifecycle: 'ready',
   eventSequence: 12,
   coreStartedAt: '2026-03-01T12:00:00.000Z',
+  integrity: { integrity: 'ok' as const, reason: 'test fixture', line: null, eventsRead: 0, bytesDiscarded: 0 },
   stopAll: { active: false, activatedAt: null, activatedBy: null },
   guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
   governor: { status: 'ready', grantsActive: 2 },
@@ -34,8 +35,8 @@ const STATUS: CoreStatus = {
       liveEnabled: false,
     },
   ],
-  sessionUsage: { calls: 0, inputTokens: null, outputTokens: null },
-  durableUsage: { calls: 3, inputTokens: null, outputTokens: null },
+  sessionUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
+  durableUsage: { calls: 3, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
   faults: [],
 }
 

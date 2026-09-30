@@ -8,6 +8,7 @@ import { projectCoreStatus } from './projections/core-status'
 import { DefaultGuard, type Guard, type Principal } from './security/guard'
 import { CognitionService } from './cognition/service'
 import { ModelGateway, type GatewayRecorder } from './model/gateway'
+import { emptyUsage } from './model/usage'
 import type { ModelProvider } from './model/provider'
 import { FakeModelProvider } from './model/fake-provider'
 import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
@@ -19,8 +20,18 @@ import type {
   CoreCommandResult,
   CoreLifecycle,
   CoreStatus,
+  JournalFault,
   PrincipalId,
 } from './protocol/core-protocol'
+
+/** A journal nobody has damaged. Stated, not assumed. */
+const HEALTHY_JOURNAL: JournalFault = {
+  integrity: 'ok',
+  reason: 'the event log was read in full and validated',
+  line: null,
+  eventsRead: 0,
+  bytesDiscarded: 0,
+}
 
 /**
  * The Freya Core.
@@ -90,6 +101,14 @@ class FreyaCore implements Core {
   private guard!: Guard
   private owner!: Principal
   private startedAt: string | null = null
+  /**
+   * What recovery found in the journal.
+   *
+   * Session state rather than something derived from the log, because the log is
+   * exactly what cannot be trusted. Held for the life of the Core so the fault
+   * cannot be quietly forgotten after start-up.
+   */
+  private integrity: JournalFault = HEALTHY_JOURNAL
   private readonly listeners = new Set<(status: CoreStatus) => void>()
   private readonly newId: () => string
   private disposeState: () => void = () => {}
@@ -142,6 +161,11 @@ class FreyaCore implements Core {
       return this.status()
     }
 
+    // Read the journal's condition *before* trusting anything in it. A corrupt
+    // log still replays — the prefix is real — but it is not the whole truth,
+    // and the Core below refuses to present it as though it were.
+    this.integrity = describeRecovery(store)
+
     this.fabric = await EventFabric.open({ store, now: this.options.now, newId: this.options.newId })
     this.state = await this.fabric.replay(initialCoreState(), reduceCoreState)
 
@@ -154,7 +178,15 @@ class FreyaCore implements Core {
     })
 
     this.service = new CognitionService(
-      { fabric: this.fabric, gateway: this.gateway, guard: this.guard, now: this.options.now },
+      {
+        fabric: this.fabric,
+        gateway: this.gateway,
+        guard: this.guard,
+        now: this.options.now,
+        // The single switch that keeps a Core with an untrustworthy journal from
+        // reaching a provider, whatever the replayed latch happens to say.
+        journalTrustworthy: () => this.integrity.integrity !== 'corrupt',
+      },
       this.state,
     )
     // The owner principal comes from the service, which is the only place in
@@ -169,7 +201,12 @@ class FreyaCore implements Core {
 
     const recoveredSequence = this.fabric.lastSequence
     this.startedAt = (this.options.now ?? (() => new Date()))().toISOString()
-    this.currentLifecycle = 'ready'
+
+    // A damaged journal is not a ready Core. The distinction is deliberate: a
+    // torn tail is a crash and this is `ready`; corruption is something this
+    // code did not write, and a Core that came up `ready` on it would be
+    // reporting a security state assembled from a log with a hole in it.
+    this.currentLifecycle = this.integrity.integrity === 'corrupt' ? 'degraded' : 'ready'
 
     await this.fabric.append(
       'core.started',
@@ -223,6 +260,7 @@ class FreyaCore implements Core {
       fabric: this.fabric,
       now: (this.options.now ?? (() => new Date()))(),
       startedAt: this.startedAt,
+      integrity: this.integrity,
     })
   }
 
@@ -485,12 +523,21 @@ function degradedStatus(
       activatedAt: state.stopAll.activatedAt,
       activatedBy: state.stopAll.activatedBy,
     },
+    // A Core whose log never opened has no journal to report on, and that is
+    // exactly as trustworthy as it sounds.
+    integrity: {
+      integrity: 'corrupt',
+      reason: 'the event log could not be opened, so no durable state could be read',
+      line: null,
+      eventsRead: 0,
+      bytesDiscarded: 0,
+    },
     guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
     // Booting has no answer. Degraded genuinely cannot serve, so it denies.
     governor: { status: lifecycle === 'degraded' ? 'deny_all' : 'unknown', grantsActive: 0 },
     // No log means no providers, and saying so is safer than listing any.
     providers: [],
-    sessionUsage: { calls: 0, inputTokens: null, outputTokens: null },
+    sessionUsage: emptyUsage(),
     durableUsage: state.durableUsage,
     faults: [...state.faults],
   }
@@ -548,6 +595,50 @@ function reject(envelope: CoreCommandEnvelope, reason: string): CoreCommandResul
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown error'
+}
+
+/**
+ * Turn a recovery report into something a person can read and act on.
+ *
+ * The reason is written out rather than left as a code, because the two
+ * situations call for different responses: a torn tail needs nothing, and a
+ * corrupt journal needs somebody to look at the file.
+ */
+function describeRecovery(store: EventStore): JournalFault {
+  const report = store instanceof JsonlEventStore ? store.recoveryReport() : null
+  if (report === null) return HEALTHY_JOURNAL
+
+  const base = {
+    eventsRead: report.eventsRead,
+    bytesDiscarded: report.bytesDiscarded,
+  }
+
+  if (report.corruption !== null) {
+    return {
+      integrity: 'corrupt',
+      reason:
+        `The event log is corrupt: line ${report.corruption.line} is a complete event that does ` +
+        `not validate (${report.corruption.reason}). ${report.eventsRead} event(s) before it were ` +
+        'read; everything from that line onward was discarded, so the security state derived from ' +
+        'this log is incomplete. Cognition is refused until the log is repaired or removed.',
+      line: report.corruption.line,
+      ...base,
+    }
+  }
+
+  if (report.tornTail) {
+    return {
+      integrity: 'torn',
+      reason:
+        `The last write was interrupted (${report.bytesDiscarded} byte(s) of a partial event ` +
+        'discarded). This is what a crash during a write looks like; every complete event was ' +
+        'read and validated.',
+      line: null,
+      ...base,
+    }
+  }
+
+  return { integrity: 'ok', reason: 'the event log was read in full and validated', line: null, ...base }
 }
 
 /** Build a Core. One per application process. */

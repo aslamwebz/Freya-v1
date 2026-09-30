@@ -1,7 +1,8 @@
 # Phase 1 — the first real Freya Core
 
-Status: in progress. This document is the plan, and it is updated as decisions
-become real rather than left as an aspiration.
+Status: **complete**. Everything in the table under [Status](#status) is built,
+wired and covered by tests. This document records what was decided and why,
+including the two defects the correction passes found.
 
 ---
 
@@ -130,18 +131,21 @@ Everything in the table below is built, wired and verified.
 | --- | --- | --- |
 | Event fabric | done | `core/events/` |
 | Event validation + recovery | done | `core/events/validate.ts`, `core/events/jsonl-store.ts` |
+| Journal integrity gate | done | corruption denies all cognition; `CoreStatus.integrity` |
 | State + projection | done | `core/state.ts`, `core/projections/` |
 | Guard | done | `core/security/guard.ts` |
 | Authority boundary | done | `core/authority.ts`, `core/testing.ts` |
 | STOP ALL | done | durable latch, proven across a relaunch in e2e |
 | Governor + grants | done | `core/cognition/governor.ts`, `grants.ts` |
 | Token budget | done | durably reserved before the call, never refunded |
+| Usage accounting | done | reported usage accumulates; unknown calls counted |
 | Cognition service | done | `core/cognition/service.ts` |
 | Gateway + providers | done | `core/model/` — NanoGPT only in production |
 | Process-scoped Core | done | `electron/coreHost.ts`, `electron/main.ts` |
 | RPC + command path | done | `electron/preload.ts`, `src/ui/commandPath.ts` |
 | Security surface | done | `src/ui/surfaces/SecuritySurface.tsx` |
 | Live probe | done | `npm run core:model-probe` |
+| Verification | done | `npm run verify` green |
 
 See [COGNITION-POLICY.md](COGNITION-POLICY.md) for the authority boundary and
 budget semantics, and [CORE-EVENTS.md](CORE-EVENTS.md) for the journal, its
@@ -169,6 +173,21 @@ The rest were found by reading: a caller could assert identity through the
 `CognitionCall` fields, a grant's token ceiling was never actually consumed, the
 echo provider stood in for a model, closing a window stopped Core, and command
 text sat in the audit journal.
+
+The final correction pass found two more:
+
+- **A corrupt journal started `ready`.** Recovery truncated the damaged segment
+  and replayed the prefix, so a STOP ALL written *after* the damage was silently
+  lost and the Core came back healthy and unstopped — reporting exactly the
+  state the user had tried to leave behind by stopping. Corruption is now
+  distinguished from an ordinary torn tail, the fault is reported in
+  `CoreStatus.integrity`, and the Governor denies every request with
+  `journal-not-trustworthy` — above the replayed latch itself.
+- **Reported usage was replaced rather than accumulated.** Each call's figures
+  overwrote the running total, so two calls reporting 12 tokens each showed 12,
+  and a call that reported nothing nulled everything accounted for before it.
+  Reports are now added, unreported calls are counted in `unknownUsageCalls` so
+  the totals are a declared lower bound, and nothing is estimated.
 
 ---
 

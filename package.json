@@ -2,7 +2,7 @@
   "name": "freya",
   "version": "0.1.0",
   "private": true,
-  "description": "Freya \u2014 a voice-first personal intelligence environment. Phase 0 desktop shell.",
+  "description": "Freya — a voice-first personal intelligence environment. Durable Core with an event journal, Guard, cognition Governor and a typed desktop host.",
   "main": "dist-electron/main.cjs",
   "type": "module",
   "scripts": {

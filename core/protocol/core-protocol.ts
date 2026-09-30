@@ -104,10 +104,34 @@ export interface ProviderStatus {
   liveEnabled: boolean
 }
 
+/**
+ * Reported provider usage, accumulated over many calls.
+ *
+ * The two figures are sums of what providers *said*, and the counter is what
+ * makes them honest:
+ *
+ * - `inputTokens` / `outputTokens` are the totals of the calls that reported
+ *   usage. They are a **lower bound** whenever `unknownUsageCalls` is above zero,
+ *   because the calls that reported nothing are simply not in the sum.
+ * - `unknownUsageCalls` counts the calls that reported no usage, or only part of
+ *   it. This is the explicit representation of "we do not know", chosen over
+ *   treating an unreported call as zero — which would make an unaccounted call
+ *   look like a free one — and over making the whole total null, which would
+ *   throw away the calls that *were* accounted for.
+ *
+ * Nothing here is ever estimated. A caller that needs a true total must check
+ * `unknownUsageCalls` first; presenting these two numbers as exact is the bug
+ * this shape exists to prevent.
+ *
+ * This is entirely separate from a grant's *authorisation* budget, which is
+ * reserved before a call and never depends on what a provider reports.
+ */
 export interface ModelUsage {
   calls: number
   inputTokens: number | null
   outputTokens: number | null
+  /** Calls whose usage was not fully reported. Makes the totals a lower bound. */
+  unknownUsageCalls: number
 }
 
 /* ---------------------------------------------------------- projection */
@@ -120,11 +144,39 @@ export type CoreLifecycle = 'booting' | 'ready' | 'degraded' | 'stopping' | 'sto
  * This is a projection of durable state, not a live handle. A field that is
  * genuinely unknown is `null`, never a placeholder number.
  */
+/**
+ * Whether the journal can be believed.
+ *
+ * `torn` is ordinary: a crash interrupted the last write and the surviving
+ * prefix is the whole truth. `corrupt` is not: a complete line failed
+ * validation, so the journal cannot be replayed into security state — the
+ * discarded segment could have contained a STOP ALL. A Core in this state denies
+ * cognition regardless of what the replayed prefix says.
+ */
+export type JournalIntegrity = 'ok' | 'torn' | 'corrupt'
+
+export interface JournalFault {
+  integrity: JournalIntegrity
+  /** Why, in words a person can act on. Never null. */
+  reason: string
+  /** Which line the problem was found on, 1-indexed. */
+  line: number | null
+  /** Complete events that were read and believed. */
+  eventsRead: number
+  /** Bytes discarded during recovery, including a torn tail. */
+  bytesDiscarded: number
+}
+
 export interface CoreStatus {
   lifecycle: CoreLifecycle
   /** Last durable event sequence, or 0 when the log is empty. */
   eventSequence: number
   coreStartedAt: string | null
+  /**
+   * Always present. A healthy journal says so explicitly, because the absence of
+   * a warning is not the same thing as a warning that is absent.
+   */
+  integrity: JournalFault
   /** The latch is derived from durable events, so it survives a restart. */
   stopAll: {
     active: boolean

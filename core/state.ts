@@ -1,5 +1,6 @@
 import type { AnyCoreEvent } from './events/envelope'
 import { emptyGrantUsage, type CognitionGrant, type CognitionGrantUsage } from './cognition/grants'
+import { accumulateAttempt, accumulateReported, accumulateUsage, emptyUsage } from './model/usage'
 import type { ModelUsage, PrincipalId } from './protocol/core-protocol'
 
 /**
@@ -36,7 +37,7 @@ export function initialCoreState(): CoreState {
   return {
     stopAll: { active: false, activatedAt: null, activatedBy: null },
     grants: [],
-    durableUsage: { calls: 0, inputTokens: null, outputTokens: null },
+    durableUsage: emptyUsage(),
     commandCount: 0,
     lastCommand: null,
     faults: [],
@@ -99,7 +100,9 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
         ),
       }
 
-    case 'cognition.grant.consumed':
+    // Authorisation: one call spent, and this call's share of the allowance
+    // taken off the budget. Both accumulate, and neither is ever refunded.
+    case 'cognition.grant.reserved':
       return {
         ...state,
         grants: state.grants.map((grant) =>
@@ -107,22 +110,45 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
             ? {
                 ...grant,
                 usage: {
-                  calls: event.payload.callsUsed,
-                  outputTokenBudgetReserved: event.payload.outputTokenBudgetReserved,
-                  inputTokens: event.payload.inputTokens,
-                  outputTokens: event.payload.outputTokens,
+                  ...grant.usage,
+                  calls: grant.usage.calls + 1,
+                  outputTokenBudgetReserved:
+                    grant.usage.outputTokenBudgetReserved + event.payload.outputTokenBudgetReserved,
                 },
               }
             : grant,
         ),
       }
 
-    case 'model.request.started':
+    // Reporting: what one provider said it used, added to the running total. An
+    // unreported call adds nothing and is counted as unknown, so the figures
+    // below are a lower bound rather than a total that quietly assumed zero.
+    case 'cognition.grant.usage_reported':
       return {
         ...state,
-        durableUsage: { ...state.durableUsage, calls: state.durableUsage.calls + 1 },
+        grants: state.grants.map((grant) =>
+          grant.id === event.payload.grantId
+            ? {
+                ...grant,
+                usage: accumulateReported(grant.usage, {
+                  inputTokens: event.payload.inputTokens,
+                  outputTokens: event.payload.outputTokens,
+                }),
+              }
+            : grant,
+        ),
       }
 
+    // An attempt is counted when it is made: `model.request.started` is the only
+    // record that a provider was ever reached, so it is the honest place for the
+    // call count. It contributes no token figures and records no gap in
+    // reporting, because the matching `completed` event carries both.
+    case 'model.request.started':
+      return { ...state, durableUsage: accumulateAttempt(state.durableUsage) }
+
+    // Reported usage is added to the running total. A call that reported nothing
+    // increments `unknownUsageCalls` instead of contributing a zero, so the
+    // totals are a declared lower bound rather than a false exact figure.
     case 'model.request.completed':
       return {
         ...state,
@@ -163,24 +189,5 @@ function grantFromEvent(
   }
 }
 
-function accumulateUsage(
-  current: ModelUsage,
-  next: { inputTokens: number | null; outputTokens: number | null },
-): ModelUsage {
-  return {
-    calls: current.calls,
-    inputTokens: add(current.inputTokens, next.inputTokens),
-    outputTokens: add(current.outputTokens, next.outputTokens),
-  }
-}
-
-/**
- * `null` means "the provider did not report this", which is not zero. Adding a
- * known number to unknown keeps it unknown rather than inventing a figure.
- */
-function add(current: number | null, next: number | null): number | null {
-  if (next === null) return current
-  return (current ?? 0) + next
-}
 
 export type { CognitionGrantUsage }

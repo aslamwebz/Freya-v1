@@ -37,7 +37,8 @@ export const CORE_EVENT_TYPES = [
   'cognition.authorization_required',
   'cognition.grant.created',
   'cognition.grant.revoked',
-  'cognition.grant.consumed',
+  'cognition.grant.reserved',
+  'cognition.grant.usage_reported',
 
   // Model execution
   'model.request.started',
@@ -130,18 +131,28 @@ export interface CoreEventPayloads {
     maxOutputTokens: number
   }
   'cognition.grant.revoked': { grantId: string; revokedBy: PrincipalId; reason: string }
-  'cognition.grant.consumed': {
+  /**
+   * The allowance taken out of the grant's budget, durably, *before* the provider
+   * was called. Authorisation arithmetic, not usage: it moves whether or not the
+   * call succeeds and whether or not the provider ever answers.
+   *
+   * Separate from the report below so that neither can overwrite the other. A
+   * single event carrying both meant the report replaced the running total with
+   * one call's figures.
+   */
+  'cognition.grant.reserved': {
     grantId: string
     requestId: string
-    callsUsed: number
-    /**
-     * The output allowance taken out of the grant's budget, durably, *before*
-     * the provider was called. This is authorisation arithmetic, not usage: it
-     * moves even when the provider reports nothing, which is precisely why it
-     * cannot be conflated with the token figures below.
-     */
+    /** This call's share of the allowance. The reducer adds it to the total. */
     outputTokenBudgetReserved: number
-    /** What the provider reported, or null when it reported nothing. */
+  }
+  /**
+   * What the provider reported for one call. Nulls mean it reported nothing, or
+   * only part of it — which the reducer records as an unknown rather than a zero.
+   */
+  'cognition.grant.usage_reported': {
+    grantId: string
+    requestId: string
     inputTokens: number | null
     outputTokens: number | null
   }
@@ -185,7 +196,8 @@ export const SECURITY_EVENT_TYPES: readonly CoreEventType[] = [
   'security.stop_all.cleared',
   'cognition.grant.created',
   'cognition.grant.revoked',
-  'cognition.grant.consumed',
+  'cognition.grant.reserved',
+  'cognition.grant.usage_reported',
 ]
 
 export function isSecurityEvent(type: CoreEventType): boolean {

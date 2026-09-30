@@ -442,24 +442,34 @@ describe('durable event validation', () => {
     await seed(good(1), good(2), good(3))
     const store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1, 2, 3])
-    expect(store.lastTruncation()).toBeNull()
+    expect(store.recoveryReport().trustworthy).toBe(true)
     await store.close()
   })
 
-  it('truncates a torn final write', async () => {
+  it('treats a torn final write as an ordinary crash, not corruption', async () => {
     await mkdir(dirname(file), { recursive: true })
     await writeFile(file, good(1) + '\n' + good(2).slice(0, 40))
     const store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
-    expect(store.lastTruncation()?.reason).toMatch(/torn/i)
+    // A line with no terminator was never committed, so the surviving prefix is
+    // the whole truth. This is the one damaged shape that is not corruption.
+    const report = store.recoveryReport()
+    expect(report.tornTail).toBe(true)
+    expect(report.corruption).toBeNull()
+    expect(report.trustworthy).toBe(true)
+    expect(report.bytesDiscarded).toBeGreaterThan(0)
     await store.close()
   })
 
-  it('truncates an unparseable final line', async () => {
+  it('calls a complete but unparseable line corruption, not a crash', async () => {
+    // The line has a terminator, so it was fully written. That is not an
+    // interrupted write, and the journal is no longer trustworthy.
     await seed(good(1), 'this is not json at all')
     const store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
-    expect(store.lastTruncation()).not.toBeNull()
+    const report = store.recoveryReport()
+    expect(report.corruption).not.toBeNull()
+    expect(report.trustworthy).toBe(false)
     await store.close()
   })
 
@@ -467,7 +477,7 @@ describe('durable event validation', () => {
     await seed(good(1), good(2, { type: 'security.stop_all.activated_evil' }))
     const store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
-    expect(store.lastTruncation()?.reason).toMatch(/unknown event type/i)
+    expect(store.recoveryReport().corruption?.reason).toMatch(/unknown event type/i)
     await store.close()
   })
 
@@ -475,7 +485,7 @@ describe('durable event validation', () => {
     await seed(good(1), good(2, { schemaVersion: 99 }))
     const store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
-    expect(store.lastTruncation()?.reason).toMatch(/schema version/i)
+    expect(store.recoveryReport().corruption?.reason).toMatch(/schema version/i)
     await store.close()
   })
 
@@ -485,7 +495,7 @@ describe('durable event validation', () => {
     await seed(good(1), good(2, { actor: 'owner; DROP TABLE' }))
     const store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
-    expect(store.lastTruncation()?.reason).toMatch(/principal/i)
+    expect(store.recoveryReport().corruption?.reason).toMatch(/principal/i)
     await store.close()
   })
 
@@ -493,7 +503,7 @@ describe('durable event validation', () => {
     await seed(good(1), good(2, { source: 'somewhere-else' }))
     const store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
-    expect(store.lastTruncation()?.reason).toMatch(/source/i)
+    expect(store.recoveryReport().corruption?.reason).toMatch(/source/i)
     await store.close()
   })
 
@@ -513,7 +523,7 @@ describe('durable event validation', () => {
     await seed(good(1), good(1))
     const store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
-    expect(store.lastTruncation()?.reason).toMatch(/not greater than/i)
+    expect(store.recoveryReport().corruption?.reason).toMatch(/not greater than/i)
     await store.close()
   })
 
@@ -521,7 +531,7 @@ describe('durable event validation', () => {
     await seed(good(1), good(5), good(3))
     const store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1, 5])
-    expect(store.lastTruncation()?.reason).toMatch(/not greater than/i)
+    expect(store.recoveryReport().corruption?.reason).toMatch(/not greater than/i)
     await store.close()
   })
 
@@ -529,7 +539,7 @@ describe('durable event validation', () => {
     await seed(good(1), good(2, { correlationId: 'has spaces and\ttabs' }))
     const store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
-    expect(store.lastTruncation()?.reason).toMatch(/correlationId/i)
+    expect(store.recoveryReport().corruption?.reason).toMatch(/correlationId/i)
     await store.close()
   })
 
@@ -539,7 +549,7 @@ describe('durable event validation', () => {
     await seed(good(1), good(2, { payload: {} }))
     let store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
-    expect(store.lastTruncation()?.reason).toMatch(/payload does not match/i)
+    expect(store.recoveryReport().corruption?.reason).toMatch(/payload does not match/i)
     await store.close()
 
     await seed(
@@ -580,7 +590,7 @@ describe('durable event validation', () => {
     await seed(good(1), good(2, { type: 'not.a.real.event' }), good(3), good(4))
     const store = await open()
     expect((await store.readAll()).map((e) => e.sequence)).toEqual([1])
-    expect(store.lastTruncation()?.line).toBe(2)
+    expect(store.recoveryReport().corruption?.line).toBe(2)
     // And the file really was shortened, so the next append lands cleanly.
     const raw = await readFile(file, 'utf8')
     expect(raw.trim().split('\n')).toHaveLength(1)

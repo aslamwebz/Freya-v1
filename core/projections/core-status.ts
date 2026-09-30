@@ -1,4 +1,4 @@
-import type { CoreLifecycle, CoreStatus } from '../protocol/core-protocol'
+import type { CoreLifecycle, CoreStatus, JournalFault } from '../protocol/core-protocol'
 import type { CoreState } from '../state'
 import { activeGrants } from '../state'
 import type { ModelGateway } from '../model/gateway'
@@ -17,18 +17,21 @@ export interface ProjectionInput {
   gateway: ModelGateway
   fabric: EventFabric
   now: Date
+  /** What recovery found. Session state, not derived from the log. */
+  integrity: JournalFault
   /** When this Core process booted. Session state, deliberately not derived
    *  from the log: replaying a partial log must never invent a start time. */
   startedAt: string | null
 }
 
 export function projectCoreStatus(input: ProjectionInput): CoreStatus {
-  const { state, lifecycle, gateway, fabric, now, startedAt } = input
+  const { state, lifecycle, gateway, fabric, now, startedAt, integrity } = input
 
   return {
     lifecycle,
     eventSequence: fabric.lastSequence,
     coreStartedAt: startedAt,
+    integrity,
 
     stopAll: {
       active: state.stopAll.active,
@@ -43,9 +46,11 @@ export function projectCoreStatus(input: ProjectionInput): CoreStatus {
     },
 
     governor: {
-      // While STOP ALL is latched the Governor refuses everything, so that is
-      // the honest status rather than a cheerful one.
-      status: state.stopAll.active ? 'deny_all' : 'ready',
+      // A corrupt journal denies everything whatever the replayed latch says,
+      // because the discarded segment may have held the STOP ALL that followed.
+      // Reporting `ready` here would be the one lie this system cannot afford.
+      status:
+        state.stopAll.active || integrity.integrity === 'corrupt' ? 'deny_all' : 'ready',
       grantsActive: activeGrants(state, now).length,
     },
 

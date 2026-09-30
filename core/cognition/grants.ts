@@ -94,13 +94,25 @@ export interface CognitionGrantUsage {
   calls: number
   /** Allowance consumed by authorisation. Monotonic. Never refunded. */
   outputTokenBudgetReserved: number
-  /** Usage the provider reported. `null` means it reported nothing. */
+  /**
+   * Usage the provider reported, accumulated. `null` means nothing was ever
+   * reported, and `unknownUsageCalls` says how many calls failed to report — so
+   * the two figures are a lower bound whenever that counter is above zero, and
+   * never an assumption that an unreported call was free.
+   */
   inputTokens: number | null
   outputTokens: number | null
+  unknownUsageCalls: number
 }
 
 export function emptyGrantUsage(): CognitionGrantUsage {
-  return { calls: 0, outputTokenBudgetReserved: 0, inputTokens: null, outputTokens: null }
+  return {
+    calls: 0,
+    outputTokenBudgetReserved: 0,
+    inputTokens: null,
+    outputTokens: null,
+    unknownUsageCalls: 0,
+  }
 }
 
 /** How much of the grant's output allowance is still unreserved. */

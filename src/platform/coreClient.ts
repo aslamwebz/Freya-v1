@@ -34,12 +34,19 @@ const ABSENT: CoreStatus = {
   lifecycle: 'booting',
   eventSequence: 0,
   coreStartedAt: null,
+  integrity: {
+    integrity: 'ok',
+    reason: 'no Core has reported yet',
+    line: null,
+    eventsRead: 0,
+    bytesDiscarded: 0,
+  },
   stopAll: { active: false, activatedAt: null, activatedBy: null },
   guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
   governor: { status: 'unknown', grantsActive: 0 },
   providers: [],
-  sessionUsage: { calls: 0, inputTokens: null, outputTokens: null },
-  durableUsage: { calls: 0, inputTokens: null, outputTokens: null },
+  sessionUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
+  durableUsage: { calls: 0, inputTokens: null, outputTokens: null, unknownUsageCalls: 0 },
   faults: ['core is not reachable from this window'],
 }
 

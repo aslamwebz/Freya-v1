@@ -27,6 +27,45 @@ export interface ValidationFailure {
   reason: string
 }
 
+/**
+ * What recovery found, and how much to trust it.
+ *
+ * The two cases are genuinely different and must not be reported as one thing:
+ *
+ * - **torn tail** — the log ends part-way through a line. That is what a crash
+ *   during a write looks like: the bytes after the last complete line were never
+ *   committed. The prefix is the whole truth, and recovery is ordinary.
+ *
+ * - **corruption** — a *complete* line failed validation, or there was more data
+ *   after the first bad line. A complete line that is wrong is not a crash. It
+ *   means the journal contains something that was never written by this code, or
+ *   was edited, or arrived out of order.
+ *
+ * Corruption means the log can no longer be replayed into trustworthy security
+ * state, because a discarded segment could have contained the STOP ALL that
+ * followed it. Core refuses to present a damaged journal as healthy.
+ */
+export interface RecoveryReport {
+  /** A crash truncated the final line. The surviving prefix is complete. */
+  tornTail: boolean
+  /** A complete line was invalid, or data followed one. Not a crash. */
+  corruption: ValidationFailure | null
+  /** Complete events that were read and are believed. */
+  eventsRead: number
+  /** Bytes discarded, including the discarded lines and any torn bytes. */
+  bytesDiscarded: number
+  /** True when the journal can be replayed as the whole truth. */
+  trustworthy: boolean
+}
+
+export const HEALTHY_RECOVERY: RecoveryReport = {
+  tornTail: false,
+  corruption: null,
+  eventsRead: 0,
+  bytesDiscarded: 0,
+  trustworthy: true,
+}
+
 const EVENT_TYPE_SET: ReadonlySet<string> = new Set<string>(CORE_EVENT_TYPES)
 
 const SOURCES: ReadonlySet<string> = new Set(['core', 'renderer', 'system'])
@@ -135,13 +174,11 @@ const PAYLOAD_RULES: {
   'cognition.grant.revoked': (p) =>
     isEventId(p.grantId) && isPrincipalId(p.revokedBy) && isNonEmptyString(p.reason),
 
-  // `reserved` is the authorisation reservation; the token figures are what the
-  // provider reported, and stay null when it reported nothing.
-  'cognition.grant.consumed': (p) =>
+  'cognition.grant.reserved': (p) =>
+    isEventId(p.grantId) && isEventId(p.requestId) && isPositiveInt(p.outputTokenBudgetReserved),
+  'cognition.grant.usage_reported': (p) =>
     isEventId(p.grantId) &&
     isEventId(p.requestId) &&
-    isPositiveInt(p.callsUsed) &&
-    isPositiveInt(p.outputTokenBudgetReserved) &&
     isNullablePositiveInt(p.inputTokens) &&
     isNullablePositiveInt(p.outputTokens),
 

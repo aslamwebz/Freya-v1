@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { isGrantActive, type CognitionGrant, type CognitionGrantSpec } from './grants'
 import { evaluateCognition, type CognitionRequest } from './governor'
 import type { ModelGateway, GatewayPermit, GatewayRecorder } from '../model/gateway'
-import type { CoreState, CognitionGrantUsage } from '../state'
+import type { CoreState } from '../state'
 import { findGrant, reduceCoreState } from '../state'
 import type { ModelUsage, PrincipalId } from '../protocol/core-protocol'
 import {
@@ -51,6 +51,12 @@ export interface CognitionServiceOptions {
   guard: Guard
   now?: () => Date
   newId?: () => string
+  /**
+   * Whether the event log can be believed. A function, not a boolean, because
+   * the answer is settled at start-up and read on every request — and because a
+   * boolean captured here would be a claim rather than a question.
+   */
+  journalTrustworthy?: () => boolean
 }
 
 export class CognitionService {
@@ -59,6 +65,7 @@ export class CognitionService {
   private readonly guard: Guard
   private readonly now: () => Date
   private readonly newId: () => string
+  private readonly journalTrustworthy: () => boolean
   private readonly disposeFabric: () => void
 
   /**
@@ -85,6 +92,7 @@ export class CognitionService {
     this.guard = options.guard
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => `cog-${randomUUID()}`)
+    this.journalTrustworthy = options.journalTrustworthy ?? (() => true)
     this.state = state
     // The only way state changes: a durable event, applied after it persisted.
     this.disposeFabric = options.fabric.subscribe((event) => {
@@ -316,6 +324,7 @@ export class CognitionService {
       grants: this.state.grants,
       stopAllActive: this.state.stopAll.active,
       now: this.now(),
+      journalTrustworthy: this.journalTrustworthy(),
     })
 
     if (decision.outcome !== 'allow') {
@@ -434,22 +443,12 @@ export class CognitionService {
   ): Promise<void> {
     const grant = findGrant(this.state, grantId)
     if (!grant) return
-    const usage: CognitionGrantUsage = {
-      calls: grant.usage.calls + 1,
-      outputTokenBudgetReserved: grant.usage.outputTokenBudgetReserved + maxOutputTokens,
-      inputTokens: grant.usage.inputTokens,
-      outputTokens: grant.usage.outputTokens,
-    }
+    // The delta, not a running total. The reducer adds it, so replaying these
+    // events rebuilds the same budget the live path spent — and two callers
+    // cannot overwrite each other's reservation.
     await this.fabric.append(
-      'cognition.grant.consumed',
-      {
-        grantId,
-        requestId,
-        callsUsed: usage.calls,
-        outputTokenBudgetReserved: usage.outputTokenBudgetReserved,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-      },
+      'cognition.grant.reserved',
+      { grantId, requestId, outputTokenBudgetReserved: maxOutputTokens },
       { correlationId: requestId },
     )
   }
@@ -467,19 +466,12 @@ export class CognitionService {
     inputTokens: number | null,
     outputTokens: number | null,
   ): Promise<void> {
-    if (inputTokens === null && outputTokens === null) return
-    const grant = findGrant(this.state, grantId)
-    if (!grant) return
+    // Recorded even when it is null: "this call reported nothing" is a fact the
+    // budget accounting needs, and dropping the event would make an unreported
+    // call indistinguishable from one that never happened.
     await this.fabric.append(
-      'cognition.grant.consumed',
-      {
-        grantId,
-        requestId,
-        callsUsed: grant.usage.calls,
-        outputTokenBudgetReserved: grant.usage.outputTokenBudgetReserved,
-        inputTokens: inputTokens ?? grant.usage.inputTokens,
-        outputTokens: outputTokens ?? grant.usage.outputTokens,
-      },
+      'cognition.grant.usage_reported',
+      { grantId, requestId, inputTokens, outputTokens },
       { correlationId: requestId },
     )
   }

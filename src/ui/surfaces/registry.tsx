@@ -8,6 +8,7 @@ import { VaultSurface } from './VaultSurface'
 import { ResearchSurface } from './ResearchSurface'
 
 import { WorkSurface } from './WorkSurface'
+import { MissionSurface } from './MissionSurface'
 import type { SurfaceDefinition } from './types'
 
 /**
@@ -34,6 +35,7 @@ const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   security: () => <SecuritySurface />,
   vault: () => <VaultSurface />,
   work: () => <WorkSurface />,
+  mission: () => <MissionSurface />,
 }
 
 /** The registry, resolved once from the two catalogs it is built from. */

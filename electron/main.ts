@@ -50,11 +50,14 @@ function e2eKey(variable: string): Uint8Array | null {
  * conversation survives and the Brain does not — or the reverse — and the failure
  * would look like a Brain bug rather than a harness that only half injected.
  */
-function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array } | null {
+function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array; mission: Uint8Array } | null {
   const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
   const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
-  if (conversation === null || brain === null) return null
-  return { conversation, brain }
+  const mission = e2eKey('FREYA_E2E_MISSION_KEY')
+  // All three or none, so a partial fixture cannot quietly run with a real keyring for
+  // the domain it forgot.
+  if (conversation === null || brain === null || mission === null) return null
+  return { conversation, brain, mission }
 }
 
 /**
@@ -341,12 +344,21 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:work', projection)
   })
 
+  // Missions are a sixth channel for the same reason. A Mission projection moves when
+  // a Mission is created, moved or concluded, which is rare enough that it does not
+  // need the per-step cadence `freya:core:work` has — and keeping it separate is what
+  // stops a Mission's status riding along inside a security projection.
+  const detachMission = coreHost?.onMission((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:mission', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
     detachConversation?.()
     detachBrain?.()
     detachWork?.()
+    detachMission?.()
   })
 
   if (DEV_SERVER) {
@@ -417,6 +429,10 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:voice', () => requireCore().voice())
   ipcMain.handle('freya:core:brain', () => requireCore().brain())
   ipcMain.handle('freya:core:work', () => requireCore().work())
+  // Missions, same bargain: the projection crosses, the substance does not. There is
+  // deliberately no channel for a Mission's private text — that lives in the encrypted
+  // store and reaches a window only through Core's own read, not as a standing feed.
+  ipcMain.handle('freya:core:mission', () => requireCore().mission())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)
@@ -454,6 +470,7 @@ app.whenReady().then(() => {
     ? Promise.resolve({
         conversation: { key: testKeys.conversation, reason: null as string | null },
         brain: { key: testKeys.brain, reason: null as string | null },
+        mission: { key: testKeys.mission, reason: null as string | null },
       })
     : loadKeyring(dataPath)
   void keyResult.then((result) => {
@@ -469,6 +486,11 @@ app.whenReady().then(() => {
       // Freya still answers. She just will not remember across a restart, and the
       // surface says exactly that rather than implying a memory that is not there.
       console.warn(`[freya] Freya will not remember across restarts — ${result.brain.reason}`)
+    }
+    if (result.mission.key === null) {
+      // Same shape as the Brain's: Missions still work for this session, and the
+      // surface reports `durable: false` rather than implying persistence it lacks.
+      console.warn(`[freya] Missions are not being saved — ${result.mission.reason}`)
     }
     const fixtureProvider = e2eResearchFixtureProvider(process.env)
     coreHost = new ElectronCoreHost(
@@ -492,6 +514,7 @@ app.whenReady().then(() => {
       {
         conversationKey: result.conversation.key,
         brainKey: result.brain.key,
+        missionKey: result.mission.key,
         // Opt-in, and named for what it is. Never inferred from a debug flag or
         // from a missing credential: a build that answers from a canned string
         // without saying so is the failure this guards against. The slow variant

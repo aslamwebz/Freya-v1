@@ -202,6 +202,38 @@ describe('the Work mirror belongs to the process too', () => {
   })
 })
 
+/**
+ * One `case` arm of the preload payload contract, comments stripped.
+ *
+ * These tests read the bridge's source rather than calling it, because
+ * `rendererPayload` is deliberately not exported: a module-private boundary is
+ * worth more than a directly callable one, and the fields it refuses are only
+ * provable by looking at what it does *not* read.
+ *
+ * Comments are stripped because several arms explain in prose exactly which field
+ * they do not accept, and these tests are about the code rather than the
+ * commentary — leaving the prose in would let a comment satisfy the assertion it
+ * describes.
+ */
+async function contractBetween(
+  from: string,
+  to: string,
+): Promise<{ source: string; contract: string }> {
+  const source = await readFile(new URL('../../electron/preload.ts', import.meta.url), 'utf8')
+  const start = source.indexOf(from)
+  const end = source.indexOf(to)
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error(`the preload bridge has no region between ${from} and ${to}`)
+  }
+  const contract = source
+    .slice(start, end)
+    .split(String.fromCharCode(10))
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => !line.trimStart().startsWith('//') && !line.trimStart().startsWith('*'))
+    .join(' ')
+  return { source, contract }
+}
+
 describe('the renderer bridge refuses what a window should not name', () => {
   it('does not include grant governance, which Core does support', async () => {
     // Core can create and revoke grants. A window cannot. The list the preload
@@ -252,5 +284,106 @@ describe('the renderer bridge refuses what a window should not name', () => {
     // describe its own approval is an object that could ask for one.
     expect(api).not.toMatch(/capabilit(y|ies)\(\):/i)
     expect(api).not.toMatch(/verifier\(\):/i)
+  })
+
+  it('refuses a Run that names its own parent, and rebuilds the one it does accept', async () => {
+    const { contract } = await contractBetween("case 'work.run.create'", "case 'work.run.start'")
+
+    // A window names *which Mission* a Run belongs to, and nothing else. The old
+    // contract forwarded a `{ kind, id }` pair read straight off the payload, which
+    // let any window attach a Run to anything by asserting one — and `kind` is a claim
+    // about structure, which is Core's to make rather than a window's.
+    //
+    // Refused rather than dropped, so code still sending the old shape is told rather
+    // than left believing it worked.
+    expect(contract).toContain("'parent' in record")
+    expect(contract).toContain("string('missionId'")
+
+    // And the forwarded payload carries an id, never a parent object.
+    const forwarded = contract.slice(contract.indexOf('payload: {'))
+    expect(forwarded).toContain('missionId')
+    expect(forwarded).not.toMatch(/\bparent\b\s*[,:}]/)
+  })
+
+  it('rebuilds run limits from named ceilings instead of forwarding the object', async () => {
+    const { contract } = await contractBetween("case 'work.run.create'", "case 'work.run.start'")
+
+    // Every other field on this command is rebuilt so an ignored blob is never
+    // structured-cloned into the main process; `limits` was the one field that skipped
+    // that. It cannot raise a ceiling either way - Core clamps downward - but it could
+    // carry an arbitrarily large object across the boundary.
+    expect(contract).toContain('for (const name of')
+    expect(contract).toContain('Math.floor(value)')
+    expect(contract).not.toContain('limits: rawLimits')
+  })
+
+  it('lets a Mission command carry its words and nothing else', async () => {
+    const { contract } = await contractBetween("case 'mission.create'", "case 'core.command.submit':")
+
+    // The three pieces of text a Mission is made of.
+    expect(contract).toContain("string('title'")
+    expect(contract).toContain("string('intent'")
+    expect(contract).toContain('successCriteria')
+
+    // And none of the four things that would let a Mission lie: a code-owned ceiling,
+    // an identity, an asserted outcome, or a chosen verifier. Each of those is read by
+    // name, so leaving them out means a window appending one never gets it across the
+    // boundary rather than merely having it ignored downstream.
+    for (const forbidden of [
+      'limits',
+      'principal',
+      'verification',
+      'verifierId',
+      'deadlineAt',
+      'status',
+    ]) {
+      expect(contract).not.toContain(`string('${forbidden}'`)
+      expect(contract).not.toContain(`${forbidden}:`)
+    }
+  })
+
+  it('reaches the whole Mission lifecycle without letting a window conclude one by assertion', async () => {
+    const source = await readFile(
+      new URL('../../electron/preload.ts', import.meta.url),
+      'utf8',
+    )
+    const reachable = source.slice(source.indexOf('const CORE_COMMANDS'))
+    for (const command of [
+      'mission.status.read',
+      'mission.create',
+      'mission.activate',
+      'mission.pause',
+      'mission.resume',
+      'mission.cancel',
+      'mission.fail',
+      'mission.requestCompletion',
+    ]) {
+      expect(reachable).toContain(`'${command}'`)
+    }
+
+    // All six state-changing commands share one arm that reads exactly one field.
+    const { contract } = await contractBetween(
+      "case 'mission.activate'",
+      "case 'core.command.submit':",
+    )
+    expect(contract).toContain("string('missionId'")
+    // `requestCompletion` asks a verifier rather than carrying the answer, so there is
+    // no `verifierId` for a window to pick the one that will say yes.
+    expect(contract).not.toContain('verifierId')
+  })
+
+  it('exposes no Mission key, store or content channel to a window', async () => {
+    const source = await readFile(
+      new URL('../../electron/preload.ts', import.meta.url),
+      'utf8',
+    )
+    const api = source.slice(source.indexOf('const api = {'), source.indexOf('contextBridge.exposeInMainWorld'))
+    // A Mission's words come back from the encrypted store, not from the bridge. So
+    // there is no function handing a window the store or its key, and the projection
+    // channel carries statuses rather than text: a window sitting open does not hold a
+    // copy of what the owner asked Freya to do.
+    expect(api).not.toMatch(/mission(Key|Store|Content)\s*\(\)/i)
+    expect(source).not.toContain('missionKey')
+    expect(source).not.toContain('MISSION_LIMITS.maxTitleChars as')
   })
 })

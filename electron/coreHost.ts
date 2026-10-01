@@ -4,6 +4,7 @@ import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
 import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
+import type { MissionProjection } from '../core/missions/types'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 import { BraveSearchProvider } from '../core/research/providers/brave'
 import { ElectronBrowserTargetFactory } from './research/managedTarget'
@@ -107,6 +108,8 @@ export interface CoreHost {
    */
   onWork(send: (projection: WorkProjection) => void): () => void
   work(): WorkProjection | null
+  onMission(send: (projection: MissionProjection) => void): () => void
+  mission(): MissionProjection | null
   stop(reason?: string): Promise<void>
 }
 
@@ -129,6 +132,16 @@ export interface CoreHostOptions {
    * Null means the Brain falls back to ephemeral and reports `durable: false`.
    */
   brainKey?: Uint8Array | null
+  /**
+   * Missions' own key, from the keyring.
+   *
+   * A **third** independent secret, for the same reason as the other two: what a
+   * person asked Freya to accomplish is theirs, and recovering the conversation key
+   * must not yield it. See `electron/keyring.ts` for why the isolation is worth a
+   * secret per domain. Null means Missions fall back to an ephemeral store and
+   * report `durable: false` rather than implying a persistence they do not have.
+   */
+  missionKey?: Uint8Array | null
   /**
    * The developer echo provider, when one was explicitly asked for.
    *
@@ -160,6 +173,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly conversationWindows = new Set<(projection: ConversationProjection) => void>()
   private readonly brainWindows = new Set<(projection: BrainProjection) => void>()
   private readonly workWindows = new Set<(projection: WorkProjection) => void>()
+  private readonly missionWindows = new Set<(projection: MissionProjection) => void>()
 
   constructor(
     private readonly dataPath: string,
@@ -182,6 +196,7 @@ export class ElectronCoreHost implements CoreHost {
           ? { conversationKey: this.options.conversationKey }
           : {}),
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
+        ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),
@@ -197,6 +212,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onConversation((projection) => this.broadcastConversation(projection))
       core.onBrain((projection) => this.broadcastBrain(projection))
       core.onWork((projection) => this.broadcastWork(projection))
+      core.onMission((projection) => this.broadcastMission(projection))
     })()
     try {
       await this.starting
@@ -369,6 +385,30 @@ export class ElectronCoreHost implements CoreHost {
     this.brainWindows.clear()
     this.workWindows.clear()
     await core?.stop(reason)
+  }
+
+  onMission(send: (projection: MissionProjection) => void): () => void {
+    this.missionWindows.add(send)
+    const projection = this.mission()
+    if (projection !== null) send(projection)
+    return () => {
+      this.missionWindows.delete(send)
+    }
+  }
+
+  mission(): MissionProjection | null {
+    return this.core?.mission() ?? null
+  }
+
+  private broadcastMission(projection: MissionProjection): void {
+    for (const send of [...this.missionWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Mission push threw', error)
+        this.missionWindows.delete(send)
+      }
+    }
   }
 
   private broadcastWork(projection: WorkProjection): void {

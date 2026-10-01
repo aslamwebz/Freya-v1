@@ -33,6 +33,14 @@ const E2E_CONVERSATION_KEY = Buffer.alloc(32, 0x5a).toString('base64')
  */
 const E2E_BRAIN_KEY = Buffer.alloc(32, 0x2b).toString('base64')
 /**
+ * A third secret, again different from the other two.
+ *
+ * Phase 7 gave Missions their own key for the same reason the Brain got one, and the
+ * harness has to inject all three together. Two of three would be the half-injected
+ * set the comment above describes, one domain further along.
+ */
+const E2E_MISSION_KEY = Buffer.alloc(32, 0x13).toString('base64')
+/**
  * Which monitor the suite drives Freya on.
  *
  * Overridable, because the right number depends on the desk: someone with three
@@ -81,6 +89,7 @@ async function launch(
       FREYA_E2E: '1',
       FREYA_E2E_CONVERSATION_KEY: E2E_CONVERSATION_KEY,
       FREYA_E2E_BRAIN_KEY: E2E_BRAIN_KEY,
+      FREYA_E2E_MISSION_KEY: E2E_MISSION_KEY,
       ...env,
     },
   })
@@ -135,6 +144,34 @@ async function openChat(page: Page): Promise<void> {
  * Idempotent for the same reason as `openChat` and `openVault`: a restored
  * singleton toggles shut if clicked twice.
  */
+/**
+ * Open the Mission board and wait for it to report.
+ *
+ * Idempotent for the same reason as `openWork`: a restored singleton toggles shut if
+ * clicked twice, and a board that opened onto nothing would make every check below
+ * pass for the wrong reason.
+ */
+async function openMission(page: Page): Promise<void> {
+  const dialog = page.locator('[role="dialog"][aria-label="Mission"]')
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Mission' })
+      .click()
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Mission"] .mission-surface', { timeout: 15_000 })
+  await page.waitForFunction(
+    () => {
+      const surface = document.querySelector('[role="dialog"][aria-label="Mission"] .mission-surface')
+      // Not the "not available" state: a board that reports an absent subsystem would
+      // satisfy every selector below without any Mission existing.
+      return surface !== null && !document.querySelector('.mission-absent')
+    },
+    undefined,
+    { timeout: 15_000 },
+  )
+}
+
 async function openWork(page: Page): Promise<void> {
   const dialog = page.locator('[role="dialog"][aria-label="Work"]')
   if (!(await dialog.isVisible().catch(() => false))) {
@@ -2120,6 +2157,207 @@ async function main(): Promise<void> {
       } finally {
         await workApp.close().catch(() => {})
       }
+    }
+
+    // --- 10. Missions -----------------------------------------------------
+    //
+    // Driven through the bridge rather than against Core directly, because the claims
+    // worth checking here are claims about what a *window* can reach.
+    const missionUsage = async (p: Page) =>
+      p.evaluate(() =>
+        [...document.querySelectorAll('.usage-row')].map((r) => r.textContent ?? '').join(' | '),
+      )
+
+    // The baseline is read from the Mission window itself rather than from the first
+    // window, which the Work section has already closed. A freshly launched window
+    // starts at zero, which is the point: everything below must leave it at zero.
+    const missionLaunch = await launch(userData)
+    try {
+      const mission = missionLaunch.page
+      await coreReady(mission)
+      await openMission(mission)
+      const callsBeforeMissions = await missionUsage(mission)
+
+      check(
+        'Mission content is encrypted at rest',
+        (await mission.locator('.mission-posture[data-durable="true"]').count()) === 1,
+      )
+      check(
+        'a durable store says so before it lists anything',
+        /ENCRYPTED AT REST/.test((await mission.locator('.mission-posture').innerText()) ?? ''),
+      )
+      check(
+        'an empty Mission list is stated as a fact, not as an absent subsystem',
+        (await mission.locator('.mission-none').count()) === 1,
+      )
+
+      // Create one, through the bridge, exactly as a window would.
+      const missionId = await mission.evaluate(async () => {
+        const bridge = (window as unknown as { freyaHost?: Record<string, unknown> }).freyaHost
+        const submit = bridge?.coreSubmit as (
+          command: string,
+          payload?: unknown,
+        ) => Promise<{ ok: boolean; mission?: { missionId?: string } }>
+        const result = await submit('mission.create', {
+          title: 'Find out about the build',
+          intent: 'Look at what is failing and report what you find.',
+          successCriteria: ['the failure is named', 'the owner can check it'],
+        })
+        return result.ok ? (result.mission?.missionId ?? null) : null
+      })
+      check('a Mission is created through the bridge', typeof missionId === 'string', String(missionId))
+
+      await mission.waitForSelector('.mission-row', { timeout: 15_000 })
+      check(
+        'a new Mission is a draft, not an outcome',
+        (await mission.locator('.mission-row[data-status="draft"]').count()) === 1,
+      )
+      check(
+        'a draft Mission offers activation and offers no way to complete',
+        (await mission.locator('.mission-row button[data-action="activate"]').count()) === 1 &&
+          (await mission.locator('.mission-row button[data-action="requestCompletion"]').count()) === 0,
+      )
+      check(
+        'a Mission with no Work attached says so rather than showing zeroes',
+        /no Work attached yet/.test((await mission.locator('.mission-counts').first().innerText()) ?? ''),
+      )
+
+      // The Mission's own words must not be on this window. The board shows ids and
+      // statuses, because a standing feed of everything the owner asked for would
+      // defeat the encryption that protects it.
+      const boardText = (await mission.locator('[role="dialog"][aria-label="Mission"]').innerText()) ?? ''
+      check(
+        'Mission text does not reach the board',
+        !boardText.includes('Look at what is failing') && !boardText.includes('the failure is named'),
+      )
+
+      await mission.locator('.mission-row button[data-action="activate"]').click()
+      await mission.waitForSelector('.mission-row[data-status="active"]', { timeout: 15_000 })
+      check('a Mission activates', (await mission.locator('.mission-row[data-status="active"]').count()) === 1)
+      check(
+        'an active Mission offers pause and no longer offers activation',
+        (await mission.locator('.mission-row button[data-action="pause"]').count()) === 1 &&
+          (await mission.locator('.mission-row button[data-action="activate"]').count()) === 0,
+      )
+
+      await mission.locator('.mission-row button[data-action="pause"]').click()
+      await mission.waitForSelector('.mission-row[data-status="paused"]', { timeout: 15_000 })
+      await mission.locator('.mission-row button[data-action="resume"]').click()
+      await mission.waitForSelector('.mission-row[data-status="active"]', { timeout: 15_000 })
+      check(
+        'a Mission pauses and resumes',
+        (await mission.locator('.mission-row[data-status="active"]').count()) === 1,
+      )
+
+      // Asking to complete with nothing established must not complete it. This is the
+      // claim the whole subsystem rests on.
+      await mission.locator('.mission-row button[data-action="requestCompletion"]').click()
+      await mission.waitForSelector('.mission-notice', { timeout: 15_000 })
+      const completionNotice = (await mission.locator('.mission-notice').innerText()) ?? ''
+      check(
+        'asking to complete a Mission that established nothing says so',
+        /no Work has been attached|not established/i.test(completionNotice),
+        completionNotice,
+      )
+      check(
+        'a Mission that established nothing is not completed',
+        (await mission.locator('.mission-row[data-status="completed"]').count()) === 0 &&
+          (await mission.locator('.mission-row[data-status="active"]').count()) === 1,
+      )
+
+      // Settle it, and confirm a terminal Mission offers nothing at all: a control Core
+      // would refuse teaches its user that buttons lie.
+      await mission.locator('.mission-row button[data-action="cancel"]').click()
+      await mission.waitForSelector('.mission-row[data-status="cancelled"]', { timeout: 15_000 })
+      check('a settled Mission offers no controls', (await mission.locator('.mission-row button').count()) === 0)
+      check('a settled Mission says so in words', (await mission.locator('.mission-settled').count()) === 1)
+
+      check('no Mission progress is shown as a percentage', !/%/.test(boardText), boardText.slice(0, 120))
+
+      // The feed, not the board: a Mission's lifecycle should read as sentences. Raw
+      // event types are a gap in the audit trail rather than a record of it.
+      const activityText = await mission.evaluate(() =>
+        [...document.querySelectorAll('.activity-row .activity-text')].map((n) => n.textContent ?? ''),
+      )
+      check(
+        'a Mission lifecycle is described in the activity feed',
+        activityText.some((line) => /Mission activated/i.test(line)) &&
+          activityText.some((line) => /Mission paused/i.test(line)),
+        activityText.slice(-6).join(' | '),
+      )
+      check(
+        'the feed never shows a bare Mission event type',
+        !activityText.some((line) => /^mission\.[a-z.]+$/.test(line.trim())),
+        activityText.slice(-6).join(' | '),
+      )
+      check(
+        'the Mission feed carries none of its text',
+        !activityText.some((line) => line.includes('Look at what is failing')),
+      )
+
+      const missionBridgeKeys = await mission.evaluate(() =>
+        Object.keys((window as unknown as { freyaHost?: object }).freyaHost ?? {}).sort(),
+      )
+      check(
+        'the bridge exposes no Mission key or store',
+        !missionBridgeKeys.some((key) => /missionKey|missionStore/i.test(key)),
+        missionBridgeKeys.join(', '),
+      )
+
+      // Zero idle spend: managing a Mission must not touch a model.
+      const callsAfterMissions = await missionUsage(mission)
+      check(
+        'no Mission above cost a model call',
+        callsAfterMissions === callsBeforeMissions,
+        `${callsBeforeMissions} -> ${callsAfterMissions}`,
+      )
+
+      // A renderer reload keeps the Mission, because it is in the journal rather than
+      // in the window about to be thrown away.
+      await mission.reload()
+      await coreReady(mission)
+      await openMission(mission)
+      await mission.waitForSelector('.mission-row[data-status="cancelled"]', { timeout: 30_000 })
+      check(
+        'a Mission survives a renderer reload',
+        (await mission.locator('.mission-row[data-status="cancelled"]').count()) === 1,
+      )
+
+      await missionLaunch.app.close().catch(() => {})
+
+      // And an application relaunch, which is the stronger claim.
+      const { app: missionAgain, page: missionRestored } = await launch(userData)
+      try {
+        await coreReady(missionRestored)
+        await openMission(missionRestored)
+        await missionRestored.waitForSelector('.mission-row[data-status="cancelled"]', {
+          timeout: 30_000,
+        })
+        check(
+          'Mission history survives an application relaunch',
+          (await missionRestored.locator('.mission-row[data-status="cancelled"]').count()) === 1,
+        )
+        check(
+          'a relaunched board still says its content is encrypted',
+          (await missionRestored.locator('.mission-posture[data-durable="true"]').count()) === 1,
+        )
+        const relaunchCalls = await missionUsage(missionRestored)
+        check(
+          'a Mission relaunch cost no model call either',
+          relaunchCalls === callsBeforeMissions,
+          `${callsBeforeMissions} -> ${relaunchCalls}`,
+        )
+      } finally {
+        await missionAgain.close().catch(() => {})
+      }
+    } catch (error) {
+      check(
+        'the Mission board drives its own lifecycle',
+        false,
+        error instanceof Error ? error.message : String(error),
+      )
+    } finally {
+      await missionLaunch.app.close().catch(() => {})
     }
 
     first = null

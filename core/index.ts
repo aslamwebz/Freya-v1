@@ -31,6 +31,13 @@ import { EncryptedConversationStore } from './conversation/encrypted-store'
 import { MemoryConversationStore } from './conversation/memory-store'
 import { VoiceService } from './voice/service'
 import type { VoiceTranscriber, VoiceSynthesizer } from './voice/types'
+import { MissionEngine, type WorkPort } from './missions/engine'
+import { ABSENT_MISSION_PROJECTION } from './missions/projection'
+import type { MissionCommandOutcome, MissionDetail, MissionProjection } from './missions/types'
+import type { CoreCommandName, MissionCommandOutcomeView } from './protocol/core-protocol'
+import type { MissionStore } from './missions/store'
+import { EncryptedMissionStore } from './missions/encrypted-store'
+import { MemoryMissionStore } from './missions/memory-store'
 import { WorkEngine, type WorkCommandOutcome } from './work/engine'
 import { ABSENT_WORK_PROJECTION, type WorkProjection } from './work/projection'
 import {
@@ -41,7 +48,9 @@ import {
 import {
   WORK_LIMITS,
   TASK_STATUSES,
+  isTerminalRunStatus,
   type RunLimits,
+  type StepRecord,
   type TaskStatus,
   type WorkStepPlan,
 } from './work/types'
@@ -177,6 +186,21 @@ export interface CoreOptions {
   /** Overrides the Brain store wholesale. For tests. */
   brainStore?: BrainStore
   /**
+   * Missions' own key, from the keyring.
+   *
+   * A **third** independent secret. A Mission holds what a person asked Freya to
+   * accomplish — their intent, their success criteria, in their words — which is as
+   * private as a conversation, and recovering one domain's key must never yield
+   * another's. See `electron/keyring.ts`.
+   *
+   * A Core with no Mission key still works: Missions fall back to an ephemeral store
+   * that reports `mode: 'ephemeral'`, `durable: false`, and says why. Missions are
+   * never silently presented as durable when they are not.
+   */
+  missionKey?: Uint8Array
+  /** Overrides the Mission content store wholesale. For tests. */
+  missionStore?: MissionStore
+  /**
    * The Phase 5 research stack, injected whole.
    *
    * Core assembles it but never populates it: the search provider and the browser
@@ -271,6 +295,7 @@ export interface Core {
    * stands, and a window cannot write a single field of what it receives.
    */
   onWork(listener: (projection: WorkProjection) => void): () => void
+  onMission(listener: (projection: MissionProjection) => void): () => void
   /**
    * The current Work projection.
    *
@@ -283,6 +308,24 @@ export interface Core {
    * not up yet" during startup without special-casing the failure.
    */
   work(): WorkProjection
+  /**
+   * Core's account of Missions. Derived from the journal, never assembled here.
+   *
+   * Never null: a Core that has not started, or was built without Missions, returns a
+   * projection that says which of those it is — because "there are no Missions" and
+   * "Missions are unavailable" are different facts and a surface must not have to
+   * guess which one it is looking at.
+   */
+  mission(): MissionProjection
+  /**
+   * One Mission's private content, decrypted from the Mission store.
+   *
+   * The counterpart to the projection, and the reason the store is encrypted rather
+   * than hidden: the owner has to be able to read back what they wrote. Nothing but
+   * the owner principal reaches this, and the value never enters a projection or the
+   * journal.
+   */
+  missionDetail(missionId: string): Promise<MissionDetail | null>
   readonly lifecycle: CoreLifecycle
 }
 
@@ -322,6 +365,7 @@ class FreyaCore implements Core {
   private readonly activityListeners = new Set<(activity: CoreActivityEvent[]) => void>()
   private readonly brainListeners = new Set<(projection: BrainProjection) => void>()
   private readonly workListeners = new Set<(projection: WorkProjection) => void>()
+  private readonly missionListeners = new Set<(projection: MissionProjection) => void>()
   /** Display-ready activity, rebuilt from the log on every start. */
   private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
@@ -351,6 +395,7 @@ class FreyaCore implements Core {
    * startup instead of throwing, the same way `brain()` does.
    */
   private workEngine: WorkEngine | undefined
+  private missionEngine: MissionEngine | undefined
   private workRegistry: WorkRegistry | undefined
 
   constructor(private readonly options: CoreOptions) {
@@ -662,6 +707,24 @@ class FreyaCore implements Core {
     })
     await this.workEngine.open()
 
+    // Missions sit above Work, so they are constructed after it and hold a read-only
+    // view of it. The engine asks Work about a Run; Work never asks Missions about
+    // anything, because Work has no field shaped like a Mission and this phase does
+    // not give it one.
+    this.missionEngine = new MissionEngine({
+      fabric: this.fabric,
+      store: await this.buildMissionStore(),
+      work: this.workWorkPort(),
+      principalId: this.owner.id,
+      now: this.options.now,
+      newId: this.options.newId,
+      onChange: () => this.publishMission(),
+      // Read fresh at the moment of each decision. A Mission that could still be
+      // activated after the panic button is a Mission that can go on creating work.
+      stopAll: () => this.state.stopAll.active,
+    })
+    await this.missionEngine.open()
+
     const recoveredSequence = this.fabric.lastSequence
     this.startedAt = (this.options.now ?? (() => new Date()))().toISOString()
 
@@ -707,6 +770,9 @@ class FreyaCore implements Core {
     // expired, and nothing is marked successful. History is not proof that
     // something is currently executing.
     await this.workEngine?.recoverInterruptedRuns()
+    // Missions reconcile after Work has, because an expired Mission's Runs have to
+    // already be settled before the Mission itself is concluded.
+    this.publishMission()
 
     if (this.currentLifecycle === 'ready') {
       await this.fabric.append('core.ready', {}, { actor: 'system' })
@@ -784,6 +850,10 @@ class FreyaCore implements Core {
       // into a closed store, producing a failure *for having failed to record*.
       // `close` aborts every live capability and waits for the loops to settle.
       await this.workEngine?.close()
+      // A verifier still running at shutdown must not be able to write a completion
+      // into a closed journal. Closing after Work is deliberate: the Mission may want
+      // to consult a Run that Work has just finished recording.
+      await this.missionEngine?.close()
       await this.conversationStore?.close()
       await this.fabric?.close()
       this.notify()
@@ -1087,6 +1157,83 @@ class FreyaCore implements Core {
   }
 
   /** The Work engine, refusing rather than throwing on a command. */
+  /**
+   * The read-only view of Work that Missions are given.
+   *
+   * Narrower than `WorkEngine` on purpose: Missions may consult a Run and may stop
+   * one, and nothing else. Handing over the engine itself would let a Mission create
+   * Runs, decide approvals, or move tasks — none of which a persistent outcome has any
+   * business doing. The Mission is the *reason* for the Run, never its author.
+   */
+  private workWorkPort(): WorkPort {
+    const engine = this.requireWork()
+    return {
+      run: (runId) => {
+        const state = engine.snapshot()
+        return state.runs.get(runId)
+      },
+      // `runSteps` holds ids in planned order; `steps` holds the records. Both are
+      // needed, because the order is what "every step" means and the records are what
+      // carry each step's verification verdict.
+      stepsOf: (runId) => {
+        const state = engine.snapshot()
+        const ordered = state.runSteps.get(runId) ?? []
+        const steps: StepRecord[] = []
+        for (const stepId of ordered) {
+          const step = state.steps.get(stepId)
+          if (step !== undefined) steps.push(step)
+        }
+        return steps
+      },
+      isSettled: (status) => isTerminalRunStatus(status),
+      pauseRun: async (runId, reason) => (await engine.pauseRun(runId, reason)).ok,
+      cancelRun: async (runId, reason) => (await engine.cancelRun(runId, reason)).ok,
+    }
+  }
+
+  async missionDetail(missionId: string): Promise<MissionDetail | null> {
+    if (this.missionEngine === undefined) return null
+    return await this.missionEngine.detail(missionId)
+  }
+
+  mission(): MissionProjection {
+    if (this.missionEngine === undefined) {
+      return {
+        ...ABSENT_MISSION_PROJECTION,
+        persistence: { mode: 'ephemeral', durable: false, reason: 'Missions are not available' },
+      }
+    }
+    return this.missionEngine.projection()
+  }
+
+  onMission(listener: (projection: MissionProjection) => void): () => void {
+    this.missionListeners.add(listener)
+    listener(this.mission())
+    return () => {
+      this.missionListeners.delete(listener)
+    }
+  }
+
+  private publishMission(): void {
+    if (this.missionListeners.size === 0) return
+    const projection = this.mission()
+    for (const listener of [...this.missionListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Mission listener threw', error)
+        this.missionListeners.delete(listener)
+      }
+    }
+  }
+
+  private requireMission(): MissionEngine {
+    if (this.missionEngine === undefined) {
+      throw new Error('the Mission engine is not available')
+    }
+    return this.missionEngine
+  }
+
   private requireWork(): WorkEngine {
     if (this.workEngine === undefined) {
       throw new Error('the Work engine is not available')
@@ -1103,6 +1250,26 @@ class FreyaCore implements Core {
    * same shape therefore arrives either way, which is also how a caller cannot
    * tell a refusal from a crash by its shape.
    */
+  /**
+   * A refused Mission command.
+   *
+   * `ok: false` on the envelope as well as in the Mission slot. A window that only
+   * read the envelope would otherwise report a refusal as a success, which is the
+   * same reasoning that makes `workRefusal` set both.
+   */
+  private missionRefusal(
+    requestId: string,
+    operation: string,
+    reason: string,
+  ): CoreCommandResult {
+    return {
+      requestId,
+      ok: false,
+      refusal: { reason },
+      mission: { operation, ok: false, reason },
+    }
+  }
+
   private workRefusal(
     requestId: string,
     operation: string,
@@ -1164,7 +1331,8 @@ class FreyaCore implements Core {
       command !== 'cognition.status.read' &&
       command !== 'voice.status.read' &&
       command !== 'brain.status.read' &&
-      command !== 'work.status.read'
+      command !== 'work.status.read' &&
+      command !== 'mission.status.read'
     ) {
       return reject(envelope, `core is ${this.lifecycle} and cannot accept mutating commands`)
     }
@@ -1855,6 +2023,78 @@ class FreyaCore implements Core {
 
         /* -------------------------------------------------------------- work */
 
+        /* ----------------------------------------------------------- missions */
+
+        case 'mission.create': {
+          const decision = this.guard.evaluate(this.owner, 'mission.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'mission.manage', requestId)
+            return this.missionRefusal(requestId, 'refused', decision.reason)
+          }
+          const title = readString(envelope.payload, 'title')
+          if (title === null) {
+            return this.missionRefusal(requestId, 'refused', 'a Mission title is missing')
+          }
+          // Only the three pieces of text a Mission is made of. Deliberately *not*
+          // forwarded: limits, principal, owner, status, verification, deadline. A
+          // window that could put `maxChildRuns` in front of Core would be raising a
+          // code-owned ceiling by asking nicely — see D24 for why the bridge does not
+          // even carry these fields.
+          const intent = readString(envelope.payload, 'intent')
+          if (intent === null) {
+            return this.missionRefusal(requestId, 'refused', 'a Mission needs an intent as well as a title')
+          }
+          const criteria = readStringArray(envelope.payload, 'successCriteria')
+          const outcome = await this.requireMission().create({
+            title,
+            intent,
+            ...(criteria === null ? {} : { successCriteria: criteria }),
+          })
+          this.publishMission()
+          return { requestId, ok: outcome.ok, status: this.status(), mission: missionResult(outcome) }
+        }
+
+        case 'mission.activate':
+        case 'mission.pause':
+        case 'mission.resume':
+        case 'mission.cancel':
+        case 'mission.fail':
+        case 'mission.requestCompletion': {
+          // One block, because all six are the same privilege and the same shape, and
+          // six near-identical handlers is six places for one of them to be written
+          // more carefully than the other five.
+          const decision = this.guard.evaluate(this.owner, 'mission.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'mission.manage', requestId)
+            return this.missionRefusal(requestId, 'refused', decision.reason)
+          }
+          const missionId = readString(envelope.payload, 'missionId')
+          if (missionId === null) {
+            return this.missionRefusal(requestId, 'refused', 'a Mission id is missing')
+          }
+          const engine = this.requireMission()
+          const operations: Partial<Record<CoreCommandName, () => Promise<MissionCommandOutcome>>> = {
+            'mission.activate': () => engine.activate(missionId),
+            'mission.pause': () => engine.pause(missionId),
+            'mission.resume': () => engine.resume(missionId),
+            'mission.cancel': () => engine.cancel(missionId),
+            'mission.fail': () => engine.fail(missionId),
+            // Completion is not a status setter. It asks a verifier, and completes the
+            // Mission only if the verifier establishes the outcome.
+            'mission.requestCompletion': () => engine.requestCompletion(missionId),
+          }
+          const run = operations[envelope.command]
+          if (run === undefined) {
+            // Unreachable: the case arm is only entered for these six commands. Checked
+            // anyway, because a `switch` on a string is the one place in this file
+            // where an unhandled value becomes a crash rather than a refusal.
+            return this.missionRefusal(requestId, 'refused', 'that Mission command is not recognised')
+          }
+          const outcome = await run()
+          this.publishMission()
+          return { requestId, ok: outcome.ok, status: this.status(), mission: missionResult(outcome) }
+        }
+
         case 'work.status.read':
           // Read-only, so it is allowed while stopping, and it needs no
           // capability: knowing what Freya is working on is the owner's own
@@ -1865,6 +2105,28 @@ class FreyaCore implements Core {
             status: this.status(),
             work: { operation: 'status', ok: true },
           }
+
+        case 'mission.status.read': {
+          // Read-only, so it survives shutdown, and evaluated against a capability of
+          // its own rather than waved through.
+          //
+          // That enforcement is the point of the split in §10 of PHASE-7: `work.status.read`
+          // is deliberately ungated, and copying that here would leave the documented
+          // read/manage separation decorative — a body allowed to watch a Mission should
+          // be describable as one that may not conclude it, and that is only true if the
+          // read is actually evaluated.
+          const decision = this.guard.evaluate(this.owner, 'mission.status.read')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'mission.status.read', requestId)
+            return this.missionRefusal(requestId, 'refused', decision.reason)
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            mission: { operation: 'status', ok: true },
+          }
+        }
 
         case 'work.task.create': {
           const decision = this.guard.evaluate(this.owner, 'work.task.manage')
@@ -1954,27 +2216,100 @@ class FreyaCore implements Core {
               ...(step.requiresApproval === true ? { requiresApproval: true } : {}),
             })
           }
-          const parent = readParent(envelope.payload)
-          if (parent === 'invalid') {
-            return this.workRefusal(requestId, 'run-created', 'the parent reference is malformed')
-          }
           const taskId = readString(envelope.payload, 'taskId')
-          const outcome = await this.requireWork().createRun({
-            steps: planSteps,
-            ...(taskId === null ? {} : { taskId }),
-            ...(parent === null ? {} : { parent }),
-            ...(limits === null ? {} : { limits }),
-          })
-          this.publishWork()
-          // A refusal is `ok: false` here, not a success carrying a reason. A
-          // window must not have to inspect a Work result to discover that the
-          // engine declined, because the one caller that reads `ok` and the one that
-          // reads `work` would otherwise disagree about whether anything happened.
+          // A window may say *which Mission* a Run belongs to. It may not say what kind
+          // of parent it is, and it may not name one.
           //
+          // This used to read `{ kind, id }` straight off the payload, which let any
+          // window attach a Run to anything by asserting an arbitrary pair — and "kind"
+          // is a claim about structure, which is Core's to make rather than a window's.
+          // `missionId` is the whole of what crosses this boundary; Core builds the
+          // parent from it. A window naming `parent` at all is refused rather than
+          // ignored, so it cannot believe the old shape still worked.
+          const missionId = readString(envelope.payload, 'missionId')
+          if (hasKey(envelope.payload, 'parent')) {
+            return this.workRefusal(
+              requestId,
+              'run-created',
+              "a Run's parent is decided by Core; name a missionId instead of a parent",
+            )
+          }
+          // Checked before the Run is built so a window gets an exact "no such
+          // Mission" refusal cheaply. This is *not* the permission decision:
+          // whether a mission-parented Run may durably exist is decided inside
+          // `attachChildRunWhileCreating`, under the Mission's own lock, together
+          // with the single `work.run.created` that names it as parent. The
+          // earlier bug — create the Run first, attach after — left the journal
+          // recording a parent that nothing corroborated when the Mission was a
+          // draft, paused, terminal, expired or over a ceiling; now a refusal
+          // happens strictly before any Work claim is written.
+          if (missionId !== null && !this.requireMission().exists(missionId)) {
+            return this.workRefusal(requestId, 'run-created', 'there is no Mission with that id')
+          }
+          const parent = missionId === null ? null : { kind: 'mission' as const, id: missionId }
+
+          // The Work outcome of the Run created inside the Mission's queue. Set
+          // only when Work accepted the plan: admission refused means creation
+          // never ran, and a Work refusal throws instead.
+          let created: WorkCommandOutcome | undefined
+
+          if (parent === null) {
+            const outcome = await this.requireWork().createRun({
+              steps: planSteps,
+              ...(taskId === null ? {} : { taskId }),
+              ...(limits === null ? {} : { limits }),
+            })
+            this.publishWork()
+            return { requestId, ok: outcome.ok, status: this.status(), work: workResult(outcome) }
+          }
+
+          // A mission-parented Run is created and corroborated as one act: the
+          // admission check, Work's durable `work.run.created` and the
+          // `mission.run.attached` all hold the Mission's queue, so no pause,
+          // cancel, deadline settlement or rival attach can land between them.
+          // A refusal here — draft, paused, terminal, past the deadline, at a
+          // ceiling, stopped — is returned before the callback runs, so nothing
+          // exists and the journal records no attempt at all.
+          let attach: MissionCommandOutcome
+          try {
+            attach = await this.requireMission().attachChildRunWhileCreating(
+              missionId as string,
+              async () => {
+                const attempt = await this.requireWork().createRun({
+                  steps: planSteps,
+                  ...(taskId === null ? {} : { taskId }),
+                  parent,
+                  ...(limits === null ? {} : { limits }),
+                })
+                if (!attempt.ok || attempt.runId === undefined) throw new RunPlanRefused(attempt)
+                created = attempt
+                return attempt.runId
+              },
+            )
+          } catch (error) {
+            // Work declining the plan (a bad capability, unsanitisable input, a
+            // malformed ceiling) is the renderer's mistake and reads like any
+            // other Work refusal; nothing durable was written on either side.
+            if (error instanceof RunPlanRefused) {
+              return this.workRefusal(requestId, 'run-created', error.outcome.reason ?? 'the run plan was refused')
+            }
+            throw error
+          }
+          if (!attach.ok) {
+            // The Mission refused on its own terms, and nothing is named as its
+            // child. Say so in the Mission's voice, not Work's: the Run does not
+            // exist, so `ok: false` is honest here.
+            return this.missionRefusal(requestId, 'run-refused', attach.reason ?? 'the Mission refused this Run')
+          }
+          if (created === undefined) {
+            throw new Error('the Mission queue surrendered no Work outcome')
+          }
+          this.publishMission()
+          this.publishWork()
           // A created Run is `queued`, not running: starting one is a separate,
           // explicit command, so nothing a renderer submits begins executing as a
           // side effect of being accepted.
-          return { requestId, ok: outcome.ok, status: this.status(), work: workResult(outcome) }
+          return { requestId, ok: true, status: this.status(), work: workResult(created) }
         }
 
         case 'work.run.start': {
@@ -2098,6 +2433,33 @@ class FreyaCore implements Core {
    *
    * A Brain fault also never changes any authority. See `brain/store.ts`.
    */
+  /**
+   * Build the Mission content store.
+   *
+   * The rule is the Brain's, for the same reason: a store that cannot encrypt is
+   * replaced by an **ephemeral one that says so**, never by a weaker store that
+   * silently stands in. A Mission somebody was told is durable, and which is not, is
+   * worse than no Mission at all — it is a promise the engine cannot keep, made
+   * quietly, about the user's own words.
+   */
+  private async buildMissionStore(): Promise<MissionStore> {
+    if (this.options.missionStore) return this.options.missionStore
+    if (this.options.missionKey) {
+      const path = `${this.options.dataPath}.missions`
+      try {
+        return await EncryptedMissionStore.open({ path, key: this.options.missionKey })
+      } catch (error) {
+        console.error('[freya.core] encrypted Mission store unavailable', describe(error))
+        return new MemoryMissionStore({
+          faultReason: `Mission content could not be encrypted: ${describe(error)}`,
+        })
+      }
+    }
+    return new MemoryMissionStore({
+      faultReason: 'no secure Mission key is available on this machine',
+    })
+  }
+
   private async buildBrainStore(): Promise<BrainStore> {
     if (this.options.brainStore) return this.options.brainStore
     if (this.options.brainKey) {
@@ -2438,6 +2800,17 @@ class FreyaCore implements Core {
  * reason travels too, for the Vault's reason — a refusal nobody can read is
  * indistinguishable from a refusal that was arbitrary.
  */
+/** Core's Mission outcome, narrowed to the fields a window is allowed to see. */
+function missionResult(outcome: MissionCommandOutcome): MissionCommandOutcomeView {
+  return {
+    operation: outcome.operation,
+    ok: outcome.ok,
+    ...(outcome.missionId === undefined ? {} : { missionId: outcome.missionId }),
+    ...(outcome.status === undefined ? {} : { status: outcome.status }),
+    ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+  }
+}
+
 function workResult(outcome: WorkCommandOutcome): WorkCommandOutcome {
   return {
     operation: outcome.operation,
@@ -2452,28 +2825,34 @@ function workResult(outcome: WorkCommandOutcome): WorkCommandOutcome {
 }
 
 /** A refused Work command, in the one shape the surface has to render. */
+/* A Run plan Work refused, raised out of the Mission queue.
+ *
+ * `attachChildRunWhileCreating` calls Work's own `createRun` as a callback, so a
+ * Work refusal has to travel as an exception rather than an outcome value. The
+ * Work result is carried whole, and the `work.run.create` handler turns it into
+ * the same refusal a window would get with no Mission named — nothing durable
+ * was written on either side.
+ */
+class RunPlanRefused extends Error {
+  constructor(readonly outcome: WorkCommandOutcome) {
+    super(outcome.reason ?? 'the run plan was refused')
+  }
+}
+
 function isTaskStatus(value: string): value is TaskStatus {
   return (TASK_STATUSES as readonly string[]).includes(value)
 }
 
 /**
- * Read an opaque parent reference off a command payload.
+ * Whether a payload carries a key at all, even an unusable one.
  *
- * Three answers, because there are three honest ones: absent, present, or present
- * and malformed. Collapsing the third into the first would let a renderer hand
- * Work a reference Core could not read and have it silently dropped — which is how
- * a Phase 7 Mission would end up orphaned from its Run with nobody told.
+ * Needed so a window naming the *old* shape is refused rather than quietly ignored.
+ * Ignoring an unrecognised field is usually the safer default, but here the field is
+ * one a window might still be sending from older code, and answering "created"
+ * would tell it the new shape is unnecessary.
  */
-function readParent(payload: unknown): { kind: string; id: string } | null | 'invalid' {
-  if (typeof payload !== 'object' || payload === null) return null
-  const value = (payload as Record<string, unknown>).parent
-  if (value === undefined || value === null) return null
-  if (typeof value !== 'object' || Array.isArray(value)) return 'invalid'
-  const parent = value as Record<string, unknown>
-  const kind = typeof parent.kind === 'string' ? parent.kind : null
-  const id = typeof parent.id === 'string' ? parent.id : null
-  if (kind === null || id === null) return 'invalid'
-  return { kind, id }
+function hasKey(payload: unknown, key: string): boolean {
+  return typeof payload === 'object' && payload !== null && key in (payload as Record<string, unknown>)
 }
 
 function degradedStatus(
@@ -2695,7 +3074,7 @@ function readRawArray(payload: unknown, key: string): unknown[] | undefined {
 /**
  * Read a partial set of Run ceilings off a command payload.
  *
- * Three answers for the same reason `readParent` has three: absent, present, or
+ * Three answers because there are three honest ones: absent, present, or present
  * present and wrong. A caller may narrow any ceiling; `resolveLimits` in the
  * engine clamps everything downward afterwards, so nothing here can widen a bound.
  */

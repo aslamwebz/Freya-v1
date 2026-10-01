@@ -187,6 +187,28 @@ export const CORE_EVENT_TYPES = [
 
   /** A ceiling was reached. Recorded so a restart cannot hide one. */
   'work.limits.exceeded',
+
+  // Mission (Phase 7) — metadata only, and the strictest family in the journal.
+  //
+  // A Mission holds the most private text Freya will ever store: what a person is
+  // trying to achieve. So there is **no slot** for a title, an intent, a success
+  // criterion or a note, and the validators reject an unexpected field rather than
+  // ignoring it. A payload with the right fields plus an `intent` would pass every
+  // field check and quietly keep the intent.
+  //
+  // Every payload is an id, a status, a count, an instant, a closed reason code, a
+  // verifier id, or a list of ids.
+  'mission.created',
+  'mission.activated',
+  'mission.paused',
+  'mission.resumed',
+  'mission.cancelled',
+  'mission.failed',
+  'mission.completed',
+  'mission.run.attached',
+  'mission.verification.requested',
+  'mission.verification.completed',
+  'mission.limit.exceeded',
 ] as const
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number]
@@ -767,6 +789,100 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
   'work.task.completed': { taskId: string; status: string }
 
   'work.limits.exceeded': { runId: string; limit: string; reason: string; observed: number }
+
+  /* --------------------------------------------------------------- mission */
+
+  /**
+   * A Mission exists.
+   *
+   * `deadlineAt` rather than a lifetime in milliseconds: the wall-clock bound is
+   * resolved once, at creation, so every later reader agrees about when the Mission
+   * expires without re-deriving it and without a timer watching it.
+   */
+  'mission.created': {
+    missionId: string
+    status: 'draft'
+    createdAt: string
+    deadlineAt: string
+    limits: MissionLimitsPayload
+  }
+
+  /**
+   * A lifecycle transition.
+   *
+   * `from` is in the payload as well as implied by the previous event, so the
+   * reducer can refuse a transition whose history does not agree with itself. A
+   * hand-edited line claiming `draft → completed` is refused rather than folded,
+   * which is what stops a replayed journal manufacturing a completed Mission with
+   * no verification behind it.
+   */
+  'mission.activated': MissionTransitionPayload
+  'mission.paused': MissionTransitionPayload
+  'mission.resumed': MissionTransitionPayload
+  'mission.cancelled': MissionTransitionPayload
+  'mission.failed': MissionTransitionPayload
+  'mission.completed': MissionTransitionPayload
+
+  /** A child Run was attached. Ids only. */
+  'mission.run.attached': {
+    missionId: string
+    runId: string
+    taskId: string | null
+  }
+
+  /**
+   * Completion verification was requested.
+   *
+   * `runIds` names what this request required. No evidence, no expectation text,
+   * no verifier internals.
+   */
+  'mission.verification.requested': {
+    missionId: string
+    verifierId: string
+    runIds: string[]
+  }
+
+  /**
+   * Verification answered.
+   *
+   * `outcome` and `reason` are both closed codes. A verifier's message and its
+   * evidence are both deliberately absent: a verifier is the component most likely
+   * to hold something private, and this is the boundary it cannot cross.
+   */
+  'mission.verification.completed': {
+    missionId: string
+    verifierId: string
+    outcome: 'passed' | 'not_established' | 'timeout' | 'cancelled'
+    reason: string | null
+  }
+
+  /** A code-owned ceiling stopped a child Run. Durable, so a restart cannot hide it. */
+  'mission.limit.exceeded': {
+    missionId: string
+    limit: 'maxChildRuns' | 'maxConcurrentChildRuns' | 'lifetimeMs'
+  }
+}
+
+/** Ceilings as they appear in a durable event. Re-validated against code on read. */
+export interface MissionLimitsPayload {
+  maxChildRuns: number
+  maxConcurrentChildRuns: number
+  lifetimeMs: number
+  verificationDeadlineMs: number
+  maxRetainedMissions: number
+  maxTitleChars: number
+  maxIntentChars: number
+  maxSuccessCriteria: number
+  maxCriterionChars: number
+}
+
+export interface MissionTransitionPayload {
+  missionId: string
+  from: string
+  to: string
+  reason: string | null
+  /** Present on completion only: which verifier established it. An id. */
+  verifierId: string | null
 }
 
 /**

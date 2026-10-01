@@ -22,11 +22,17 @@ Mobile and the public companion are deliberately deferred.
 
 ---
 
-## Phase 7 — Missions
+## Phase 7 — Missions (done)
 
 Persistent outcomes above Runs. Durable Mission identity/intent/outcome, strict
 states, child Runs through `Run.parent`, truthful progress, verified completion,
 budgets, pause/cancel propagation and a read-only projection.
+
+What was built, and what was left out on purpose, is recorded in
+[PHASE-7.md](PHASE-7.md). The short version: a Mission is a durable record of an
+outcome, a bounded set of Runs you may attach to it, and a conclusion only a
+code-owned verifier can make. Nothing decomposes a Mission into Runs by itself,
+nothing plans, and nothing is ever concluded unattended.
 
 No Workforce or computer control yet.
 

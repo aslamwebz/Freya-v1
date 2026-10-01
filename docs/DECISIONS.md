@@ -340,12 +340,24 @@ check.
 
 Conversation history and the Brain are separate stores holding separate classes of
 data, so they get separate 256-bit secrets, each wrapped separately by the OS
-secure storage. Phase 5 added a third domain — research — and did **not** add a
-fourth kind of secret to share.
+secure storage.
+
+**Corrected in Phase 7.** This section used to say "Phase 5 added a third domain —
+research". That was never true, and the code was right while the prose was not:
+Phase 5 stores nothing durable, because research results are deliberately ephemeral
+and are never admitted to the Brain (D23). `KEY_DOMAINS` has always been exactly
+`conversation` and `brain`. Mission is therefore the **third** domain, added by
+Phase 7 — the first new secret since Phase 4.
+
+The correction matters beyond bookkeeping. "Research already has a key" was a
+plausible-sounding reason not to give Missions one, and a reader checking the
+sentence rather than the keyring would have concluded Missions belonged to an
+existing domain. They do not, and a Mission is not less private than a
+conversation: it holds what somebody asked Freya to accomplish, in their words.
 
 Deriving subkeys from one root is tidier to manage. It is also the case where
 recovering the root yields *every* domain at once, so "the conversation key leaked"
-stops being a bounded problem and becomes "Freya's entire memory leaked". Two
+stops being a bounded problem and becomes "Freya's entire memory leaked". Three
 secrets cost a migration and buy back a blast radius of one.
 
 Phase 3's single `.key` file is adopted byte-identically as the conversation secret
@@ -454,6 +466,113 @@ Mission or recent interaction. Every item has scope and can expire or be revoked
 
 This improves accuracy while preserving the rule that Freya sees what the user
 gave her access to, not everything the machine could technically expose.
+
+## D30 — A Mission's words are their own domain, and never reach the journal
+
+Phase 7 added a third keyring domain for Mission content, and made three
+consequences structural rather than documented.
+
+**The text is not in the journal, the feed or any projection.** The journal carries
+`missionId`, statuses, timestamps, the code-owned ceilings and closed reason codes.
+The Mission payloads are validated by a rule that rejects an *unexpected key*, for
+D25's reason: a payload with the right fields plus an `intent` passes every field
+check and quietly keeps it. The renderer gets statuses and counts over its own
+channel and reads the text only by asking Core for one Mission, so a window that is
+merely open holds no copy of everything the owner has asked for.
+
+**No ceiling is renderer-raisable.** The bridge rebuilds `mission.create` from a
+title, an intent and success criteria, and reads no `limits`, `status`,
+`verification`, `verifierId`, `deadlineAt` or `principalId`. This is D24's rule
+applied to a new command: a window that could put a bound in front of Core would be
+raising a code-owned ceiling by asking nicely.
+
+**A Run's parent is Core's to decide.** `work.run.create` forwards `missionId` and
+refuses `parent`. Phase 6 read `{ kind, id }` straight off the payload, so any window
+could attach a Run to anything by asserting one — and `kind` is a claim about
+structure. The Mission's existence is checked *before* the Run is created, because
+`work.run.created` records the parent it is given, and an uncorroborated claim in the
+audit trail is worse than a refusal.
+
+## D31 — Completion requires a verifier that actually passed, on replay as well as live
+
+The transition table cannot prevent a fabricated outcome on its own. `active →
+completed` is a *legal* edge, so a three-line hand-written journal — created,
+activated, completed — folded straight into `status: completed, verification: null`.
+
+So the reducer carries the rule the live engine already followed: `mission.completed`
+is folded only when the Mission holds a verification record whose state is `passed`
+**and** whose `verifierId` matches the one named on the transition. That is what the
+engine emits, and the only way it emits it.
+
+This is the same posture as the Work deadline rule in PHASE-6 §8, arrived at from
+the other direction: "a deadline fabricates no verdict" and "a completion cannot be
+folded without one" are two halves of one property. The journal's value is that it
+can be trusted to mean what it says, and that has to hold under a hand-edited file,
+not only under code that is behaving.
+
+Two things made this harder to write than it looks. The happy-path test in
+`mission-lifecycle.test.ts` originally folded a bare `completed` and passed, because
+the test encoded the bug rather than catching it. And replay fixtures now have to
+ask, pass, and only then conclude — which is a more honest description of how a
+Mission actually gets completed anyway.
+
+## D32 — A damaged store is read-only, and says so
+
+Three defects, one root cause: a fault that was tracked and never read.
+
+`EncryptedMissionStore` stopped replaying at the first record that failed
+authentication — correct, and stronger than skipping — but `write()` never consulted
+that flag. Since a write rewrites the whole file from the in-memory records, and
+those records were only the readable prefix, writing while degraded **deleted every
+Mission after the break**. Reproduced: three records in, two out, holding `m1` and
+`m4`; the next open reported the store *healthy*, because the evidence had just been
+overwritten.
+
+A degraded store is now read-only, which is the Brain's rule for the same reason
+(ARCHITECTURE §4.3). Refusing costs the owner the ability to add Missions until they
+resolve the fault, and that is visible. Truncating costs them Missions they already
+wrote, and that is not.
+
+`faultReason` was a hardcoded `null`, so the projection reported `durable: true` and
+the board said `ENCRYPTED AT REST` over content nothing could decrypt. It is now a
+getter, `durable` also requires no outstanding fault, and the board has a third
+label — a store that is encrypted *and* unreadable is neither of the two things the
+old two-label split could say.
+
+Mission creation is refused while degraded rather than half-done. The engine writes
+the private text before it records the Mission, so a refused creation leaves nothing
+orphaned, and a Mission whose words could not be kept is not a Mission.
+
+## D33 — Retention is reported, never implied away
+
+`maxRetainedMissions` bounds what a board *lists* and nothing else — not the journal,
+not the in-memory fold. The per-status counts were computed after that slice, so past
+200 Missions the projection reported `total: 200` while 205 existed, and the five it
+dropped were silently unlisted.
+
+Work has reported `runsRetained` / `runsTotal` / `runsHidden` for exactly this reason,
+and Missions now report the same triple with the total taken from the unfiltered
+fold. A viewer that silently stopped listing Missions would read as "they were never
+created", which is false, and the difference between the two numbers is how much of
+the truth is off screen.
+
+## D34 — A journal failure degrades; it does not strand or crash
+
+Two defects on the path this engine otherwise degrades from gracefully.
+
+The verification claim was taken *before* the write that could fail, so one disk error
+wedged the Mission behind a `verification-in-progress` refusal for the life of the
+process. The comment above the claim promised the opposite, so the code contradicted
+its own stated guarantee. The claim is now released when the request cannot be
+recorded.
+
+And `result.finally(...)` returns a *new* promise: handling `result` does not handle
+it. A rejected Mission command therefore left a rejected promise with no listener,
+which Node treats as an unhandled rejection and, by default, a process exit.
+
+Both were found by attacking the failure path rather than the success path, which is
+the argument for doing so: a subsystem's failure handling is the part no normal test
+exercises and the part a user meets on their worst day.
 
 ## D29 — Major builds must survive an adversarial Gauntlet
 

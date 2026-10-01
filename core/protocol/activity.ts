@@ -58,6 +58,20 @@ export type ActivityKind =
   | 'work.step.verified'
   | 'work.approval.requested'
   | 'work.approval.decided'
+  // Missions. Every one of the eleven is named, because the distinction between
+  // "established" and "hit a ceiling" is the reason the subsystem exists and a feed
+  // that renders both as an unworded row has thrown it away.
+  | 'mission.created'
+  | 'mission.activated'
+  | 'mission.paused'
+  | 'mission.resumed'
+  | 'mission.cancelled'
+  | 'mission.failed'
+  | 'mission.completed'
+  | 'mission.run.attached'
+  | 'mission.verification.requested'
+  | 'mission.verification.completed'
+  | 'mission.limit.exceeded'
   | 'other'
 
 export interface CoreActivityEvent {
@@ -546,6 +560,84 @@ export function describeActivity(event: {
         kind: 'grant.revoked',
         text: `Grant ${text(event.payload.grantId)} revoked.`,
         tone: 'neutral',
+      }
+
+    // Missions.
+    //
+    // These get sentences rather than falling through, because flattening them was
+    // hiding the exact distinction this subsystem exists to draw: `mission.completed`
+    // is a verifier saying the outcome was established, and `mission.limit.exceeded` is
+    // a ceiling stopping it. As unworded rows they rendered identically, which is the
+    // same flattening Work's doc refuses when a verification passes or fails.
+    //
+    // Every field read here is a named one - an id, a status, a closed reason - and no
+    // Mission text exists on any of these events to leak. The sentences say what
+    // happened to an *outcome*, never what the outcome was.
+    case 'mission.created':
+      return { ...base, kind: 'mission.created', text: 'Mission created.', tone: 'neutral' }
+
+    case 'mission.activated':
+      return { ...base, kind: 'mission.activated', text: 'Mission activated.', tone: 'neutral' }
+
+    case 'mission.paused':
+      return { ...base, kind: 'mission.paused', text: 'Mission paused.', tone: 'neutral' }
+
+    case 'mission.resumed':
+      return { ...base, kind: 'mission.resumed', text: 'Mission resumed.', tone: 'neutral' }
+
+    case 'mission.cancelled':
+      return {
+        ...base,
+        kind: 'mission.cancelled',
+        text: `Mission cancelled (${text(event.payload.reason, 'no reason given')}).`,
+        tone: 'neutral',
+      }
+
+    case 'mission.failed':
+      return {
+        ...base,
+        kind: 'mission.failed',
+        text: `Mission concluded as not achieved (${text(event.payload.reason, 'no reason given')}).`,
+        tone: 'bad',
+      }
+
+    case 'mission.completed':
+      return {
+        ...base,
+        kind: 'mission.completed',
+        text: `Mission completed, established by verifier ${text(event.payload.verifierId, 'unknown')}.`,
+        // Distinctly good. This is the one event in the system that means something a
+        // person asked for was achieved, and it should not read like a ceiling failure.
+        tone: 'good',
+      }
+
+    case 'mission.run.attached':
+      return { ...base, kind: 'mission.run.attached', text: 'Run attached to a Mission.', tone: 'neutral' }
+
+    case 'mission.verification.requested':
+      return {
+        ...base,
+        kind: 'mission.verification.requested',
+        text: `Mission completion asked of verifier ${text(event.payload.verifierId, 'unknown')}.`,
+        tone: 'neutral',
+      }
+
+    case 'mission.verification.completed':
+      return {
+        ...base,
+        kind: 'mission.verification.completed',
+        // The outcome is named rather than blurred, because "asked" and "answered" and
+        // "ran out of time" are three different facts about whether anything was proved.
+        text: `Mission verification ${text(event.payload.outcome, 'unanswered')}.`,
+        tone: event.payload.outcome === 'passed' ? 'good' : 'neutral',
+      }
+
+    case 'mission.limit.exceeded':
+      return {
+        ...base,
+        kind: 'mission.limit.exceeded',
+        text: `Mission ceiling reached: ${text(event.payload.limit, 'unknown')}.`,
+        tone: 'warn',
       }
 
     default:

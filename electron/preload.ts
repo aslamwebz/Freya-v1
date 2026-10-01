@@ -13,6 +13,8 @@ import { CONVERSATION_LIMITS } from '../core/conversation/types'
 import { VOICE_LIMITS } from '../core/voice/types'
 import { BRAIN_LIMITS } from '../core/brain/types'
 import { WORK_LIMITS } from '../core/work/types'
+import { DEFAULT_MISSION_LIMITS as MISSION_LIMITS } from '../core/missions/types'
+import type { MissionProjection } from '../core/missions/types'
 
 export interface RuntimeInfo {
   version: string
@@ -187,6 +189,28 @@ const api = {
   },
 
   /**
+   * The Mission projection: statuses, counts, limits and honesty about persistence.
+   *
+   * What does **not** cross is the point of the whole subsystem: no title, no intent,
+   * no success criteria. Those live in the encrypted Mission store and come back only
+   * through the explicit `coreMissionDetail` read, which is a question about one
+   * Mission rather than a standing feed. A window that is merely open therefore does
+   * not hold a copy of everything the owner asked Freya to do.
+   *
+   * `persistence` crosses precisely so the surface can say `FORGETS ON QUIT` rather
+   * than implying durability the store may not have.
+   */
+  coreMission: (): Promise<MissionProjection | null> => ipcRenderer.invoke('freya:core:mission'),
+
+  onCoreMission: (handler: (projection: MissionProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: MissionProjection): void => handler(projection)
+    ipcRenderer.on('freya:core:mission', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:mission', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -268,6 +292,21 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'work.run.resume',
   'work.run.cancel',
   'work.approval.decide',
+
+  // Missions. A window may state what it wants accomplished and move that Mission
+  // around. Note what it may *not* do, because these are the two things that make a
+  // Mission trustworthy: it cannot raise a code-owned ceiling, and it cannot conclude
+  // anything by asserting a status. `mission.requestCompletion` is reachable precisely
+  // because a window is the owner's UI — but it *asks*, and only a code-owned verifier
+  // decides whether the outcome was established.
+  'mission.status.read',
+  'mission.create',
+  'mission.activate',
+  'mission.pause',
+  'mission.resume',
+  'mission.cancel',
+  'mission.fail',
+  'mission.requestCompletion',
 ])
 
 /**
@@ -344,7 +383,58 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       return { ok: true }
 
     case 'work.status.read':
+    case 'mission.status.read':
       return { ok: true }
+
+    case 'mission.create': {
+      // The three pieces of text a Mission is made of, and nothing else.
+      //
+      // What is deliberately absent is the interesting part. There is no `limits`
+      // case, no `status`, no `verification`, no `verifierId`, no `principalId`, no
+      // `deadlineAt` — so a window cannot raise a code-owned ceiling, declare itself
+      // the owner, or assert an outcome it never established. A Mission's limits are
+      // code's to set and a Mission's outcome is a verifier's to establish; this
+      // bridge forwards the words and refuses the rest.
+      const title = string('title', MISSION_LIMITS.maxTitleChars)
+      if (title === null || title === undefined) return { ok: false, reason: 'a Mission title is required' }
+      const intent = string('intent', MISSION_LIMITS.maxIntentChars)
+      if (intent === null || intent === undefined) return { ok: false, reason: 'a Mission needs an intent' }
+
+      const rawCriteria = record?.successCriteria
+      if (rawCriteria !== undefined) {
+        if (!Array.isArray(rawCriteria)) return { ok: false, reason: 'success criteria are invalid' }
+        if (rawCriteria.length > MISSION_LIMITS.maxSuccessCriteria) {
+          return {
+            ok: false,
+            reason: `a Mission may hold at most ${MISSION_LIMITS.maxSuccessCriteria} success criteria`,
+          }
+        }
+        const criteria: string[] = []
+        for (const raw of rawCriteria) {
+          if (typeof raw !== 'string') return { ok: false, reason: 'a success criterion is invalid' }
+          if (raw.length > MISSION_LIMITS.maxCriterionChars) {
+            return { ok: false, reason: 'a success criterion is too long' }
+          }
+          criteria.push(raw)
+        }
+        return { ok: true, payload: { title, intent, successCriteria: criteria } }
+      }
+      return { ok: true, payload: { title, intent } }
+    }
+
+    case 'mission.activate':
+    case 'mission.pause':
+    case 'mission.resume':
+    case 'mission.cancel':
+    case 'mission.fail':
+    case 'mission.requestCompletion': {
+      // One block for all six. None of them accepts a second field: there is no
+      // `verifierId` to name, because choosing the verifier is how a caller would
+      // choose the answer.
+      const missionId = string('missionId', MAX_ID_CHARS)
+      if (missionId === null || missionId === undefined) return { ok: false, reason: 'a Mission id is required' }
+      return { ok: true, payload: { missionId } }
+    }
 
     case 'core.command.submit': {
       const text = string('text', 4_000)
@@ -582,19 +672,57 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
 
       const taskId = string('taskId', MAX_ID_CHARS, false)
       if (taskId === null) return { ok: false, reason: 'task id is invalid' }
+      // A window may say *which Mission* this Run belongs to, and nothing else about
+      // its parent. There is deliberately no `parent` case here: an earlier version
+      // forwarded a `{ kind, id }` pair read straight off the payload, which let any
+      // window attach a Run to anything by asserting one. Naming a parent is a claim
+      // about structure, and structure is Core's to decide. Refused rather than
+      // dropped, so code still sending the old shape is told.
+      if (record !== null && 'parent' in record) {
+        return {
+          ok: false,
+          reason: "a run's parent is decided by Core; name a missionId instead of a parent",
+        }
+      }
+      const missionId = string('missionId', MAX_ID_CHARS, false)
+      if (missionId === null) return { ok: false, reason: 'mission id is invalid' }
+      // Rebuilt from the four named ceilings rather than forwarded as an object.
+      //
+      // Every other field on this command is rebuilt for one reason: an ignored blob
+      // would still be structured-cloned into the main process before Core could refuse
+      // it, so a window could attach an arbitrarily large payload to an otherwise valid
+      // command. `limits` was the one field that skipped that, for no stated reason.
+      //
+      // None of these can raise anything — Core clamps each one downward against
+      // WORK_LIMITS — so this is about the size of what crosses the boundary, not about
+      // what it can do.
       const rawLimits = record?.limits
-      if (
-        rawLimits !== undefined &&
-        (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits))
-      ) {
-        return { ok: false, reason: 'run limits are invalid' }
+      let limits: Record<string, number> | undefined
+      if (rawLimits !== undefined) {
+        if (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits)) {
+          return { ok: false, reason: 'run limits are invalid' }
+        }
+        const requested = rawLimits as Record<string, unknown>
+        limits = {}
+        for (const name of ['maxSteps', 'maxActions', 'maxDurationMs', 'maxAttemptsPerStep']) {
+          const value = requested[name]
+          if (value === undefined || value === null) continue
+          if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+            return { ok: false, reason: `run limit ${name} is invalid` }
+          }
+          limits[name] = Math.floor(value)
+        }
+        // An object carrying only unrecognised keys carries no request at all, and
+        // forwarding it would be forwarding an empty lie.
+        if (Object.keys(limits).length === 0) limits = undefined
       }
       return {
         ok: true,
         payload: {
           steps,
           ...(taskId === undefined ? {} : { taskId }),
-          ...(rawLimits === undefined ? {} : { limits: rawLimits }),
+          ...(missionId === undefined ? {} : { missionId }),
+          ...(limits === undefined ? {} : { limits }),
         },
       }
     }

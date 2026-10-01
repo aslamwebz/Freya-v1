@@ -423,6 +423,62 @@ Work is new, so it starts the stronger way. Adding the same check to an older fa
 is a schema-version question rather than a code one, and belongs with whatever next
 changes that family's payload.
 
+### Missions
+
+`mission.created` · `mission.activated` · `mission.paused` · `mission.resumed` ·
+`mission.cancelled` · `mission.failed` · `mission.completed` ·
+`mission.run.attached` · `mission.verification.requested` ·
+`mission.verification.completed` · `mission.limit.exceeded`
+
+Metadata only, and the rule is the Work one, because the content here is the most
+sensitive thing the journal has ever been asked not to hold. A Mission's title,
+intent and success criteria are what somebody asked Freya to accomplish, in their
+words.
+
+```
+  mission.created                 missionId, createdAt, deadlineAt, limits, status
+  mission.<transition>            missionId, from, to, reason, verifierId
+  mission.verification.requested  missionId, verifierId, runIds
+  mission.verification.completed  missionId, verifierId, outcome
+  mission.limit.exceeded          missionId, limit
+```
+
+Four details worth naming:
+
+- **No Mission payload has a slot for the Mission's text.** Not in the transition
+  events, not in the verification events, and not in `created`. The encrypted store is
+  the only place it exists, and the validator rejects an *unexpected key* — so a
+  payload carrying the right fields plus an `intent` is refused rather than quietly
+  kept. That is D25's rule, and here it protects something a person wrote rather than
+  something they searched for.
+- **`mission.completed` cannot be folded without a verification that passed.** The
+  transition table cannot enforce this, because `active → completed` is a legal
+  edge; the reducer does, by requiring a `mission.verification.completed` whose
+  outcome is `passed` and whose `verifierId` matches the one named on the transition.
+  Without it, a three-line hand-written journal manufactured a completed Mission.
+- **`mission.resumed` is separate from `mission.activated`** even though both land on
+  `active`, because only the origin tells them apart — and a journal that cannot
+  answer "was this ever paused?" cannot be audited.
+- **`mission.verification.completed` records a `timeout`.** Phase 6 writes *no*
+  verification event when a deadline lands mid-verification, leaving it `requested`.
+  Missions differ deliberately: at a deadline we hold positive knowledge that no
+  verdict arrived, which is a different fact from "nobody has answered", and that is
+  exactly what a crash leaves behind. The outcome recorded asserts nothing about the
+  Mission — it stays `active`.
+
+### No Mission event is a security event
+
+None of the eleven is in `SECURITY_EVENT_TYPES`, for Work's reason: a Mission event
+describes Freya *working toward* an outcome. A Mission that reached `completed` says
+nothing about whether Freya may think next, and a ceiling that was hit says nothing
+about the authority to reach it. Reporting either in the security stream would let an
+ordinary failure masquerade as a safety posture.
+
+The Mission fault that does exist is reported where it belongs, and is also not a
+security event: a Mission content store that fails authentication reports
+`persistence.reason` and refuses writes. It cannot grant cognition or clear a stop,
+and — like a Brain fault — it does not lose authority either.
+
 ### No Work event is a security event
 
 Not in `SECURITY_EVENT_TYPES`, and none may be. A Work event describes Freya *doing

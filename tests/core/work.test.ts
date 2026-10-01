@@ -1454,6 +1454,34 @@ describe('retries and limits', () => {
 
   })
 
+  it('clamps the wall-clock ceiling, which is the one easiest to leave unasserted', async () => {
+
+    // `resolveLimits` clamps all four ceilings with the same `Math.min`, but the
+    // duration one is the only wall-clock bound among them - and a caller asking for a
+    // very long run is asking for exactly this number. The clamp is correct; it was
+    // simply never checked, which is how a regression in it would have landed.
+    await boot()
+    const { WORK_LIMITS } = await import('../../core/work/types')
+    await must('work.run.create', {
+      steps: [record('one')],
+      limits: { maxDurationMs: 10_000_000 },
+    })
+    const recorded = (await journal()).find((event) => event.type === 'work.run.created')
+    const limits = (recorded?.payload as { limits: RunLimits }).limits
+    expect(limits.maxDurationMs).toBe(WORK_LIMITS.maxRunDurationMs)
+
+    // And the shape a hostile or careless caller actually sends: a value that is
+    // effectively infinite, which the clamp still has to hold.
+    const absurd = await must('work.run.create', {
+      steps: [record('two')],
+      limits: { maxDurationMs: Number.MAX_SAFE_INTEGER },
+    })
+    const absurdRecorded = (await journal()).filter((event) => event.type === 'work.run.created').at(-1)
+    const absurdLimits = (absurdRecorded?.payload as { limits: RunLimits }).limits
+    expect(absurdLimits.maxDurationMs).toBe(WORK_LIMITS.maxRunDurationMs)
+    expect(absurd.work?.ok).toBe(true)
+  })
+
   it('refuses a plan larger than the ceiling it asked for', async () => {
 
     await boot()

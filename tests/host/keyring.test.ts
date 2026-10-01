@@ -147,27 +147,31 @@ describe('one secret per domain', () => {
     secure.throwingEncrypt = true
     const result = await loadKeyring(dataPath())
     expect(secure.attemptedPlaintext).not.toBe('')
-    for (const domain of [result.conversation, result.brain]) {
+    for (const domain of [result.conversation, result.brain, result.mission]) {
       expect(domain.key).toBeNull()
       expect(domain.reason).not.toContain(secure.attemptedPlaintext)
     }
     expect(existsSync(`${dataPath()}.keyring.json`)).toBe(false)
   })
 
-  it('gives conversation and brain different secrets', async () => {
+  it('gives every domain a different secret from every other', async () => {
     const keyring = await loadKeyring(dataPath())
     expect(keyring.conversation.key).not.toBeNull()
     expect(keyring.brain.key).not.toBeNull()
+    expect(keyring.mission.key).not.toBeNull()
     // The property the whole file exists for. If this ever failed, a leaked
     // conversation key would be a leaked Brain, and "the conversation key leaked"
     // would stop being a bounded problem.
-    expect(Buffer.from(keyring.conversation.key!).equals(Buffer.from(keyring.brain.key!))).toBe(false)
+    const domains = [keyring.conversation, keyring.brain, keyring.mission]
+    const hexes = domains.map((domain) => Buffer.from(domain.key!).toString('hex'))
+    expect(new Set(hexes).size).toBe(3)
   })
 
   it('gives each domain a full 256-bit secret', async () => {
     const keyring = await loadKeyring(dataPath())
     expect(keyring.conversation.key!.length).toBe(32)
     expect(keyring.brain.key!.length).toBe(32)
+    expect(keyring.mission.key!.length).toBe(32)
   })
 
   it('wraps each secret separately, not as one blob', async () => {
@@ -181,9 +185,11 @@ describe('one secret per domain', () => {
     // The record is there so a keyring written on one platform is never read as
     // though it had been written the same way on another.
     expect(file.protection).toBe('gnome_libsecret')
-    expect(Object.keys(file.keys).sort()).toEqual(['brain', 'conversation'])
+    expect(Object.keys(file.keys).sort()).toEqual(['brain', 'conversation', 'mission'])
     // Separate wrapped blobs: recovering one domain never unwraps another.
     expect(file.keys.brain).not.toBe(file.keys.conversation)
+    expect(file.keys.mission).not.toBe(file.keys.conversation)
+    expect(file.keys.mission).not.toBe(file.keys.brain)
   })
 
   it('returns the same secrets on the next run', async () => {
@@ -203,6 +209,116 @@ describe('one secret per domain', () => {
     expect(elsewhere.conversation.key).toBeNull()
     // Refused, not replaced with something weaker.
     expect(elsewhere.brain.reason).toMatch(/could not be decrypted/)
+  })
+})
+
+/**
+ * Phase 7's third domain, and the migration that introduces it.
+ *
+ * The hard part is not generating a key, it is adding one to a file that already
+ * exists without endangering the two that are in it. Those keys belong to people's
+ * conversations and their own long-term memory, and there is no way to regenerate
+ * them — so a rewrite that failed halfway would be unrecoverable rather than
+ * merely inconvenient.
+ */
+describe('the Mission domain, and the migration that introduces it', () => {
+  /** A Phase 6 keyring: correct, current, and missing the Mission key. */
+  async function writeTwoDomainKeyring(): Promise<{ conversation: string; brain: string }> {
+    const conversation = randomBytes(32).toString('base64')
+    const brain = randomBytes(32).toString('base64')
+    await writeFile(
+      `${dataPath()}.keyring.json`,
+      JSON.stringify({
+        version: KEYRING_VERSION,
+        protection: 'gnome_libsecret',
+        keys: { conversation: wrapField(conversation), brain: wrapField(brain) },
+      }),
+    )
+    return { conversation, brain }
+  }
+
+  it('reads a Mission key written by an earlier run', async () => {
+    const first = await loadKeyring(dataPath())
+    const second = await loadKeyring(dataPath())
+    // Durable Missions, not per-launch ones: a key regenerated on every start would
+    // make every Mission written encrypted unreadable at the next start, which reads
+    // exactly like losing them.
+    expect(Buffer.from(second.mission.key!).equals(Buffer.from(first.mission.key!))).toBe(true)
+  })
+
+  it('adds a Mission key to an existing keyring without disturbing the other two', async () => {
+    const before = await writeTwoDomainKeyring()
+
+    const keyring = await loadKeyring(dataPath())
+
+    // The two existing secrets must survive byte-for-byte. These are somebody's
+    // history; there is no second copy and no way to regenerate them.
+    expect(Buffer.from(keyring.conversation.key!).toString('base64')).toBe(before.conversation)
+    expect(Buffer.from(keyring.brain.key!).toString('base64')).toBe(before.brain)
+    expect(keyring.mission.key).not.toBeNull()
+    expect(keyring.mission.key!.length).toBe(32)
+
+    // And it was persisted, rather than generated afresh each launch.
+    const file = JSON.parse(await readFile(`${dataPath()}.keyring.json`, 'utf8')) as {
+      keys: Record<string, string>
+    }
+    expect(Object.keys(file.keys).sort()).toEqual(['brain', 'conversation', 'mission'])
+  })
+
+  it('gives the migrated Mission key a different secret from both existing ones', async () => {
+    await writeTwoDomainKeyring()
+    const keyring = await loadKeyring(dataPath())
+    const hexes = [keyring.conversation, keyring.brain, keyring.mission].map((domain) =>
+      Buffer.from(domain.key!).toString('hex'),
+    )
+    // A Mission re-wrapping the conversation secret would be worse than no
+    // migration: it would look correct and quietly merge two blast radii.
+    expect(new Set(hexes).size).toBe(3)
+  })
+
+  it('will not rewrite a keyring whose existing secrets it cannot read', async () => {
+    await writeTwoDomainKeyring()
+    const onDisk = await readFile(`${dataPath()}.keyring.json`, 'utf8')
+
+    // Copied to another OS account: the file travels, the secrets do not.
+    secure.account = 'user-b'
+
+    const keyring = await loadKeyring(dataPath())
+
+    // Nothing was written, so the original is intact for whoever does hold the keys.
+    expect(await readFile(`${dataPath()}.keyring.json`, 'utf8')).toBe(onDisk)
+
+    // And no Mission key is claimed, because adding one would mean re-wrapping
+    // secrets this process cannot open.
+    expect(keyring.mission.key).toBeNull()
+    // And it says the two true things: the keyring was not touched, and the Mission
+    // will forget itself rather than take anything else down with it.
+    expect(keyring.mission.reason).toMatch(/left untouched/i)
+    expect(keyring.mission.reason).toMatch(/memory/i)
+  })
+
+  it('still keeps the readable domains when the OS cannot write the new one', async () => {
+    await writeTwoDomainKeyring()
+    secure.throwingEncrypt = true
+
+    const keyring = await loadKeyring(dataPath())
+
+    // A migration that costs history because it could not add a key is a strictly
+    // worse outcome than a Mission that forgets itself.
+    expect(keyring.conversation.key).not.toBeNull()
+    expect(keyring.brain.key).not.toBeNull()
+    expect(keyring.mission.key).toBeNull()
+    expect(keyring.mission.reason).not.toContain(secure.attemptedPlaintext)
+  })
+
+  it('does not mistake a two-domain keyring for a corrupt one', async () => {
+    // The migration is an upgrade, not an error. A file that predates the Mission
+    // domain is exactly what this code is expected to meet.
+    await writeTwoDomainKeyring()
+    const keyring = await loadKeyring(dataPath())
+    expect(keyring.conversation.reason).toBeNull()
+    expect(keyring.brain.reason).toBeNull()
+    expect(keyring.mission.reason).toBeNull()
   })
 })
 

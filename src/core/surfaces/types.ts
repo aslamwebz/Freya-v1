@@ -10,6 +10,7 @@
 export const SURFACE_TYPES = [
   'chat',
   'search',
+  'research',
   'work',
   'mission',
   'vault',
@@ -106,11 +107,31 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   search: {
     type: 'search',
     title: 'Search',
-    summary: 'Search across files, vault and knowledge. Retrieval is not implemented in Phase 0.',
+    // Rewritten in Phase 5 from a window that returned nothing into a real web
+    // search and source reader. Local file, vault and full-text scopes are still
+    // absent, and the surface says so rather than listing capabilities it lacks.
+    summary:
+      'Web search through the configured provider, and reading a public source into bounded plain text. Nothing is indexed locally.',
     width: 600,
-    height: 500,
+    height: 560,
     minWidth: 380,
-    minHeight: 300,
+    minHeight: 320,
+    instance: 'singleton',
+    status: 'working',
+  },
+  research: {
+    type: 'research',
+    title: 'Research',
+    // A separate window from Search because the two answer different questions and
+    // have different costs: Search is one query and no model, Research is a bounded
+    // multi-stage run that spends model calls. Merging them would make a free action
+    // look like an expensive one.
+    summary:
+      'Bounded, cited research over public web pages, with the code-owned limits and the sources behind every finding shown.',
+    width: 680,
+    height: 600,
+    minWidth: 420,
+    minHeight: 340,
     instance: 'singleton',
     status: 'working',
   },

@@ -5,6 +5,7 @@ import { SearchSurface } from './SearchSurface'
 import { HarnessSurface } from './HarnessSurface'
 import { SecuritySurface } from './SecuritySurface'
 import { VaultSurface } from './VaultSurface'
+import { ResearchSurface } from './ResearchSurface'
 import type { SurfaceDefinition } from './types'
 
 /**
@@ -26,6 +27,7 @@ import type { SurfaceDefinition } from './types'
 const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   chat: () => <ChatSurface />,
   search: () => <SearchSurface />,
+  research: () => <ResearchSurface />,
   harness: () => <HarnessSurface />,
   security: () => <SecuritySurface />,
   vault: () => <VaultSurface />,

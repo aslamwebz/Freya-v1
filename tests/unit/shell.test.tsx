@@ -203,12 +203,12 @@ describe('Freya shell', () => {
     await boot()
 
     await act(async () => {
-      fireEvent.click(dockButton(/search/i))
+      fireEvent.click(dockButton('Search'))
     })
 
     expect(manager.surfaces).toHaveLength(1)
     expect(screen.getByRole('dialog', { name: 'Search' })).toBeInTheDocument()
-    expect(screen.getByPlaceholderText(/search files, vault and knowledge/i)).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/search the web/i)).toBeInTheDocument()
   })
 
   it('gives every surface type the same window chrome without bespoke components', async () => {
@@ -231,7 +231,7 @@ describe('Freya shell', () => {
   it('moves a surface by dragging its title bar', async () => {
     await boot()
     await act(async () => {
-      fireEvent.click(dockButton(/search/i))
+      fireEvent.click(dockButton('Search'))
     })
 
     const surface = manager.surfaces[0]
@@ -283,7 +283,7 @@ describe('Freya shell', () => {
     await boot()
     await act(async () => {
       fireEvent.click(dockButton(/chat/i))
-      fireEvent.click(dockButton(/search/i))
+      fireEvent.click(dockButton('Search'))
     })
     const surfaces = manager.surfaces ?? []
     const chat = surfaces.find((s) => s.type === 'chat')
@@ -326,7 +326,7 @@ describe('Freya shell', () => {
   it('maximises to the workspace frame and restores the previous geometry', async () => {
     await boot()
     await act(async () => {
-      fireEvent.click(dockButton(/search/i))
+      fireEvent.click(dockButton('Search'))
     })
     const id = manager.surfaces[0]?.id ?? ''
     const original = { ...(manager.get(id)?.layout ?? {}) }
@@ -361,7 +361,7 @@ describe('Freya shell', () => {
   it('closes a surface and removes it from the workspace', async () => {
     await boot()
     await act(async () => {
-      fireEvent.click(dockButton(/search/i))
+      fireEvent.click(dockButton('Search'))
       fireEvent.click(dockButton(/harness/i))
     })
     expect(manager.surfaces).toHaveLength(2)
@@ -529,7 +529,7 @@ describe('Freya shell', () => {
     expect(shellStore.getState().surfaces).toEqual({ open: 1, minimized: 0, focused: chatId })
 
     await act(async () => {
-      fireEvent.click(dockButton(/search/i))
+      fireEvent.click(dockButton('Search'))
     })
     const searchId = manager.surfaces[1]?.id ?? ''
     expect(shellStore.getState().surfaces).toEqual({ open: 2, minimized: 0, focused: searchId })
@@ -550,7 +550,7 @@ describe('Freya shell', () => {
   it('notifies store subscribers when a surface moves, with no second subscription', async () => {
     await boot()
     await act(async () => {
-      fireEvent.click(dockButton(/search/i))
+      fireEvent.click(dockButton('Search'))
     })
     const id = manager.surfaces[0]?.id ?? ''
     const listener = vi.fn()

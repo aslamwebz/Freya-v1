@@ -510,7 +510,20 @@
 .search-field {
   display: flex;
   gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* The label is a real element, not a placeholder: a person reading a search box
+   needs to know whether they are searching the web or typing a URL. */
+.search-field-label {
   flex: none;
+  align-self: center;
+  font: var(--label);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--ink-3);
+  min-width: 96px;
 }
 
 .search-field input {
@@ -568,41 +581,354 @@
   color: var(--ink-2);
 }
 
-.search-scopes {
+.search-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   flex: none;
 }
 
-.search-scopes-title {
+.search-section h3 {
+  margin: 0;
   font: var(--label);
   letter-spacing: var(--label-tracking);
   text-transform: uppercase;
   color: var(--ink-3);
 }
 
-.search-scopes ul {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 0;
-}
-
-.search-scopes li {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 2px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  font-size: 12.5px;
-}
-
-.search-scopes b {
-  font-weight: 500;
-}
-
-.search-scopes em {
-  font-style: normal;
-  color: var(--ink-3);
+.search-status {
+  margin: 0;
   font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.search-result-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-result-list li {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--blue-line);
+  background: rgba(63, 150, 255, 0.05);
+}
+
+.search-result-list a {
+  font: 500 12.5px/1.3 var(--font);
+  color: var(--ink);
+}
+
+.search-result-list p {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+/* A snippet is a snippet. Labelling it as the page's own description would be a
+   small lie that compounds when a model quotes it back. */
+.search-result-domain {
+  margin-left: 8px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.search-document {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.search-document h4 {
+  margin: 0 0 4px;
+  font: 500 13px/1.3 var(--font-display);
+  color: var(--ink);
+}
+
+.search-document-meta {
+  margin: 0 0 8px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.search-document-meta a {
+  color: var(--blue-hi);
+}
+
+.search-document-headings {
+  margin: 0 0 8px;
+  padding: 0 0 0 16px;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+/* Rendered as preformatted text, never as markup. Everything in here came off an
+   arbitrary web page; React escapes it and this element does nothing else. */
+.search-document-text {
+  margin: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 400 12px/1.55 var(--font-mono);
+  color: var(--ink-2);
+}
+
+.search-document-truncated {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--amber);
+}
+
+/* ------------------------------------------------------------ research */
+
+.research-surface {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.research-boundary {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  max-width: 64ch;
+}
+
+.research-section {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  flex: none;
+}
+
+.research-section h3,
+.research-section h4 {
+  margin: 0;
+  font: var(--label);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.research-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.research-field span {
+  font: var(--label);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.research-field textarea {
+  font: 400 12.5px/1.5 var(--font);
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--gold-line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.research-field textarea:focus {
+  outline: none;
+  border-color: var(--gold-line-strong);
+}
+
+.research-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.research-button,
+.research-cancel {
+  border: 1px solid var(--gold-line-strong);
+  background: var(--gold-soft);
+  color: var(--gold-hi);
+  border-radius: 9px;
+  padding: 7px 13px;
+  font: var(--label);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+.research-button:disabled {
+  opacity: 0.4;
+}
+
+/* Cancel is deliberately not the same colour as start. Stopping something that is
+   already spending is a different act from beginning it. */
+.research-cancel {
+  border-color: rgba(255, 90, 82, 0.45);
+  background: rgba(255, 90, 82, 0.1);
+  color: var(--red);
+}
+
+.research-stage {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--blue-hi);
+}
+
+/* The ceilings are shown before anything is asked for, not after. A person
+   deciding whether to spend a research run is entitled to know what it costs. */
+.research-limits {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.research-limit-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.research-limit-list li {
+  font: 400 11px/1 var(--font-mono);
+  color: var(--ink-2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  padding: 5px 8px;
+}
+
+.research-limits-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+/* A partial answer is styled differently from a complete one, so the two cannot be
+   skimmed as the same thing. */
+.research-partial {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(242, 180, 65, 0.35);
+  background: rgba(242, 180, 65, 0.07);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.research-findings,
+.research-conflicts,
+.research-uncertainties,
+.research-sources,
+.research-failures {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.research-findings li,
+.research-conflicts li {
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--blue-line);
+  background: rgba(63, 150, 255, 0.05);
+}
+
+.research-conflicts li {
+  border-color: rgba(242, 180, 65, 0.35);
+  background: rgba(242, 180, 65, 0.06);
+}
+
+.research-findings p,
+.research-conflicts p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+/* Every finding names its sources, on the same row, so a claim and its basis are
+   never separated. A citation that cannot be followed is decoration. */
+.research-citations {
+  display: block;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.research-uncertainties li {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* A closed failure code, never a provider's own words. */
+.research-failures li {
+  font: 400 11px/1.4 var(--font-mono);
+  color: var(--amber);
+}
+
+.research-failures code {
+  font: inherit;
+}
+
+.research-sources li {
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.research-sources a {
+  font: 500 12px/1.3 var(--font);
+  color: var(--ink);
+}
+
+.research-source-url {
+  display: block;
+  margin-top: 2px;
+  font: 400 10.5px/1.4 var(--font-mono);
+  color: var(--ink-3);
+  word-break: break-all;
+}
+
+.research-sources p {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.research-usage,
+.research-none,
+.research-failure {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.research-failure {
+  color: var(--amber);
 }
 
 /* ---------------------------------------------------------- harness */

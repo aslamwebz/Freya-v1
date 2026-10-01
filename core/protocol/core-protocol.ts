@@ -35,6 +35,23 @@ export const CAPABILITIES = [
   'security.status.read',
   'security.stop',
   'security.resume',
+  /**
+   * Phase 5 research capabilities.
+   *
+   * Separate names, because they are separate kinds of privilege. Search asks a
+   * third party about the world; `browser.read` fetches an arbitrary public page
+   * and therefore executes an attacker's HTML inside a managed sandbox; research
+   * starts a multi-stage operation that spends model calls. A capability vocabulary
+   * that collapsed them into one `research.use` would make it impossible to widen
+   * one without widening all three.
+   *
+   * None is a grant a model or a page can obtain. They are held by the owner
+   * principal only, and each is evaluated by Guard before the privileged work
+   * happens rather than after it.
+   */
+  'search.web',
+  'browser.read',
+  'research.start',
 ] as const
 
 export type Capability = (typeof CAPABILITIES)[number]
@@ -53,6 +70,13 @@ export const ALL_CAPABILITIES: readonly Capability[] = CAPABILITIES
  *
  * Deliberately excludes `cognition.grant.manage` and every `security.*`
  * capability: a worker can ask to think, and that is the end of it.
+ *
+ * Phase 5 deliberately adds none of `search.web`, `browser.read` or
+ * `research.start` here. A worker can already ask for cognition under a grant, and
+ * cognition is where a research operation's model turns happen. Giving a worker the
+ * ability to reach the network or a browser as well would mean an agent could
+ * exfiltrate whatever it was told, which is the opposite of what a bounded worker
+ * is for.
  */
 export const WORKER_CAPABILITIES: readonly Capability[] = ['cognition.request']
 

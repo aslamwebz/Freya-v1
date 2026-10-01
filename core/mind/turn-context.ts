@@ -181,11 +181,10 @@ export interface DetectedContextReference {
  * source that kind yet" — the difference the Context domain insists on preserving
  * between a kind that is not built and a scope that is empty.
  */
-const DEFERRED_NOUNS: readonly { readonly noun: string; readonly kind: DeferredContextKind }[] = [
-  { noun: 'window', kind: 'active_window' },
-  { noun: 'app', kind: 'active_window' },
-  { noun: 'application', kind: 'active_window' },
-]
+// active_window became a live sourced kind in issue #30. Live kinds are never
+// inferred from adjacent nouns because doing so could resolve past a real ambiguity.
+// No remaining deferred kind has a prose noun this compiler can identify honestly.
+const DEFERRED_NOUNS: readonly { readonly noun: string; readonly kind: DeferredContextKind }[] = []
 
 /** How far past the term a qualifying noun may sit, in characters. */
 const NOUN_WINDOW = 24

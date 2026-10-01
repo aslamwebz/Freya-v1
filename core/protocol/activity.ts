@@ -50,6 +50,14 @@ export type ActivityKind =
   | 'voice.capture'
   | 'grant.created'
   | 'grant.revoked'
+  | 'work.run.started'
+  | 'work.run.completed'
+  | 'work.run.failed'
+  | 'work.run.cancelled'
+  | 'work.run.recovered'
+  | 'work.step.verified'
+  | 'work.approval.requested'
+  | 'work.approval.decided'
   | 'other'
 
 export interface CoreActivityEvent {
@@ -311,6 +319,216 @@ export function describeActivity(event: {
         ...base,
         kind: 'voice.capture',
         text: `Local recording discarded: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'warn',
+      }
+
+    /* ---------------------------------------------------------------- work */
+    //
+    // Metadata only, and worded so a row can never be mistaken for what happened.
+    // No step label, no task title, no observation text and no capability data
+    // appears here — none of it is in the journal either, so there is nothing to
+    // leak. The feed says a run finished and how much of it verified, which is the
+    // question somebody watching actually has.
+
+    case 'work.run.created':
+      return {
+        ...base,
+        kind: 'other',
+        text: `Run planned: ${number(event.payload.steps && (event.payload.steps as unknown[]).length, 0)} steps.`,
+        tone: 'neutral',
+      }
+
+    case 'work.run.started':
+      return { ...base, kind: 'work.run.started', text: 'Run started.', tone: 'busy' }
+
+    case 'work.run.resumed':
+      return {
+        ...base,
+        kind: 'work.run.started',
+        text: `Run resumed${event.payload.reason ? `: ${text(event.payload.reason)}` : '.'}`,
+        tone: 'busy',
+      }
+
+    case 'work.run.paused':
+      return {
+        ...base,
+        kind: 'other',
+        text: `Run paused: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'warn',
+      }
+
+    case 'work.run.waiting':
+      return {
+        ...base,
+        kind: 'other',
+        text: `Run waiting: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'warn',
+      }
+
+    case 'work.run.awaiting_approval':
+      return {
+        ...base,
+        kind: 'work.approval.requested',
+        text: `Run stopped for approval: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'warn',
+      }
+
+    case 'work.run.completed':
+      return {
+        ...base,
+        kind: 'work.run.completed',
+        text: `Run completed: ${number(event.payload.verifiedCount, 0)} of ${number(event.payload.stepCount, 0)} steps verified.`,
+        tone: 'good',
+      }
+
+    case 'work.run.failed':
+      return {
+        ...base,
+        kind: 'work.run.failed',
+        text: `Run failed: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'bad',
+      }
+
+    case 'work.run.cancelled':
+      return {
+        ...base,
+        kind: 'work.run.cancelled',
+        text: `Run cancelled: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'warn',
+      }
+
+    // Stated in the feed rather than hidden in the projection, because a run that
+    // was still executing when the process died is exactly the thing a person
+    // would otherwise assume came back to life on its own.
+    case 'work.run.recovered':
+      return {
+        ...base,
+        kind: 'work.run.recovered',
+        text: `A run was interrupted by a restart and has been recorded as failed: ${text(event.payload.reason)}`,
+        tone: 'warn',
+      }
+
+    case 'work.step.verified':
+      return { ...base, kind: 'work.step.verified', text: 'A step was verified.', tone: 'good' }
+
+    case 'work.step.failed':
+      return {
+        ...base,
+        kind: 'other',
+        text: `Step failed: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'bad',
+      }
+
+    case 'work.step.cancelled':
+      return {
+        ...base,
+        kind: 'other',
+        text: `Step cancelled: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'warn',
+      }
+
+    case 'work.step.skipped':
+      return { ...base, kind: 'other', text: 'A step was skipped.', tone: 'neutral' }
+
+    case 'work.action.started':
+      return {
+        ...base,
+        kind: 'other',
+        text: `Capability "${text(event.payload.capability)}" attempted (${number(event.payload.attempt, 1)}).`,
+        tone: 'busy',
+      }
+
+    case 'work.action.completed':
+      return { ...base, kind: 'other', text: 'A capability returned.', tone: 'neutral' }
+
+    case 'work.action.failed':
+      return {
+        ...base,
+        kind: 'other',
+        text: `A capability failed: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'bad',
+      }
+
+    case 'work.action.cancelled':
+      return {
+        ...base,
+        kind: 'other',
+        text: `A capability was cancelled: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'warn',
+      }
+
+    // Measured, never quoted. The lengths are the whole disclosure: they let an
+    // operator see that something substantial came back without this feed becoming a
+    // transcript of what every capability produced.
+    case 'work.observation.recorded':
+      return {
+        ...base,
+        kind: 'other',
+        text: `Observation recorded (${text(event.payload.kind, 'result')}, ${number(event.payload.summaryLength, 0)} characters).`,
+        tone: 'neutral',
+      }
+
+    case 'work.verification.requested':
+      return {
+        ...base,
+        kind: 'other',
+        text: `Verification requested from "${text(event.payload.verifier)}".`,
+        tone: 'neutral',
+      }
+
+    case 'work.verification.completed':
+      // Passed and failed read differently on purpose. A verification that passed
+      // and one that failed are the same event shape, and flattening them would
+      // erase the only distinction this architecture exists to preserve.
+      return event.payload.verdict === 'passed'
+        ? { ...base, kind: 'other', text: 'Verification passed.', tone: 'good' }
+        : {
+            ...base,
+            kind: 'other',
+            text: `Verification failed: ${text(event.payload.reason, 'no reason given')}`,
+            tone: 'bad',
+          }
+
+    case 'work.approval.requested':
+      return {
+        ...base,
+        kind: 'work.approval.requested',
+        text: `Approval requested before "${text(event.payload.capability)}" runs: ${text(event.payload.proposal)}. Nothing has run yet.`,
+        tone: 'warn',
+      }
+
+    case 'work.approval.approved':
+      return { ...base, kind: 'work.approval.decided', text: 'An approval was granted.', tone: 'good' }
+
+    case 'work.approval.denied':
+      return {
+        ...base,
+        kind: 'work.approval.decided',
+        text: `An approval was denied: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'bad',
+      }
+
+    case 'work.approval.cancelled':
+      return {
+        ...base,
+        kind: 'work.approval.decided',
+        text: `An approval request was withdrawn: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'warn',
+      }
+
+    case 'work.approval.expired':
+      return {
+        ...base,
+        kind: 'work.approval.decided',
+        text: `An approval request expired: ${text(event.payload.reason, 'no reason given')}`,
+        tone: 'warn',
+      }
+
+    case 'work.limits.exceeded':
+      return {
+        ...base,
+        kind: 'other',
+        text: `A run reached its ${text(event.payload.limit, 'limit')} ceiling and stopped.`,
         tone: 'warn',
       }
 

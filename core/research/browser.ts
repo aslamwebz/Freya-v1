@@ -26,6 +26,10 @@ export interface BrowserTargetFactory { create(sessionId: string, signal: AbortS
 export interface BrowserEvent { sessionId: string; stage: 'creating' | 'ready' | 'navigating' | 'reading' | 'closed'; failureCode?: ResearchErrorCode }
 export interface BrowserSession { id: string; state: 'ready' | 'navigating' | 'reading' }
 export interface ManagedBrowserOptions { newId?: () => string; onEvent?: (event: BrowserEvent) => void }
+// Electron destroys its window synchronously; this bounds optional asynchronous cleanup.
+async function closeTarget(target: BrowserTarget): Promise<void> {
+  await withResearchAbort(undefined, 1000, async () => target.close()).catch(() => {})
+}
 interface SessionEntry {
   id: string
   state: BrowserEvent['stage']
@@ -54,7 +58,7 @@ export class ManagedBrowserService {
         const target = await this.factory.create(id, signal)
         // A factory may ignore abort. The late result is still ours to dispose of.
         if (signal.aborted || entry.state === 'closed') {
-          await target.close().catch(() => {})
+          await closeTarget(target)
           throw new ResearchError('cancelled')
         }
         entry.target = target
@@ -90,8 +94,7 @@ export class ManagedBrowserService {
   }
 
   async navigate(id: string, url: string, options: { signal?: AbortSignal } = {}): Promise<void> {
-    const source = assertPublicUrl(url).href
-    return this.operation(id, 'navigating', options, (target, signal) => target.navigate(source, signal))
+    return this.operation(id, 'navigating', options, (target, signal) => target.navigate(assertPublicUrl(url).href, signal))
   }
 
   async read(id: string, options: { signal?: AbortSignal } = {}): Promise<ReadableDocument> {
@@ -104,7 +107,7 @@ export class ManagedBrowserService {
     this.sessions.delete(entry.id)
     entry.controller.abort()
     this.emit(entry, failureCode)
-    await entry.target?.close().catch(() => {})
+    if (entry.target) await closeTarget(entry.target)
   }
 
   async close(id: string): Promise<void> {
@@ -120,10 +123,14 @@ export class ManagedBrowserService {
 
   async readWebPage(url: string, options: { signal?: AbortSignal } = {}): Promise<ReadableDocument> {
     const source = assertPublicUrl(url).href
-    const id = await this.create(options)
+    let id: string | undefined
     try {
-      await this.navigate(id, source, options)
-      return await this.read(id, options)
-    } finally { await this.close(id) }
+      return await withResearchAbort(options.signal, 15000, async (signal) => {
+        id = await this.create({ signal })
+        await this.navigate(id, source, { signal })
+        return this.read(id, { signal })
+      })
+    } catch (error) { throw safeResearchError(error, 'network_error') }
+    finally { if (id) await this.close(id) }
   }
 }

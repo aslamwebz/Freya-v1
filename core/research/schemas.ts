@@ -46,7 +46,7 @@ export function parseSynthesis(text: string, sources: readonly ResearchSource[])
     if (!Array.isArray(input) || input.length > max) return invalid()
     return input.map(item => {
       const row = object(item, ['text', 'sourceIds'])
-      const [text] = strings([row.text], 1, 2048)
+      const text = strings([row.text], 1, 2048)[0]!
       const sourceIds = [...new Set(strings(row.sourceIds, 6, 128))]
       if (sourceIds.length < minimum || sourceIds.some(id => !known.has(id))) return invalid()
       return { text, sourceIds }

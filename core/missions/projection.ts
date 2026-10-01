@@ -49,6 +49,31 @@ export interface WorkTruthPort {
   isSettled(status: RunStatus): boolean
 }
 
+/**
+ * What a Core without Missions reports.
+ *
+ * Separate from an empty-but-real projection because the two mean different things
+ * to a surface: "there are no Missions" is a fact, and "Missions are not available"
+ * is a fault. Collapsing them would let a window render a healthy-looking empty list
+ * over a subsystem that never started.
+ */
+export const ABSENT_MISSION_PROJECTION: MissionProjection = Object.freeze({
+  persistence: Object.freeze({ mode: 'unavailable' as const, reason: null, durable: false }),
+  missions: Object.freeze([]),
+  counts: Object.freeze({
+    total: 0,
+    draft: 0,
+    active: 0,
+    paused: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+    needsAttention: 0,
+  }),
+  limits: DEFAULT_MISSION_LIMITS,
+  sequence: 0,
+})
+
 export function missionProjection(
   state: MissionState,
   work: WorkTruthPort,

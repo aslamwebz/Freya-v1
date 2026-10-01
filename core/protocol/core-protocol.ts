@@ -72,6 +72,19 @@ export const CAPABILITIES = [
    * withheld, audited or re-gated without touching the rest of Work.
    */
   'work.approval.decide',
+
+  // Missions — Phase 7.
+  //
+  // Two, not one, and the split is the point.
+  //
+  // `mission.status.read` is held by the owner only and is what a Mission surface
+  // needs in order to render. `mission.manage` is what creates, activates, pauses,
+  // resumes, cancels, concludes and *asks for completion*. Splitting them means a
+  // future body can be given the ability to watch a Mission without being able to
+  // conclude one — and concluding is the only operation that can say "this is done",
+  // which is the one thing nobody should reach by accident.
+  'mission.status.read',
+  'mission.manage',
 ] as const
 
 export type Capability = (typeof CAPABILITIES)[number]
@@ -91,6 +104,12 @@ export const ALL_CAPABILITIES: readonly Capability[] = CAPABILITIES
  * Deliberately excludes `cognition.grant.manage`, every `security.*` capability,
  * and **every `work.*` capability**: a worker can ask to think, and that is the
  * end of it.
+ *
+ * `mission.*` is excluded for the same reason as `work.*`, and the exclusion is
+ * stated here for the same reason: a Run executing under a worker principal must
+ * never be able to conclude the Mission it belongs to. A Mission is a person's
+ * outcome, and an agent deciding on its own that it has been achieved is precisely
+ * the failure Missions exist to prevent.
  *
  * `work.*` being here in the negative is the single most important line in the
  * vocabulary. A Run executing under a worker principal can therefore never plan
@@ -367,6 +386,13 @@ export type CoreCommandName =
    * approver could approve its own request.
    */
   | 'work.approval.decide'
+  | 'mission.create'
+  | 'mission.activate'
+  | 'mission.pause'
+  | 'mission.resume'
+  | 'mission.cancel'
+  | 'mission.fail'
+  | 'mission.requestCompletion'
 
 export interface CoreCommandEnvelope {
   command: CoreCommandName
@@ -416,6 +442,17 @@ export interface CoreCommandResult {
    * wherever status is.
    */
   brain?: BrainCommandOutcome
+  /**
+   * The Mission view of a Mission command's result.
+   *
+   * Its own slot for the same reason as every other subsystem's: a Mission carries
+   * what the owner asked for, and a security projection is exactly the kind of thing
+   * that gets cached, logged and copied around. It is also where a *refusal* lands
+   * separately from `ok`, because "the engine declined" and "Core understood you" are
+   * different facts and a window that cannot tell them apart will report a refusal as
+   * a success.
+   */
+  mission?: MissionCommandOutcomeView
   /**
    * The research view of a research command's result.
    *
@@ -507,6 +544,25 @@ export interface ResearchCommandOutcome {
  * and counts what it left out. "Freya recalled this" is only a meaningful thing to
  * show somebody if they can also see where it came from and what was dropped.
  */
+/**
+ * What a Mission command produced, as the renderer sees it.
+ *
+ * A structural copy of `MissionCommandOutcome` rather than a re-export, because the
+ * protocol is what a window is typed against and Core's engine types are not part of
+ * that contract. Nothing here is writable: Core overwrites it on the next push.
+ */
+export interface MissionCommandOutcomeView {
+  /** Which Mission operation this was, in the vocabulary Core knows. */
+  operation: string
+  ok: boolean
+  /** The Mission's id, once one exists. */
+  missionId?: string
+  /** The status after the command, when it changed anything. */
+  status?: string
+  /** Why a refusal or a non-establishment happened, in words. Never evidence. */
+  reason?: string
+}
+
 export interface BrainCommandOutcome {
   operation:
     | 'status'

@@ -237,6 +237,70 @@ export function parseDurableEvent(
   return validateDurableEvent(value, previousSequence)
 }
 
+/**
+ * Reject a payload whose key set is not exactly the one the schema names.
+ *
+ * Reading named fields is not enough on its own: a payload with the right fields
+ * *plus* a query would pass every field check and quietly keep the query. This is
+ * what makes "no query in a research event" a property of the validator rather than
+ * a property of everyone remembering.
+ */
+function exactKeys(p: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(p).sort()
+  const expected = [...keys].sort()
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
+}
+
+const RESEARCH_STAGE_KEYS = ['operationId', 'sessionId', 'stage', 'counters', 'failureCode'] as const
+
+const RESEARCH_STAGE_COUNTER_KEYS = [
+  'iterations',
+  'queries',
+  'results',
+  'pages',
+  'evidenceChars',
+  'modelTurns',
+  'failures',
+  'durationMs',
+] as const
+
+const RESEARCH_STAGES = [
+  'authorizing',
+  'planning',
+  'gap',
+  'searching',
+  'reading',
+  'synthesizing',
+  'completed',
+  'partial',
+  'failed',
+  'cancelled',
+  'creating',
+  'ready',
+  'navigating',
+  'closed',
+] as const
+
+/**
+ * One research stage, for all eleven event types.
+ *
+ * Every field is either an id Core issued, a closed enum, an integer the subsystem
+ * counted itself, or a fixed failure code. There is no slot for a query, a URL, a
+ * domain, a snippet, page text, an answer or a provider diagnostic, and the key check
+ * above means an extra field cannot be attached either.
+ */
+const RESEARCH_STAGE = (p: Record<string, unknown>): boolean => {
+  if (!exactKeys(p, RESEARCH_STAGE_KEYS)) return false
+  if (!isNonEmptyString(p.operationId)) return false
+  if (!(p.sessionId === null || isNonEmptyString(p.sessionId))) return false
+  if (typeof p.stage !== 'string' || !RESEARCH_STAGES.includes(p.stage as never)) return false
+  if (!(p.failureCode === null || isNonEmptyString(p.failureCode))) return false
+  const counters = p.counters
+  if (typeof counters !== 'object' || counters === null || Array.isArray(counters)) return false
+  if (!exactKeys(counters as Record<string, unknown>, RESEARCH_STAGE_COUNTER_KEYS)) return false
+  return RESEARCH_STAGE_COUNTER_KEYS.every((key) => isNonNegativeInt((counters as Record<string, unknown>)[key]))
+}
+
 const PAYLOAD_RULES: {
   [K in CoreEventType]: (payload: Record<string, unknown>) => boolean
 } = {
@@ -415,4 +479,24 @@ const PAYLOAD_RULES: {
     (p.turnId === null || isEventId(p.turnId)),
 
   'brain.degraded': (p) => isNonEmptyString(p.reason),
+
+  /* ------------------------------------------------------------- research */
+
+  // One rule for all eleven research stages, applied to each. The rule reads
+  // *named* fields and checks the key set exactly, so a hand-edited line cannot
+  // smuggle a query, a URL, a snippet or a page into a payload whose schema does not
+  // have a slot for it. `exactKeys` is the load-bearing part: without it an extra
+  // field would be retained and simply ignored, which is precisely the failure mode
+  // this whole event family exists to prevent.
+  'research.search_started': RESEARCH_STAGE,
+  'research.search_completed': RESEARCH_STAGE,
+  'research.search_failed': RESEARCH_STAGE,
+  'research.read_started': RESEARCH_STAGE,
+  'research.read_completed': RESEARCH_STAGE,
+  'research.read_failed': RESEARCH_STAGE,
+  'research.started': RESEARCH_STAGE,
+  'research.progress': RESEARCH_STAGE,
+  'research.completed': RESEARCH_STAGE,
+  'research.failed': RESEARCH_STAGE,
+  'research.cancelled': RESEARCH_STAGE,
 }

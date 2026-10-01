@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ElectronCoreHost } from '../../electron/coreHost'
 import type { CoreStatus } from '../../core/protocol/core-protocol'
+import type { WorkProjection } from '../../core/work/projection'
 
 /**
  * The Core belongs to the process, not the window.
@@ -124,6 +125,83 @@ describe('the Core host', () => {
   })
 })
 
+describe('the Work mirror belongs to the process too', () => {
+  it('reports Work as unavailable before Core has started', () => {
+    // A host that has not started has no engine, and must say so rather than
+    // handing a window an empty board that reads as "there is no work".
+    const projection = host!.work()
+    expect(projection).toBeNull()
+  })
+
+  it('pushes the current projection on attach, so a reloaded window catches up', async () => {
+    await host!.start()
+    const seen: WorkProjection[] = []
+    const dispose = host!.onWork((projection) => seen.push(projection))
+
+    // Delivered immediately: a window that has just reloaded must know where the
+    // work stands without asking for it.
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.health).toBe('ready')
+    expect(seen[0]?.runs).toEqual([])
+    dispose()
+  })
+
+  it('keeps work across a window detaching and another attaching', async () => {
+    await host!.start()
+    const first: WorkProjection[] = []
+    const disposeFirst = host!.onWork((projection) => first.push(projection))
+
+    const created = await host!.submit({
+      command: 'work.run.create',
+      requestId: 'w1',
+      payload: {
+        steps: [
+          {
+            key: 'record',
+            label: 'Record the first note',
+            capability: 'test.record',
+            verifier: 'test.record.matches',
+            input: { expect: 'record' },
+          },
+        ],
+      },
+    })
+    expect(created.ok).toBe(true)
+    const runId = created.work?.runId
+    expect(runId).toBeTruthy()
+
+    // The window goes away mid-flight. This is the property the whole architecture
+    // rests on: the renderer is the disposable half.
+    disposeFirst()
+
+    const second: WorkProjection[] = []
+    host!.onWork((projection) => second.push(projection))
+
+    expect(second[0]?.runs.map((run) => run.runId)).toEqual([runId])
+    // And it is still there, still queued, and untouched by the reload.
+    expect(second[0]?.runs[0]?.status).toBe('queued')
+  })
+
+  it('drops a window that throws rather than taking the mirror down with it', async () => {
+    await host!.start()
+    const healthy: WorkProjection[] = []
+    host!.onWork(() => {
+      throw new Error('this window is broken')
+    })
+    host!.onWork((projection) => healthy.push(projection))
+
+    await host!.submit({
+      command: 'work.run.create',
+      requestId: 'w1',
+      payload: { steps: [{ key: 'a', label: 'a', capability: 'test.record', verifier: 'test.record.matches' }] },
+    })
+
+    // One broken subscriber must not stop the others being told, exactly as with
+    // status, activity, conversation and Brain.
+    expect(healthy.length).toBeGreaterThan(1)
+  })
+})
+
 describe('the renderer bridge refuses what a window should not name', () => {
   it('does not include grant governance, which Core does support', async () => {
     // Core can create and revoke grants. A window cannot. The list the preload
@@ -137,5 +215,42 @@ describe('the renderer bridge refuses what a window should not name', () => {
     expect(listed).toContain("'security.stopAll'")
     expect(listed).not.toContain("'cognition.grant.create'")
     expect(listed).not.toContain("'cognition.grant.revoke'")
+  })
+
+  it('gives a window no way to approve on a principal of its own choosing', async () => {
+    const source = await readFile(
+      new URL('../../electron/preload.ts', import.meta.url),
+      'utf8',
+    )
+    // The decision reaches the bridge and the decision is rebuilt from named
+    // fields. There is no `decidedBy` in the payload contract at all, so a window
+    // that appends one is not merely ignored — it never crosses the boundary.
+    // Comments stripped, because the case explains in prose that it does not read
+    // a `decidedBy` — and this test is about the code, not the commentary.
+    const contract = source
+      .slice(
+        source.indexOf("case 'work.approval.decide'"),
+        source.indexOf('// Grant governance is intentionally not in CORE_COMMANDS'),
+      )
+.split(/\r?\n/)
+      .filter((line) => !line.trimStart().startsWith('//') && !line.trimStart().startsWith('*'))
+      .join(' ')
+    expect(contract).toContain("string('approvalId'")
+    expect(contract).toContain("string('decision'")
+    expect(contract).not.toContain('decidedBy')
+    expect(contract).not.toContain('principal')
+  })
+
+  it('gives a window no way to reach a capability, a verifier or a plan', async () => {
+    const source = await readFile(
+      new URL('../../electron/preload.ts', import.meta.url),
+      'utf8',
+    )
+    const api = source.slice(source.indexOf('const api = {'), source.indexOf('contextBridge.exposeInMainWorld'))
+    // The bridge exposes projections and commands. There is no function that
+    // returns a registered capability or verifier, because an object that could
+    // describe its own approval is an object that could ask for one.
+    expect(api).not.toMatch(/capabilit(y|ies)\(\):/i)
+    expect(api).not.toMatch(/verifier\(\):/i)
   })
 })

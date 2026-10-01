@@ -6,6 +6,7 @@ import type {
 import type { CoreActivityEvent } from '../../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../../core/protocol/conversation'
 import type { BrainProjection } from '../../core/brain/brain'
+import type { WorkProjection } from '../../core/work/projection'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -86,6 +87,22 @@ export interface FreyaHostBridge {
    */
   coreBrain(): Promise<BrainProjection | null>
   onCoreBrain(handler: (projection: BrainProjection) => void): () => void
+
+  /**
+   * The Work projection: tasks, runs, steps, approvals and progress.
+   *
+   * Its own channel, and the note that matters is about what does **not** cross: no
+   * step input, no observation contents, no plan, no capability or verifier
+   * instance. A window can see that work is running, waiting on a person, or
+   * finished, and whether each step verified — which is everything a board needs —
+   * without being able to read what any capability was given or returned, or to
+   * reach the code that would let it describe its own approval.
+   *
+   * Nothing here is writable. A window submits commands; Core owns the state and
+   * overwrites the mirror whenever it moves.
+   */
+  coreWork(): Promise<WorkProjection | null>
+  onCoreWork(handler: (projection: WorkProjection) => void): () => void
 }
 
 declare global {

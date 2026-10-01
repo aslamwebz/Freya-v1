@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Searcher } from '../../../core/research/searcher'
+import { withResearchAbort } from '../../../core/research/async'
 import { ResearchError } from '../../../core/research/errors'
 import type { SearchProvider, SearchResult } from '../../../core/research/types'
 
@@ -48,6 +49,27 @@ describe('provider neutral searcher', () => {
     const malicious = Object.assign(new ResearchError('provider_error'), { code: 'private-vendor-detail' })
     const searcher = new Searcher({ provider: provider(async () => { throw malicious }) })
     await expect(searcher.searchWeb('query')).rejects.toMatchObject({ code: 'provider_error', message: 'The search provider failed.' })
+  })
+  it('sanitizes a provider throwing null as a provider failure', async () => {
+    const searcher = new Searcher({ provider: provider(async () => { throw null }) })
+    await expect(searcher.searchWeb('query')).rejects.toMatchObject({ code: 'provider_error', message: 'The search provider failed.' })
+  })
+  it.each([null, undefined])('preserves direct helper rejection with %s', async (reason) => {
+    vi.useFakeTimers()
+    const controller = new AbortController()
+    const remove = vi.spyOn(controller.signal, 'removeEventListener')
+    let active: AbortSignal | undefined
+    const promise = withResearchAbort(controller.signal, 1000, async (signal) => {
+      active = signal
+      throw reason
+    })
+    await expect(promise).rejects.toBe(reason)
+    expect(active?.aborted).toBe(true)
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it.each([null, undefined])('preserves successful helper resolution with %s', async (value) => {
+    await expect(withResearchAbort(undefined, 1000, async () => value)).resolves.toBe(value)
   })
   it('times out after ten seconds even if the provider ignores its signal', async () => {
     vi.useFakeTimers()

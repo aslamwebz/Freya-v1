@@ -10,25 +10,25 @@ export function withResearchAbort<T>(
   const controller = new AbortController()
   return new Promise<T>((resolve, reject) => {
     let settled = false
-    const finish = (error: unknown, value?: T): void => {
+    const finish = (outcome: { ok: true; value: T } | { ok: false; error: unknown }): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       signal?.removeEventListener('abort', cancel)
-      if (error !== null) {
+      if (!outcome.ok) {
         // Abort the request/stream as well as ending the public wait.
-        controller.abort(error)
-        reject(error)
-      } else resolve(value as T)
+        controller.abort(outcome.error)
+        reject(outcome.error)
+      } else resolve(outcome.value)
     }
-    const cancel = (): void => finish(new ResearchError('cancelled'))
-    const timer = setTimeout(() => finish(new ResearchError('timeout')), timeoutMs)
+    const cancel = (): void => finish({ ok: false, error: new ResearchError('cancelled') })
+    const timer = setTimeout(() => finish({ ok: false, error: new ResearchError('timeout') }), timeoutMs)
     timer.unref?.()
     signal?.addEventListener('abort', cancel, { once: true })
     if (signal?.aborted) { cancel(); return }
     Promise.resolve().then(() => {
       if (controller.signal.aborted) throw new ResearchError('cancelled')
       return operation(controller.signal)
-    }).then((value) => finish(null, value), (error: unknown) => finish(error))
+    }).then((value) => finish({ ok: true, value }), (error: unknown) => finish({ ok: false, error }))
   })
 }

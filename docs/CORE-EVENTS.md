@@ -230,7 +230,14 @@ memory's text, and never an entity's name:
 An entity's name is *measured*, not recorded. A person's name in an audit log is a
 copy of it in the one place Freya does not protect as well as the Brain.
 
-**Recall.** There is deliberately no `brain.recalled` event. Recall happens
+**Search queries and research questions.** The `research.*` family carries ids, a
+closed stage, integer counters and fixed failure codes — no query, no URL, no
+domain, no snippet, no page text, no answer, no provider diagnostic. The validator
+rejects an **unexpected key**, not merely an invalid one, because a payload with
+the right fields plus a query would pass every field check and quietly keep it.
+
+**Recall.** There is deliberately no `brain.recalled` event, and no
+`research.recalled` either. Recall happens
 constantly, and journalling it would turn the log into a permanent record of what
 Freya connected to what — every association, for as long as the journal is kept.
 The Vault shows recall on demand instead.
@@ -322,6 +329,34 @@ Metadata only, as described above. Two details worth naming:
 Every Brain payload is validated by the same `PAYLOAD_RULES` table as everything
 else, reading named fields rather than passing the object through — so a
 hand-edited line cannot smuggle in a field the schema does not name.
+
+### Research
+`research.search_started` · `research.search_completed` · `research.search_failed` ·
+`research.read_started` · `research.read_completed` · `research.read_failed` ·
+`research.started` · `research.progress` · `research.completed` · `research.failed` ·
+`research.cancelled`
+
+All eleven share **one** payload shape, because the fields that must never appear
+are easier to guarantee for one type than for eleven:
+
+```jsonc
+{
+  "operationId": "op-1",      // an id Core issued
+  "sessionId": null,          // the managed browser session, when the stage had one
+  "stage": "searching",       // closed enum
+  "counters": { /* 8 integers the subsystem counted itself */ },
+  "failureCode": null         // a ResearchErrorCode, never a message
+}
+```
+
+A source URL does reach the renderer — a person needs it to check a claim, and a
+citation that cannot be followed is decoration — but it reaches the **renderer**, not
+the journal. The journal sees a count.
+
+Expected failures are reduced to fixed public codes before they reach anything the
+renderer can see. A provider that throws `FAKE_SECRET C:/private/key` is contained
+twice: `safeResearchError` at the research result boundary, and the gateway's own
+recorder at the journal boundary.
 
 ---
 

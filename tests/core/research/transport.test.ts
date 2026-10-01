@@ -81,7 +81,7 @@ describe('bounded transport', () => {
   })
   it('allows an http to https upgrade, which only improves the outcome', async () => {
     const request = vi.fn(async ({ url }: { url: URL }) =>
-      url.protocol === 'http:' ? reply(302, { location: 'https://example.com/' }) : reply(200, {}, 'body'),
+      url.protocol === 'http:' ? reply(302, { location: 'https://example.com/' }) : reply(200, {}, ['body']),
     )
     const transport = new SafeHttpTransport({ resolver: async () => [{ address: '8.8.8.8', family: 4 }], request })
     await expect(transport.get('http://example.com', options())).resolves.toMatchObject({ status: 200 })

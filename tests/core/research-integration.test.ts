@@ -466,3 +466,27 @@ describe('unchanged behaviour', () => {
     expect(capabilities).toContain('research.start')
   })
 })
+describe('diagnostic containment is structural, not incidental', () => {
+  it('reduces a raw throw from research.start to a fixed public code', async () => {
+    // Every throw on this path is a fixed-string ResearchError today. The point of
+    // this test is that one day a dependency throws something raw, and the renderer
+    // still does not see it.
+    const harness = await started()
+    harness.provider.complete = async () => {
+      throw new Error('FAKE_SECRET C:/private/key and the owner query too')
+    }
+    const result = await submit('research.start', { question: 'a private question' }, 'r1')
+    const serialised = JSON.stringify(result)
+    expect(serialised).not.toContain('FAKE_SECRET')
+    expect(serialised).not.toContain('C:/private/key')
+    // Whatever shape the failure takes - absorbed into a partial result or refused
+    // outright - the provider's own words never reach the renderer.
+    if (!result.ok) {
+      expect(result.refusal?.reason).toMatch(/model|provider|refused|failed|unavailable/i)
+    } else {
+      // Absorbed: an honest 'failed' research with no findings, not a fabricated one.
+      expect(result.research?.result?.state).toBe('failed')
+      expect(result.research?.result?.findings).toEqual([])
+    }
+  })
+})

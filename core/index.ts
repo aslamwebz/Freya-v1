@@ -1586,12 +1586,31 @@ class FreyaCore implements Core {
           }
           const refused = this.refuseResearch(requestId)
           if (refused !== null) return refused
-          const result = await this.researchIntegration!.research(question)
-          return {
-            requestId,
-            ok: true,
-            status: this.status(),
-            research: { operation: 'research', operationId: result.id, limits: this.researchLimits(), result: projectResearch(result) },
+          const operationId = this.newId()
+          await this.emitResearch('research.started', operationId, 'authorizing', null, {})
+          try {
+            const result = await this.researchIntegration!.research(question)
+            // The journal records that a job ended, not what it found.
+            await this.emitResearch('research.completed', result.id, result.state, null, {
+              ...result.usage,
+            })
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              research: {
+                operation: 'research',
+                operationId: result.id,
+                limits: this.researchLimits(),
+                result: projectResearch(result),
+              },
+            }
+          } catch (error) {
+            // Routed through the safe mapper like its siblings. Every throw on this
+            // path is a fixed-string ResearchError today, so nothing leaks yet - but
+            // containment that depends on every future throw happening to be tidy is
+            // not containment, and one raw throw would reach the renderer verbatim.
+            return this.researchFailure(requestId, operationId, 'research.started', error)
           }
         }
 

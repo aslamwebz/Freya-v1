@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
+import { appReady, vaultSettled } from './readiness.ts'
 
 /**
  * End-to-end check of the real desktop app.
@@ -41,6 +42,12 @@ const E2E_BRAIN_KEY = Buffer.alloc(32, 0x2b).toString('base64')
  */
 const E2E_DISPLAY = process.env.FREYA_E2E_DISPLAY ?? '2'
 const results: { name: string; ok: boolean; detail?: string }[] = []
+
+async function waitForAppReady(page: Page): Promise<void> {
+  await page.waitForFunction(appReady, undefined, { timeout: 20_000 })
+  const errors = await page.pageErrors()
+  if (errors.length > 0) throw new Error(`Renderer failed: ${errors.map((error) => error.message).join(' | ')}`)
+}
 
 function check(name: string, ok: boolean, detail?: string): void {
   results.push({ name, ok, detail })
@@ -86,22 +93,27 @@ async function launch(
   })
   const page = await app.firstWindow()
   const diagnostics: string[] = []
-  page.on('pageerror', (error) => diagnostics.push(`pageerror: ${error.message}`))
+  page.on('pageerror', (error) => {
+    diagnostics.push(`pageerror: ${error.message}`)
+  })
   page.on('console', (message) => {
     if (message.type() === 'error') diagnostics.push(`console: ${message.text()}`)
   })
   try {
-    await page.waitForSelector('.app[data-ready="true"]', { timeout: 20_000 })
-    await page.waitForSelector('.presence', { timeout: 20_000 })
+    await waitForAppReady(page)
   } catch (error) {
     const snapshot = await page
       .evaluate(() => ({
         url: location.href,
         ready: document.querySelector('.app')?.getAttribute('data-ready') ?? null,
         bootError: document.querySelector('.boot-error')?.textContent ?? null,
+        core: [...document.querySelectorAll('.runtime-row')].find(
+          (row) => row.querySelector('dt')?.textContent === 'Core',
+        )?.textContent ?? null,
         body: document.body?.innerText?.slice(0, 1200) ?? '',
       }))
       .catch(() => ({ url: 'unavailable', ready: null, bootError: null, body: '' }))
+    await app.close().catch(() => {})
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}\n` +
         `boot snapshot: ${JSON.stringify(snapshot)}\n` +
@@ -171,16 +183,7 @@ async function openVault(page: Page): Promise<void> {
       .click()
   }
   await page.waitForSelector('[role="dialog"][aria-label="Vault"] .vault-surface', { timeout: 15_000 })
-  await page.waitForFunction(
-    () => {
-      const surface = document.querySelector('[role="dialog"][aria-label="Vault"] .vault-surface')
-      // Not the "waiting for Core" state: durability has to be settled before
-      // anything is typed, and the check below depends on which one it is.
-      return surface !== null && !document.querySelector('.vault-absent')
-    },
-    undefined,
-    { timeout: 15_000 },
-  )
+  await page.waitForFunction(vaultSettled, undefined, { timeout: 15_000 })
 }
 
 /**
@@ -276,7 +279,7 @@ async function main(): Promise<void> {
     const { app, page } = await launch(userData)
     first = app
 
-    check('application boots', await page.locator('.app[data-ready="true"]').isVisible())
+    check('application boots', await page.evaluate(appReady))
     const displaySwitches = await app.evaluate(({ app }) => ({
       freya: app.commandLine.getSwitchValue('freya-display'),
       chromium: app.commandLine.hasSwitch('display'),
@@ -525,15 +528,7 @@ async function main(): Promise<void> {
     // Everything here is a value Core produced over IPC. The shell does not
     // compute a lifecycle or keep a counter of its own.
     const coreReady = async (p: Page) => {
-      await p.waitForFunction(
-        () => {
-          const rows = [...document.querySelectorAll('.runtime-row')]
-          const core = rows.find((r) => r.querySelector('dt')?.textContent === 'Core')
-          return core?.querySelector('dd b')?.textContent === 'Ready'
-        },
-        undefined,
-        { timeout: 20_000 },
-      )
+      await waitForAppReady(p)
     }
     await coreReady(page)
     check('core reaches ready and the window says Ready', true)
@@ -978,9 +973,14 @@ async function main(): Promise<void> {
       await p4.getByRole('button', { name: /stop all/i }).click()
       await p4.waitForSelector('[role="alertdialog"][aria-label="Confirm stop all"]')
       await p4.getByRole('button', { name: /yes, stop everything/i }).click()
-      await p4.waitForTimeout(500)
+      await p4.waitForFunction(() => document.querySelector('.security-posture b')?.textContent === 'STOPPED')
       await p4.getByRole('button', { name: /resume core/i }).click()
-      await p4.waitForTimeout(700)
+      await p4.waitForFunction(() => document.querySelector('.security-posture b')?.textContent === 'RUNNING')
+      await p4.waitForFunction(() => {
+        const rows = [...document.querySelectorAll('.activity-row')]
+        return rows.some((row) => /stop all activated/i.test(row.textContent ?? '')) &&
+          rows.some((row) => /stop all cleared/i.test(row.textContent ?? ''))
+      })
       await p4.getByRole('button', { name: 'Close Security' }).click()
       check(
         'the activity feed reports the durable stop and resume',
@@ -1127,7 +1127,7 @@ async function main(): Promise<void> {
 
         // --- 6. the transcript survives a renderer reload ----------------
         await chat.reload()
-        await chat.waitForSelector('.app[data-ready="true"]', { timeout: 20_000 })
+        await waitForAppReady(chat)
         await openChat(chat)
         await chat.waitForFunction(
           () =>
@@ -1611,13 +1611,13 @@ async function main(): Promise<void> {
 
         // --- 5. a blocked URL fails safely --------------------------------
         await readUrl(research, 'http://169.254.169.254/latest/meta-data/')
-        await research.waitForSelector('[role="dialog"][aria-label="Search"] .search-status', { timeout: 20_000 })
+        await research.waitForSelector('[role="dialog"][aria-label="Search"] .search-status[role="alert"]', { timeout: 20_000 })
         const blocked = await research.locator('[role="dialog"][aria-label="Search"] .search-status').first().textContent()
         check('a link-local URL is refused with a stated reason', (blocked ?? '').length > 0, blocked ?? '')
 
         // --- 6. a page with nothing readable is a failure, not an answer ---
         await readUrl(research, 'https://fixture.example.com/empty')
-        await research.waitForTimeout(2_000)
+        await research.waitForSelector('[role="dialog"][aria-label="Search"] .search-status[role="alert"]', { timeout: 20_000 })
         check(
           'a page with no readable text produces no document rather than an empty one',
           (await research.locator('[role="dialog"][aria-label="Search"] .search-document-text').count()) === 0,
@@ -1974,12 +1974,13 @@ async function main(): Promise<void> {
         // worked. A separate run from the gated one, because a run stops at its
         // first failed step and could never then reach a gate.
         await board.getByRole('button', { name: /run something unverifiable/i }).click()
-        // Wait for the fixed, code-owned verification failure reason. Verifier
+        // Wait for the run to settle, not an intermediate failed step that Core
+        // may still retry. Keep the fixed, code-owned failure reason. Verifier
         // explanations can contain Step input or Observation data, so they are not
         // durable UI text and must not be echoed back through the Work projection.
         await work.waitForFunction(
           () =>
-            [...document.querySelectorAll('[role="dialog"][aria-label="Work"] .work-step-meta')].some(
+            [...document.querySelectorAll('[role="dialog"][aria-label="Work"] .work-run[data-status="failed"] .work-step-meta')].some(
               (row) =>
                 (row.textContent ?? '').includes('failed') &&
                 (row.textContent ?? '').includes('verification did not establish the intended result'),

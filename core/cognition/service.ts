@@ -99,8 +99,9 @@ export class CognitionService {
    * cheerfully authorised ten 300-token requests and finished 3000 tokens over.
    *
    * The lock is per grant, so unrelated grants still proceed in parallel, and
-   * it is released before the provider is called, because serialising inference
-   * would defeat the point of a gateway.
+   * it is held for the entire authoriseAndRun — including the provider call —
+   * so a concurrent request cannot read a stale remaining figure while another
+   * request's provider call is still in flight.
    */
   private readonly grantLocks = new Map<string, Promise<unknown>>()
 

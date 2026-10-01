@@ -10,6 +10,7 @@ const date = '2026-10-01T00:00:00.000Z'
 const doc = (url: string, text = 'Evidence'): ReadableDocument => ({ id: 'untrusted-id', url, canonicalUrl: null, title: 'Source', sourceDomain: '', retrievedAt: date, headings: [], text, links: [], metadata: {}, contentLength: text.length, truncated: false })
 const hit = (url: string) => ({ url, title: 'Source', snippet: '', sourceDomain: '', rank: 1, retrievedAt: date, publishedAt: null })
 const never = () => new Promise<never>(() => {})
+const terminalStages: readonly ResearchEvent['stage'][] = ['completed', 'partial', 'failed', 'cancelled']
 const synthesis: ResearchModel['complete'] = async messages => {
   const content = messages.filter(message => message.role === 'user').map(message => message.content).join('\n')
   const ids = [...new Set([...content.matchAll(/"sourceId":"([^"]+)"/g)].map(match => match[1]!))]
@@ -263,5 +264,44 @@ describe('bounded research coordinator', () => {
     expect(result.state).toBe('cancelled')
     expect(JSON.stringify(result)).not.toContain('private reason')
     expect(run.counts().turns).toBe(0)
+  })
+  it('writes exactly one terminal event on cancellation, not a failure-coded extra', async () => {
+    // Regression: the catch block used to call failure() for a terminal
+    // cancellation, which wrote a failure-coded event on the current stage,
+    // and then run() wrote the cancelled stage event — one terminal-stage
+    // event plus an extra failure-coded non-terminal event for a single
+    // cancellation. An observer counting terminal states stayed correct, but
+    // one counting failure-coded events would double-count the outcome.
+    const run = fixture({ model: never })
+    const pending = run.coordinator.research('q')
+    await vi.waitFor(() => expect(run.coordinator.current()?.stage).toBe('planning'))
+    const status = run.coordinator.current()!
+    expect(run.coordinator.cancel(status.id)).toBe(true)
+    const result = await pending
+    expect(result.state).toBe('cancelled')
+    expect(result.failures).toEqual([{ stage: 'planning', code: 'cancelled' }])
+    expect(result.usage.failures).toBe(1)
+    const terminalEvents = run.events.filter(event => terminalStages.includes(event.stage))
+    expect(terminalEvents).toHaveLength(1)
+    expect(terminalEvents[0]?.stage).toBe('cancelled')
+    expect(run.events.filter(event => event.failureCode === 'cancelled')).toHaveLength(0)
+  })
+  it('writes exactly one terminal event on timeout, not a failure-coded extra', async () => {
+    vi.useFakeTimers()
+    try {
+      const run = fixture({ model: never, limits: { durationMs: 30 } })
+      const pending = run.coordinator.research('q')
+      await vi.advanceTimersByTimeAsync(31)
+      const result = await pending
+      expect(result.state).toBe('failed')
+      expect(result.failures).toEqual([{ stage: 'planning', code: 'timeout' }])
+      expect(result.usage.failures).toBe(1)
+      const terminalEvents = run.events.filter(event => terminalStages.includes(event.stage))
+      expect(terminalEvents).toHaveLength(1)
+      expect(terminalEvents[0]?.stage).toBe('failed')
+      expect(run.events.filter(event => event.failureCode === 'timeout')).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

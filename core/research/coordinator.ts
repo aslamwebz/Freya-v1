@@ -111,13 +111,13 @@ export class ResearchCoordinator {
   private async authorize(job: Job, operation: ResearchAuthorization['operation'], requestId: string): Promise<void> {
     await this.operation(job, async signal => { await this.options.authorize?.({ operation, researchId: job.id, requestId, signal }) })
   }
-  private failure(job: Job, error: unknown): void {
+  private failure(job: Job, error: unknown, writeEvent = true): void {
     if (error instanceof BudgetReached) { job.limited = true; return }
     const safe = safeResearchError(error, 'invalid_response')
     if (job.usage.failures < this.limits.failures) {
       job.usage.failures++
       job.failures.push({ stage: job.stage, code: safe.code, ...(job.stage === 'reading' && job.sourceUrl ? { url: job.sourceUrl } : {}) })
-      this.stage(job, job.stage, safe.code)
+      if (writeEvent) this.stage(job, job.stage, safe.code)
     }
   }
   private reserve(job: Job, key: 'modelTurns' | 'queries' | 'pages' | 'iterations'): void {
@@ -200,7 +200,14 @@ export class ResearchCoordinator {
       if (job.sources.length) synthesis = parseSynthesis(await this.model(job, 'synthesizing'), job.sources)
     } catch (error) {
       cancelled = !job.timedOut && (job.signal.aborted || (error instanceof ResearchError && error.code === 'cancelled'))
-      this.failure(job, job.timedOut ? new ResearchError('timeout') : error)
+      // A terminal cancellation or timeout is recorded by the stage(job, state)
+      // call below, so this path only keeps the failure record. Writing the
+      // stage event here too produced one terminal-stage event plus an extra
+      // failure-coded non-terminal event for the same outcome. BudgetReached
+      // classifies as terminal here and failure() handles it identically,
+      // setting job.limited instead of recording anything.
+      const normalized = job.timedOut ? new ResearchError('timeout') : error
+      this.failure(job, normalized, !this.terminal(job, normalized))
     }
     const state: ResearchState = cancelled ? 'cancelled' : !job.sources.length ? 'failed' : job.limited || job.failures.length || !synthesis.findings.length ? 'partial' : 'completed'
     if (state !== 'completed' && synthesis.uncertainties.length < 16) synthesis.uncertainties.push('Research is incomplete; retrieved sources are unverified evidence.')

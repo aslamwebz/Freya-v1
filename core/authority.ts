@@ -49,6 +49,8 @@ export type CognitionIntentKind =
 
 /** Everything a caller may say about a cognition request. */
 export interface CognitionIntent {
+  /** Trusted Core cancellation only; narrows authority and never crosses IPC. */
+  signal?: AbortSignal
   kind: CognitionIntentKind
   /** The text to send. Held in memory only; never written to an audit event. */
   prompt: string

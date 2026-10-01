@@ -39,6 +39,7 @@ interface SessionEntry {
 
 export class ManagedBrowserService {
   private readonly sessions = new Map<string, SessionEntry>()
+  private readonly closing = new Set<Promise<void>>()
   constructor(private readonly factory: BrowserTargetFactory, private readonly options: ManagedBrowserOptions = {}) {}
 
   private emit(entry: SessionEntry, failureCode?: ResearchErrorCode): void {
@@ -107,7 +108,11 @@ export class ManagedBrowserService {
     this.sessions.delete(entry.id)
     entry.controller.abort()
     this.emit(entry, failureCode)
-    if (entry.target) await closeTarget(entry.target)
+    if (entry.target) {
+      const pending = closeTarget(entry.target)
+      this.closing.add(pending)
+      try { await pending } finally { this.closing.delete(pending) }
+    }
   }
 
   async close(id: string): Promise<void> {
@@ -115,7 +120,10 @@ export class ManagedBrowserService {
     if (entry) await this.dispose(entry)
   }
 
-  async closeAll(): Promise<void> { await Promise.all([...this.sessions.values()].map((entry) => this.dispose(entry))) }
+  async closeAll(): Promise<void> {
+    await Promise.all([...this.sessions.values()].map((entry) => this.dispose(entry)))
+    await Promise.all([...this.closing])
+  }
 
   activeSessions(): BrowserSession[] {
     return [...this.sessions.values()].flatMap(({ id, state }) => state === 'ready' || state === 'navigating' || state === 'reading' ? [{ id, state }] : [])

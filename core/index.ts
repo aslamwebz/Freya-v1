@@ -1620,14 +1620,14 @@ class FreyaCore implements Core {
       failed: async (record) => {
         await this.fabric.append(
           'model.request.failed',
-          record,
+          { ...record, reason: 'The model request failed.' },
           { actor: 'system', correlationId: record.requestId },
         )
       },
       cancelled: async (record) => {
         await this.fabric.append(
           'model.request.cancelled',
-          record,
+          { ...record, reason: 'The model request was cancelled.' },
           { actor: 'system', correlationId: record.requestId },
         )
       },

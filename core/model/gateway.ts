@@ -359,8 +359,14 @@ export class ModelGateway {
    * calls, so a failure is recorded once and returned — and a cancelled one is
    * recorded once and never re-attempted.
    */
-  async execute(permit: GatewayPermit, prompt: string): Promise<ModelResult> {
+  async execute(permit: GatewayPermit, prompt: string, signal?: AbortSignal): Promise<ModelResult> {
     const call = this.beginCall(permit)
+    const abort = () => {
+      call.cancellationReason = 'the request was cancelled'
+      call.controller.abort(new ModelRequestCancelled(call.cancellationReason))
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) abort()
     // Derived once, from the compiled messages, so the two request shapes cannot
     // drift apart and a provider cannot be shown something the caller did not.
     const flattened = permit.messages ? flattenMessages(permit.messages) : prompt
@@ -429,6 +435,7 @@ export class ModelGateway {
       this.onActivityChange()
       const result = await provider.complete(request, options)
       this.markProviderSettled(call)
+      this.assertContactable(call)
 
       this.sessionUsage = accumulateUsage(this.sessionUsage, {
         inputTokens: result.inputTokens,
@@ -478,6 +485,7 @@ export class ModelGateway {
       // the error reveals which one it was.
       throw markProviderContact(error instanceof Error ? error : new Error(reason), call.contacted)
     } finally {
+      signal?.removeEventListener('abort', abort)
       this.endCall(call)
     }
   }

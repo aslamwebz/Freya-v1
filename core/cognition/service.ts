@@ -393,7 +393,7 @@ export class CognitionService {
     }
 
     try {
-      const result = await this.gateway.execute(permit, intent.prompt)
+      const result = await this.gateway.execute(permit, intent.prompt, intent.signal)
       if (decision.grantId !== null) {
         await this.reportProviderUsage(
           decision.grantId,

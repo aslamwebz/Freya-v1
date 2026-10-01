@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+      # Phase 5 lives on its own branch until it is reviewed and merged. Its
+      # pushes are verified here so the branch cannot rot silently while it waits.
+      # This adds coverage; it removes none.
+      - phase-5-research
 
   pull_request:
     branches:

@@ -14,6 +14,7 @@ import {
   CONTEXT_SENTINEL_LABEL,
   CONTEXT_SENTINEL_URI,
   MISSION_KEY_SEED,
+  at,
   beginScratch,
   contextStore,
   endScratch,
@@ -344,6 +345,114 @@ describe('an authenticating record is still checked against the domain', () => {
     const future = await EncryptedContextStore.open({ path, key: testContextKey() })
     expect(future.faultReason).toMatch(/version 99/)
     await future.close()
+  })
+
+  it('refuses a record whose kind cannot come from the source it names', async () => {
+    // The kind/source table is the load-bearing half of provenance, so it is
+    // enforced on the way *back out of storage* too. A record naming a pairing
+    // admission would never have accepted must not survive a restart on the
+    // strength of a valid tag: that is how a host-reported `current_mission` or a
+    // Core-invented `shared_tab` would be laundered into the store from a file.
+    //
+    // The origin is supplied, so the *only* thing wrong with this record is the
+    // pairing — which is what makes the refusal attributable to this rule alone.
+    const legal = secretItem(contextStore())
+    const claimed = { ...legal.provenance, source: 'core_record' as const, originId: 'mission-4711' }
+    const refused = storePath()
+    await sealArbitrary({ ...legal, provenance: claimed }, refused)
+    const store = await EncryptedContextStore.open({ path: refused, key: testContextKey() })
+    expect(store.faultReason).toMatch(
+      /kind file came from the source core_record, which this build does not allow/,
+    )
+    expect((await store.load()).ok).toBe(false)
+    await store.close()
+
+    // The same shape with a pairing the table admits is not refused, so the
+    // assertion is about the table and not about foreign-looking records at large.
+    const allowed = storePath()
+    await sealArbitrary({ ...legal, provenance: { ...legal.provenance, source: 'owner_authorization' } }, allowed)
+    const fine = await EncryptedContextStore.open({ path: allowed, key: testContextKey() })
+    expect(fine.faultReason).toBeNull()
+    const loaded = await fine.load()
+    expect(loaded.ok).toBe(true)
+    if (loaded.ok) expect(loaded.snapshot.records[0]?.provenance.source).toBe('owner_authorization')
+    await fine.close()
+  })
+
+  it('refuses a non-owner source that names no origin', async () => {
+    // `host_report` content is only admissible when it names the record it came
+    // from, so "the host said so" is never a bare assertion. A record that skipped
+    // that on the way onto disk must not be trusted on the way back off it.
+    //
+    // `file` genuinely admits `host_report`, so the pairing here is legal and the
+    // missing origin is the only thing wrong with the record.
+    const reported = secretItem(contextStore(), { source: 'host_report', originId: 'grant-4711' })
+    const path = storePath()
+    await sealArbitrary(
+      { ...reported, provenance: { source: 'host_report', capturedAt: reported.admittedAt, originId: null } },
+      path,
+    )
+    const store = await EncryptedContextStore.open({ path, key: testContextKey() })
+    expect(store.faultReason).toMatch(/cannot have without naming an origin/)
+    expect((await store.load()).ok).toBe(false)
+    await store.close()
+
+    // The same record with its origin is legal, and recovers with the origin intact.
+    const kept = storePath()
+    await sealArbitrary(reported, kept)
+    const fine = await EncryptedContextStore.open({ path: kept, key: testContextKey() })
+    expect(fine.faultReason).toBeNull()
+    const loaded = await fine.load()
+    expect(loaded.ok && loaded.snapshot.records[0]?.provenance.originId).toBe('grant-4711')
+    await fine.close()
+  })
+
+  it('refuses a record that does not outlive its own admission', async () => {
+    // `expiresAt` is a death instant, and admission refuses a TTL of zero. A
+    // record that expired at the moment it was admitted is one the domain would
+    // never hold; recovering it would put an already-dead item back in the store
+    // as though it were still on its way out.
+    const legal = secretItem(contextStore())
+    for (const expiresAt of [legal.admittedAt, at(-1).toISOString()]) {
+      const path = storePath()
+      await sealArbitrary({ ...legal, expiresAt }, path)
+      const store = await EncryptedContextStore.open({ path, key: testContextKey() })
+      expect(store.faultReason, expiresAt).toMatch(/does not outlive its own admission/)
+      expect((await store.load()).ok).toBe(false)
+      await store.close()
+    }
+  })
+
+  it('refuses a record captured after it was admitted', async () => {
+    // Provenance that has not happened yet is provenance this build refuses to
+    // record. `capturedAt` is measured at admission, so a capture instant later
+    // than the admission that carries it is a file claiming something the domain
+    // would have rejected.
+    const legal = secretItem(contextStore())
+    const path = storePath()
+    await sealArbitrary(
+      { ...legal, provenance: { ...legal.provenance, capturedAt: at(1).toISOString() } },
+      path,
+    )
+    const store = await EncryptedContextStore.open({ path, key: testContextKey() })
+    expect(store.faultReason).toMatch(/was captured after it was admitted/)
+    expect((await store.load()).ok).toBe(false)
+    await store.close()
+
+    // And the boundary is inclusive, like every other instant in the domain: a
+    // capture exactly at the admission instant is legal and must still recover.
+    const legalBoundary = storePath()
+    await sealArbitrary(
+      {
+        ...legal,
+        expiresAt: at(10 * 60_000).toISOString(),
+        provenance: { ...legal.provenance, capturedAt: legal.admittedAt },
+      },
+      legalBoundary,
+    )
+    const fine = await EncryptedContextStore.open({ path: legalBoundary, key: testContextKey() })
+    expect(fine.faultReason).toBeNull()
+    await fine.close()
   })
 
   it('pins the domain label in the AAD, so the format cannot drift silently', () => {

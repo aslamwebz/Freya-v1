@@ -203,10 +203,19 @@ perfectly.
 
 So `snapshot.ts` re-checks every recovered record against the domain's closed tables — the
 kind must be a kind this build *sources* (a record claiming `active_window` or `agent_work`
-is asserting a capability that does not exist), the scope must be a real scope, the
-provenance must satisfy the same origin requirement admission enforces, the TTL must lie
-inside the ceiling no matter which limits wrote it, the measurements must match the content,
-and a revoked record must not still hold the content that revocation destroys.
+is asserting a capability that does not exist), the **pairing** of kind and source must be
+one `CONTEXT_KIND_SOURCES` admits, a non-owner source must still name the origin admission
+demanded, `capturedAt` must not be later than `admittedAt`, `expiresAt` must be later than
+`admittedAt` and inside the ceiling no matter which limits wrote it, the measurements must
+match the content, the scope must be a real scope, and a revoked record must not still hold
+the content that revocation destroys.
+
+Every one of those is a rule admission already enforces on the way in. Re-stating them here
+is not duplication — it is the difference between a rule that only a caller can break and a
+rule a stale or hostile file can choose. The kind/source table in particular is the
+load-bearing half of provenance: a record naming a pairing admission would never have
+accepted (a `current_mission` the host reported, a `shared_tab` Core invented, a `file` from
+`core_record`) must not reappear because a valid tag said who wrote it.
 
 The refusal is **total**. A store that served the records it could parse and dropped the
 rest would make its contents a function of which records an attacker chose to damage, and
@@ -281,15 +290,20 @@ retry; there is no background job keeping context "fresh".
 
 ## Where the tests are
 
-`tests/core/context/persistence/` — 70 tests, deterministic, offline, no model calls.
+`tests/core/context/persistence/` — 74 tests, deterministic, offline, no model calls.
 
 - **`context-persistence-crypto.test.ts`** — the bytes. The sentinel is absent from every
   byte of the file; the file holds no plaintext record fields; one file is written and
   nothing is left beside it; every rewrite gets a fresh nonce; no other domain's key opens
   this store and this store cannot open a Mission's; a record cannot be re-labelled, and a
-  flipped bit is caught. Plus the "attacker or buggy writer who holds the key" cases: a
-  record that authenticates and claims `active_window`, claims a TTL beyond the ceiling, or
-  claims to be revoked while still holding its content, is refused by name.
+  flipped bit is caught. Plus the "attacker or buggy writer who holds the key" cases, each
+  sealed by hand with the real algorithm and the real AAD so the *wire format* is pinned
+  rather than the same code trusted twice: a record that authenticates and claims
+  `active_window`, claims a TTL beyond the ceiling, claims a pairing
+  `CONTEXT_KIND_SOURCES` does not admit, comes from `host_report` without naming its
+  origin, does not outlive its own admission, was captured after it was admitted, or claims
+  to be revoked while still holding its content — each refused by name, each with a legal
+  counterpart alongside it that must still recover.
 - **`context-persistence-recovery.test.ts`** — the restart. Scope, provenance, TTL,
   measurements and revocation all come back byte-identical; an item that expired while the
   process was down is `expired` afterwards and its content is destroyed; a revoked item is

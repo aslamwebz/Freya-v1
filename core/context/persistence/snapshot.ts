@@ -1,4 +1,5 @@
 import {
+  CONTEXT_KIND_SOURCES,
   CONTEXT_LIMITS,
   contextLimits,
   isContextKind,
@@ -31,9 +32,15 @@ import { ContextPersistenceError, isContextPersistenceError } from './errors'
  *
  * So each record is re-checked against `../types` here: the kind must be a kind
  * this build sources (a deferred kind on disk would be a record claiming to be
- * something it is not), the provenance must name a source and an origin the
- * domain would have admitted, the scope must be a real scope, and the TTL must
- * lie inside the ceiling no matter which limits wrote it.
+ * something it is not), the *pairing* of kind and source must be one
+ * `CONTEXT_KIND_SOURCES` admits, the provenance must name an origin wherever the
+ * domain would have demanded one, the instants must be ordered the way admission
+ * orders them, the scope must be a real scope, and the TTL must lie inside the
+ * ceiling no matter which limits wrote it.
+ *
+ * Each of those is a rule the domain already enforces on the way in. Re-stating
+ * them here is not duplication: it is the difference between a rule that a stale
+ * file can choose and a rule only a caller can break.
  *
  * ## Why the refusal is total
  *
@@ -120,6 +127,18 @@ export function decodeContextItem(value: unknown, limits: ContextLimits): Contex
   }
 
   const provenance = decodeProvenance(value['provenance'], contextId, limits)
+  // The kind/source table, enforced on the way *back out of storage* as well as on
+  // the way in. This is the load-bearing half of provenance: a record naming a
+  // pairing the domain would never have admitted — a `current_mission` the host
+  // reported, a `shared_tab` Core invented, a `file` from `core_record` — must not
+  // survive a restart, or a stale or buggy writer would launder it into the store
+  // on the strength of a valid tag. Checked after the kind and the source are each
+  // known to be real, so this can only be about the pairing.
+  if (!CONTEXT_KIND_SOURCES[kind].includes(provenance.source)) {
+    return refuse(
+      `context record ${contextId} claims that the kind ${kind} came from the source ${provenance.source}, which this build does not allow`,
+    )
+  }
   const scope = decodeScope(value['scope'], contextId, limits)
 
   const content = value['content']

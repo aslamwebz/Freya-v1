@@ -290,6 +290,20 @@ export type CoreCommandName =
   | 'brain.memory.archive'
   /** Recall on demand, so a person can see what Freya would bring to a question. */
   | 'brain.recall'
+  /* ----------------------------------------------------------- research */
+  /**
+   * Phase 5. Five commands, and each payload is one field.
+   *
+   * `query`, `url` and `researchId` are the entire renderer-controlled input. Not
+   * provenance, provider, model, limits, budget, principal or capability — a
+   * renderer that could name any of those could either launder a web page's
+   * contents in as an owner assertion, or raise its own budgets.
+   */
+  | 'search.web'
+  | 'browser.read'
+  | 'research.start'
+  | 'research.cancel'
+  | 'research.status.read'
 
 export interface CoreCommandEnvelope {
   command: CoreCommandName
@@ -339,6 +353,73 @@ export interface CoreCommandResult {
    * wherever status is.
    */
   brain?: BrainCommandOutcome
+  /**
+   * The research view of a research command's result.
+   *
+   * Its own slot for the same reason the conversation, voice and Brain slots exist:
+   * a window must never have to dig a search result or a research answer out of a
+   * security projection, where it would travel wherever status is cached or logged.
+   */
+  research?: ResearchCommandOutcome
+}
+
+/**
+ * What a research command produced.
+ *
+ * Bounded in every direction. `limits` is the code-owned ceiling, echoed so a window
+ * can show what Freya is actually allowed to spend; it is never an input. Sources
+ * carry the URL a person would need in order to check a claim — that is the point of
+ * a citation — while the journal, the activity feed and every event carry only ids
+ * and counts.
+ */
+export interface ResearchCommandOutcome {
+  operation: 'search' | 'read' | 'research' | 'cancelled' | 'status' | 'refused'
+  reason?: string
+  operationId?: string
+  limits?: {
+    iterations: number
+    queries: number
+    results: number
+    pages: number
+    evidenceChars: number
+    durationMs: number
+    modelTurns: number
+    maxOutputTokens: number
+  }
+  results?: readonly {
+    title: string
+    url: string
+    snippet: string
+    sourceDomain: string
+  }[]
+  document?: {
+    title: string
+    url: string
+    sourceDomain: string
+    retrievedAt: string
+    headings: string[]
+    text: string
+    links: readonly { title: string; url: string }[]
+    truncated: boolean
+  }
+  result?: {
+    id: string
+    state: 'completed' | 'partial' | 'failed' | 'cancelled'
+    findings: readonly { text: string; sourceIds: string[] }[]
+    conflicts: readonly { text: string; sourceIds: string[] }[]
+    uncertainties: string[]
+    sources: readonly {
+      sourceId: string
+      url: string
+      title: string
+      domain: string
+      retrievedAt: string
+      excerpt: string
+    }[]
+    failures: readonly { stage: string; code: string }[]
+    usage: Record<string, number>
+  }
+  status?: { operationId: string; stage: string } | null
 }
 
 /**

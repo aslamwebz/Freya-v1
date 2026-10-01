@@ -85,10 +85,15 @@ class GrantedResearchModel {
     messages: readonly { role: 'system' | 'user' | 'assistant'; content: string }[],
     options: { signal: AbortSignal; researchId: string; requestId: string; maxOutputTokens: number },
   ): Promise<string> {
-    // One grant per research job, created before the first turn and revoked when
-    // the job ends — including on cancellation, which is the path most likely to be
-    // missed and the one that would otherwise leave a live allowance behind.
-    const grantId = `research:${options.researchId}`
+    // One grant per model turn, created before it and revoked in a `finally`.
+    //
+    // Per turn rather than per job because the coordinator reports the end of a job
+    // by settling its promise, and the grant would then have to be revoked from
+    // outside the model adapter — where cancellation is exactly the path most likely
+    // to be missed, and the one that would otherwise leave a live allowance behind.
+    // Revoking here means no exit can forget it: completion, failure, refusal and
+    // cancellation all run the same `finally`.
+    const grantId = `research:${options.researchId}:${options.requestId}`
     await this.authority.createGrant({
       grantId,
       expiresAt: new Date(Date.now() + this.limits.durationMs).toISOString(),

@@ -15,6 +15,12 @@ import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nan
 import { MindService, type TurnExperience } from './mind/mind'
 import type { ReferenceKnowledge } from './mind/context-compiler'
 import { Brain, buildIdentityRoot, buildSelfDefinition, type BrainProjection } from './brain/brain'
+import { ResearchIntegration } from './research/coreIntegration'
+import { RESEARCH_LIMITS } from './research/schemas'
+import { safeResearchError } from './research/errors'
+import type { BrowserTargetFactory } from './research/browser'
+import type { SearchProvider } from './research/types'
+import type { ResearchResult } from './research/coordinator'
 import type { BrainStore } from './brain/store'
 import { EncryptedBrainStore } from './brain/encrypted-store'
 import { MemoryBrainStore } from './brain/memory-store'
@@ -35,6 +41,7 @@ import type { OwnerAuthority, WorkerAuthority } from './authority'
 import type {
   CoreCommandEnvelope,
   CoreCommandResult,
+  ResearchCommandOutcome,
   CoreLifecycle,
   CoreStatus,
   JournalFault,
@@ -74,6 +81,15 @@ export const CORE_VERSION = '0.1.0'
  * is the same thing a crash would have produced and is not a worse record.
  */
 const SHUTDOWN_DRAIN_MS = 1_000
+
+/**
+ * How long shutdown waits for research to settle.
+ *
+ * Shorter than the cognition drain, because a research job is a chain of bounded
+ * operations rather than one provider call, and a wedged browser target would
+ * otherwise hold the application open for the whole 120s research ceiling.
+ */
+const RESEARCH_DRAIN_MS = 1_000
 
 export interface CoreOptions {
   /** Where the durable log lives. */
@@ -137,6 +153,16 @@ export interface CoreOptions {
   brainKey?: Uint8Array
   /** Overrides the Brain store wholesale. For tests. */
   brainStore?: BrainStore
+  /**
+   * The Phase 5 research stack, injected whole.
+   *
+   * Core assembles it but never populates it: the search provider and the browser
+   * target come from the host, so Core holds no search credential, knows nothing
+   * about which vendor is configured, and cannot decide that a key existing means
+   * search is enabled. Absent — the normal case for a Core built without research —
+   * every research command is refused with a stated reason and nothing is called.
+   */
+  research?: { searchProvider: SearchProvider; browserFactory: BrowserTargetFactory }
   /** A local speech-to-text engine. Absent means none is configured. */
   voiceTranscriber?: VoiceTranscriber
   /** A local text-to-speech engine. Absent means none is configured. */
@@ -249,6 +275,18 @@ class FreyaCore implements Core {
   private stopped = false
   private conversationStore!: ConversationStore
   private brainService!: Brain
+  /** Null when the host configured no research stack. Every command then refuses. */
+  private researchIntegration: ResearchIntegration | null = null
+  /**
+   * Research admission.
+   *
+   * Closed synchronously by STOP ALL, before that command's first `await`. A
+   * research operation that checked admission and then awaited would be able to
+   * reach the network after the stop, which is the window STOP ALL exists to
+   * remove. Deliberately a boolean rather than derived state: it has to be readable
+   * without asking anything that could be slow.
+   */
+  private researchAdmissionOpen = false
   private mind!: MindService
   private conversations!: ConversationService
   private voiceService!: VoiceService
@@ -394,6 +432,25 @@ class FreyaCore implements Core {
     // The owner principal comes from the service, which is the only place in
     // Core that builds a trusted one.
     this.owner = this.service.ownerPrincipalFor()
+
+    // Research, once an owner authority exists to issue its bounded grants. The
+    // stack is opened here and never again: research starts only on an explicit
+    // owner request, so boot does no network, browser or model work at all.
+    if (this.options.research) {
+      this.researchIntegration = new ResearchIntegration({
+        searchProvider: this.options.research.searchProvider,
+        browserFactory: this.options.research.browserFactory,
+        authority: this.service.ownerAuthority(),
+        guard: this.guard,
+        principal: this.owner,
+        stopped: () => this.state.stopAll.active || !this.gateway.gateStatus().open,
+        closeAdmission: (reason) => this.closeResearch(reason),
+        emit: async (type, payload) => {
+          await this.fabric.append(type as never, payload as never, { actor: 'owner' })
+        },
+      })
+      this.researchAdmissionOpen = true
+    }
 
     // State follows the log, for both replay and live appends.
     //
@@ -584,6 +641,10 @@ class FreyaCore implements Core {
 
     const began = Date.now()
     try {
+      // Research stops before anything else and without awaiting first, for the same
+      // ordering reason as STOP ALL: a half-finished research job reaching the
+      // network during shutdown is still a request.
+      this.closeResearch(`core stopping: ${reason}`)
       if (this.fabric) {
         // A microphone must not outlive the Core that opened it.
         await this.voiceService?.abandon('the application is shutting down')
@@ -600,6 +661,11 @@ class FreyaCore implements Core {
       this.disposeState()
       this.service?.dispose()
       this.currentLifecycle = 'stopped'
+      // Research is drained *before* the fabric closes, and on a bound: a browser
+      // target or provider that ignores its signal must not be able to hang shutdown
+      // forever. Bounded means the worst case is a job that never settled, which the
+      // journal already describes honestly — the same record a crash would leave.
+      await this.drainResearch()
       // Closed before the fabric, so the Brain's in-flight writes land while the
       // event stream that records them is still open. An experience record written
       // after its own journal event would be a record of something the log says
@@ -609,6 +675,135 @@ class FreyaCore implements Core {
       await this.fabric?.close()
       this.notify()
     }
+  }
+
+  /**
+   * Refuse a research command, or return null to allow it.
+   *
+   * Two refusals and they are different in kind. "Not configured" means the host
+   * supplied no research stack, which is the normal state for a Core that was not
+   * built with one. "Stopped" means the owner stopped Freya, and saying so plainly
+   * matters more than a generic failure: the person pressed STOP ALL and then typed
+   * a search, and being told "unknown command" would be a lie about what happened.
+   */
+  private refuseResearch(requestId: string): CoreCommandResult | null {
+    if (this.researchIntegration === null) {
+      return {
+        requestId,
+        ok: false,
+        refusal: { reason: 'web search and research are not configured in this build' },
+        research: { operation: 'refused', reason: 'web search and research are not configured in this build' },
+      }
+    }
+    if (!this.researchAdmissionOpen || this.state.stopAll.active) {
+      const reason = 'Freya is stopped. Every search, page read and research request is refused.'
+      return { requestId, ok: false, refusal: { reason }, research: { operation: 'refused', reason } }
+    }
+    return null
+  }
+
+  /** The code-owned research ceilings, echoed so a window can show them. */
+  private researchLimits(): ResearchCommandOutcome['limits'] {
+    const { iterations, queries, results, pages, evidenceChars, durationMs, modelTurns, maxOutputTokens } =
+      RESEARCH_LIMITS
+    return { iterations, queries, results, pages, evidenceChars, durationMs, modelTurns, maxOutputTokens }
+  }
+
+  /**
+   * Append one research stage event.
+   *
+   * `extra` is merged into the counters and may only contribute integers, so a
+   * caller cannot smuggle a string into a payload the validator would reject — and
+   * more importantly cannot smuggle one past a test that reads the journal.
+   */
+  private async emitResearch(
+    type: string,
+    operationId: string,
+    stage: string,
+    failureCode: string | null,
+    extra: Readonly<Record<string, number>>,
+  ): Promise<void> {
+    try {
+      await this.fabric.append(
+        type as never,
+        {
+          operationId,
+          sessionId: null,
+          stage,
+          counters: {
+            iterations: 0,
+            queries: 0,
+            results: 0,
+            pages: 0,
+            evidenceChars: 0,
+            modelTurns: 0,
+            failures: failureCode === null ? 0 : 1,
+            durationMs: 0,
+            ...extra,
+          },
+          failureCode,
+        } as never,
+        { actor: 'owner' },
+      )
+    } catch (error) {
+      // The journal records what happened; it is not the Brain's memory. Losing an
+      // event must not lose the operation that produced it.
+      console.error('[freya.core] a research event could not be recorded', describe(error))
+    }
+  }
+
+  /**
+   * A research failure as a closed public code.
+   *
+   * A provider, a page or a transport may throw anything at all, including text
+   * carrying a credential or a filesystem path. `safeResearchError` reduces it to a
+   * fixed message chosen by this repository, so nothing a third party said can reach
+   * the renderer, the projection or the journal.
+   */
+  private researchFailure(
+    requestId: string,
+    operationId: string,
+    startedEvent: string,
+    error: unknown,
+  ): CoreCommandResult {
+    const safe = safeResearchError(error, 'provider_error')
+    void this.emitResearch('research.failed', operationId, 'failed', safe.code, {})
+    void startedEvent
+    return {
+      requestId,
+      ok: false,
+      refusal: { reason: safe.message },
+      research: { operation: 'refused', reason: safe.message },
+    }
+  }
+
+  /**
+   * Close research admission and cancel everything in flight. Synchronous.
+   *
+   * Called by STOP ALL before its first await and by shutdown before anything is
+   * awaited, because the property being defended is that no research operation can
+   * *begin* a network, browser or model operation after a stop. Cancellation alone
+   * would only interrupt what is already running.
+   */
+  private closeResearch(reason: string): void {
+    this.researchAdmissionOpen = false
+    // `cancelAll` aborts the coordinator's own controller; the integration also
+    // closes managed browser sessions, whose windows must not outlive the process.
+    this.researchIntegration?.closeAdmission(reason)
+  }
+
+  /** Wait for research to settle, on a bound. Never throws. */
+  private async drainResearch(): Promise<void> {
+    const integration = this.researchIntegration
+    if (!integration) return
+    await Promise.race([
+      integration.coordinator.drain().catch(() => undefined),
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, RESEARCH_DRAIN_MS)
+        timer.unref?.()
+      }),
+    ]).catch(() => undefined)
+    await integration.browser.closeAll().catch(() => undefined)
   }
 
   status(): CoreStatus {
@@ -870,6 +1065,13 @@ class FreyaCore implements Core {
           // closing the gate costs nothing and can be undone, whereas a provider
           // call cannot be un-spent.
           this.gateway?.cancelAll(`STOP ALL: ${reason}`)
+          // Research admission closes in the *same synchronous turn*, for the same
+          // reason. The gateway is what stops a model turn; research also reaches
+          // the network and a browser, and neither is behind the gateway gate. A
+          // research job cancelled only after an await would still be able to issue
+          // its next search, and that next search is the request the owner just
+          // asked to stop.
+          this.closeResearch(`STOP ALL: ${reason}`)
 
           try {
             const event = await this.fabric.append(
@@ -1290,6 +1492,139 @@ class FreyaCore implements Core {
                 estimatedTokens: pack.estimatedTokens,
                 empty: pack.empty,
               },
+            },
+          }
+        }
+
+        /* ---------------------------------------------------------- research */
+
+        case 'search.web': {
+          const query = readString(envelope.payload, 'query')
+          if (query === null || query.trim().length === 0) {
+            return { requestId, ok: false, refusal: { reason: 'a search query is required' } }
+          }
+          const refused = this.refuseResearch(requestId)
+          if (refused !== null) return refused
+          const operationId = this.newId()
+          try {
+            const results = (await this.researchIntegration!.searchWeb(query)) as readonly {
+              title: string
+              url: string
+              snippet: string
+              sourceDomain: string
+            }[]
+            await await this.emitResearch('research.search_completed', operationId, 'searching', null, {
+              results: results.length,
+            })
+            // A URL reaches the renderer because a person needs it in order to check
+            // a claim. It reaches the journal as a count.
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              research: {
+                operation: 'search',
+                operationId,
+                limits: this.researchLimits(),
+                results: results.slice(0, 10).map((row) => ({
+                  title: row.title,
+                  url: row.url,
+                  snippet: row.snippet,
+                  sourceDomain: row.sourceDomain,
+                })),
+              },
+            }
+          } catch (error) {
+            return this.researchFailure(requestId, operationId, 'search_started', error)
+          }
+        }
+
+        case 'browser.read': {
+          const url = readString(envelope.payload, 'url')
+          if (url === null) {
+            return { requestId, ok: false, refusal: { reason: 'a URL is required' } }
+          }
+          const refused = this.refuseResearch(requestId)
+          if (refused !== null) return refused
+          const operationId = this.newId()
+          await this.emitResearch('research.read_started', operationId, 'reading', null, {})
+          try {
+            const document = await this.researchIntegration!.readWebPage(url)
+            await this.emitResearch('research.read_completed', operationId, 'reading', null, {
+              evidenceChars: document.contentLength,
+            })
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              research: {
+                operation: 'read',
+                operationId,
+                limits: this.researchLimits(),
+                document: {
+                  title: document.title,
+                  url: document.url,
+                  sourceDomain: document.sourceDomain,
+                  retrievedAt: document.retrievedAt,
+                  headings: document.headings.slice(0, 32),
+                  // Bounded by the extractor; sent as text and never as markup.
+                  text: document.text.slice(0, 24_000),
+                  links: document.links.slice(0, 32).map((link) => ({ title: link.title, url: link.url })),
+                  truncated: document.truncated,
+                },
+              },
+            }
+          } catch (error) {
+            return this.researchFailure(requestId, operationId, 'read_started', error)
+          }
+        }
+
+        case 'research.start': {
+          const question = readString(envelope.payload, 'question')
+          if (question === null || question.trim().length === 0) {
+            return { requestId, ok: false, refusal: { reason: 'a research question is required' } }
+          }
+          const refused = this.refuseResearch(requestId)
+          if (refused !== null) return refused
+          const result = await this.researchIntegration!.research(question)
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            research: { operation: 'research', operationId: result.id, limits: this.researchLimits(), result: projectResearch(result) },
+          }
+        }
+
+        case 'research.cancel': {
+          const refused = this.refuseResearch(requestId)
+          if (refused !== null) return refused
+          const researchId = readString(envelope.payload, 'researchId')
+          if (researchId === null) {
+            return { requestId, ok: false, refusal: { reason: 'a research id is required' } }
+          }
+          const cancelled = this.researchIntegration!.coordinator.cancel(researchId)
+          return {
+            requestId,
+            ok: cancelled,
+            status: this.status(),
+            research: cancelled
+              ? { operation: 'cancelled', operationId: researchId }
+              : { operation: 'refused', reason: 'that research operation is not running' },
+          }
+        }
+
+        case 'research.status.read': {
+          // Read-only, so it is answered even while stopped: a person watching a
+          // cancelled research needs to see that it is cancelled.
+          const current = this.researchIntegration?.coordinator.current() ?? null
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            research: {
+              operation: 'status',
+              limits: this.researchLimits(),
+              status: current === null ? null : { operationId: current.id, stage: current.stage },
             },
           }
         }
@@ -1940,3 +2275,30 @@ export function createCore(options: CoreOptions): Core {
 }
 
 export type { AnyCoreEvent }
+
+/**
+ * A research result as the renderer sees it.
+ *
+ * Sources keep their URL, because a person needs it to check a claim and a citation
+ * that cannot be followed is decoration. Failures keep a closed code, never the
+ * message a provider threw — which may carry a credential or a path.
+ */
+function projectResearch(result: ResearchResult): NonNullable<ResearchCommandOutcome['result']> {
+  return {
+    id: result.id,
+    state: result.state,
+    findings: result.findings.map((finding) => ({ text: finding.text, sourceIds: [...finding.sourceIds] })),
+    conflicts: result.conflicts.map((conflict) => ({ text: conflict.text, sourceIds: [...conflict.sourceIds] })),
+    uncertainties: [...result.uncertainties],
+    sources: result.sources.map((source) => ({
+      sourceId: source.sourceId,
+      url: source.url,
+      title: source.title,
+      domain: source.domain,
+      retrievedAt: source.retrievedAt,
+      excerpt: source.excerpt,
+    })),
+    failures: result.failures.map((failure) => ({ stage: failure.stage, code: failure.code })),
+    usage: { ...result.usage },
+  }
+}

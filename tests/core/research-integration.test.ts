@@ -9,6 +9,7 @@ import { FakeModelProvider } from '../../core/model/fake-provider'
 import type { SearchProvider } from '../../core/research/types'
 import type { BrowserTarget, BrowserTargetFactory, ReadableDocument } from '../../core/research/browser'
 import type { ModelResult } from '../../core/model/provider'
+import { RESEARCH_LIMITS } from '../../core/research/schemas'
 
 /**
  * Phase 5 inside Core.
@@ -77,18 +78,14 @@ const DOCUMENT: ReadableDocument = {
 class StubBrowserTargetFactory implements BrowserTargetFactory {
   reads: string[] = []
   closed = 0
-  async create(sessionId: string): Promise<BrowserTarget> {
-    const factory = this
+  async create(): Promise<BrowserTarget> {
     return {
-      async navigate(url: string) {
-        factory.reads.push(url)
+      navigate: async (url: string) => {
+        this.reads.push(url)
       },
-      async read() {
-        return DOCUMENT
-      },
-      async close() {
-        factory.closed += 1
-        void sessionId
+      read: async () => DOCUMENT,
+      close: async () => {
+        this.closed += 1
       },
     }
   }
@@ -254,20 +251,32 @@ describe('research.start', () => {
         uncertainties: ['Only one source was readable.'],
       }),
     ]
+    // Counted here rather than via `provider.calls`, because replacing `complete`
+    // replaces the method that increments it.
     let index = 0
-    harness.provider.complete = async () => textResult(answers[Math.min(index++, answers.length - 1)] as string)
+    let modelTurns = 0
+    harness.provider.complete = async () => {
+      modelTurns += 1
+      return textResult(answers[Math.min(index++, answers.length - 1)] as string)
+    }
 
     const result = await submit('research.start', { question: 'what does the fixture say?' })
     expect(result.ok).toBe(true)
     // Whatever the outcome, the provider was only ever asked by the gateway.
-    expect(harness.provider.calls).toBeGreaterThan(0)
+    expect(modelTurns).toBeGreaterThan(0)
+    expect(modelTurns).toBeLessThanOrEqual(RESEARCH_LIMITS.modelTurns)
     expect(core!.status().governor.grantsActive).toBe(0)
   })
 
   it('revokes the research grant when research finishes', async () => {
     const harness = await started()
-    harness.provider.complete = async () => textResult(JSON.stringify({ queries: [], findings: [], conflicts: [], uncertainties: [] }))
+    let turns = 0
+    harness.provider.complete = async () => {
+      turns += 1
+      return textResult(JSON.stringify({ queries: [], findings: [], conflicts: [], uncertainties: [] }))
+    }
     await submit('research.start', { question: 'anything' })
+    expect(turns).toBeGreaterThan(0)
     // A grant left live would be a standing allowance nobody intended.
     expect(core!.status().governor.grantsActive).toBe(0)
   })
@@ -320,10 +329,10 @@ describe('research.cancel', () => {
     const running = submit('research.start', { question: 'a slow question' }, 'start')
     // Wait until the operation is actually running before cancelling it.
     await new Promise((resolve) => setTimeout(resolve, 30))
-    const status = (await submit('research.status.read', undefined, 'status')) as {
-      research?: { id?: string }
-    }
-    const id = String(status.research?.id ?? '')
+    const status = await submit('research.status.read', undefined, 'status')
+    const id = String(
+      (status.research?.status as { operationId?: string } | null)?.operationId ?? '',
+    )
     expect(id.length).toBeGreaterThan(0)
 
     const cancelled = await submit('research.cancel', { researchId: id }, 'cancel')

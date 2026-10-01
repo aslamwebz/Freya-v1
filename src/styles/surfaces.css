@@ -2365,3 +2365,156 @@
 .mission-actions button[data-terminal='true'] {
   border-color: rgba(198, 150, 88, 0.34);
 }
+
+/* ---------------------------------------------------------- Workforce view */
+
+/* A mirror with no controls in it. The absence of any button style below is the
+   point as much as the presence of the row styles: this window renders what Core
+   reports and submits nothing, so there is nothing here to hover, press or
+   disable. */
+.workforce-surface {
+  padding: 18px 20px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  height: 100%;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.workforce-absent,
+.workforce-none {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  max-width: 62ch;
+}
+
+.workforce-read-notice {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--gold-hi);
+}
+
+/* The posture strip sits above the list on purpose, for the same reason the
+   Mission board's does: whether a Workforce domain exists at all is read before
+   any worker is. "No workforce" and "an empty workforce" must not look alike. */
+.workforce-posture {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+}
+
+.workforce-posture[data-ready='false'] {
+  border-color: rgba(198, 150, 88, 0.34);
+}
+
+.workforce-posture b {
+  font: 500 14px/1 var(--font-display);
+  letter-spacing: 0.2em;
+  color: var(--gold-hi);
+}
+
+.workforce-posture span {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.workforce-section h2 {
+  margin: 0 0 8px;
+  font: 400 10px/1 var(--font-display);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.workforce-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.workforce-worker,
+.workforce-team {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 13px 15px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+}
+
+.workforce-worker header,
+.workforce-team header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workforce-worker h3,
+.workforce-team h3 {
+  margin: 0;
+  font: 400 12px/1 var(--font-display);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-1);
+}
+
+.workforce-worker code,
+.workforce-team code {
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.workforce-state {
+  font: 500 10px/1 var(--font-display);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold-hi);
+}
+
+.workforce-team-line,
+.workforce-specialization,
+.workforce-assignment,
+.workforce-concurrency,
+.workforce-budget,
+.workforce-capabilities,
+.workforce-purpose,
+.workforce-members {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.workforce-capabilities,
+.workforce-members {
+  color: var(--ink-3);
+}
+
+.workforce-claims {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* A claim is drawn in the colour a caution is drawn in, because that is what it
+   is: a worker's own words, shown so they can be examined, never promoted into
+   the assignment list above them. */
+.workforce-claim {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--gold-hi);
+}

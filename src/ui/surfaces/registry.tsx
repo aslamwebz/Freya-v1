@@ -9,6 +9,7 @@ import { ResearchSurface } from './ResearchSurface'
 
 import { WorkSurface } from './WorkSurface'
 import { MissionSurface } from './MissionSurface'
+import { WorkforceSurface } from './WorkforceSurface'
 import type { SurfaceDefinition } from './types'
 
 /**
@@ -36,6 +37,9 @@ const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   vault: () => <VaultSurface />,
   work: () => <WorkSurface />,
   mission: () => <MissionSurface />,
+  // The Workforce view, registered against the `team` type — the window the
+  // vocabulary has always called the place where agents and teams would live.
+  team: () => <WorkforceSurface />,
 }
 
 /** The registry, resolved once from the two catalogs it is built from. */

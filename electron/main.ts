@@ -352,6 +352,15 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:mission', projection)
   })
 
+  // The Workforce projection is a seventh channel, and the note that matters is
+  // about what does *not* cross: no source, no authority, no rule, no worker
+  // credential. A window learns who exists and what Core says each is doing —
+  // which is everything a workforce view needs — and nothing that could decide
+  // anything.
+  const detachWorkforce = coreHost?.onWorkforce((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:workforce', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -359,6 +368,7 @@ function createWindow(): BrowserWindow {
     detachBrain?.()
     detachWork?.()
     detachMission?.()
+    detachWorkforce?.()
   })
 
   if (DEV_SERVER) {
@@ -433,6 +443,11 @@ function registerIpc(): void {
   // deliberately no channel for a Mission's private text — that lives in the encrypted
   // store and reaches a window only through Core's own read, not as a standing feed.
   ipcMain.handle('freya:core:mission', () => requireCore().mission())
+  // The Workforce projection, same bargain as every other channel here: what a
+  // window needs to render crosses, and there is deliberately no handle to a
+  // source, a rule or a worker behind it. A read, from a window, of a
+  // projection Core built.
+  ipcMain.handle('freya:core:workforce', () => requireCore().workforce())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

@@ -214,14 +214,20 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   },
   team: {
     type: 'team',
-    title: 'Team',
-    summary: 'Agents, teams and swarms. No agent exists in Phase 0 and none is simulated.',
-    width: 620,
-    height: 500,
+    // No longer a placeholder. The window renders the Workforce projection Core
+    // actually reports — which today is the honest sentence that no Workforce
+    // domain exists, and which becomes worker and team rows the moment Core has
+    // some. A placeholder here would understate the build; a simulated roster
+    // would be worse than either.
+    title: 'Workforce',
+    summary:
+      'The workers and teams Core actually has: who exists, what each is assigned, and what each merely claims. Nothing on this surface is simulated.',
+    width: 640,
+    height: 540,
     minWidth: 400,
-    minHeight: 300,
+    minHeight: 320,
     instance: 'singleton',
-    status: 'placeholder',
+    status: 'working',
   },
   office: {
     type: 'office',

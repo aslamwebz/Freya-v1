@@ -10,6 +10,7 @@
  */
 
 import type { ConversationCommandOutcome, VoiceCommandOutcome } from './conversation'
+import type { WorkforceCommandOutcome } from './workforce'
 
 /* ------------------------------------------------------------ identity */
 
@@ -386,6 +387,23 @@ export type CoreCommandName =
    * approver could approve its own request.
    */
   | 'work.approval.decide'
+  /* ----------------------------------------------------------- workforce */
+  /**
+   * Phase 8. The *only* Workforce command, and a read.
+   *
+   * There is deliberately no `workforce.worker.create`, no `workforce.assign`,
+   * no `workforce.team.manage` and no `workforce.claim.submit` in this
+   * vocabulary: naming a worker, placing one on a team, assigning a capability
+   * or recording a claim are Workforce authority, and Workforce authority lives
+   * in Core (issue #10) rather than in a window. A renderer reaching for any of
+   * those names finds `unknown command`, which is the correct answer.
+   *
+   * The read takes no payload either — see `WORKFORCE_NO_PAYLOAD`. A window may
+   * ask what the workforce is, and may not accompany the question with an owner,
+   * a principal, an authority, a trust level, a provenance, a capability or a
+   * claim of its own.
+   */
+  | 'workforce.status.read'
   | 'mission.status.read'
   | 'mission.create'
   | 'mission.activate'
@@ -476,6 +494,23 @@ export interface CoreCommandResult {
    * a second copy of the board.
    */
   work?: WorkCommandOutcome
+
+  /**
+   * The Workforce view of a Workforce command's result.
+   *
+   * Its own slot for the same reason every other subsystem's exists: whether
+   * Core answered a workforce read, or refused it, is a fact about Workforce
+   * and must never have to be dug out of a security projection where it would
+   * travel wherever status is cached or logged.
+   *
+   * The projection itself arrives on its own channel — see
+   * `workforce.status.read` and the Workforce mirror — so this slot carries the
+   * *outcome* of one command rather than a second copy of the workforce. It is
+   * also where a refusal lands separately from `ok`, for the same reason as the
+   * Mission slot: "the read was refused" and "Core understood you" are different
+   * facts.
+   */
+  workforce?: WorkforceCommandOutcome
 }
 
 /**

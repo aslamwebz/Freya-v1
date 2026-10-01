@@ -5,6 +5,7 @@ import type { ConversationProjection, VoiceProjection } from '../core/protocol/c
 import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
 import type { MissionProjection } from '../core/missions/types'
+import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 import { BraveSearchProvider } from '../core/research/providers/brave'
 import { ElectronBrowserTargetFactory } from './research/managedTarget'
@@ -110,6 +111,17 @@ export interface CoreHost {
   work(): WorkProjection | null
   onMission(send: (projection: MissionProjection) => void): () => void
   mission(): MissionProjection | null
+  /**
+   * Attach to the Workforce projection. Returns a disposer.
+   *
+   * Its own channel, as every subsystem has, and the same bargain: what a
+   * window needs in order to render crosses, and nothing that protects or
+   * decides workforce state crosses at all. No source, no authority object, no
+   * rule, no worker credential — the host can read a projection and forward it,
+   * which is the entire of what it knows how to do with a workforce.
+   */
+  onWorkforce(send: (projection: WorkforceProjection) => void): () => void
+  workforce(): WorkforceProjection | null
   stop(reason?: string): Promise<void>
 }
 
@@ -163,6 +175,17 @@ export interface CoreHostOptions {
    * real Brave provider or the real Electron target while believing it is offline.
    */
   research?: { searchProvider: SearchProvider; browserFactory: BrowserTargetFactory }
+  /**
+   * Fills Core's Workforce seam. For assembly and tests; production passes
+   * none, and the host does not build one.
+   *
+   * Forwarded *into* Core and nowhere else. This is not Electron deciding who
+   * is on a team or what a worker may do — it cannot, because the type it
+   * forwards is something Core can read, not something that takes an
+   * instruction. Workforce authority lives in Core (issue #10); the host's job
+   * is to hand over a reader and then mirror what comes back.
+   */
+  workforceSource?: WorkforceSource
 }
 
 export class ElectronCoreHost implements CoreHost {
@@ -174,6 +197,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly brainWindows = new Set<(projection: BrainProjection) => void>()
   private readonly workWindows = new Set<(projection: WorkProjection) => void>()
   private readonly missionWindows = new Set<(projection: MissionProjection) => void>()
+  private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
 
   constructor(
     private readonly dataPath: string,
@@ -197,6 +221,12 @@ export class ElectronCoreHost implements CoreHost {
           : {}),
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
         ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),
+        // The Workforce seam, forwarded whole. Nothing is derived from it here:
+        // the host neither reads nor interprets a workforce, it only hands Core
+        // the reader it was given and mirrors what Core reports.
+        ...(this.options.workforceSource
+          ? { workforceSource: this.options.workforceSource }
+          : {}),
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),
@@ -213,6 +243,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onBrain((projection) => this.broadcastBrain(projection))
       core.onWork((projection) => this.broadcastWork(projection))
       core.onMission((projection) => this.broadcastMission(projection))
+      core.onWorkforce((projection) => this.broadcastWorkforce(projection))
     })()
     try {
       await this.starting
@@ -384,6 +415,7 @@ export class ElectronCoreHost implements CoreHost {
     this.conversationWindows.clear()
     this.brainWindows.clear()
     this.workWindows.clear()
+    this.workforceWindows.clear()
     await core?.stop(reason)
   }
 
@@ -407,6 +439,44 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window Mission push threw', error)
         this.missionWindows.delete(send)
+      }
+    }
+  }
+
+  /**
+   * Attach to the Workforce projection, pushed immediately.
+   *
+   * A window that reloads re-attaches to the same Core and is told what the
+   * workforce is without asking — including, today, the honest sentence that no
+   * Workforce domain exists. Null before the Core has started, so a host with
+   * nothing to report says nothing rather than manufacturing an empty one.
+   */
+  onWorkforce(send: (projection: WorkforceProjection) => void): () => void {
+    this.workforceWindows.add(send)
+    const projection = this.workforce()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Workforce push threw', error)
+      }
+    }
+    return () => {
+      this.workforceWindows.delete(send)
+    }
+  }
+
+  workforce(): WorkforceProjection | null {
+    return this.core?.workforce() ?? null
+  }
+
+  private broadcastWorkforce(projection: WorkforceProjection): void {
+    for (const send of [...this.workforceWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Workforce push threw', error)
+        this.workforceWindows.delete(send)
       }
     }
   }

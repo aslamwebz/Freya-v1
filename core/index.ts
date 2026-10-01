@@ -56,6 +56,13 @@ import {
 } from './work/types'
 import type { ContextBudget } from './mind/context-compiler'
 import type { ConversationProjection, ConversationTurnView, VoiceProjection } from './protocol/conversation'
+import {
+  ABSENT_WORKFORCE_PROJECTION,
+  NO_WORKFORCE_DOMAIN_REASON,
+  WORKFORCE_NO_PAYLOAD,
+  type WorkforceProjection,
+  type WorkforceSource,
+} from './protocol/workforce'
 import { describeActivity, mergeActivity } from './protocol/activity'
 import type { CoreActivityEvent } from './protocol/activity'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
@@ -226,6 +233,21 @@ export interface CoreOptions {
    * — which is the correct starting posture rather than a gap.
    */
   workCapabilities?: readonly WorkCapability[]
+  /**
+   * The Phase 8 Workforce seam.
+   *
+   * The *entire* integration surface this lane assumes about issue #10: Core
+   * may be handed something it can read a `WorkforceProjection` from, and
+   * optionally follow. Unset — the state of every build until that domain
+   * exists — Core reports `NO_WORKFORCE_DOMAIN_REASON` and an empty,
+   * `unavailable` projection, which is the honest reading rather than a
+   * placeholder workforce.
+   *
+   * A source carries no authority by virtue of being one. It can be read; it
+   * cannot be instructed through this option, and nothing in it is reachable
+   * from a renderer.
+   */
+  workforceSource?: WorkforceSource
 }
 
 /**
@@ -326,6 +348,21 @@ export interface Core {
    * journal.
    */
   missionDetail(missionId: string): Promise<MissionDetail | null>
+  /**
+   * Core's account of the workforce: workers, teams, and what each is doing.
+   *
+   * Read-only and never null. A Core with no Workforce domain returns a
+   * projection that says exactly that — because "there are no workers" and
+   * "there is no Workforce" are different facts and a surface must not have to
+   * guess which one it is looking at.
+   *
+   * This is the far side of the `WorkforceSource` seam. Core reads a source it
+   * was built with; it has no method that takes an instruction about workers,
+   * so there is no path from this accessor to authority even in principle.
+   */
+  workforce(): WorkforceProjection
+  /** Subscribe to the Workforce projection. Same mirror semantics as the others. */
+  onWorkforce(listener: (projection: WorkforceProjection) => void): () => void
   readonly lifecycle: CoreLifecycle
 }
 
@@ -366,6 +403,17 @@ class FreyaCore implements Core {
   private readonly brainListeners = new Set<(projection: BrainProjection) => void>()
   private readonly workListeners = new Set<(projection: WorkProjection) => void>()
   private readonly missionListeners = new Set<(projection: MissionProjection) => void>()
+  private readonly workforceListeners = new Set<(projection: WorkforceProjection) => void>()
+  /**
+   * The Workforce seam, or null in every build where nothing has filled it.
+   *
+   * Null is a real, reachable state rather than a branch nobody exercises: it
+   * is what production is today, and `workforce()` reports it in words instead
+   * of inventing an empty-but-ready workforce to stand in.
+   */
+  private workforceSource: WorkforceSource | null
+  /** Detaches Core from the source's change channel. Set once, at start. */
+  private disposeWorkforceSource: () => void = () => {}
   /** Display-ready activity, rebuilt from the log on every start. */
   private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
@@ -400,6 +448,7 @@ class FreyaCore implements Core {
 
   constructor(private readonly options: CoreOptions) {
     this.newId = options.newId ?? (() => randomUUID())
+    this.workforceSource = options.workforceSource ?? null
   }
 
   get lifecycle(): CoreLifecycle {
@@ -725,6 +774,15 @@ class FreyaCore implements Core {
     })
     await this.missionEngine.open()
 
+    // The Workforce seam, if anything filled it.
+    //
+    // Subscribed here rather than in the constructor so a source that pushes
+    // during boot cannot reach a listener set nobody has attached to yet, and
+    // disposed in `stop()` so a source cannot outlive the Core reading it. A
+    // source without `subscribe` is simply read again on the next attach.
+    this.disposeWorkforceSource =
+      this.workforceSource?.subscribe?.(() => this.publishWorkforce()) ?? (() => {})
+
     const recoveredSequence = this.fabric.lastSequence
     this.startedAt = (this.options.now ?? (() => new Date()))().toISOString()
 
@@ -833,6 +891,8 @@ class FreyaCore implements Core {
       }
     } finally {
       this.disposeState()
+      this.disposeWorkforceSource()
+      this.disposeWorkforceSource = () => {}
       this.service?.dispose()
       this.currentLifecycle = 'stopped'
       // Research is drained *before* the fabric closes, and on a bound: a browser
@@ -1227,6 +1287,63 @@ class FreyaCore implements Core {
     }
   }
 
+  /**
+   * Core's account of the workforce.
+   *
+   * Three outcomes, and no fourth:
+   *
+   *   - a source was supplied, so whatever it reports — verbatim;
+   *   - no source, so `NO_WORKFORCE_DOMAIN_REASON`, which is the truth about
+   *     every build of this repository today;
+   *   - a source that threw, so an `unavailable` projection that says the read
+   *     failed, rather than a stale one that says everything is fine.
+   *
+   * Never an empty-but-ready projection. "There are no workers" and "there is
+   * no Workforce" are different facts, and a surface that cannot tell them
+   * apart will eventually show a person a workforce that was never there.
+   */
+  workforce(): WorkforceProjection {
+    if (this.workforceSource === null) {
+      return { ...ABSENT_WORKFORCE_PROJECTION, reason: NO_WORKFORCE_DOMAIN_REASON }
+    }
+    try {
+      return this.workforceSource.projection()
+    } catch (error) {
+      return {
+        ...ABSENT_WORKFORCE_PROJECTION,
+        reason: `the Workforce domain could not be read: ${describe(error)}`,
+      }
+    }
+  }
+
+  onWorkforce(listener: (projection: WorkforceProjection) => void): () => void {
+    this.workforceListeners.add(listener)
+    // Delivered immediately, like every other subscription here, so a window
+    // that attaches late agrees with one that never left.
+    try {
+      listener(this.workforce())
+    } catch (error) {
+      console.error('[freya.core] Workforce subscriber threw', error)
+    }
+    return () => {
+      this.workforceListeners.delete(listener)
+    }
+  }
+
+  /** Re-publish the Workforce mirror. Called when the source says it moved. */
+  private publishWorkforce(): void {
+    if (this.workforceListeners.size === 0) return
+    const projection = this.workforce()
+    for (const listener of [...this.workforceListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Workforce listener threw', error)
+        this.workforceListeners.delete(listener)
+      }
+    }
+  }
+
   private requireMission(): MissionEngine {
     if (this.missionEngine === undefined) {
       throw new Error('the Mission engine is not available')
@@ -1332,6 +1449,7 @@ class FreyaCore implements Core {
       command !== 'voice.status.read' &&
       command !== 'brain.status.read' &&
       command !== 'work.status.read' &&
+      command !== 'workforce.status.read' &&
       command !== 'mission.status.read'
     ) {
       return reject(envelope, `core is ${this.lifecycle} and cannot accept mutating commands`)
@@ -2128,6 +2246,37 @@ class FreyaCore implements Core {
           }
         }
 
+        /* ------------------------------------------------------- workforce */
+
+        case 'workforce.status.read': {
+          // Read-only, so it survives shutdown — and it carries nothing, which
+          // is the whole of this lane's write surface against Workforce: there
+          // is none.
+          //
+          // The refusal is deliberate rather than a silent drop. A window that
+          // appends an owner, a principal, an authority, a trust level, a
+          // provenance, a capability or a claim is *told* the read takes no
+          // payload, instead of being left believing the field went somewhere.
+          // Core never reads a payload on this path at all — there is no code
+          // here that could honour a forged field even if this check were
+          // removed — but a boundary that refuses teaches, and one that quietly
+          // ignores teaches a compromised window nothing.
+          if (carriesFields(envelope.payload)) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: WORKFORCE_NO_PAYLOAD },
+              workforce: { operation: 'refused', ok: false, reason: WORKFORCE_NO_PAYLOAD },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            workforce: { operation: 'status', ok: true },
+          }
+        }
+
         case 'work.task.create': {
           const decision = this.guard.evaluate(this.owner, 'work.task.manage')
           if (!decision.allowed) {
@@ -2853,6 +3002,22 @@ function isTaskStatus(value: string): value is TaskStatus {
  */
 function hasKey(payload: unknown, key: string): boolean {
   return typeof payload === 'object' && payload !== null && key in (payload as Record<string, unknown>)
+}
+
+/**
+ * Whether a payload carries any field at all.
+ *
+ * For the commands whose entire contract is "nothing" — today only
+ * `workforce.status.read`. `undefined`, `null` and `{}` carry nothing; a
+ * string, an array, or an object with a single key in it all do, and each is
+ * refused rather than dropped so that code still sending fields is told the
+ * read takes none.
+ */
+function carriesFields(payload: unknown): boolean {
+  if (payload === undefined || payload === null) return false
+  if (typeof payload !== 'object') return true
+  if (Array.isArray(payload)) return true
+  return Object.keys(payload as Record<string, unknown>).length > 0
 }
 
 function degradedStatus(

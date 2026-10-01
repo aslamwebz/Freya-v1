@@ -8,6 +8,7 @@ import type { ConversationProjection, VoiceProjection } from '../../core/protoco
 import type { BrainProjection } from '../../core/brain/brain'
 import type { WorkProjection } from '../../core/work/projection'
 import type { MissionProjection } from '../../core/missions/types'
+import type { WorkforceProjection } from '../../core/protocol/workforce'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -117,6 +118,19 @@ export interface FreyaHostBridge {
    */
   coreMission(): Promise<MissionProjection | null>
   onCoreMission(handler: (projection: MissionProjection) => void): () => void
+
+  /**
+   * The Workforce projection: which workers and teams exist, and what Core says
+   * each is doing.
+   *
+   * Same bargain as every other channel, and here the note that matters is what
+   * has no function at all: there is nothing on this bridge that names a
+   * worker, places one on a team, assigns a capability, records a claim or
+   * reaches the source Core read. The list above *is* the privileged surface —
+   * a window can look at the workforce, and cannot touch it in any direction.
+   */
+  coreWorkforce(): Promise<WorkforceProjection | null>
+  onCoreWorkforce(handler: (projection: WorkforceProjection) => void): () => void
 }
 
 declare global {

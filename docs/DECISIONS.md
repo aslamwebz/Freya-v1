@@ -418,3 +418,55 @@ somebody searched for does not belong.
 There is deliberately no `research.recalled` event either. Recall happens constantly,
 and journalling it would make the log a permanent record of what Freya found
 interesting.
+
+## D26 — Core is Freya; Electron is one body
+
+The product direction changed from "desktop AI dashboard" to a persistent personal
+intelligence that can appear as a desktop character, dashboard or Office.
+
+That does **not** justify a rewrite or cloud split now. Core remains hosted by
+Electron for prototype speed. The architectural decision is narrower: identity,
+memory, relationship, Missions, Work, Workforce and authority must not acquire
+dependencies on React, DOM, Three.js or BrowserWindow.
+
+A body can be replaced. Freya cannot.
+
+## D27 — Personality is flexible; the Constitution is not
+
+A real personality needs stable temperament, relationship history, situational
+judgment and anti-repetition. A future public product may let a user rename and
+reshape that personality.
+
+Safety cannot be another personality trait. `FREYA-CONSTITUTION.md` sits above
+personality and model prompts. A user can ask for sarcastic, quiet or playful.
+They cannot configure away Guard, privacy, approval, truth or authority boundaries.
+
+## D28 — Context is a capability, not omniscience
+
+Natural interaction needs references such as "this function" or "this video".
+The tempting implementation is a blanket screen feed.
+
+Rejected.
+
+Context is composed from provenance-carrying references: active application
+metadata, a selection, an authorized project/file, a shared browser tab, media, a
+Mission or recent interaction. Every item has scope and can expire or be revoked.
+
+This improves accuracy while preserving the rule that Freya sees what the user
+gave her access to, not everything the machine could technically expose.
+
+## D29 — Major builds must survive an adversarial Gauntlet
+
+Ordinary tests prove intended behavior. Freya also needs tests written from the
+position of somebody trying to make her betray the user or her own trusted
+boundary.
+
+Security-relevant changes run a fast adversarial smoke suite. Major phases and
+release candidates run `RED-TEAM.md`: prompt injection, indirect content,
+secret/source extraction, privilege escalation, memory/context poisoning, approval
+bypass, cross-agent attacks, IPC smuggling and race/replay attacks.
+
+Critical invariants are zero-tolerance. One confirmed secret leak, Guard bypass,
+self-escalation or fabricated verification blocks the build regardless of aggregate
+pass percentage.
+

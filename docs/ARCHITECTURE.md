@@ -1,45 +1,59 @@
 # Architecture
 
-Freya is a local desktop application. This document covers only the boundaries
-that Phase 0 must get right. Everything else is deferred.
+Freya is a **persistent Core with replaceable embodiments**.
+
+Today Core is hosted inside the Electron desktop process because that keeps the
+prototype local, simple and fast to debug. That is a deployment choice, not an
+ownership boundary. From this point forward, nothing that makes Freya Freya may
+depend on Electron.
+
+The governing rules are in [FREYA-CONSTITUTION.md](FREYA-CONSTITUTION.md), and the
+future sequence is in [ROADMAP.md](ROADMAP.md).
 
 ---
 
 ## 1. The shape of the system
 
 ```
+                              FREYA CORE
 ┌───────────────────────────────────────────────────────────────────────┐
-│  Desktop Shell  (Electron main process — "Freya Desktop")             │
-│  • owns the BrowserWindow, the app lifecycle, the window registry     │
-│  • owns the workspace file on disk                                    │
-│  • exposes a narrow, typed preload bridge                            │
+│ Identity · Mind · Personality · Context · Memory · Missions · Work    │
+│ Workforce · Governor · Guard · Event Fabric · Model Gateway           │
+│                                                                       │
+│ No React · no DOM · no CSS · no Three.js · no BrowserWindow           │
 └───────────────────────────────┬───────────────────────────────────────┘
-                                │  contextBridge (preload.ts)
-                    ┌───────────▼───────────┐
-                    │  Renderer  (React UI) │
-                    │  ┌─────────────────┐  │
-                    │  │ Shell chrome    │  │   header / nav / dock
-                    │  │ Surface Manager │  │   one windowing model
-                    │  │ Presence        │  │   one canvas renderer
-                    │  │ Dashboard cards │  │   read-only projections
-                    │  └────────���────────┘  │
-                    │        ▲              │
-                    │        │ subscribe    │
-                    │   ┌────┴─────┐        │
-                    │   │  Store   │        │  one reducer, one event log
-                    │   └────┬─────┘        │
-                    └────────┼──────────────┘
-                             │  (boundary — not implemented)
-              ┌──────────────▼──────────────┐
-              │  RPC / event client          │
-              │  "Freya Core" — Phase 1+     │
-              └──────────────────────────────┘
+                                │ typed Freya protocol / projections
+                 ┌──────────────┼──────────────┐
+                 │              │              │
+          Desktop Presence   Dashboard       Office
+          character/voice    work surfaces   workforce view
+                 │              │              │
+                 └──────────────┼──────────────┘
+                                │ bounded device capabilities
+              ┌─────────────────┼─────────────────┐
+              │                 │                 │
+           Browser            Files          Editor/Apps/Computer
 ```
 
-The renderer **never** touches the filesystem, the network, or a model. It has
-no `fs`, no `child_process`, no outbound HTTP. Everything privileged happens in
-the main process, and everything the future Core owns is reached through one
-interface.
+Three ownership rules are load-bearing:
+
+1. **Core is Freya.** Identity, relationship, memory truth, Missions, Work,
+   Workforce, authority and credentials do not belong to a renderer.
+2. **Bodies are disposable projections.** The orb, desktop character, dashboard
+   and future Office render Core state and submit narrow requests. Closing or
+   replacing one must not change who Freya is.
+3. **Hands are capabilities.** Browser/files/editor/apps/computer control are
+   scoped interfaces mediated by Guard and a local device boundary, never
+   unrestricted ambient access.
+
+The current Electron main process is both host and adapter. A later phase may move
+Core into a separate local service or hardened backend without changing the
+renderer contract. The UI should know that it is connected to Freya, not where
+Freya happens to execute.
+
+The renderer **never** owns the filesystem, network, model credentials, memory,
+authority or long-running work. Privileged platform adapters live outside the
+renderer and are reached through narrow typed boundaries.
 
 ---
 
@@ -62,12 +76,12 @@ script exposes four functions and one flag — `getRuntimeInfo`,
 `loadWorkspace`, `saveWorkspace`, `onCollect`, `isDesktop` — and nothing else. No
 remote module, no `ipcRenderer` passthrough, no eval.
 
-**Why the UI can be disposable.** Long-running Freya work (missions, agent
-sessions, PTYs) will live in the *main* process, keyed by `surface.id` and
-`context.id` — not in the renderer. The renderer only ever holds a *projection*
-of that state. Reloading the renderer re-reads the projection; the work keeps
-running. This is why the surface id is a durable, stable identifier and not a
-React key.
+**Why the UI can be disposable.** Long-running Freya work lives in Core, not in
+the renderer. In the current deployment Core is hosted by the Electron main
+process; later it may be a separate local service. The renderer only holds a
+projection of that state. Reloading or replacing a body re-reads the projection;
+the work keeps running. Surface ids are durable UI identities, not ownership of
+the work they display.
 
 ---
 

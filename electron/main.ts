@@ -399,6 +399,11 @@ app.whenReady().then(() => {
         // provider object it cannot inspect.
         BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY,
         FREYA_ALLOW_WEB_SEARCH: process.env.FREYA_ALLOW_WEB_SEARCH,
+        // Gates for the offline research fixtures. Both are required, and they are
+        // read here in main rather than accepted from a window, so no renderer can
+        // put a production build into fixture mode.
+        FREYA_E2E: process.env.FREYA_E2E,
+        FREYA_E2E_RESEARCH: process.env.FREYA_E2E_RESEARCH,
       },
       {
         conversationKey: result.conversation.key,

@@ -142,7 +142,14 @@ function pointer(type: string, clientX: number, clientY: number): MouseEvent {
   return new MouseEvent(type, { bubbles: true, button: 0, clientX, clientY })
 }
 
-function dockButton(name: RegExp) {
+/**
+ * A dock button by its exact title.
+ *
+ * Exact rather than a substring pattern because `/search/i` also matches "Research",
+ * and a selector that quietly matches two surfaces is a selector that will pick the
+ * wrong one after the next title change.
+ */
+function dockButton(name: string | RegExp) {
   const dock = screen.getByRole('toolbar', { name: /work surfaces/i })
   return within(dock).getByRole('button', { name })
 }

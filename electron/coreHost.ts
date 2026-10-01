@@ -6,6 +6,7 @@ import type { BrainProjection } from '../core/brain/brain'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 import { BraveSearchProvider } from '../core/research/providers/brave'
 import { ElectronBrowserTargetFactory } from './research/managedTarget'
+import { fixtureSearchProvider, fixtureTransport, researchFixturesEnabled } from './research/e2eFixtures'
 import { SafeHttpTransport } from '../core/research/transport'
 import type { SearchProvider } from '../core/research/types'
 import type { BrowserTargetFactory } from '../core/research/browser'
@@ -25,6 +26,17 @@ import type { BrowserTargetFactory } from '../core/research/browser'
 export interface HostEnv extends NanoGptEnv {
   BRAVE_SEARCH_API_KEY?: string
   FREYA_ALLOW_WEB_SEARCH?: string
+  /**
+   * E2E gates. Main-process only, and both must be present before any research
+   * fixture is used.
+   *
+   * Read from the environment by the host rather than passed by the renderer, so
+   * that no window can switch a production build into fixture mode. They replace the
+   * transport's DNS and socket seams only — the URL policy, the bounds and the
+   * browser target remain the real ones.
+   */
+  FREYA_E2E?: string
+  FREYA_E2E_RESEARCH?: string
 }
 
 /**
@@ -178,6 +190,17 @@ export class ElectronCoreHost implements CoreHost {
    * credential even indirectly.
    */
   private buildResearchStack(): { searchProvider: SearchProvider; browserFactory: BrowserTargetFactory } {
+    // The offline fixture path, behind two independent gate variables, replaces the
+    // transport's DNS and socket seams only. The URL policy, the byte bounds, the
+    // redirect handling and the browser target are all the real ones, so the E2E is
+    // testing the production code path and not a parallel implementation of it.
+    if (researchFixturesEnabled(this.env as Record<string, string | undefined>)) {
+      return {
+        searchProvider: fixtureSearchProvider(),
+        browserFactory: new ElectronBrowserTargetFactory(fixtureTransport()),
+      }
+    }
+
     const transport = new SafeHttpTransport()
     return {
       searchProvider: new BraveSearchProvider({ env: this.env, transport }),

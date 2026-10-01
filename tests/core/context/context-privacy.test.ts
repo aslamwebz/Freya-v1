@@ -182,11 +182,14 @@ describe('private context content reaches no generic surface', () => {
 describe('the context domain reaches nothing', () => {
   const dir = fileURLToPath(new URL('../../../core/context', import.meta.url))
 
-  it('imports nothing outside its own directory', () => {
-    const files = readdirSync(dir).filter((name) => name.endsWith('.ts'))
-    expect(files.length).toBeGreaterThan(3)
+  const FOUNDATION = ['audit.ts', 'item.ts', 'reference.ts', 'store.ts', 'types.ts']
 
-    const source = files.map((name) => readFileSync(join(dir, name), 'utf8')).join('\n')
+  function foundationSource(): string {
+    return FOUNDATION.map((name) => readFileSync(join(dir, name), 'utf8')).join('\n')
+  }
+
+  it('the foundation imports nothing outside its own directory', () => {
+    const source = foundationSource()
     const specifiers = [...source.matchAll(/from\s+'([^']+)'/g)].map((match) => match[1])
 
     expect(specifiers.length).toBeGreaterThan(0)
@@ -202,9 +205,17 @@ describe('the context domain reaches nothing', () => {
     expect(source).not.toMatch(/setTimeout|setInterval/)
   })
 
-  it('contains no clock reads, no timers and nothing that can wait', () => {
-    const files = readdirSync(dir).filter((name) => name.endsWith('.ts'))
-    const source = files.map((name) => readFileSync(join(dir, name), 'utf8')).join('\n')
+  it('is the whole of what the directory holds', () => {
+    // So that adding another file is a deliberate act and not a silent escape
+    // from the two assertions above.
+    const files = readdirSync(dir)
+      .filter((name) => name.endsWith('.ts'))
+      .sort()
+    expect(files).toEqual([...FOUNDATION, 'mission-adapter.ts', 'workforce-adapter.ts'].sort())
+  })
+
+  it('the foundation contains no clock reads, no timers and nothing that can wait', () => {
+    const source = foundationSource()
 
     // The instant always comes from the caller: same state, same instant, same
     // verdict — and no background tick keeping context "fresh".

@@ -19,7 +19,8 @@ import {
  *
  * - **Not a clipboard reader.** No selection is *found* here; content arrives
  *   as an argument or there is nothing to adapt. Active app/window discovery
- *   stays in the later capture lane (`active_window` is refused by name).
+ *   belongs to the host observation lane (`sources/window`, issue #30), not
+ *   to a selection adapter — this file cannot see, and does not pretend to.
  * - **Not an authority.** A selection shared into one conversation is a
  *   photograph of that selection with that scope and TTL; it grants no access
  *   to anything it mentions.

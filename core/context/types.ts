@@ -32,20 +32,25 @@
  *   trust boundary on its own; the only shape allowed near audit surface is the
  *   metadata-only {@link ContextAuditRecord}. There are no `context.*` journal
  *   events in this lane at all.
- * - **No capture.** Nothing in this domain reaches for a screen, a window, an
- *   app or a device. Content arrives only by being handed in by a caller that
- *   already has it.
+ * - **No capture.** Nothing in this domain reaches for a screen, an app or a
+ *   device on its own. Content arrives only by being handed in by a caller that
+ *   already has it; the observation lane under `sources/window/` defines the
+ *   *shape* a host-injected provider must fill — an opt-in sensor outside this
+ *   store hands observations in, and nothing here is allowed to reach outward.
  * - **No inference.** Every operation here is synchronous and deterministic —
  *   a module that cannot await cannot call a model, so idle context
  *   maintenance costs zero inference.
  *
  * ## Deferred kinds
  *
- * `active_window` (app/window capture) and `agent_work` (a different Workforce
- * lane, which waits for issue #10) are *declared* so that a caller asking for
- * them is refused truthfully — `kind_deferred` in a word — instead of silently
- * receiving nothing, or worse, receiving something invented. Declaring a kind is
- * not sourcing it: admission refuses both until the capture lane and #10 land.
+ * `agent_work` (a different Workforce lane, which waits for issue #10) is
+ * *declared* so that a caller asking for it is refused truthfully —
+ * `kind_deferred` in a word — instead of silently receiving nothing, or worse,
+ * receiving something invented. Declaring a kind is not sourcing it: admission
+ * refuses it until #10 lands. `active_window` was declared the same way; the
+ * Phase 9 observation lane (issue #30) is the capture lane that sources it, as
+ * a `host_report` of app and window *identity* — never pixels — from an
+ * explicit opt-in host sensor.
  *
  * `active_worker` is the sourced Workforce kind (issue #31): bounded metadata
  * about a worker Core currently has active, produced by the Workforce adapter
@@ -57,8 +62,13 @@
 /**
  * The context kinds this build can honestly source.
  *
- * Each one names a *human act or Core record*, not a sensing capability:
- * somebody selected this, somebody shared this, or Core already knows this.
+ * Most name a *human act or Core record* — somebody selected this, somebody
+ * shared this, or Core already knows this. One, `active_window`, is a
+ * *host-reported observation*: the desktop host telling Core which app and
+ * window identity is in front. It is still not a sensing privilege — its only
+ * permitted source is `host_report` (see {@link CONTEXT_KIND_SOURCES}), it
+ * carries identity and safe metadata only, never pixels, and it requires an
+ * `originId`, so "the host saw it" always names the observation it came from.
  */
 export const CONTEXT_KINDS = [
   /** The owner explicitly selected this text/segment. */
@@ -73,6 +83,8 @@ export const CONTEXT_KINDS = [
   'shared_tab',
   /** Media (image/audio/video/document) the owner shared. */
   'shared_media',
+  /** The active app/window identity, host-observed and TTL-bounded (issue #30). */
+  'active_window',
   /** A Workforce worker Core currently has active, summarised as bounded metadata. */
   'active_worker',
 ] as const
@@ -82,10 +94,10 @@ export type ContextKind = (typeof CONTEXT_KINDS)[number]
  * Declared, not sourced.
  *
  * These exist so a request for them fails with an honest reason rather than a
- * quiet absence. `active_window` is Phase 9's later capture lane (not built
- * here: "no active app/window capture yet"); `agent_work` waits for issue #10.
+ * quiet absence. `agent_work` waits for issue #10. (`active_window` was here
+ * until the Phase 9 observation lane — issue #30 — made it honest to source.)
  */
-export const DEFERRED_CONTEXT_KINDS = ['active_window', 'agent_work'] as const
+export const DEFERRED_CONTEXT_KINDS = ['agent_work'] as const
 export type DeferredContextKind = (typeof DEFERRED_CONTEXT_KINDS)[number]
 
 export type AnyContextKind = ContextKind | DeferredContextKind
@@ -142,6 +154,12 @@ export const CONTEXT_KIND_SOURCES: Readonly<Record<ContextKind, readonly Context
     file: ['owner_authorization', 'owner_selection', 'host_report'],
     shared_tab: ['owner_share', 'host_report'],
     shared_media: ['owner_share', 'host_report'],
+    // Active app/window is a host observation, never an owner's own hand and
+    // never Core's invention: `host_report` alone, so an admitted active_window
+    // always names the observation (`originId`) behind it.
+    active_window: ['host_report'],
+    // Active worker is Core's own record of Workforce state (#31): the adapter
+    // derives it from Core projections, and nothing that is not Core may say so.
     active_worker: ['core_record'],
   })
 

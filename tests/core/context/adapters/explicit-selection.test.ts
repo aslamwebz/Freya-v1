@@ -127,9 +127,12 @@ describe('selection is the owner\'s own hand — everything else is refused', ()
   })
 
   it('refuses deferred kinds by name and unknown kinds honestly', () => {
+    // `active_window` is a real kind since the observation lane (#30) — but a
+    // real kind from another lane's hand is still not this adapter's to
+    // produce, and the honest refusal word for that is `kind_mismatch`.
     expectRefusal(
       explicitSelectionAdmission(selectionInput({ kind: 'active_window' })),
-      'kind_deferred',
+      'kind_mismatch',
     )
     expectRefusal(
       explicitSelectionAdmission(selectionInput({ kind: 'agent_work' })),

@@ -214,7 +214,10 @@ export function buildContextAdmission(
   if (kind !== null) {
     if (!isAnyContextKind(kind)) return refusal('kind_unknown')
     // Declared-but-unsourced kinds are refused by name here too: an adapter
-    // that built nothing for `active_window` would be a quiet ambient capture.
+    // that built nothing for `agent_work` would be a quiet invention. (Kinds
+    // that are real but belong to another lane — `active_window` is the host
+    // observation lane's, #30 — die a line below as `kind_mismatch`, which is
+    // the same refusal in a truer word: this adapter does not produce them.)
     if (isDeferredContextKind(kind)) return refusal('kind_deferred')
     if (kind !== spec.kind) return refusal('kind_mismatch')
   }

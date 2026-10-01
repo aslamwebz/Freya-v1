@@ -88,9 +88,11 @@ import {
  * there is no code path from an admitted selection to a request that costs money,
  * and a module with no `async` and no `Promise` cannot invent one.
  *
- * Active-window capture is absent by construction: `active_window` is a deferred
- * kind in the foundation, so it is refused by name on every path, including any
- * Core-internal one.
+ * Active-window capture is absent by construction: this class never reads a
+ * screen, a window or a device. The foundation admits `active_window` only as a
+ * `host_report` (issue #30), and this file's host lane takes no session scope —
+ * so a front-window item can only reach the store when the desktop host's
+ * opt-in observation lane, not this boundary, hands it in.
  */
 
 /** How many scopes Core will hold at once. A ceiling, like every other here. */

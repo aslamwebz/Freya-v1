@@ -126,7 +126,11 @@ describe('metadata never carries the private part', () => {
       ['input_invalid', mistyped({ scope: conversation('c1'), content: CANARY, limits: {} })],
       ['authority_not_admissible', secretInput({ grant: CANARY })],
       ['kind_mismatch', secretInput({ kind: 'file' })],
-      ['kind_deferred', secretInput({ kind: 'active_window' })],
+      // `active_window` is sourced by the observation lane (#30) — for this
+      // adapter it is another lane's kind, and `agent_work` keeps the
+      // deferred-kind phrasing under test.
+      ['kind_mismatch', secretInput({ kind: 'active_window' })],
+      ['kind_deferred', secretInput({ kind: 'agent_work' })],
       ['kind_unknown', secretInput({ kind: 'clipboard' })],
       ['source_not_permitted', secretInput({ source: 'owner_share' })],
       ['scope_confusion', mistyped({ content: CANARY, scopeId: CANARY_LABEL })],

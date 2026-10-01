@@ -429,10 +429,12 @@ export const SESSION_CONTEXT_SCOPE: ContextScopeRef = Object.freeze({
  * Whether a Context pull got an answer, in this vocabulary.
  *
  * Two operations because there are two facts: Core answered, or the answer
- * could not be had. A pull is not a command — there is no `context.status.read`
- * in `CoreCommandName` yet, and adding one is #15/#16's decision made in
- * `core/index.ts` and `core-protocol.ts`, not this lane's — so this outcome
- * describes the IPC read itself.
+ * could not be had. A pull is not a command: the door a window reaches is the
+ * projection read on the bridge, which carries no argument and so cannot carry
+ * a claim, and this outcome describes that IPC read itself. Core's own
+ * `context.status.read` is a command in *Core's* vocabulary — this lane does
+ * not hand it to a window, because the window's door names no `context.*`
+ * command at all.
  */
 export type ContextOperation = 'status' | 'refused'
 

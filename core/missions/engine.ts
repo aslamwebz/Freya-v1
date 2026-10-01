@@ -352,8 +352,20 @@ export class MissionEngine {
 
       // Claimed only once the request is certain to be recorded, so a refusal never
       // leaves the Mission permanently stuck behind a claim nobody owns.
+      //
+      // The claim and the write that could fail are the reason this needs a `catch`
+      // rather than just a comment: taking the claim and *then* having the journal
+      // throw would otherwise strand the Mission for the life of the process, because
+      // the release is further down and never reached. Measured before this: one
+      // simulated disk failure, and every later request refused with
+      // `verification-in-progress` for good.
       this.verifying.add(missionId)
-      await this.emit('mission.verification.requested', { missionId, verifierId, runIds: required })
+      try {
+        await this.emit('mission.verification.requested', { missionId, verifierId, runIds: required })
+      } catch (error) {
+        this.verifying.delete(missionId)
+        throw error
+      }
 
       return {
         kind: 'admitted',
@@ -618,7 +630,12 @@ export class MissionEngine {
     )
     void result.catch(() => undefined)
     this.inflight.add(result)
-    void result.finally(() => this.inflight.delete(result))
+    // `.finally` returns a *new* promise, so handling `result` above does not handle
+    // this one — and a rejected `result` would leave it rejected with nobody listening,
+    // which Node treats as an unhandled rejection and, by default, a process exit. A
+    // journal write failing is exactly the situation this engine goes to such lengths
+    // to degrade gracefully from, so it must not take the process down instead.
+    void result.finally(() => this.inflight.delete(result)).catch(() => undefined)
     return result
   }
 

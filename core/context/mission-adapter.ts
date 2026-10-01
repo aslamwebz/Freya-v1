@@ -1,73 +1,47 @@
-import { MISSION_STATUSES, type MissionStatus } from '../missions/types'
+import { MISSION_STATUSES, isTerminalMissionStatus, type MissionStatus } from '../missions/types'
+import type { ContextAdmission } from './types'
+import type { ContextStore } from './store'
 
 /**
  * THE CURRENT-MISSION CONTEXT ADAPTER.
  *
- * This is the whole of Phase 9's coupling to Missions, and it is deliberately
- * this small.
+ * Phase 9's coupling to Missions, built from Core-owned projections. The
+ * adapter reads a narrow report — a Mission id and its lifecycle status —
+ * and produces bounded context metadata. It never reads a Mission's private
+ * content (title, intent, success criteria), which lives in an encrypted
+ * store this lane has no business touching.
  *
- * ## Why an adapter at all, and why not more of one
+ * ## What crosses the boundary
  *
- * "Here" should mean the Mission a person is actually working on, so the
- * Context domain needs to know which Mission is current. It does **not** need to
- * know what the Mission says.
- *
- * A Mission's private text — its title, its intent, its success criteria — lives
- * in an encrypted Mission store (`core/missions/encrypted-store.ts`) that this
- * lane has no business reading, and it is absent from `MissionRecord` on
- * purpose: the journal copy of a Mission holds ids, statuses, instants, counts
- * and closed codes, and that absence is what makes a Mission safe to keep in a
- * backup. So the adapter is built from the fields a `MissionSummaryView` already
- * exposes in the open, and there is no path from here to a Mission's words
- * because the words are not on this side of the boundary.
- *
- * That is what "narrow, where safe" means here. A wider adapter — one that read
- * the Mission's title so that "here" could be "here: the offer letter" — would
- * move the most private text Freya holds into an ephemeral, process-lifetime
- * store with no encryption and no durability, which is a downgrade dressed as a
- * feature.
+ * Exactly two facts: a Mission id and a status from the closed
+ * `MissionStatus` table. No title, no intent, no success criteria, no
+ * verification evidence, no child-run counts. The content is a deterministic
+ * sentence derived from those two fields, so the same report always produces
+ * the same admission.
  *
  * ## One item, or "here" stops meaning anything
- *
- * The current Mission is admitted into the **session** scope: it is ambient by
- * nature, and a Mission that resolved only inside the conversation it was
- * created in would stop being "here" the moment the owner opened another
- * surface. That is safe precisely because of what the item carries — an id, a
- * status and a fixed sentence — and unsafe the moment that changes.
  *
  * At most one live `current_mission` item exists at any instant. The adapter
  * re-points by revoking the previous item rather than admitting alongside it,
  * because two live items of one kind make every "here" ambiguous, and an
- * ambiguous "here" is a refusal rather than a guess. See `ContextIntegration`.
+ * ambiguous "here" is a refusal rather than a guess.
  *
- * ## Why the content does not move with the counters
+ * ## Deterministic expiry and revocation
  *
- * The sentence below is a function of the Mission's **id and status only**, not
- * of its run counts. Counts change every time a Run is attached or finishes,
- * and a "here" that re-points on every attachment would fill the audit with
- * revocations of context whose meaning never actually changed — training a reader
- * to ignore the revocation trail, which is the one signal in it worth reading.
+ * The item carries an explicit TTL, so it expires deterministically if the
+ * adapter is not called again (e.g. after a restart). When the Mission is no
+ * longer active — its status is terminal, or no Mission is current — the
+ * adapter revokes the item with a stated reason, so a later reference answers
+ * `revoked` rather than pretending nothing was ever there.
  *
- * Stale counts would be worse than none: a prompt compiler reading "2 of 5 runs"
- * that was true four runs ago has been handed a fact it cannot check. So the
- * adapter omits them and says why, rather than including them and labelling them.
+ * ## No authority
+ *
+ * Context never grants authority or capability. Holding a `current_mission`
+ * item says nothing about what may be done with it; Guard does not read this
+ * module.
  */
 
-import type { ContextCoreRecord } from './coreIntegration'
-
-/**
- * What Core may say about the current Mission, in Context's own vocabulary.
- *
- * Ids, a closed status and a derived sentence. Deliberately **not** a
- * `MissionSummaryView`: that type is the Mission domain's view of a Mission and
- * carries fields — deadlines, verification verdicts, available actions — that
- * have no business being copied into an admission spec that another subsystem
- * will hold. A narrow input type is the enforcement; a comment is not.
- *
- * `status` is typed as `MissionStatus` rather than `string` so a renamed or
- * removed Mission status becomes a compile error here instead of an opaque
- * string reaching an admission.
- */
+/** What Core may say about the current Mission, in Context's own vocabulary. */
 export interface ContextMissionReport {
   readonly missionId: string
   readonly status: MissionStatus
@@ -76,18 +50,21 @@ export interface ContextMissionReport {
 /** Why a Mission's context was taken back, in Core's words. */
 export const CONTEXT_MISSION_REVOKED_REASON = 'the current Mission changed'
 
+/** Why a Mission's context was taken back because it is no longer active. */
+export const CONTEXT_MISSION_INACTIVE_REASON = 'the Mission is no longer active'
+
+/** Default TTL for a current-Mission context item: one hour. */
+export const MISSION_CONTEXT_TTL_MS = 60 * 60_000
+
 /**
  * Whether a status is one Core can put in front of a person as context.
  *
  * `MissionStatus` is a closed table, and this is the runtime check that the
- * `ContextMissionReport` type is only a promise about. It is checked rather than
- * assumed because the report is assembled from a Mission projection fold: a type
- * assertion is not evidence, and an unrecognised status would otherwise be admitted
- * as an item label, which is the one part of a Mission somebody might recognise.
- *
- * A guard the type system already provides, deliberately kept — because the caller
- * is Core's own command dispatch and the value underneath it came out of a JSONL
- * fold, which is exactly the place where a closed table stops being decorative.
+ * `ContextMissionReport` type is only a promise about. It is checked rather
+ * than assumed because the report is assembled from a Mission projection fold:
+ * a type assertion is not evidence, and an unrecognised status would otherwise
+ * be admitted as an item label, which is the one part of a Mission somebody
+ * might recognise.
  */
 export function isReportableMissionStatus(value: unknown): value is MissionStatus {
   return typeof value === 'string' && (MISSION_STATUSES as readonly string[]).includes(value)
@@ -96,9 +73,9 @@ export function isReportableMissionStatus(value: unknown): value is MissionStatu
 /**
  * The sentence "here" resolves to, when "here" means the current Mission.
  *
- * One clause and two facts. Bounded by construction — a Mission id and a status
- * are both short and both come from a closed table, so this cannot outgrow
- * `maxContentChars` the way free text from a caller can.
+ * One clause and two facts. Bounded by construction — a Mission id and a
+ * status are both short and both come from a closed table, so this cannot
+ * outgrow `maxContentChars` the way free text from a caller can.
  */
 export function missionContextContent(report: ContextMissionReport): string {
   return `The current Mission is ${report.missionId} and it is ${report.status}.`
@@ -107,20 +84,93 @@ export function missionContextContent(report: ContextMissionReport): string {
 /**
  * The admission for a current Mission, built by Core rather than requested.
  *
- * Note what this function does **not** take: a source, a channel, a scope or a
- * caller. All four are Core's decision. `scope` is the session scope because a
- * current Mission is ambient, and `source` is fixed by the entry point this spec
- * is only ever handed to — so nothing that reaches it can assert where it came
- * from, and the type itself has no field in which such an assertion could live.
+ * Note what this function does **not** take: a source, a scope or a caller.
+ * All three are Core's decision. `scope` is the session scope because a
+ * current Mission is ambient, and `source` is fixed by the kind/source table
+ * — so nothing that reaches it can assert where it came from, and the type
+ * itself has no field in which such an assertion could live.
  */
-export function missionContextAdmission(report: ContextMissionReport): ContextCoreRecord {
+export function missionContextAdmission(report: ContextMissionReport): ContextAdmission {
   return {
     kind: 'current_mission',
+    source: 'core_record',
     scope: { scopeKind: 'session', scopeId: 'session' },
     content: missionContextContent(report),
-    // The status, and only the status: a label is rendered, so it must not be
-    // the one part of a Mission somebody might recognise by shape.
     label: report.status,
     originId: report.missionId,
+    ttlMs: MISSION_CONTEXT_TTL_MS,
+  }
+}
+
+/** What a sync did, in Core's words. */
+export type MissionSyncResult =
+  | { readonly operation: 'unchanged' }
+  | { readonly operation: 'admitted'; readonly contextId: string }
+  | { readonly operation: 'repointed'; readonly contextId: string; readonly revokedId: string }
+  | { readonly operation: 'revoked'; readonly contextId: string }
+
+/**
+ * The stateful adapter that keeps the context store in sync with the current
+ * Mission.
+ *
+ * The adapter is the only thing that knows which Mission is current. It
+ * receives a report on every projection read and applies the diff to the
+ * store: admit when a Mission becomes current, re-point when it changes,
+ * revoke when it is no longer active.
+ *
+ * Deterministic: the same sequence of reports against the same store produces
+ * the same sequence of sync results. No clock is read; `now` is passed in.
+ */
+export class MissionContextAdapter {
+  private currentContextId: string | null = null
+  private currentMissionId: string | null = null
+  private currentStatus: MissionStatus | null = null
+
+  /**
+   * Sync the store with the current Mission.
+   *
+   * `report` is null when no Mission is current. A non-null report with a
+   * terminal status means the Mission is no longer active — its context is
+   * revoked rather than updated, because a completed Mission is not "here"
+   * any more.
+   */
+  sync(report: ContextMissionReport | null, store: ContextStore, now: Date): MissionSyncResult {
+    if (report === null || isTerminalMissionStatus(report.status)) {
+      return this.revokeCurrent(store, now, CONTEXT_MISSION_INACTIVE_REASON)
+    }
+
+    if (this.currentMissionId === report.missionId && this.currentStatus === report.status) {
+      return { operation: 'unchanged' }
+    }
+
+    const admission = missionContextAdmission(report)
+    const result = store.admit(admission, now)
+    if (!result.ok) {
+      throw new Error(`the current-Mission admission was refused (${result.code}): ${result.reason}`)
+    }
+
+    const revokedId = this.currentContextId
+    if (revokedId !== null) {
+      store.revoke(revokedId, CONTEXT_MISSION_REVOKED_REASON, now)
+    }
+
+    this.currentContextId = result.item.contextId
+    this.currentMissionId = report.missionId
+    this.currentStatus = report.status
+
+    return revokedId === null
+      ? { operation: 'admitted', contextId: result.item.contextId }
+      : { operation: 'repointed', contextId: result.item.contextId, revokedId }
+  }
+
+  private revokeCurrent(store: ContextStore, now: Date, reason: string): MissionSyncResult {
+    const contextId = this.currentContextId
+    if (contextId === null) return { operation: 'unchanged' }
+
+    store.revoke(contextId, reason, now)
+    this.currentContextId = null
+    this.currentMissionId = null
+    this.currentStatus = null
+    return { operation: 'revoked', contextId }
   }
 }

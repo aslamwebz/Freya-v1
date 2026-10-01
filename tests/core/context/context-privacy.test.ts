@@ -220,12 +220,14 @@ describe('the context foundation reaches nothing', () => {
   })
 
   it('is the whole of what the directory holds', () => {
-    // So that adding a sixth foundation file is a deliberate act and not a silent
-    // escape from the two assertions above.
+    // So that adding another foundation file is a deliberate act and not a
+    // silent escape from the two assertions above.
     const files = readdirSync(dir)
       .filter((name) => name.endsWith('.ts'))
       .sort()
-    expect(files).toEqual([...FOUNDATION, 'coreIntegration.ts', 'mission-adapter.ts'].sort())
+    expect(files).toEqual(
+      [...FOUNDATION, 'coreIntegration.ts', 'mission-adapter.ts', 'workforce-adapter.ts'].sort(),
+    )
   })
 
   it('contains no clock reads, no timers and nothing that can wait', () => {

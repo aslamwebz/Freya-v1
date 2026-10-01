@@ -446,10 +446,12 @@ export class MissionEngine {
   /**
    * Whether a Mission with this id exists.
    *
-   * Exists so Core can answer "is this a real Mission?" before it writes a Run whose
-   * parent it is about to assert. The admission rules — active, not expired, under both
-   * ceilings — belong to {@link attachChildRun} and are deliberately not duplicated here;
-   * a second copy of those rules in Core is how the two would drift.
+   * Lets Core give a window an exact "no such Mission" refusal *cheaply*, before
+   * building a Run at all. It is not the admission decision — whether a
+   * mission-parented Run may durably exist is settled by
+   * {@link attachChildRunWhileCreating} inside the per-Mission queue — so this
+   * says nothing about status, ceilings or deadlines, and must never be used as
+   * permission by itself.
    */
   exists(missionId: string): boolean {
     return this.state.missions.has(missionId)
@@ -458,11 +460,11 @@ export class MissionEngine {
   /**
    * Attach a child Run.
    *
-   * The only door to a new Run, and it enforces admission before anything happens:
-   * the Mission must exist, must be `active`, must not have expired, and must be
-   * under both ceilings. Once pause wins admission, a child Run arriving later
-   * cannot start under stale state, because the status is re-read inside the
-   * per-Mission queue rather than before it.
+   * The only door to an *already created* Run, and it enforces admission before
+   * anything happens: the Mission must exist, must be `active`, must not have
+   * expired, and must be under both ceilings. Once pause wins admission, a child
+   * Run arriving later cannot start under stale state, because the status is
+   * re-read inside the per-Mission queue rather than before it.
    */
   async attachChildRun(
     missionId: string,
@@ -489,30 +491,100 @@ export class MissionEngine {
         // Mission look like it had hit a ceiling it had not.
         return { operation: 'run-attached', ok: true, missionId, runId }
       }
-
-      const now = this.options.now?.() ?? new Date()
-      if (Date.parse(now.toISOString()) >= Date.parse(mission.deadlineAt)) {
-        await this.emit('mission.limit.exceeded', { missionId, limit: 'lifetimeMs' })
-        return refused('run-attached', 'this Mission has passed its deadline', missionId)
-      }
-      if (mission.childRuns.length >= mission.limits.maxChildRuns) {
-        await this.emit('mission.limit.exceeded', { missionId, limit: 'maxChildRuns' })
-        this.options.onChange?.()
-        return refused('run-attached', 'this Mission has reached its child Run ceiling', missionId)
-      }
-      if (liveChildCount(mission, this.options.work) >= mission.limits.maxConcurrentChildRuns) {
-        await this.emit('mission.limit.exceeded', { missionId, limit: 'maxConcurrentChildRuns' })
-        this.options.onChange?.()
-        return refused('run-attached', 'this Mission has reached its concurrent child Run ceiling', missionId)
-      }
-      if (this.options.stopAll?.() === true) {
-        return refused('run-attached', 'Freya is stopped', missionId)
-      }
-
+      const refusal = await this.admissionRefusal(missionId, mission)
+      if (refusal !== null) return refusal
       await this.emit('mission.run.attached', { missionId, runId, taskId })
       this.options.onChange?.()
       return { operation: 'run-attached', ok: true, missionId, runId }
     })
+  }
+
+  /**
+   * Attach a child Run that is created *as part of* the admission decision.
+   *
+   * This is the door Core's `work.run.create` takes when a renderer names a
+   * missionId. `create` is Work's own run creation, handed over as a callback so
+   * the Mission engine — the one authority on admission — decides *whether* a
+   * mission-parented Run may be durably written at all, while Work still owns
+   * how Runs are made.
+   *
+   * The whole sequence is admission check → `work.run.created` →
+   * `mission.run.attached`, and it all runs inside this one Mission's queue.
+   * Nothing that refuses attachment — a pause, a cancel, a deadline settlement,
+   * another attach filling the last ceiling slot — can interleave, because every
+   * one of those joins the same queue. A refusal therefore happens strictly
+   * before `create` is ever called, and the journal never records a
+   * mission-parented Work Run without a `mission.run.attached` beside it. The
+   * reverse arrangement — create first, attach after — is exactly the defect
+   * this replaces: a `work.run.created` with a parent the Mission could not
+   * corroborate, and no event to say otherwise.
+   */
+  async attachChildRunWhileCreating(
+    missionId: string,
+    create: () => Promise<string>,
+    taskId: string | null = null,
+  ): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('run-attached', 'missions are shutting down')
+    return this.serialise(missionId, async () => {
+      const mission = this.state.missions.get(missionId)
+      if (mission === undefined) return refused('run-attached', 'no such mission')
+      if (mission.status !== 'active') {
+        return refused(
+          'run-attached',
+          `only an active Mission may attach Work; this one is ${mission.status}`,
+          missionId,
+        )
+      }
+      // The Run does not exist yet, so none of these readings can be made stale
+      // by its creation: the queue is held across `work.run.created`, and count
+      // ceilings are read against the children that are already there. `create`
+      // resolving to a run id means Work accepted the plan *and* recorded the
+      // parent — the corroboration below is emitted immediately, without the
+      // queue ever being released between the two writes.
+      const refusal = await this.admissionRefusal(missionId, mission)
+      if (refusal !== null) return refusal
+      const runId = await create()
+      await this.emit('mission.run.attached', { missionId, runId, taskId })
+      this.options.onChange?.()
+      return { operation: 'run-attached', ok: true, missionId, runId }
+    })
+  }
+
+  /**
+   * The house rules for one more child Run, decided inside the queue.
+   *
+   * Shared by {@link attachChildRun} and {@link attachChildRunWhileCreating} so
+   * there is exactly one copy of the ceilings. Resolves to null when the Mission
+   * may take another child, and to the refusal — having already emitted the
+   * matching `mission.limit.exceeded` — when it may not.
+   */
+  private async admissionRefusal(
+    missionId: string,
+    mission: MissionRecord,
+  ): Promise<MissionCommandOutcome | null> {
+    const now = this.options.now?.() ?? new Date()
+    if (Date.parse(now.toISOString()) >= Date.parse(mission.deadlineAt)) {
+      await this.emit('mission.limit.exceeded', { missionId, limit: 'lifetimeMs' })
+      return refused('run-attached', 'this Mission has passed its deadline', missionId)
+    }
+    if (mission.childRuns.length >= mission.limits.maxChildRuns) {
+      await this.emit('mission.limit.exceeded', { missionId, limit: 'maxChildRuns' })
+      this.options.onChange?.()
+      return refused('run-attached', 'this Mission has reached its child Run ceiling', missionId)
+    }
+    if (liveChildCount(mission, this.options.work) >= mission.limits.maxConcurrentChildRuns) {
+      await this.emit('mission.limit.exceeded', { missionId, limit: 'maxConcurrentChildRuns' })
+      this.options.onChange?.()
+      return refused(
+        'run-attached',
+        'this Mission has reached its concurrent child Run ceiling',
+        missionId,
+      )
+    }
+    if (this.options.stopAll?.() === true) {
+      return refused('run-attached', 'Freya is stopped', missionId)
+    }
+    return null
   }
 
   /* ------------------------------------------------------------- projection */

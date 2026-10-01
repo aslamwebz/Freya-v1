@@ -2234,41 +2234,82 @@ class FreyaCore implements Core {
               "a Run's parent is decided by Core; name a missionId instead of a parent",
             )
           }
-          // Checked before the Run is created, because `work.run.created` records the
-          // parent it is given. Attaching afterwards and discovering the Mission does not
-          // exist left the durable log claiming a parent that nothing could corroborate —
-          // a `work.run.created` with a `mission` parent and no `mission.run.attached`
-          // anywhere near it. Only *existence* is asked here; whether the attachment is
-          // admissible stays with the engine, so the rules live in one place.
+          // Checked before the Run is built so a window gets an exact "no such
+          // Mission" refusal cheaply. This is *not* the permission decision:
+          // whether a mission-parented Run may durably exist is decided inside
+          // `attachChildRunWhileCreating`, under the Mission's own lock, together
+          // with the single `work.run.created` that names it as parent. The
+          // earlier bug — create the Run first, attach after — left the journal
+          // recording a parent that nothing corroborated when the Mission was a
+          // draft, paused, terminal, expired or over a ceiling; now a refusal
+          // happens strictly before any Work claim is written.
           if (missionId !== null && !this.requireMission().exists(missionId)) {
             return this.workRefusal(requestId, 'run-created', 'there is no Mission with that id')
           }
           const parent = missionId === null ? null : { kind: 'mission' as const, id: missionId }
-          const outcome = await this.requireWork().createRun({
-            steps: planSteps,
-            ...(taskId === null ? {} : { taskId }),
-            ...(parent === null ? {} : { parent }),
-            ...(limits === null ? {} : { limits }),
-          })
-          // Attached only once Work has actually accepted the Run, so a Mission is
-          // never credited with a Run that does not exist. A ceiling that refuses the
-          // attachment is reported by the Mission projection rather than by failing
-          // the whole command, because the Run genuinely was created and a window told
-          // otherwise would be told something false.
-          if (outcome.ok && parent !== null && outcome.runId !== undefined) {
-            await this.requireMission().attachChildRun(missionId as string, outcome.runId)
-            this.publishMission()
+
+          // The Work outcome of the Run created inside the Mission's queue. Set
+          // only when Work accepted the plan: admission refused means creation
+          // never ran, and a Work refusal throws instead.
+          let created: WorkCommandOutcome | undefined
+
+          if (parent === null) {
+            const outcome = await this.requireWork().createRun({
+              steps: planSteps,
+              ...(taskId === null ? {} : { taskId }),
+              ...(limits === null ? {} : { limits }),
+            })
+            this.publishWork()
+            return { requestId, ok: outcome.ok, status: this.status(), work: workResult(outcome) }
           }
+
+          // A mission-parented Run is created and corroborated as one act: the
+          // admission check, Work's durable `work.run.created` and the
+          // `mission.run.attached` all hold the Mission's queue, so no pause,
+          // cancel, deadline settlement or rival attach can land between them.
+          // A refusal here — draft, paused, terminal, past the deadline, at a
+          // ceiling, stopped — is returned before the callback runs, so nothing
+          // exists and the journal records no attempt at all.
+          let attach: MissionCommandOutcome
+          try {
+            attach = await this.requireMission().attachChildRunWhileCreating(
+              missionId as string,
+              async () => {
+                const attempt = await this.requireWork().createRun({
+                  steps: planSteps,
+                  ...(taskId === null ? {} : { taskId }),
+                  parent,
+                  ...(limits === null ? {} : { limits }),
+                })
+                if (!attempt.ok || attempt.runId === undefined) throw new RunPlanRefused(attempt)
+                created = attempt
+                return attempt.runId
+              },
+            )
+          } catch (error) {
+            // Work declining the plan (a bad capability, unsanitisable input, a
+            // malformed ceiling) is the renderer's mistake and reads like any
+            // other Work refusal; nothing durable was written on either side.
+            if (error instanceof RunPlanRefused) {
+              return this.workRefusal(requestId, 'run-created', error.outcome.reason ?? 'the run plan was refused')
+            }
+            throw error
+          }
+          if (!attach.ok) {
+            // The Mission refused on its own terms, and nothing is named as its
+            // child. Say so in the Mission's voice, not Work's: the Run does not
+            // exist, so `ok: false` is honest here.
+            return this.missionRefusal(requestId, 'run-refused', attach.reason ?? 'the Mission refused this Run')
+          }
+          if (created === undefined) {
+            throw new Error('the Mission queue surrendered no Work outcome')
+          }
+          this.publishMission()
           this.publishWork()
-          // A refusal is `ok: false` here, not a success carrying a reason. A
-          // window must not have to inspect a Work result to discover that the
-          // engine declined, because the one caller that reads `ok` and the one that
-          // reads `work` would otherwise disagree about whether anything happened.
-          //
           // A created Run is `queued`, not running: starting one is a separate,
           // explicit command, so nothing a renderer submits begins executing as a
           // side effect of being accepted.
-          return { requestId, ok: outcome.ok, status: this.status(), work: workResult(outcome) }
+          return { requestId, ok: true, status: this.status(), work: workResult(created) }
         }
 
         case 'work.run.start': {
@@ -2784,6 +2825,20 @@ function workResult(outcome: WorkCommandOutcome): WorkCommandOutcome {
 }
 
 /** A refused Work command, in the one shape the surface has to render. */
+/* A Run plan Work refused, raised out of the Mission queue.
+ *
+ * `attachChildRunWhileCreating` calls Work's own `createRun` as a callback, so a
+ * Work refusal has to travel as an exception rather than an outcome value. The
+ * Work result is carried whole, and the `work.run.create` handler turns it into
+ * the same refusal a window would get with no Mission named — nothing durable
+ * was written on either side.
+ */
+class RunPlanRefused extends Error {
+  constructor(readonly outcome: WorkCommandOutcome) {
+    super(outcome.reason ?? 'the run plan was refused')
+  }
+}
+
 function isTaskStatus(value: string): value is TaskStatus {
   return (TASK_STATUSES as readonly string[]).includes(value)
 }

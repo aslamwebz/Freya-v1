@@ -556,7 +556,122 @@ describe('a Run is parented only by something Core can corroborate', () => {
     expect(result.ok).toBe(true)
     expect(harness.core.work()?.runs[0]?.parentId ?? null).toBeNull()
   })
+
+  it('leaves no parent claim behind when a Mission refuses children', async () => {
+    // The one invariant: a mission-parented `work.run.created` is only ever
+    // written when the Mission will corroborate it. Every refusal below happens
+    // before the Run exists, so for each status the journal shows the claim and
+    // the corroboration landing together — or neither at all.
+    const refuses = [
+      { label: 'still draft', setup: [] as [string, Record<string, unknown>][] },
+      {
+        label: 'paused',
+        setup: [['mission.activate', { missionId: null }], ['mission.pause', { missionId: null }]],
+      },
+      {
+        label: 'cancelled',
+        setup: [['mission.activate', { missionId: null }], ['mission.cancel', { missionId: null }]],
+      },
+    ] as const
+    for (const refusalCase of refuses) {
+      const harness = await started()
+      const missionId = await harness.mission(`Refused ${refusalCase.label}`, 'Live but closed.')
+      for (const [command, payload] of refusalCase.setup) {
+        await harness.send(command, { ...payload, missionId })
+      }
+      const result = await harness.send('work.run.create', { steps: [step('one')], missionId })
+      expect(result.ok, refusalCase.label).toBe(false)
+      expect(result.refusal?.reason, refusalCase.label).toBe(
+        `only an active Mission may attach Work; this one is ${
+          refusalCase.label === 'paused' ? 'paused' : refusalCase.label === 'cancelled' ? 'cancelled' : 'draft'
+        }`,
+      )
+      // Nothing corroborated means nothing claimed.
+      expect(parentedRunEvents(await journal(), missionId), refusalCase.label).toHaveLength(0)
+      expect(attachEventsFor(await journal(), missionId), refusalCase.label).toHaveLength(0)
+    }
+  })
+
+  it('refuses a run past the Mission deadline and records no parent claim', async () => {
+    let clock = new Date('2026-01-01T00:00:00Z')
+    const harness = await started({ now: () => clock })
+    const missionId = await harness.mission('Out of time', 'Was live once.')
+    await harness.send('mission.activate', { missionId })
+    clock = new Date(clock.getTime() + 31 * 24 * 60 * 60_000)
+
+    const result = await harness.send('work.run.create', { steps: [step('one')], missionId })
+    expect(result.ok).toBe(false)
+    expect(result.refusal?.reason).toMatch(/deadline/)
+    expect(parentedRunEvents(await journal(), missionId)).toHaveLength(0)
+    expect(attachEventsFor(await journal(), missionId)).toHaveLength(0)
+  })
+
+  it('refuses at the child Run ceiling and records no parent claim', async () => {
+    const harness = await started()
+    const missionId = await harness.mission('At the ceiling', 'Room for three.')
+    await harness.send('mission.activate', { missionId })
+    for (let i = 0; i < 4; i += 1) {
+      const result = await harness.send('work.run.create', { steps: [step(`fill-${i}`)], missionId })
+      expect(result.ok).toBe(true)
+    }
+
+    const result = await harness.send('work.run.create', { steps: [step('one-too-many')], missionId })
+    expect(result.ok).toBe(false)
+    expect(result.refusal?.reason).toMatch(/concurrent child Run ceiling/)
+    expect(parentedRunEvents(await journal(), missionId)).toHaveLength(4)
+    expect(attachEventsFor(await journal(), missionId)).toHaveLength(4)
+  })
+
+  it('refuses while stopped and records no parent claim', async () => {
+    const harness = await started()
+    const missionId = await harness.mission('Stopped', 'Live, but the button was pressed.')
+    await harness.send('mission.activate', { missionId })
+    await harness.send('security.stopAll', { reason: 'the panic button' })
+
+    const result = await harness.send('work.run.create', { steps: [step('one')], missionId })
+    expect(result.ok).toBe(false)
+    expect(result.refusal?.reason).toMatch(/stopped/i)
+    expect(parentedRunEvents(await journal(), missionId)).toHaveLength(0)
+    expect(attachEventsFor(await journal(), missionId)).toHaveLength(0)
+  })
+
+  it('leaves an admitted attach fully corroborated in the journal', async () => {
+    // The converse: when the command returns ok, the durable claim and its
+    // corroboration must both be present — exactly one of each, written because
+    // the Mission still said yes inside the same lock that wrote the parent.
+    const harness = await started()
+    const missionId = await harness.mission('Corroborated', 'Providers, meet claims.')
+    await harness.send('mission.activate', { missionId })
+    const result = await harness.send('work.run.create', { steps: [step('one')], missionId })
+    expect(result.ok).toBe(true)
+
+    const claimed = parentedRunEvents(await journal(), missionId)
+    const attached = attachEventsFor(await journal(), missionId)
+    expect(claimed).toHaveLength(1)
+    expect(attached).toHaveLength(1)
+    expect(String((attached[0]?.payload as Record<string, unknown>).runId)).toBe(
+      String((claimed[0]?.payload as Record<string, unknown>).runId),
+    )
+  })
 })
+
+/** `work.run.created` events durably claiming this Mission as parent. */
+function parentedRunEvents(events: AnyCoreEvent[], missionId: string): AnyCoreEvent[] {
+  return events.filter(
+    (event) =>
+      event.type === 'work.run.created' &&
+      (event.payload as Record<string, unknown>).parentId === missionId,
+  )
+}
+
+/** `mission.run.attached` events corroborating that claim. */
+function attachEventsFor(events: AnyCoreEvent[], missionId: string): AnyCoreEvent[] {
+  return events.filter(
+    (event) =>
+      event.type === 'mission.run.attached' &&
+      (event.payload as Record<string, unknown>).missionId === missionId,
+  )
+}
 
 describe('STOP ALL outranks Missions', () => {
   it('refuses to activate a Mission while stopped', async () => {

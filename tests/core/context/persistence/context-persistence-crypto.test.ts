@@ -280,10 +280,10 @@ describe('an authenticating record is still checked against the domain', () => {
 
   it('refuses a record that claims a kind this build does not source', async () => {
     const legal = secretItem(contextStore())
-    // `active_window` is a declared-but-unsourced kind: a record asserting it is
-    // asserting a capture capability this build has not got.
+    // `agent_work` is declared for truthful refusal but remains unsourced: a
+    // persisted record cannot make a deferred kind real merely by authenticating.
     const path = storePath()
-    await sealArbitrary({ ...legal, kind: 'active_window' }, path)
+    await sealArbitrary({ ...legal, kind: 'agent_work' }, path)
     const store = await EncryptedContextStore.open({ path, key: testContextKey() })
     expect(store.faultReason).toMatch(/does not source/)
     expect((await store.load()).ok).toBe(false)

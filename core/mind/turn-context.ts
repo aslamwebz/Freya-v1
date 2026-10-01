@@ -8,7 +8,6 @@ import {
   type ContextResolution,
   type ContextScope,
   type ContextTerm,
-  type DeferredContextKind,
 } from '../context/types'
 import { contextItemState, isValidContextInstant, orderedContextItems } from '../context/item'
 import { contextItemsInScope } from '../context/reference'
@@ -159,29 +158,25 @@ export interface TurnContextSource {
 /** One deictic word found in the owner's own text, with its position. */
 export interface DetectedContextReference {
   readonly term: ContextTerm
-  /** A kind this build does not source yet, when the owner named one. Otherwise null. */
+  /** A narrowly recognised kind named by the owner, when that mapping is safe. Otherwise null. */
   readonly kind: AnyContextKind | null
   /** Character offset in the turn text. Reported for audit; never rendered. */
   readonly at: number
 }
 
 /**
- * Nouns that name a kind this build declares but does not source.
+ * Nouns that unambiguously name the host-observed active-window kind.
  *
- * Only these get a kind inferred, and the reason is narrow and deliberate.
- * Inferring `file` from "this file" would be a **guess about meaning**: if two
- * items are live and one of them is a tab, "this file" narrowed to `file` resolves
- * to something the owner may not have meant, and the entire point of the resolver
- * is that it refuses instead. So live kinds are never inferred — an unnarrowed
- * reference that matches two things stays ambiguous.
+ * Phase 9 originally declared `active_window` as deferred, so this table was a
+ * deferred-kind hint. Issue #30 now sources that kind for real. Keeping this one
+ * narrow hint prevents "this window" from resolving to an unrelated lone file,
+ * while preserving the conservative rule for every other live kind: `file`, tab,
+ * media, Mission and worker nouns are never inferred from adjacent prose.
  *
- * A *deferred* kind is different, because it cannot produce a wrong answer: the
- * resolver refuses `kind_deferred` whatever the store holds. Naming one turns a
- * misleading "nothing in scope matches" into the truthful "this build does not
- * source that kind yet" — the difference the Context domain insists on preserving
- * between a kind that is not built and a scope that is empty.
+ * The literal kind type is intentional. Expanding this table to another live kind
+ * requires a deliberate type change rather than silently weakening that rule.
  */
-const DEFERRED_NOUNS: readonly { readonly noun: string; readonly kind: DeferredContextKind }[] = [
+const ACTIVE_WINDOW_NOUNS: readonly { readonly noun: string; readonly kind: 'active_window' }[] = [
   { noun: 'window', kind: 'active_window' },
   { noun: 'app', kind: 'active_window' },
   { noun: 'application', kind: 'active_window' },
@@ -216,7 +211,7 @@ export function detectContextReferences(text: string): {
     if (isContextTerm(word)) {
       found.push({
         term: word,
-        kind: deferredKindAfter(text, match.index + match[0].length),
+        kind: namedKindAfter(text, match.index + match[0].length),
         at: match.index,
       })
     }
@@ -225,11 +220,11 @@ export function detectContextReferences(text: string): {
   return { found, total }
 }
 
-function deferredKindAfter(text: string, from: number): AnyContextKind | null {
+function namedKindAfter(text: string, from: number): AnyContextKind | null {
   const rest = text.slice(from, from + NOUN_WINDOW)
   const noun = /^\s+([a-z]+)/i.exec(rest)?.[1]?.toLowerCase() ?? null
   if (noun === null) return null
-  return DEFERRED_NOUNS.find((entry) => entry.noun === noun)?.kind ?? null
+  return ACTIVE_WINDOW_NOUNS.find((entry) => entry.noun === noun)?.kind ?? null
 }
 
 /* ---------------------------------------------------------------- report */

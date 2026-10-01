@@ -196,16 +196,16 @@ describe('an ambiguous reference is never guessed', () => {
     expect(block.report.references[0]).toMatchObject({ kind: null })
   })
 
-  it('narrows only a deferred kind, because that cannot produce a wrong answer', () => {
+  it('keeps an explicit window noun on the active-window kind instead of resolving an unrelated file', () => {
     const store = scopedStore()
     admitOrThrow(store, fileSpec())
 
     const block = compile(store, 'what is this window')
     expect(block.report.references[0]).toMatchObject({ term: 'this', kind: 'active_window' })
-    expect(reasonOf(block)).toBe('kind_deferred')
-    // "Not built yet" and "you shared nothing" are different sentences, and the
-    // deferred kind is the one that must not be reported as an empty scope.
-    expect(blockOf(block)).toMatch(/does not source that context kind yet/)
+    expect(reasonOf(block)).toBe('no_candidates')
+    // The observation lane now sources active_window. With no observed window in
+    // scope, the truthful answer is absence — never the unrelated file above.
+    expect(blockOf(block)).toMatch(/no live context item in this scope matches that reference/)
   })
 
   it('says so when nothing is in scope at all, and when no scope is current', () => {

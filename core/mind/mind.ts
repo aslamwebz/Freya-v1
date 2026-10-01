@@ -330,10 +330,10 @@ export class MindService {
    * going to make. Nothing in Core reads the Context store in the background, so
    * idle Freya compiles nothing and spends nothing.
    */
-  private sharedContextFor(text: string): ModelMessage | null {
+  private sharedContextFor(text: string, conversationId: string): ModelMessage | null {
     if (this.turnContext === null) return null
     try {
-      return this.turnContext({ text, now: this.now() })?.message ?? null
+      return this.turnContext({ text, conversationId, now: this.now() })?.message ?? null
     } catch (error) {
       // Logged and swallowed, for the reason above: a turn must not be lost to its
       // enrichment. The fault belongs to the Context domain's own health reporting.
@@ -502,7 +502,7 @@ export class MindService {
       // so the Context Compiler's input stays the closed set of five explicit
       // fields the Phase 9 red-team suite asserts, and this block arrives as a
       // separate `user`-role message the compiler was never asked to trust.
-      const messages = withTurnContext(compiled.messages, this.sharedContextFor(text))
+      const messages = withTurnContext(compiled.messages, this.sharedContextFor(text, input.conversationId))
 
       // Record what context was actually assembled before the provider is asked.
       // This remains true for failure/cancellation outcomes too; a turn does not

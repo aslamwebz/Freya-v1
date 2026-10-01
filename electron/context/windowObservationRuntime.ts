@@ -32,9 +32,9 @@ import type { ContextCommandOutcome } from '../../core/protocol/context'
  * `createActiveWindowFacadeAdmitter`). The runtime owns no store, exposes no
  * IPC, and adds no method that could act on a window — it observes, and
  * observation is not a verb you point at a screen or a permission. Enabling
- * this in production remains the host composition's explicit act — no file in
- * `main.ts`/`coreHost.ts`/`preload.ts` constructs it, and a test holds that
- * line — but since #27 the door it would hand its observations to exists.
+ * this in production remains the host composition's explicit act: main supplies
+ * an opt-in setting, and coreHost supplies the narrow Core lane and timer.
+ * The preload and renderer expose no observation door.
  */
 
 /**
@@ -42,8 +42,8 @@ import type { ContextCommandOutcome } from '../../core/protocol/context'
  *
  * The union is deliberate: a runtime that could admit to *both* would be one
  * refactor away from double-writing provenance, and a runtime with *neither*
- * would be observation for nobody — the very thing that keeps this lane out of
- * `main.ts`. The caller must say which door, in the type, at construction.
+ * would be observation for nobody. The caller must say which door, in the type,
+ * at construction.
  */
 export type WindowObservationAdmission =
   | { readonly sink: WindowAdmissionSink; readonly lane?: undefined }

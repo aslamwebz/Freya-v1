@@ -292,6 +292,8 @@ export interface TurnContextBlock {
 }
 
 export interface TurnContextRequest {
+  /** Real conversation identity from Mind; never derived from the words. */
+  readonly conversationId?: string
   /**
    * The owner's own words for this turn.
    *

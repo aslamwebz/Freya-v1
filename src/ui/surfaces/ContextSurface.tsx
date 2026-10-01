@@ -163,6 +163,13 @@ export function ContextSurface() {
       <div className="context-posture" data-ready="true">
         <b>CONTEXT</b>
         <span>{describeCounts(projection)}</span>
+        {projection.persistence ? (
+          <span data-durable={projection.persistence.durable}>
+            {projection.persistence.durable
+              ? 'Context is encrypted and retained across restarts.'
+              : bounded(projection.persistence.reason ?? 'Context is held in this session only.')}
+          </span>
+        ) : null}
         <span>
           Read-only. Provenance, scope, expiry and every state below are Core&apos;s own
           report; this window asserts none of them, resolves nothing, and captures nothing.

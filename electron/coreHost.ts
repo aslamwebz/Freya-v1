@@ -6,7 +6,9 @@ import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
 import type { MissionProjection } from '../core/missions/types'
 import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
-import type { ContextProjection, ContextProjectionView } from '../core/protocol/context'
+import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
+import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
+import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 import { BraveSearchProvider } from '../core/research/providers/brave'
 import { ElectronBrowserTargetFactory } from './research/managedTarget'
@@ -113,6 +115,7 @@ export function toContextProjection(
   const view = projection
   const available = view.limits.maxItems > 0
   return {
+    persistence: { ...view.persistence },
     health: available ? 'ready' : 'unavailable',
     reason: available ? null : (view.persistence.reason ?? 'Core has not reported a Context yet'),
     items: view.items.map((row) => ({
@@ -341,6 +344,14 @@ export interface CoreHostOptions {
    * report `durable: false` rather than implying a persistence they do not have.
    */
   missionKey?: Uint8Array | null
+  contextKey?: Uint8Array | null
+  /** Explicit main-process opt-in; never accepted from a renderer. */
+  windowObservation?: {
+    enabled: boolean
+    provider: ActiveWindowProvider
+    scope: ContextScopeRef
+    timer?: WindowTimer | null
+  }
   /**
    * The developer echo provider, when one was explicitly asked for.
    *
@@ -378,6 +389,7 @@ export interface CoreHostOptions {
 export class ElectronCoreHost implements CoreHost {
   private core: Core | null = null
   private starting: Promise<void> | null = null
+  private stopRequested = false
   private readonly windows = new Set<(status: CoreStatus) => void>()
   private readonly activityWindows = new Set<(activity: CoreActivityEvent[]) => void>()
   private readonly conversationWindows = new Set<(projection: ConversationProjection) => void>()
@@ -392,6 +404,9 @@ export class ElectronCoreHost implements CoreHost {
    * integration and takes no context source from the host.
    */
   private readonly contextChannel = new ContextChannel()
+  private windowObservation: WindowObservationRuntime | null = null
+  private observedContextId: string | null = null
+  private windowLane: ReturnType<Core['contextWindowLane']> | null = null
 
   constructor(
     private readonly dataPath: string,
@@ -402,6 +417,7 @@ export class ElectronCoreHost implements CoreHost {
   async start(): Promise<void> {
     if (this.core) return
     if (this.starting) return this.starting
+    this.stopRequested = false
     this.starting = (async () => {
       const research = this.options.research ?? this.buildResearchStack()
       const core = createCore({
@@ -415,6 +431,7 @@ export class ElectronCoreHost implements CoreHost {
           : {}),
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
         ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),
+        contextKey: this.options.contextKey ?? null,
         // The Workforce seam, forwarded whole. Nothing is derived from it here:
         // the host neither reads nor interprets a workforce, it only hands Core
         // the reader it was given and mirrors what Core reports.
@@ -429,6 +446,10 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.providers ? { providers: this.options.providers } : {}),
       })
       await core.start()
+      if (this.stopRequested) {
+        await core.stop('host stopped during startup')
+        return
+      }
       this.core = core
       // Any window attached later still gets every subsequent change.
       core.subscribe((status) => this.broadcast(status))
@@ -443,6 +464,19 @@ export class ElectronCoreHost implements CoreHost {
       // window's vocabulary, with no edit here and no authority moved into
       // Electron. A Core that reports nothing still binds to nothing.
       this.contextChannel.bind(core)
+      const observation = this.options.windowObservation
+      if (observation?.enabled) {
+        this.windowLane = core.contextWindowLane(observation.scope)
+        this.windowObservation = createWindowObservationRuntime({
+          ...observation,
+          timer: observation.timer === undefined ? createIntervalTimer() : observation.timer,
+          lane: this.windowLane,
+          onAdmission: (outcome) => {
+            if ('contextId' in outcome && outcome.ok) this.observedContextId = outcome.contextId ?? null
+          },
+        })
+        this.windowObservation.start()
+      }
     })()
     try {
       await this.starting
@@ -606,7 +640,18 @@ export class ElectronCoreHost implements CoreHost {
     return this.core?.status() ?? NOT_READY
   }
 
+  windowObservationStatus(): WindowSourceStatus {
+    return this.windowObservation?.status() ?? 'disabled'
+  }
+
   async stop(reason = 'app shutdown'): Promise<void> {
+    this.stopRequested = true
+    try { await this.starting } catch { /* The start caller receives its own failure. */ }
+    this.windowObservation?.stop()
+    if (this.observedContextId) this.windowLane?.revoke(this.observedContextId, 'window observation stopped')
+    this.windowObservation = null
+    this.windowLane = null
+    this.observedContextId = null
     const core = this.core
     this.core = null
     this.windows.clear()

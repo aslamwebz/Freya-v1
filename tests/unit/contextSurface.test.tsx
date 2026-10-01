@@ -281,3 +281,14 @@ describe('the Context view shows only what Core reported', () => {
     expect(screen.getByText(/Core has not reported a Context projection/i)).toBeInTheDocument()
   })
 })
+
+
+describe('Core storage health is visible without granting a write path', () => {
+  it('shows the actual degraded persistence reason', async () => {
+    push(ready({ persistence: { mode: 'encrypted', durable: false,
+      reason: 'Context storage unavailable; this session only' } } as Partial<ContextProjection>))
+    render(<ContextSurface />)
+    expect(await screen.findByText('Context storage unavailable; this session only')).toBeInTheDocument()
+    expect(coreSubmit).not.toHaveBeenCalled()
+  })
+})

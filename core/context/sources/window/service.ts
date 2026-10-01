@@ -330,8 +330,10 @@ export class WindowObservationService {
 
     const fresh = this.current(now)
     const key = windowSpanKey(info)
-    if (fresh !== null && this.spanKey === key) {
-      // The same front, restated: refresh the TTL, emit nothing new.
+    if (fresh !== null && this.spanKey === key &&
+        now.getTime() < Date.parse(fresh.observedAt) + this.limits.ttlMs) {
+      // Keep short refreshes in one span. At the original TTL, emit a fresh
+      // observation so the Core admission does not expire under a live source.
       this.held = { info: fresh, expiresAtMs: now.getTime() + this.limits.ttlMs }
       return
     }

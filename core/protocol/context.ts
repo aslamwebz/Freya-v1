@@ -251,9 +251,9 @@ export interface ContextAuditRowView {
  */
 export interface ContextProjectionView {
   readonly persistence: {
-    readonly mode: 'ephemeral'
-    /** False, and said so: no encrypted context store exists yet. */
-    readonly durable: false
+    readonly mode: 'encrypted' | 'ephemeral'
+    /** Actual persistence health; false when the secure store is unavailable. */
+    readonly durable: boolean
     readonly reason: string | null
   }
   /** What "here" currently means, or null when nothing is current. */
@@ -568,6 +568,8 @@ export interface ContextCounts {
  * gives: `'unavailable'` is not `'ready'` with zero items.
  */
 export interface ContextProjection {
+  /** Core's secure-store health, mirrored as metadata only. */
+  readonly persistence?: ContextProjectionView['persistence']
   readonly health: 'ready' | 'unavailable'
   /** Why, in words a person can act on. Null when healthy. */
   readonly reason: string | null

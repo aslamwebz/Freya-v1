@@ -64,11 +64,16 @@ Every context item has scope, TTL and revocation.
 
 No omniscient global screen privilege.
 
-The store and its refusal rules are [PHASE-9's foundation lane](PHASE-9.md) — provenance,
-scope, TTL, revocation and the ambiguity-safe resolver. What sits in front of it is the
-Core-owned boundary: five operations a caller can reach, none of which lets the caller
-decide where content came from or how wide it is. See [PHASE-9.md](PHASE-9.md) for the
-anti-forgery argument and for what is deferred to the agent and renderer lanes.
+Phase 9 implementation and final acceptance gates are complete. Production
+assembly connects encrypted Context restart recovery, actual conversation-scoped
+Mind input and opt-in own-app window observation. The read-only desktop mirror
+reports actual storage health. On 2026-10-02 the full verification gate passed:
+2,089 tests, typecheck, lint, build and 187 desktop checks. [Issue #47](https://github.com/aslamwebz/Freya/issues/47)
+tracks integration into `phase-7-missions`; `main` is preserved separately.
+See [PHASE-9.md](PHASE-9.md) for ownership, provenance and verification details.
+
+OS-wide native observation and `agent_work` remain explicit unsupported/deferred
+boundaries; no Phase 10 execution is included.
 
 ## Phase 10 — Harness and Computer Hands
 

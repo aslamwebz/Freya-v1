@@ -13,11 +13,8 @@ import type { OwnWindowSource } from './windowProviders'
  * answers a question about this application's own windows and cannot be made
  * to answer a question about anybody else's.
  *
- * This file is compiled with the host and imported by nothing yet: production
- * enablement belongs with the Core admission boundary (issue #27), and until
- * a live store can hold an observation, the honest move is to keep the lane
- * open-circuited rather than capture for nobody. The runtime composition in
- * `windowObservationHost.ts` is where a wired host would call it.
+ * Main constructs this source only for the explicit own-app opt-in. The host
+ * couples it to Core's narrow window lane; it never becomes a renderer API.
  */
 export function createElectronOwnWindowSource(): OwnWindowSource {
   return {

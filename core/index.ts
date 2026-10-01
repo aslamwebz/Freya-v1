@@ -67,6 +67,10 @@ import {
   type ContextIntegrationOptions,
 } from './context/coreIntegration'
 import type { ContextReference } from './context/types'
+import { ContextPersistenceRuntime } from './contextPersistence'
+import { bindTurnContext } from './mind/turn-context'
+import type { ActiveWindowAdmissionLane } from './context/sources/window'
+import type { ContextHostReport } from './context/coreIntegration'
 import type { ContextCommandOutcome, ContextProjectionView, ContextScopeRef } from './protocol/context'
 import { NO_ACTIVE_AGENT_CONTEXT_REASON } from './protocol/context'
 import type { ConversationProjection, ConversationTurnView, VoiceProjection } from './protocol/conversation'
@@ -219,6 +223,8 @@ export interface CoreOptions {
    * never silently presented as durable when they are not.
    */
   missionKey?: Uint8Array
+  /** Context's independent secure key; absent means explicit process-only Context. */
+  contextKey?: Uint8Array | null
   /** Overrides the Mission content store wholesale. For tests. */
   missionStore?: MissionStore
   /**
@@ -424,6 +430,8 @@ export interface Core {
    * context item can widen no grant and satisfy no capability.
    */
   context(): ContextProjectionView
+  /** Main-process composition only; no protocol/preload door exposes this lane. */
+  contextWindowLane(scope: ContextScopeRef): ActiveWindowAdmissionLane
   /** Subscribe to the Context projection. Same mirror semantics as the others. */
   onContext(listener: (projection: ContextProjectionView) => void): () => void
   readonly lifecycle: CoreLifecycle
@@ -478,6 +486,7 @@ class FreyaCore implements Core {
    * scheduled.
    */
   private contextIntegration: ContextIntegration | undefined
+  private contextPersistence: ContextPersistenceRuntime | undefined
   /** Context wiring handed in by Core itself, never by a payload. */
   private readonly contextOptions: Partial<ContextIntegrationOptions>
   /**
@@ -801,6 +810,13 @@ class FreyaCore implements Core {
       now: this.options.now,
       newId: this.options.newId,
       budget: this.options.contextBudget,
+      turnContext: (request) => {
+        if (!request.conversationId || !this.contextIntegration) return null
+        const source = this.contextIntegration.turnSource({
+          scopeKind: 'conversation', scopeId: request.conversationId,
+        })
+        return bindTurnContext(source)(request)
+      },
       // The conversation service is built after the Mind, so this resolves lazily
       // and is the only thing that couples the two. Without it a window would only
       // learn a turn had started after it had already finished.
@@ -901,10 +917,23 @@ class FreyaCore implements Core {
     // Context sits beside Missions rather than above them: it reads which Mission is
     // current and nothing else, and it is built here so the two are wired in one place.
     //
-    // No host argument, no capture lane and no model. Constructing it opens nothing,
-    // and the one thing it is given from the outside is the clock Core already had.
-    this.contextIntegration = new ContextIntegration(this.contextOptions)
+    // Recover through the separate secure persistence lifecycle before serving readers.
+    // Context still owns no capture lane, authority, journal family or model.
+    const recoveredContext = await ContextPersistenceRuntime.open({
+      path: `${this.options.dataPath}.context.enc`,
+      onHealthChange: () => this.publishContext(),
+      key: this.options.contextKey ?? null,
+      now: (this.options.now ?? (() => new Date()))(),
+    })
+    this.contextPersistence = recoveredContext.runtime
+    this.contextIntegration = new ContextIntegration({
+      ...this.contextOptions,
+      initialRecords: recoveredContext.records,
+      onChange: (records) => this.contextPersistence?.commit(records),
+      persistenceHealth: () => recoveredContext.runtime.health(),
+    })
     this.syncContextMission()
+    await this.contextPersistence.flush()
 
     this.workforceEngine = new WorkforceEngine({
       fabric: this.fabric,
@@ -1077,6 +1106,7 @@ class FreyaCore implements Core {
       // journal that is already closed, producing a failure *for having failed to
       // record* the shutdown.
       await this.workforceEngine?.close()
+      await this.contextPersistence?.close()
       await this.conversationStore?.close()
       await this.fabric?.close()
       this.notify()
@@ -1542,8 +1572,7 @@ class FreyaCore implements Core {
    * *current* is the only thing read across — an id and a status — because that is
    * all a Mission's open record carries; its title, intent and success criteria live
    * in an encrypted store this deliberately cannot read, and admitting them here
-   * would move the most private text Freya holds into a process-lifetime store with
-   * no encryption at all.
+   * would copy private Mission wording into another domain unnecessarily.
    *
    * Idempotent, so a Mission board that re-renders cannot churn context ids. "Which
    * Mission is active" is the read; "everything about the current Mission" is not,
@@ -1651,6 +1680,34 @@ class FreyaCore implements Core {
    * `start()` has built the integration, and answering that with a stack trace
    * would turn an ordinary race into something a person sees.
    */
+  contextWindowLane(scope: ContextScopeRef): ActiveWindowAdmissionLane {
+    const owned = new Set<string>()
+    const integration = this.requireContext()
+    if (scope.scopeKind !== 'session') integration?.activateScope(scope)
+    const publish = () => {
+      this.publishContext()
+      void this.contextPersistence?.flush().then(() => this.publishContext())
+    }
+    return {
+      admitHostReport: (report: ContextHostReport) => {
+        if (!integration || scope.scopeKind === 'session' || report.kind !== 'active_window' ||
+            report.scope.scopeKind !== scope.scopeKind || report.scope.scopeId !== scope.scopeId) {
+          return contextRefusal('scope_not_requestable')
+        }
+        const outcome = integration.admitHostReport(report)
+        if (outcome.ok && outcome.contextId) owned.add(outcome.contextId)
+        publish()
+        return outcome
+      },
+      revoke: (contextId, reason) => {
+        if (!integration || !owned.delete(contextId)) return contextRefusal('malformed_request')
+        const outcome = integration.revoke(contextId, reason)
+        publish()
+        return outcome
+      },
+    }
+  }
+
   private requireContext(): ContextIntegration | null {
     return this.contextIntegration ?? null
   }
@@ -2632,6 +2689,7 @@ class FreyaCore implements Core {
           // arm's whole job is to hand it `unknown` and render what came back.
           const integration = this.requireContext()
           const outcome = this.contextCommand(envelope.command, envelope.payload, integration)
+          await this.contextPersistence?.flush()
           // Every mutating context operation re-points or re-scopes something, so the
           // mirror moves. Publishing on the read arms too keeps one rule: the mirror
           // is rebuilt whenever a context command was understood.

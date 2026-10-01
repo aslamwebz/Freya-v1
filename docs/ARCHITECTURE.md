@@ -438,6 +438,42 @@ status changes, and retrieval stops returning it. The Vault lists what Freya hol
 and counts what was withdrawn, so it is visible that a memory went somewhere rather
 nowhere.
 
+### 4.4 The public network, and a browser that only reads
+
+Phase 5 adds the only subsystem in Freya that reaches the internet, and it is
+structured so that "the URL looked fine" is never the reason something was reached.
+
+**Public-network policy.** HTTP(S) on default ports only; no userinfo; no private,
+reserved, loopback, link-local, unique-local or multicast address in any
+normalised form (decimal, octal, hexadecimal, IPv4-mapped IPv6 included); every DNS
+answer validated; **the vetted address pinned to the connection** through a
+`lookup` override so the name cannot be resolved twice; every check repeated at
+each redirect; no https→http downgrade; cookies, `Host`, `Proxy-Authorization` and
+CRLF in header values refused; three redirects maximum; bodies bounded *while
+streaming*. Full detail in [PHASE-5.md](PHASE-5.md) §3.
+
+**The managed browser reads.** A hidden, sandboxed, `contextIsolation` window with
+no preload and no node integration. The page is fetched by the controlled transport
+— never by the page — and served on a session-owned internal URL under
+`default-src 'none'; script-src 'none'; connect-src 'none'; frame-src 'none'`. Every
+subresource, permission, popup, download, frame and page-initiated navigation is
+denied independently. One fixed trusted extraction script runs in an isolated
+world; no script or selector comes from the renderer, a model or a page.
+
+Session partitions come from a **bounded leased pool of four**, cleared on acquire
+and release, because Electron cannot destroy a `Session` and one per read would
+accumulate for the life of the process.
+
+**It has no `click` and no `fill`.** Those were in scope and are deliberately
+absent: a page that can be clicked is a page whose author chose what Freya does
+next, and the injection containment depends on there being no executable surface
+for an injected instruction to reach. See D22.
+
+**A Brain fault is still not a security event**, and research does not change that.
+A research failure cannot grant cognition or clear a stop; it is a data fault
+reported with a fixed public code. Research results are ephemeral and are never
+written to the encrypted Brain — see D23.
+
 ### 4.1 Surviving an immediate quit
 
 A renderer cannot push its final layout at quit time — an IPC sent during
@@ -498,6 +534,8 @@ electron/main.ts          owns one Core, for the life of the process
       conversation/       conversation entities, stores, and the service
       identity/           the Identity Kernel: who Freya is, outside any model
       brain/              identity root, self-model, world, memory, experience
+      research/           search, URL policy, transport, browser, evidence,
+                          schemas, prompts, coordinator, Core integration
       voice/              local-only voice abstractions and bounds
       projections/        Core's account of itself, derived from the log
 ```
@@ -700,17 +738,16 @@ a real level when a device is open and does not simulate a reply from it.
 
 ## 7. Deliberately absent
 
-Phase 4 implements a conversation, a Mind, an Identity Kernel, encrypted
-conversation storage, a local voice seam, push-to-talk capture, and the Brain:
-an identity root, a persistent self-model, a world of entities and relations,
-admitted memory, and per-turn experience records.
+Phase 5 adds provider-neutral web search, a managed read-only Electron browser, and
+bounded cited research over public pages. Phase 4 added the Brain; phase 3 the
+conversation, Mind and Identity Kernel; phase 2 the local voice seam.
 
-No phase 1–4 implements: streaming, automatic summarisation, embeddings, vector
-or semantic retrieval, self-modification, learning from conversation, Searcher,
-web research, browser automation, Browser Relay, Missions execution, Work, the Run
-engine, agents, swarms, PTYs, terminal, Foundry, Relay, connectors/MCP, 3D Office,
-an Obsidian-compatible file vault, or a local speech-engine binary adapter. There
-are no stub classes for them, and no panel that implies one is running.
+No phase 1–5 implements: streaming, automatic summarisation, embeddings, vector or
+semantic retrieval, self-modification, learning from conversation, **browser
+automation** (`click`/`fill` — see §4.4), Browser Relay, Missions execution, Work,
+the Run engine, agents, swarms, PTYs, terminal, Foundry, Relay, connectors/MCP, 3D
+Office, an Obsidian-compatible file vault, or a local speech-engine binary adapter.
+There are no stub classes for them, and no panel that implies one is running.
 
 ### 7.1 Absences inside the Brain that are decisions, not gaps
 

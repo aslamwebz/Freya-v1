@@ -382,22 +382,35 @@ Rules:
 **Not persisted:** dashboard demo fixtures, the presence canvas, transient
 animation values. They are derived, not stored.
 
-### 4.2 Two encrypted stores, two secrets
+### 4.2 Three encrypted stores, three secrets
 
-Everything a person tells Freya is written to disk encrypted, in **two separate
+Everything a person tells Freya is written to disk encrypted, in **separate
 stores**, each with its own 256-bit secret and each wrapped separately by the OS
 secure storage:
 
 ```
   conversation  256-bit random  ─┐
-                                 ├─→ each wrapped separately
-  brain         256-bit random  ─┘     (DPAPI / Keychain / libsecret)
+  brain         256-bit random  │     each wrapped separately
+  mission       256-bit random  ─┘     (DPAPI / Keychain / libsecret)
 ```
+
+Phase 7 added `mission` for a Mission's title, intent and success criteria — what
+somebody asked Freya to accomplish, in their words. That is as private as a
+conversation, so it gets the same isolation rather than sharing a secret.
+
+A keyring written before Phase 7 has two domains and is **upgraded**, not rejected:
+the third secret is generated and the file rewritten with all three, preserving the
+existing two byte-for-byte. That rewrite is only attempted when every secret already
+in the file has been unwrapped — a keyring this process cannot open is left exactly
+as found, and Missions report memory-only instead. Those two keys hold people's
+conversations and their own long-term memory, and there is no second copy, so a
+rewrite that failed halfway would be unrecoverable rather than inconvenient. The
+write is temp-file plus rename for the same reason.
 
 Independent secrets rather than one root with derived subkeys, and that is a
 deliberate trade. Deriving is tidier to manage, but recovering a root yields
 *every* domain at once — so "the conversation key leaked" stops being a bounded
-problem and becomes "Freya's entire memory leaked". Two secrets cost a migration
+problem and becomes "Freya's entire memory leaked". Three secrets cost a migration
 and buy back a blast radius of one. The Brain is the longest-lived, most valuable
 state in the system, so it is the last thing that should be one key-compromise
 away from the conversation log.
@@ -519,7 +532,7 @@ The intended shape, stated so the seams can be checked against it:
 | Brain (memory, identity, self) | **built in Phase 4** — a `brain.*` event family + a `vault` surface | a second window implementation |
 | Work (runs, tasks, approvals) | **built in Phase 6** — a `work.*` event family, a `WorkEngine`, and a `work` surface | a store, a persistence path, or the journal knowing what a step is |
 | Searcher | a `searcher.*` event family + a surface registry entry | a second window implementation |
-| Missions | `mission.*` events + surface context | the store to know what a "mission" is |
+| Missions | **built in Phase 7** — a `mission.*` event family, a `MissionEngine`, an encrypted content store with its own key, and a `mission` surface | a store for Work, or the journal knowing what a Mission is |
 | Workforce | `workforce.*` events | agents running in the renderer |
 | Harness | surfaces that request a PTY from the main process | the renderer owning process handles |
 | Vault (files, Obsidian-compatible import) | **the `vault` surface is now the Brain**; a file-backed vault is a *future* capability-scoped access path | direct fs from the renderer |
@@ -783,11 +796,11 @@ There is no field a body could hide in, so adding one is a visible change to the
 audit schema rather than something that quietly starts retaining text.
 
 The keys live in the main process (`electron/keyring.ts`), wrapped by the OS
-secure storage, and are injected into Core as bytes. Neither ever enters the
+secure storage, and are injected into Core as bytes. None of them ever enters the
 renderer, a model request, the journal, a log line, or a projection. No secure
-storage means **no key for either domain**, which means ephemeral in-memory stores
-that label themselves — never a plaintext file and never a key stored beside the
-data it protects. See §4.2 for why there are two.
+storage means **no key for any domain**, which means ephemeral in-memory stores that
+label themselves — never a plaintext file and never a key stored beside the data it
+protects. See §4.2 for why there is one per domain.
 
 Corrupt conversation data is a **conversation-data fault**. It cannot grant
 cognition, clear a stop, or widen a budget, and it does not lock Freya either:
@@ -932,11 +945,18 @@ Full detail, including why Work adds no store of its own (§5.1), is in
 
 Phase 6 implements the Work engine: runs, steps, actions, observations and verifications, tasks, approvals, cancellation, bounded retries, execution ceilings, a read-only board, and honest recovery from interrupted work. Phase 5 adds provider-neutral web search, a managed read-only Electron browser, and bounded cited research over public pages. Phase 4 added the Brain; phase 3 the conversation, Mind and Identity Kernel; phase 2 the local voice seam.
 
-No phase 1–6 implements: streaming, automatic summarisation, embeddings, vector or semantic retrieval, self-modification, learning from conversation, **browser automation** (`click`/`fill`), Browser Relay, **Missions**, agents, swarms, PTYs, terminal, Foundry, Relay, connectors/MCP, 3D Office, an Obsidian-compatible file vault, a step dependency graph, or a local speech-engine binary adapter. There are no stub classes for them, and no panel that implies one is running.
+No phase 1–7 implements: streaming, automatic summarisation, embeddings, vector or semantic retrieval, self-modification, learning from conversation, **browser automation** (`click`/`fill`), Browser Relay, agents, swarms, PTYs, terminal, Foundry, Relay, connectors/MCP, 3D Office, an Obsidian-compatible file vault, a step dependency graph, or a local speech-engine binary adapter. There are no stub classes for them, and no panel that implies one is running.
 
-The `mission` surface is still a declared placeholder, and `Run.parent` is an
-opaque `{ kind, id }` reference that Phase 7 fills in — Work deliberately has no
-field shaped like a Mission.
+`Run.parent` remains an opaque `{ kind, id }` reference, and Work still has no
+field shaped like a Mission: Phase 7 populated it from a `missionId` a window names,
+and Core builds the parent. Nothing in Work knows Missions exist.
+
+What Phase 7 deliberately did **not** add is the other half of the story. A Mission
+is a durable record of an outcome, a bounded set of Runs you may attach to it, and a
+conclusion only a verifier can make. Nothing decomposes a Mission into Runs by
+itself, nothing plans, nothing watches a Mission to guess how it is going, and no
+Mission is ever concluded unattended. Those would be Workforce and Searcher, and
+stubbing them here would be the fake autonomy this project exists to avoid.
 
 ### 7.1 Absences inside the Brain that are decisions, not gaps
 

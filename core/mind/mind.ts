@@ -4,6 +4,7 @@ import type { ConversationTurnEvent } from '../events/envelope'
 import type { OwnerAuthority } from '../authority'
 import type { CognitionGrantSpec } from '../cognition/grants'
 import type { ModelGateway } from '../model/gateway'
+import type { ModelMessage } from '../model/provider'
 import { FREYA_IDENTITY, type FreyaIdentity } from '../identity/identity'
 import {
   ContextBudgetExceeded,
@@ -11,6 +12,7 @@ import {
   type ContextBudget,
   type ReferenceKnowledge,
 } from './context-compiler'
+import type { TurnContextReader } from './turn-context'
 import { ConversationStoreError, type ConversationStore } from '../conversation/store'
 import {
   CONVERSATION_LIMITS,
@@ -194,6 +196,26 @@ export interface MindServiceOptions {
    */
   recall?: (query: string) => ReferenceKnowledge | null
   /**
+   * What the owner put in scope for *this* turn, as a bounded quoted block.
+   *
+   * Supplied by the Core, which owns the Context store, and shaped the same way as
+   * `recall` on purpose: the Mind asks, and a function somebody else wrote answers.
+   * Three consequences are deliberate:
+   *
+   *  - **It is only ever called on a real turn.** There is no ambient call, no
+   *    subscription and no background refresh; context that is not attached to a
+   *    question the owner asked costs nothing and reaches no model.
+   *  - **It is data, never authority.** The result is a `user`-role message of
+   *    quoted material, spliced in beside the question. It grants nothing, widens
+   *    no scope, and cannot change a Guard verdict — Guard does not read it and
+   *    never will. See `core/mind/turn-context.ts` for why it is a separate module
+   *    rather than another field on the compiler's input.
+   *  - **A turn does not depend on it.** A Context source that throws yields no
+   *    block at all, exactly as a Brain that cannot recall does. Sharing something
+   *    is not a precondition of being answered.
+   */
+  turnContext?: TurnContextReader
+  /**
    * Record what this turn attempted, as metadata.
    *
    * Supplied by the Core, which owns the Brain. Aimed at the Brain, never at the
@@ -228,6 +250,7 @@ export class MindService {
   private readonly newId: () => string
   private readonly runtimeFacts: () => readonly string[]
   private readonly recall: ((query: string) => ReferenceKnowledge | null) | null
+  private readonly turnContext: TurnContextReader | null
   private readonly onTurnStateChange: () => void
   private readonly onTurnExperience: ((experience: TurnExperience) => Promise<void>) | null
 
@@ -268,6 +291,7 @@ export class MindService {
     this.newId = options.newId ?? (() => randomUUID())
     this.runtimeFacts = options.runtimeFacts ?? (() => [])
     this.recall = options.recall ?? null
+    this.turnContext = options.turnContext ?? null
     this.onTurnStateChange = options.onTurnStateChange ?? (() => {})
     this.onTurnExperience = options.onTurnExperience ?? null
   }
@@ -289,6 +313,31 @@ export class MindService {
       // Logged and swallowed. The fault is the Brain's to report through its own
       // health; here it must only mean "no reference material this turn".
       console.error('[freya.mind] recall failed; continuing without reference memory', error)
+      return null
+    }
+  }
+
+  /**
+   * What the owner put in scope for this turn, as a provider message.
+   *
+   * Never throws. A Context source that is unavailable, empty or unhappy returns
+   * null, and the turn proceeds with no shared material — the same degradation as a
+   * Brain that cannot recall. A shared file is an enrichment, and letting its
+   * failure become a turn failure would mean a damaged Context store stops Freya
+   * answering questions that never needed it.
+   *
+   * Called exactly once per turn, here, on the way to a call the Mind was already
+   * going to make. Nothing in Core reads the Context store in the background, so
+   * idle Freya compiles nothing and spends nothing.
+   */
+  private sharedContextFor(text: string): ModelMessage | null {
+    if (this.turnContext === null) return null
+    try {
+      return this.turnContext({ text, now: this.now() })?.message ?? null
+    } catch (error) {
+      // Logged and swallowed, for the reason above: a turn must not be lost to its
+      // enrichment. The fault belongs to the Context domain's own health reporting.
+      console.error('[freya.mind] turn context compile failed; continuing without it', error)
       return null
     }
   }
@@ -449,6 +498,12 @@ export class MindService {
         throw error
       }
 
+      // The block goes in *after* compilation rather than through the compiler,
+      // so the Context Compiler's input stays the closed set of five explicit
+      // fields the Phase 9 red-team suite asserts, and this block arrives as a
+      // separate `user`-role message the compiler was never asked to trust.
+      const messages = withTurnContext(compiled.messages, this.sharedContextFor(text))
+
       // Record what context was actually assembled before the provider is asked.
       // This remains true for failure/cancellation outcomes too; a turn does not
       // need to complete successfully for its Experience metadata to be accurate.
@@ -462,8 +517,8 @@ export class MindService {
       // --- 5. exactly one authorised cognition ------------------------------
       const outcome = await this.authority.request({
         kind: 'user_turn',
-        prompt: compiled.messages.map((m) => m.content).join('\n\n'),
-        messages: compiled.messages,
+        prompt: messages.map((m) => m.content).join('\n\n'),
+        messages,
         maxOutputTokens,
         grantId: grant.grantId,
         correlationId: turnId,
@@ -771,6 +826,28 @@ private async finishTurn(
     // exactly the fold a reader already performs.
     await this.store.putConversation(conversation)
   }
+}
+
+/**
+ * Place a turn's shared Context block immediately before the owner's question.
+ *
+ * Position is a truthfulness decision, not a formatting one. The compiler's last
+ * message is always the current user message and it stays last, so the material a
+ * question refers to never arrives *after* the reference — and the question is
+ * still the final thing a provider reads, which is what keeps the person's own
+ * words at the end of the packet rather than a file's.
+ *
+ * A null block returns the compiler's array untouched, so a turn with nothing
+ * shared produces exactly the packet it produced before Context existed.
+ */
+function withTurnContext(
+  messages: readonly ModelMessage[],
+  block: ModelMessage | null,
+): readonly ModelMessage[] {
+  if (block === null) return messages
+  const last = messages[messages.length - 1]
+  if (last === undefined) return [...messages, block]
+  return [...messages.slice(0, -1), block, last]
 }
 
 function terminalEventFor(outcome: MindTurnOutcome) {

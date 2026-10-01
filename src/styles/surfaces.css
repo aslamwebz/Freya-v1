@@ -2207,3 +2207,161 @@
   line-height: 1.6;
   color: var(--ink-3);
 }
+
+/* ------------------------------------------------------------- Mission board */
+
+.mission-surface {
+  padding: 18px 20px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  height: 100%;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.mission-absent,
+.mission-none,
+.mission-settled {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+}
+
+.mission-none {
+  max-width: 62ch;
+}
+
+/* The persistence strip is above the list on purpose. A Mission somebody has been
+   told is durable, and which is not, is worse than no Mission at all — so the honest
+   answer is read before any Mission is. */
+.mission-posture {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+}
+
+.mission-posture[data-durable='false'] {
+  border-color: rgba(198, 150, 88, 0.34);
+}
+
+.mission-posture b {
+  font: 500 14px/1 var(--font-display);
+  letter-spacing: 0.2em;
+  color: var(--gold-hi);
+}
+
+.mission-posture span {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.mission-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mission-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 13px 15px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+}
+
+/* Attention is marked on the row rather than by turning the whole thing red, because
+   a Mission with a failed child is still open. Reading it as a failure is exactly the
+   inference Missions exist to prevent. */
+.mission-row[data-attention='true'] {
+  border-color: rgba(198, 150, 88, 0.4);
+}
+
+.mission-row header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mission-row h3 {
+  margin: 0;
+  font: 400 10px/1 var(--font-display);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.mission-row code {
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.mission-counts,
+.mission-attention,
+.mission-verification,
+.mission-reason,
+.mission-notice {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.mission-attention {
+  color: var(--gold-hi);
+}
+
+.mission-reason,
+.mission-settled {
+  color: var(--ink-3);
+}
+
+.mission-notice {
+  color: var(--gold-hi);
+}
+
+.mission-verification[data-state='passed'] {
+  color: var(--ink-2);
+}
+
+.mission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.mission-actions button {
+  font: 400 11.5px/1 var(--font-ui);
+  color: var(--ink-2);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 11px;
+  cursor: pointer;
+}
+
+.mission-actions button:hover:not(:disabled) {
+  border-color: var(--gold-line);
+  color: var(--ink-1);
+}
+
+.mission-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Anything that can settle a Mission is visually separated from the reversible
+   controls, because they are not the same kind of click. */
+.mission-actions button[data-terminal='true'] {
+  border-color: rgba(198, 150, 88, 0.34);
+}

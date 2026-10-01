@@ -150,13 +150,18 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   mission: {
     type: 'mission',
     title: 'Mission',
-    summary: 'A persistent outcome. The Missions engine is not implemented in Phase 0.',
+    // No longer a placeholder. The engine, its verifier, its encrypted store and this
+    // board all exist, so a placeholder here would understate the build rather than
+    // describe it. What this window does *not* show is the Mission's text — that is in
+    // the encrypted store, and a standing feed of it would defeat the encryption.
+    summary:
+      'Persistent outcomes: what you asked Freya to accomplish, what is happening underneath it, and whether anything was verified.',
     width: 640,
     height: 540,
     minWidth: 400,
     minHeight: 320,
     instance: { keyedBy: 'missionId' },
-    status: 'placeholder',
+    status: 'working',
   },
   vault: {
     type: 'vault',

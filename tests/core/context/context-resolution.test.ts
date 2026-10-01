@@ -157,11 +157,14 @@ describe('no match, said precisely', () => {
   it('names a deferred kind instead of reporting no match', () => {
     const store = readyStore()
     expect(
-      refusal(store.resolve({ term: 'this', kind: 'active_window' as AnyContextKind }, T0)).reason,
-    ).toBe('kind_deferred')
-    expect(
       refusal(store.resolve({ term: 'this', kind: 'agent_work' as AnyContextKind }, T0)).reason,
     ).toBe('kind_deferred')
+    // `active_window` was deferred until the observation lane (issue #30)
+    // sourced it. It is a real kind now, so a reference to an empty scope
+    // gets the honest "nothing matched", not "not built yet".
+    expect(refusal(store.resolve({ term: 'this', kind: 'active_window' }, T0)).reason).toBe(
+      'no_candidates',
+    )
   })
 
   it('refuses a reference it does not understand', () => {

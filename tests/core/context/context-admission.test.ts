@@ -172,21 +172,44 @@ describe('provenance is checked, not asserted', () => {
     if (future.ok) throw new Error('expected a refusal')
     expect(future.code).toBe('invalid_instant')
   })
-})
 
-describe('declared-but-unsourced kinds fail truthfully', () => {
-  it('refuses active window capture by name', () => {
+  it('sources an active window only as a named host report', () => {
+    // The observation lane (issue #30) promoted `active_window`: it is real
+    // now, but only the host that observed it may report it, and a report
+    // without an origin is still "the host said so" with nothing behind it.
     const store = sequencedStore()
-    const result = store.admit(
+
+    const reported = store.admit(
+      {
+        kind: 'active_window',
+        source: 'host_report',
+        originId: 'obs-1',
+        scope: conversation('c1'),
+        content: 'an editor window, observed',
+      },
+      T0,
+    )
+    expect(reported.ok).toBe(true)
+
+    const claimed = store.admit(
       { kind: 'active_window', source: 'owner_share', scope: conversation('c1'), content: 'x' },
       T0,
     )
-    expect(result.ok).toBe(false)
-    if (result.ok) throw new Error('expected a refusal')
-    expect(result.code).toBe('kind_deferred')
-    expect(result.reason).toMatch(/does not source that context kind yet/)
-  })
+    expect(claimed.ok).toBe(false)
+    if (claimed.ok) throw new Error('expected a refusal')
+    expect(claimed.code).toBe('source_not_permitted')
 
+    const bare = store.admit(
+      { kind: 'active_window', source: 'host_report', scope: conversation('c1'), content: 'x' },
+      T0,
+    )
+    expect(bare.ok).toBe(false)
+    if (bare.ok) throw new Error('expected a refusal')
+    expect(bare.code).toBe('origin_required')
+  })
+})
+
+describe('declared-but-unsourced kinds fail truthfully', () => {
   it('refuses workforce agent-work context by name', () => {
     const store = sequencedStore()
     const result = store.admit(

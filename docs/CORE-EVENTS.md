@@ -358,6 +358,84 @@ renderer can see. A provider that throws `FAKE_SECRET C:/private/key` is contain
 twice: `safeResearchError` at the research result boundary, and the gateway's own
 recorder at the journal boundary.
 
+
+### Work
+
+`work.run.created` · `work.run.started` · `work.run.resumed` · `work.run.paused` ·
+`work.run.waiting` · `work.run.awaiting_approval` · `work.run.completed` ·
+`work.run.failed` · `work.run.cancelled` · `work.run.recovered` ·
+`work.step.ready` · `work.step.started` · `work.step.verified` ·
+`work.step.failed` · `work.step.cancelled` · `work.step.skipped` ·
+`work.action.started` · `work.action.completed` · `work.action.failed` ·
+`work.action.cancelled` · `work.observation.recorded` ·
+`work.verification.requested` · `work.verification.completed` ·
+`work.approval.requested` · `work.approval.approved` · `work.approval.denied` ·
+`work.approval.cancelled` · `work.approval.expired` · `work.task.created` ·
+`work.task.updated` · `work.task.attached` · `work.task.completed` ·
+`work.limits.exceeded`
+
+Metadata only, and the rule is the Brain's with more force, because the content here
+is richer than a memory's: a step's input is whatever a capability is about to be
+handed, and an observation's data is whatever it just returned.
+
+```
+  work.observation.recorded   observationId, kind, summaryLength, detailLength
+  work.step.started           runId, stepId, stepKey, index, capability, attempt
+  work.action.started         runId, stepId, actionId, attempt, capability, principal
+```
+
+Both lengths, never the text. Step labels, step inputs, task titles and
+verification reasons are absent entirely — there is no field they could occupy.
+
+Four details worth naming:
+
+- **`work.approval.requested` is the transition, not a note beside one.** It is the
+  moment a run and its step stop and begin waiting on a named decision, so one event
+  carries one fact. It is also what makes "nothing ran yet" checkable: the record
+  exists strictly before any `work.action.started` could.
+- **`work.run.recovered` carries `previousStatus` in its payload** rather than
+  reading it back from state, because after a restart "what this run was doing" is
+  precisely the thing that is no longer knowable. The fact that a status had to be
+  reconciled is the point: the journal records that history was *not* proof of
+  execution.
+- **`work.action.failed` is not a failed step.** The step keeps its remaining
+  attempts, and each one writes its own action, observation and verification events,
+  so a flapping capability's history stays whole instead of collapsing into one
+  error.
+- **`work.limits.exceeded` exists so a restart cannot hide one.** A ceiling that
+  stopped a run is a fact about the run, not only about the process that enforced
+  it.
+
+### Work payloads reject fields they do not name
+
+Every `work.*` rule goes through `workRule()`, which **refuses a payload carrying a
+key the schema does not list** — and so does the nested step seed.
+
+The older families read named fields and ignore the rest, which is a real defence:
+an undeclared key has nowhere to be read from, so it never reaches a reducer or a
+projection. It is not enough for Work. The argument for putting execution history in
+this file at all is that there is *no field a body could hide in* — and ignoring an
+undeclared key still lets somebody hand-editing the file write a value to disk. The
+difference between "the reducer ignores it" and "it was never accepted" is the whole
+claim.
+
+Work is new, so it starts the stronger way. Adding the same check to an older family
+is a schema-version question rather than a code one, and belongs with whatever next
+changes that family's payload.
+
+### No Work event is a security event
+
+Not in `SECURITY_EVENT_TYPES`, and none may be. A Work event describes Freya *doing
+work*: planned, attempted, observed, verified, decided. A run that reached
+`completed` says nothing about whether Freya may think next, and a ceiling that was
+hit says nothing about the authority to reach it. Reporting either in the security
+stream would let an ordinary failure masquerade as a safety posture — the same
+argument that keeps `brain.degraded` out.
+
+The genuinely security-relevant part is already recorded where it belongs:
+`guard.decision` is written every time Guard refuses a capability, and
+`work.action.started` names the principal whose capabilities were evaluated.
+
 ---
 
 ## Replay

@@ -503,8 +503,9 @@ The intended shape, stated so the seams can be checked against it:
 | --- | --- | --- |
 | Mind (conversation) | **built in Phase 3** — a `conversation.*` event family + a `chat` surface | any change to the window model |
 | Brain (memory, identity, self) | **built in Phase 4** — a `brain.*` event family + a `vault` surface | a second window implementation |
+| Work (runs, tasks, approvals) | **built in Phase 6** — a `work.*` event family, a `WorkEngine`, and a `work` surface | a store, a persistence path, or the journal knowing what a step is |
 | Searcher | a `searcher.*` event family + a surface registry entry | a second window implementation |
-| Work / Missions | `work.updated` / `mission.*` events + surface context | the store to know what a "mission" is |
+| Missions | `mission.*` events + surface context | the store to know what a "mission" is |
 | Workforce | `workforce.*` events | agents running in the renderer |
 | Harness | surfaces that request a PTY from the main process | the renderer owning process handles |
 | Vault (files, Obsidian-compatible import) | **the `vault` surface is now the Brain**; a file-backed vault is a *future* capability-scoped access path | direct fs from the renderer |
@@ -513,6 +514,72 @@ The intended shape, stated so the seams can be checked against it:
 
 The test of this architecture: **a new system adds events, a surface entry, and
 a component.** It does not add a window manager, a store, or a persistence path.
+
+### 5.1 Work is the one subsystem that adds no persistence
+
+The Brain and the Conversation store each own an encrypted file. **Work owns none**,
+and that is a decision rather than an omission.
+
+Its history lives in the event journal, which already is the durable record of what
+happened: `work.*` events are fsynced, sequence-ordered, validated against a closed
+schema and replayed on every start. They carry only ids, counts, statuses and
+*measured lengths*, so there is nothing in them for a store to protect — no step
+input, no observation text, no label, no task title. A third encrypted store would
+have meant a third keyring secret, a third file and a third recovery policy, for
+what is structurally the same information in a weaker form.
+
+What is lost by that choice, and stated rather than hidden: a step's plan, its
+input, an observation's contents and any label a person typed are **process facts**
+and do not survive a restart. The projection says so with a single
+`detailAvailable` boolean, and recovery is written around the consequence — see §6.5.
+
+So the separation is explicit rather than accidental:
+
+```
+  durable   what ran, in what order, how it ended, whether it verified,
+            who decided each approval                        → the journal
+
+  live      which capability is executing right now, a plan,
+            an observation's contents, a label you typed      → this process
+```
+
+A future phase that needs durable work *content* — a Mission whose decomposition has
+to outlive the process, say — adds an encrypted store then, with its own key and its
+own retention rules, rather than weakening this boundary now.
+
+### 5.2 Capabilities attach; subsystems do not branch
+
+Work reaches the outside world only through a registered `WorkCapability`, and
+`core/work/` names no subsystem. Search, a browser, a terminal, an agent and a
+Mission are all "call this, get evidence back, verify it against that", so they
+attach by being registered:
+
+```
+  Work Step
+     ↓  a plan names a registered capability
+  capability.capability ──► Guard ──► allow | deny | approval_required
+     ↓
+  execute(request, { signal, now })
+     ↓
+  Observation ──► a separately registered verifier ──► verified | failed
+     ↑                    ↑
+     └── raced ───────────┘  against one Run deadline, covering the whole Step
+```
+
+Three rules the shapes enforce rather than document:
+
+- **A capability is asked; it does not decide.** It names the Guard capability it
+  needs, and a plan cannot name a capability directly.
+- **An action is not evidence.** `execute` returns an Observation and never a
+  verdict, and the verifier is a separately registered object that receives the
+  observation and nothing else — so the thing that produced the evidence cannot
+  certify it.
+- **Risk lives on the capability, in code.** A plan may *add* an approval gate; it
+  can never remove the one a `consequential` capability carries on its own account.
+
+The engine holds no `Principal`: Core closes over the owner principal when it wires
+the `WorkAuthorizer`, which is what keeps §4's "no exported principal factory"
+property intact.
 
 ---
 
@@ -734,20 +801,128 @@ The level is a mutable number outside React, read by the presence's existing
 animation loop, so a frame of audio cannot cause a re-render. The envelope prefers
 a real level when a device is open and does not simulate a reply from it.
 
+### 6.5 Work: models decide, code controls
+
+Phase 6 added the execution substrate, and the rule it is written around is the one
+in `PRODUCT.md` first principles:
+
+> Models decide. Code controls. Events remember. Verification establishes truth.
+
+Concretely, in `core/work/`:
+
+- **Nothing mutates state directly.** Every change is an append to the journal, and
+  the fold of the journal is the only state there is. A Run has no field anyone can
+  assign.
+- **Transitions are validated centrally.** One table per aggregate, and the engine
+  refuses any edge it does not contain. This is also the answer to the race in §6.1:
+  a completion that arrives after a cancellation is not a timing problem, it is an
+  edge that does not exist.
+- **A plan is a request.** A caller proposes steps; Core validates every
+  capability, verifier and input against the registry before anything runs, and
+  refuses the whole plan rather than executing a subset of it.
+- **Approval is upstream of execution.** The gate is recorded and the call path
+  returns from it, so no ordering in the engine can produce an action that is
+  approved afterwards. Only the owner may decide, `decidedBy` has no field a caller
+  can supply, and `WORKER_CAPABILITIES` excludes every `work.*` capability.
+- **A Step closes only on a verifier.** Never on a capability saying it finished —
+  and a verifier that never answers cannot close it either. A Step is bounded by
+  `maxDurationMs` across the whole of `capability → observation → verification`
+  (see below), so a collaborator that hangs is bounded by the same mechanism as one
+  that is merely slow.
+
+Three boundaries that are worth naming because they are easy to erode:
+
+**Idle Work costs nothing.** There is no timer, no wake source and no poll in
+`core/work/`. A run waiting on a person is stopped, not slow, and nothing watches
+it. The engine never touches a model; a capability that wanted cognition would have
+to ask through an authority the engine does not hold.
+
+**Live execution is a process fact — the same rule as §6.1.** A run the journal
+says was executing when the process died cannot be continued, because its plan was
+in memory. Recovery marks it `failed` with the reason written to the journal, settles
+its steps, expires any approval it was waiting on, and resumes nothing. History is
+not proof that something is currently executing, and saying so is what makes the
+recovery honest rather than hopeful.
+
+**A Run cannot grow forever.** Steps, capability calls, runtime and attempts per
+step are all bounded, checked *before* the thing they bound, and exceeding one is a
+recorded outcome rather than a silent stop. A planner may propose as many steps as
+it likes; a run stops at a number it did not choose.
+
+**A bound has to bound the thing, not the gap between things.** This is worth
+stating separately because getting it wrong is invisible in review and obvious in
+use. A duration ceiling checked *before each action* is not a duration ceiling: a
+capability could start a second before the deadline and run for an hour afterwards,
+and the run would still be allowed to continue. So the remaining time is computed
+before the call, a timer is armed for it, and the capability is **raced** against
+that timer rather than awaited.
+
+**And the bound covers the whole active Step, not its first half.** A Step is
+`capability → observation → verification`, and `maxDurationMs` is a bound on that
+entire path. Bounding only the capability and then awaiting the verifier leaves a
+hole, and on the final step that hole is the run: a verifier returning `passed` after
+the budget was gone would complete it. So the deadline is computed **once**, before
+the capability is called, and the verifier is raced against **that same deadline**.
+There is deliberately no fresh budget for the verify phase — per-phase budgets would
+let one step take the ceiling twice and a three-step run take it three times.
+
+Three properties follow, and all are structural:
+
+- A collaborator that **ignores its abort signal cannot hold a run open**. JavaScript
+  cannot forcibly terminate arbitrary code, so the engine stops *waiting* at the
+  deadline and settles the run itself; the promise keeps both handlers, so a late
+  resolution is swallowed rather than becoming an unhandled rejection or a resurrected
+  run. This is the honest boundary — the engine stops **believing** a collaborator
+  rather than pretending it stopped it. This holds for a verifier exactly as it does
+  for a capability.
+- A collaborator that answers **after** the deadline is not an answer. The clock is
+  re-checked after each race, because the promise can win it microseconds before the
+  timer fires. A late verdict is discarded, and on the last step it cannot complete
+  the run.
+- A deadline **fabricates no verdict**. When it lands in verification, no
+  `work.verification.completed` is written at all — the verification stays
+  `requested`, meaning a check was asked for and never answered. Writing `failed`
+  would be as much a fabrication as writing `passed`: the audit trail's value is that
+  it can be trusted to mean what it says. For the same reason the action is left
+  `completed` — the capability *did* return.
+
+A deadline is not a cancellation and is journalled as a different thing: the action
+settles `failed` with the ceiling as its reason, never `cancelled`, because
+`work.action.cancelled` would put a cancellation in the audit trail that nobody asked
+for. Cancellation still wins a race, because a person pressing stop is a more
+specific fact than a budget running out — and because the terminal table has no
+outgoing edges, whichever loses has nowhere to go.
+
+Cancellation is also a **third arm of the race**, not merely an abort. Aborting only
+*asks*; a hanging verifier would otherwise keep a cancelled run alive for the rest of
+its budget, long after the person who pressed stop had given up waiting. The release
+happens in the same synchronous turn as the flag is set, and is never collapsed into
+the deadline, because the two get different records.
+
+**Retention bounds memory, never history.** `WORK_LIMITS.maxRetainedRuns` bounds
+what a board *lists* and what this process keeps: a settled run's plan, step labels
+and observation summaries. It does not touch the journal, and it does not prune the
+in-memory fold, which is the journal's image in the same way `BrainState` is. Live
+work and runs blocked on an approval are never evicted whatever the ceiling; settled
+runs are kept newest-first, with the id as a tie-break in the same direction so the
+order is total and reproducible. The projection states `runsRetained`,
+`runsTotal` and `runsHidden`, because a viewer that silently stopped listing runs
+would read as "they finished and went away" — and that would be false.
+
+Full detail, including why Work adds no store of its own (§5.1), is in
+[PHASE-6.md](PHASE-6.md).
+
 ---
 
 ## 7. Deliberately absent
 
-Phase 5 adds provider-neutral web search, a managed read-only Electron browser, and
-bounded cited research over public pages. Phase 4 added the Brain; phase 3 the
-conversation, Mind and Identity Kernel; phase 2 the local voice seam.
+Phase 6 implements the Work engine: runs, steps, actions, observations and verifications, tasks, approvals, cancellation, bounded retries, execution ceilings, a read-only board, and honest recovery from interrupted work. Phase 5 adds provider-neutral web search, a managed read-only Electron browser, and bounded cited research over public pages. Phase 4 added the Brain; phase 3 the conversation, Mind and Identity Kernel; phase 2 the local voice seam.
 
-No phase 1–5 implements: streaming, automatic summarisation, embeddings, vector or
-semantic retrieval, self-modification, learning from conversation, **browser
-automation** (`click`/`fill` — see §4.4), Browser Relay, Missions execution, Work,
-the Run engine, agents, swarms, PTYs, terminal, Foundry, Relay, connectors/MCP, 3D
-Office, an Obsidian-compatible file vault, or a local speech-engine binary adapter.
-There are no stub classes for them, and no panel that implies one is running.
+No phase 1–6 implements: streaming, automatic summarisation, embeddings, vector or semantic retrieval, self-modification, learning from conversation, **browser automation** (`click`/`fill`), Browser Relay, **Missions**, agents, swarms, PTYs, terminal, Foundry, Relay, connectors/MCP, 3D Office, an Obsidian-compatible file vault, a step dependency graph, or a local speech-engine binary adapter. There are no stub classes for them, and no panel that implies one is running.
+
+The `mission` surface is still a declared placeholder, and `Run.parent` is an
+opaque `{ kind, id }` reference that Phase 7 fills in — Work deliberately has no
+field shaped like a Mission.
 
 ### 7.1 Absences inside the Brain that are decisions, not gaps
 

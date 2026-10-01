@@ -52,6 +52,26 @@ export const CAPABILITIES = [
   'search.web',
   'browser.read',
   'research.start',
+
+  // Work — Phase 6.
+  //
+  // `work.execute` is the one a `WorkCapability` names and the engine evaluates
+  // before calling it. A capability states which vocabulary entry it needs, so a
+  // future Searcher capability names `searcher.execute` and gets a policy decision
+  // of its own rather than borrowing Work's.
+  'work.status.read',
+  'work.execute',
+  'work.run.manage',
+  'work.task.manage',
+  /**
+   * Deciding an approval.
+   *
+   * Separate from `work.run.manage` on purpose, because it is the only Work
+   * capability that means *a person is being trusted*, and it is the one a model
+   * must never be able to reach. Splitting it out means that capability can be
+   * withheld, audited or re-gated without touching the rest of Work.
+   */
+  'work.approval.decide',
 ] as const
 
 export type Capability = (typeof CAPABILITIES)[number]
@@ -68,8 +88,15 @@ export const ALL_CAPABILITIES: readonly Capability[] = CAPABILITIES
 /**
  * The capabilities a worker may ever hold.
  *
- * Deliberately excludes `cognition.grant.manage` and every `security.*`
- * capability: a worker can ask to think, and that is the end of it.
+ * Deliberately excludes `cognition.grant.manage`, every `security.*` capability,
+ * and **every `work.*` capability**: a worker can ask to think, and that is the
+ * end of it.
+ *
+ * `work.*` being here in the negative is the single most important line in the
+ * vocabulary. A Run executing under a worker principal can therefore never plan
+ * further work, never cancel, never move a task, and — above all — never approve
+ * its own request. Approval is the one capability in this system whose absence must
+ * not be a matter of configuration.
  *
  * Phase 5 deliberately adds none of `search.web`, `browser.read` or
  * `research.start` here. A worker can already ask for cognition under a grant, and
@@ -305,6 +332,42 @@ export type CoreCommandName =
   | 'research.cancel'
   | 'research.status.read'
 
+  /* --------------------------------------------------------------- work */
+  /** Read-only. Reports the board: tasks, runs, approvals and progress. */
+  | 'work.status.read'
+  /**
+   * Create a Task.
+   *
+   * A task is a user-visible piece of work, not a Step: one Task may contain
+   * several Runs, and turning every internal Step into a Task would put the
+   * engine's own mechanics on the user's board.
+   */
+  | 'work.task.create'
+  | 'work.task.update'
+  /**
+   * Plan and start a Run.
+   *
+   * The renderer supplies a *plan* and Core validates every part of it against the
+   * registered capability and verifier set. A plan is a request, not an authority:
+   * it cannot name a capability that does not exist, cannot raise a ceiling, and
+   * cannot assert that something is safe to run without a check.
+   */
+  | 'work.run.create'
+  | 'work.run.start'
+  | 'work.run.pause'
+  | 'work.run.resume'
+  /** Scoped: stops one Run. Does not latch STOP ALL. */
+  | 'work.run.cancel'
+  /**
+   * Approve or deny a gated action.
+   *
+   * The payload carries the decision and nothing else. There is deliberately no
+   * `decidedBy` field to read, because identity for a decision is assigned by Core
+   * from the principal that reached the command — a caller that could name its own
+   * approver could approve its own request.
+   */
+  | 'work.approval.decide'
+
 export interface CoreCommandEnvelope {
   command: CoreCommandName
   /** Correlates the acknowledgement with the request that caused it. */
@@ -361,6 +424,20 @@ export interface CoreCommandResult {
    * security projection, where it would travel wherever status is cached or logged.
    */
   research?: ResearchCommandOutcome
+
+  /**
+   * The Work view of a Work command's result.
+   *
+   * Its own slot, for the same reason the Brain and conversation slots exist: this
+   * is the answer to "what did Core do with the work", and it must never have to be
+   * dug out of a security projection where it would be cached and copied wherever
+   * status is.
+   *
+   * The projection itself arrives on its own channel — see `work.status.read` and
+   * the Work mirror — so this slot carries the *outcome* of one command rather than
+   * a second copy of the board.
+   */
+  work?: WorkCommandOutcome
 }
 
 /**
@@ -464,4 +541,30 @@ export interface BrainCommandOutcome {
     estimatedTokens: number
     empty: boolean
   }
+}
+
+/**
+ * What a Work command produced.
+ *
+ * `ok` is here and not inferred from the presence of a result, because a Work
+ * command that was *refused* still produces a result — and "your approval request
+ * was denied" and "the engine could not be reached" must never look the same as
+ * success. `reason` carries Core's own words on every refusal, for the same reason
+ * the Vault shows one: a refusal somebody cannot examine is indistinguishable from
+ * a refusal that was arbitrary.
+ *
+ * Note what this type does **not** carry: a step plan, a capability input, an
+ * observation, or an approval proposal. The outcome says what happened to a
+ * command. What the work consists of is on the Work projection.
+ */
+export interface WorkCommandOutcome {
+  operation: string
+  ok: boolean
+  reason?: string
+  runId?: string
+  stepId?: string
+  approvalId?: string
+  taskId?: string
+  /** The Run's status after the command, which is the honest answer to "where is it now". */
+  runStatus?: string
 }

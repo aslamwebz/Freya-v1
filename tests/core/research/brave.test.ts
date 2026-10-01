@@ -48,6 +48,10 @@ describe('Brave adapter', () => {
     expect(JSON.stringify(results)).not.toContain(env.BRAVE_SEARCH_API_KEY)
     expect(results[0]?.snippet).toBe('Echo [redacted]')
   })
+  it('drops source URLs that contain percent-encoded credentials', async () => {
+    const brave = new BraveSearchProvider({ env, transport: transport({ web: { results: [{ title: 'Echo', url: 'https://example.com/offline%2Dfixture%2Dcredential' }] } }) })
+    expect(await brave.search('query', opts())).toEqual([])
+  })
   it('does not contact transport for blank, overlong or already-cancelled requests', async () => {
     const get = vi.fn(transport({ web: { results: [] } }).get)
     const brave = new BraveSearchProvider({ env, transport: { get } })

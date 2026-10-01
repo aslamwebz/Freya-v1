@@ -57,6 +57,7 @@ export class BraveSearchProvider implements SearchProvider {
           const row = value as Record<string, unknown>
           // A credential in a URL must never become a source URL or citation.
           if (typeof row.url !== 'string' || row.url.includes(this.#apiKey)) continue
+          try { if (decodeURIComponent(row.url).includes(this.#apiKey)) continue } catch { continue }
           rows.push({ title: redact(row.title), url: row.url, snippet: redact(row.description), publishedAt: row.page_age })
         }
         return normalizeSearchResults(rows, limit, this.now().toISOString())

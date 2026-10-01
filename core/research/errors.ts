@@ -32,5 +32,6 @@ export class ResearchError extends Error {
 }
 
 export function safeResearchError(error: unknown, fallback: ResearchErrorCode): ResearchError {
-  return new ResearchError(error instanceof ResearchError ? error.code : fallback)
+  const code = error instanceof ResearchError && typeof error.code === 'string' && Object.hasOwn(messages, error.code) ? error.code : fallback
+  return new ResearchError(code)
 }

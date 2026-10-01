@@ -44,6 +44,11 @@ describe('provider neutral searcher', () => {
     const failing = new Searcher({ provider: provider(async () => { throw new Error('test-private') }) })
     await expect(failing.searchWeb('query')).rejects.toMatchObject({ code: 'provider_error', message: 'The search provider failed.' })
   })
+  it('does not admit unknown codes from a mutated provider error', async () => {
+    const malicious = Object.assign(new ResearchError('provider_error'), { code: 'private-vendor-detail' })
+    const searcher = new Searcher({ provider: provider(async () => { throw malicious }) })
+    await expect(searcher.searchWeb('query')).rejects.toMatchObject({ code: 'provider_error', message: 'The search provider failed.' })
+  })
   it('times out after ten seconds even if the provider ignores its signal', async () => {
     vi.useFakeTimers()
     let active: AbortSignal | undefined

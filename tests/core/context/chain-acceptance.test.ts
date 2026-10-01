@@ -18,6 +18,10 @@ import {
   type ExplicitSelectionInput,
 } from '../../../core/context/adapters/explicit-selection'
 import { authorizedProjectAdmission } from '../../../core/context/adapters/project-file'
+import {
+  MissionContextAdapter,
+  missionContextContent,
+} from '../../../core/context/mission-adapter'
 import { sharedMediaAdmission, sharedTabAdmission } from '../../../core/context/adapters/tab-media'
 import { T0, at, conversation, sessionScope } from './fixture'
 import {
@@ -215,6 +219,75 @@ describe('an explicit source reaches the store, with the provenance its adapter 
     // The refusal phrases itself; it never quotes the claim back.
     expect(smuggled.reason).not.toContain('context.admin')
     expect(store.retained).toBe(0)
+  })
+})
+
+/* -------------------------------------------------- a Core-recorded source */
+
+describe('a source Core recorded for itself takes the same road', () => {
+  it('carries core_record provenance, and the Mission sentence stays in the store', () => {
+    const store = chainStore()
+    store.setActiveScope(sessionScope())
+    const report = { missionId: 'mission-7', status: 'active' } as const
+    const synced = new MissionContextAdapter().sync(report, store, T0)
+    if (synced.operation !== 'admitted') {
+      throw new Error(`expected an admission, got '${synced.operation}'`)
+    }
+
+    const row = store.audit(T0)[0]
+    if (row === undefined) throw new Error('expected one row')
+    expect(row.source).toBe('core_record')
+    expect(row.originId).toBe('mission-7')
+
+    const projection = chainSeam().project({ store, now: T0 })
+    const view = projection.items[0]
+    if (view === undefined) throw new Error('expected one view')
+    expect(view.kind).toBe('current_mission')
+    expect(view.provenance).toEqual({
+      sourceClass: 'core_record',
+      detail: 'mission-7',
+      admittedAt: row.admittedAt,
+    })
+    expect(view.scope).toEqual({ label: 'session', detail: 'session' })
+    expect(view.state).toBe('current')
+
+    // The adapter's derived sentence is content, and content stops at the
+    // store: the projection carries the origin it came *from*, never the words.
+    const sentence = missionContextContent(report)
+    expect(store.list(T0)[0]?.content).toBe(sentence)
+    expect(JSON.stringify(projection)).not.toContain(sentence)
+    expect(JSON.stringify(projection)).not.toContain(sentence.toLowerCase())
+  })
+
+  it('re-points by taking the old Mission back, and the projection says so', () => {
+    const store = chainStore()
+    store.setActiveScope(sessionScope())
+    const adapter = new MissionContextAdapter()
+    adapter.sync({ missionId: 'mission-7', status: 'active' }, store, T0)
+    const moved = adapter.sync({ missionId: 'mission-8', status: 'active' }, store, T0)
+    if (moved.operation !== 'repointed') {
+      throw new Error(`expected a re-point, got '${moved.operation}'`)
+    }
+
+    const projection = chainSeam().project({ store, now: T0 })
+    expect(projection.counts).toEqual({
+      items: 2,
+      current: 1,
+      expired: 0,
+      revoked: 1,
+      references: 0,
+      unresolvedReferences: 0,
+    })
+    expect(
+      projection.items.find((item) => item.itemId === moved.revokedId)?.state,
+    ).toBe('revoked')
+    expect(projection.items.find((item) => item.itemId === moved.contextId)?.state).toBe('current')
+    expect(JSON.stringify(projection)).not.toContain('mission-7 and it is active')
+
+    // One live `current_mission`, so "here" is a unique answer and not a tie.
+    const resolution = store.resolve({ term: 'this', kind: 'current_mission' }, T0)
+    if (!resolution.ok) throw new Error(`expected a unique match, got '${resolution.reason}'`)
+    expect(resolution.item.contextId).toBe(moved.contextId)
   })
 })
 

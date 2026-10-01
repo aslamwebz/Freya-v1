@@ -2274,6 +2274,27 @@ async function main(): Promise<void> {
 
       check('no Mission progress is shown as a percentage', !/%/.test(boardText), boardText.slice(0, 120))
 
+      // The feed, not the board: a Mission's lifecycle should read as sentences. Raw
+      // event types are a gap in the audit trail rather than a record of it.
+      const activityText = await mission.evaluate(() =>
+        [...document.querySelectorAll('.activity-row .activity-text')].map((n) => n.textContent ?? ''),
+      )
+      check(
+        'a Mission lifecycle is described in the activity feed',
+        activityText.some((line) => /Mission activated/i.test(line)) &&
+          activityText.some((line) => /Mission paused/i.test(line)),
+        activityText.slice(-6).join(' | '),
+      )
+      check(
+        'the feed never shows a bare Mission event type',
+        !activityText.some((line) => /^mission\.[a-z.]+$/.test(line.trim())),
+        activityText.slice(-6).join(' | '),
+      )
+      check(
+        'the Mission feed carries none of its text',
+        !activityText.some((line) => line.includes('Look at what is failing')),
+      )
+
       const missionBridgeKeys = await mission.evaluate(() =>
         Object.keys((window as unknown as { freyaHost?: object }).freyaHost ?? {}).sort(),
       )

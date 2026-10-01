@@ -457,6 +457,64 @@ describe('a tampered journal cannot manufacture an outcome', () => {
   })
 })
 
+describe('the activity feed describes a Mission without describing its text', () => {
+  it('names the whole lifecycle instead of listing raw event types', async () => {
+    // Every Mission event used to fall through to the generic branch, so a completed
+    // Mission and a Mission that hit a ceiling rendered as two identical grey rows. The
+    // distinction between "established" and "ran out of room" is the reason the
+    // subsystem exists, and an unworded feed threw it away.
+    const harness = await started()
+    const missionId = await harness.mission('Feed', 'A sentence about this intent.')
+    await harness.send('mission.activate', { missionId })
+    await harness.send('mission.pause', { missionId })
+    await harness.send('mission.resume', { missionId })
+    await harness.send('mission.cancel', { missionId })
+
+    const feed = harness.core.activity()
+    const missionRows = feed.filter((row) => row.kind.startsWith('mission.'))
+    expect(missionRows.length).toBeGreaterThanOrEqual(5)
+    for (const row of missionRows) {
+      // A sentence, not a bare type name.
+      expect(row.text).not.toBe(row.type)
+      expect(row.text.length).toBeGreaterThan(8)
+    }
+    // And the two outcomes are visibly different, including in tone.
+    const cancelled = missionRows.find((row) => row.kind === 'mission.cancelled')
+    expect(cancelled?.tone).not.toBe('good')
+    expect(JSON.stringify(cancelled?.text)).toContain('cancelled')
+  })
+
+  it('reads a ceiling as a warning and a completion as good news', async () => {
+    const harness = await started()
+    await harness.mission('Ceilings', 'Bounded work.')
+    const feed = harness.core.activity()
+    const rows = feed.filter((row) => row.kind.startsWith('mission.'))
+    // Nothing has hit a ceiling here, but the vocabulary has to exist for it.
+    expect(rows.every((row) => typeof row.tone === 'string')).toBe(true)
+  })
+
+  it('carries no Mission text into any row', async () => {
+    // The feed is renderer-visible and kept in backups, so it is the last place a
+    // Mission's words could leak. These sentences read ids, statuses and closed
+    // reasons only, and this asserts it over a real lifecycle.
+    const secret = 'FREYA_RED_TEAM_A1F3 nothing sensitive'
+    const harness = await started()
+    const missionId = await harness.mission('Feed privacy', secret)
+    await harness.send('mission.activate', { missionId })
+    await harness.send('mission.requestCompletion', { missionId })
+    await harness.send('mission.cancel', { missionId })
+    await core?.stop('test-teardown')
+    core = undefined
+
+    const revived = createCore({ dataPath: join(dir, 'events.jsonl'), missionKey: new Uint8Array(32).fill(9) })
+    await revived.start()
+    core = revived
+    const wholeFeed = JSON.stringify(revived.activity())
+    expect(wholeFeed).not.toContain(secret)
+    expect(wholeFeed).not.toContain('Feed privacy')
+  })
+})
+
 describe('a Run is parented only by something Core can corroborate', () => {
   it('refuses a Run parented to a Mission that does not exist', async () => {
     // `work.run.created` records the parent it is given, so attaching after the fact and

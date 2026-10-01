@@ -1331,7 +1331,8 @@ class FreyaCore implements Core {
       command !== 'cognition.status.read' &&
       command !== 'voice.status.read' &&
       command !== 'brain.status.read' &&
-      command !== 'work.status.read'
+      command !== 'work.status.read' &&
+      command !== 'mission.status.read'
     ) {
       return reject(envelope, `core is ${this.lifecycle} and cannot accept mutating commands`)
     }
@@ -2104,6 +2105,28 @@ class FreyaCore implements Core {
             status: this.status(),
             work: { operation: 'status', ok: true },
           }
+
+        case 'mission.status.read': {
+          // Read-only, so it survives shutdown, and evaluated against a capability of
+          // its own rather than waved through.
+          //
+          // That enforcement is the point of the split in §10 of PHASE-7: `work.status.read`
+          // is deliberately ungated, and copying that here would leave the documented
+          // read/manage separation decorative — a body allowed to watch a Mission should
+          // be describable as one that may not conclude it, and that is only true if the
+          // read is actually evaluated.
+          const decision = this.guard.evaluate(this.owner, 'mission.status.read')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'mission.status.read', requestId)
+            return this.missionRefusal(requestId, 'refused', decision.reason)
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            mission: { operation: 'status', ok: true },
+          }
+        }
 
         case 'work.task.create': {
           const decision = this.guard.evaluate(this.owner, 'work.task.manage')

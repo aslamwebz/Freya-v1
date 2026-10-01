@@ -499,4 +499,352 @@ const PAYLOAD_RULES: {
   'research.completed': RESEARCH_STAGE,
   'research.failed': RESEARCH_STAGE,
   'research.cancelled': RESEARCH_STAGE,
+
+
+  /* ----------------------------------------------------------------- work */
+
+  // Metadata only. The rules below are the list of what that means for Work, and
+  // they read named fields rather than passing the object through — so a
+  // hand-edited line cannot smuggle in a field the schema does not name, which for
+  // Work is the difference between a journal that *measures* what happened and one
+  // that quietly starts retaining what every capability returned.
+'work.run.created': workRule(
+    ['runId', 'kind', 'taskId', 'parentKind', 'parentId', 'limits', 'steps'],
+    (p) =>
+      isEventId(p.runId) &&
+      isNonEmptyString(p.kind) &&
+      isNullableString(p.taskId) &&
+      isNullableString(p.parentKind) &&
+      isNullableString(p.parentId) &&
+      isRunLimits(p.limits) &&
+      Array.isArray(p.steps) &&
+      p.steps.length > 0 &&
+      p.steps.every(isStepSeed),
+  ),
+
+  'work.run.started': workRule(['runId'], (p) => isEventId(p.runId)),
+
+  'work.run.resumed': workRule(
+    ['runId', 'reason'],
+    (p) => isEventId(p.runId) && isNullableString(p.reason),
+  ),
+
+  'work.run.paused': workRule(
+    ['runId', 'reason'],
+    (p) => isEventId(p.runId) && isNonEmptyString(p.reason),
+  ),
+
+  'work.run.waiting': workRule(
+    ['runId', 'reason'],
+    (p) => isEventId(p.runId) && isNonEmptyString(p.reason),
+  ),
+
+  'work.run.awaiting_approval': workRule(
+    ['runId', 'reason'],
+    (p) => isEventId(p.runId) && isNonEmptyString(p.reason),
+  ),
+
+  'work.run.completed': workRule(
+    ['runId', 'stepCount', 'verifiedCount'],
+    (p) =>
+      isEventId(p.runId) && isNonNegativeInt(p.stepCount) && isNonNegativeInt(p.verifiedCount),
+  ),
+
+  'work.run.failed': workRule(
+    ['runId', 'reason', 'stepCount', 'verifiedCount'],
+    (p) =>
+      isEventId(p.runId) &&
+      isNonEmptyString(p.reason) &&
+      isNonNegativeInt(p.stepCount) &&
+      isNonNegativeInt(p.verifiedCount),
+  ),
+
+  'work.run.cancelled': workRule(
+    ['runId', 'reason'],
+    (p) => isEventId(p.runId) && isNonEmptyString(p.reason),
+  ),
+
+  'work.run.recovered': workRule(
+    ['runId', 'previousStatus', 'reason'],
+    (p) =>
+      isEventId(p.runId) && isNonEmptyString(p.previousStatus) && isNonEmptyString(p.reason),
+  ),
+
+  'work.step.ready': workRule(
+    ['runId', 'stepId', 'stepKey'],
+    (p) => isEventId(p.runId) && isEventId(p.stepId) && isNonEmptyString(p.stepKey),
+  ),
+
+  'work.step.started': workRule(
+    ['runId', 'stepId', 'stepKey', 'index', 'capability', 'attempt'],
+    (p) =>
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isNonEmptyString(p.stepKey) &&
+      isNonNegativeInt(p.index) &&
+      isNonEmptyString(p.capability) &&
+      isPositiveInt(p.attempt),
+  ),
+
+  'work.step.verified': workRule(
+    ['runId', 'stepId', 'attempt'],
+    (p) => isEventId(p.runId) && isEventId(p.stepId) && isNonNegativeInt(p.attempt),
+  ),
+
+  'work.step.failed': workRule(
+    ['runId', 'stepId', 'reason'],
+    (p) => isEventId(p.runId) && isEventId(p.stepId) && isNonEmptyString(p.reason),
+  ),
+
+  'work.step.cancelled': workRule(
+    ['runId', 'stepId', 'reason'],
+    (p) => isEventId(p.runId) && isEventId(p.stepId) && isNonEmptyString(p.reason),
+  ),
+
+  'work.step.skipped': workRule(
+    ['runId', 'stepId', 'reason'],
+    (p) => isEventId(p.runId) && isEventId(p.stepId) && isNonEmptyString(p.reason),
+  ),
+
+  // `principal` is checked here rather than trusted, because this is the field that
+  // says who executed. A forged line claiming `owner` is exactly what the
+  // envelope-level principal check exists to stop, and this is the second place the
+  // same claim is made.
+  'work.action.started': workRule(
+    ['runId', 'stepId', 'actionId', 'attempt', 'capability', 'principal'],
+    (p) =>
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isEventId(p.actionId) &&
+      isPositiveInt(p.attempt) &&
+      isNonEmptyString(p.capability) &&
+      isPrincipalId(p.principal),
+  ),
+
+  'work.action.completed': workRule(
+    ['runId', 'stepId', 'actionId', 'attempt', 'durationMs'],
+    (p) =>
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isEventId(p.actionId) &&
+      isPositiveInt(p.attempt) &&
+      isNonNegativeInt(p.durationMs),
+  ),
+
+  'work.action.failed': workRule(
+    ['runId', 'stepId', 'actionId', 'attempt', 'reason', 'durationMs'],
+    (p) =>
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isEventId(p.actionId) &&
+      isPositiveInt(p.attempt) &&
+      isNonEmptyString(p.reason) &&
+      isNonNegativeInt(p.durationMs),
+  ),
+
+  'work.action.cancelled': workRule(
+    ['runId', 'stepId', 'actionId', 'attempt', 'reason'],
+    (p) =>
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isEventId(p.actionId) &&
+      isPositiveInt(p.attempt) &&
+      isNonEmptyString(p.reason),
+  ),
+
+  'work.observation.recorded': workRule(
+    ['runId', 'stepId', 'actionId', 'observationId', 'kind', 'summaryLength', 'detailLength'],
+    (p) =>
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isNullableString(p.actionId) &&
+      isEventId(p.observationId) &&
+      isNonEmptyString(p.kind) &&
+      isNonNegativeInt(p.summaryLength) &&
+      isNonNegativeInt(p.detailLength),
+  ),
+
+  'work.verification.requested': workRule(
+    ['runId', 'stepId', 'verificationId', 'verifier'],
+    (p) =>
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isEventId(p.verificationId) &&
+      isNonEmptyString(p.verifier),
+  ),
+
+  'work.verification.completed': workRule(
+    ['runId', 'stepId', 'verificationId', 'verdict', 'reason'],
+    (p) =>
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isEventId(p.verificationId) &&
+      (p.verdict === 'passed' || p.verdict === 'failed') &&
+      isNonEmptyString(p.reason),
+  ),
+
+  'work.approval.requested': workRule(
+    [
+      'approvalId',
+      'runId',
+      'stepId',
+      'capability',
+      'requiredCapability',
+      'risk',
+      'principal',
+      'justification',
+      'proposal',
+    ],
+    (p) =>
+      isEventId(p.approvalId) &&
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isNonEmptyString(p.capability) &&
+      isNonEmptyString(p.requiredCapability) &&
+      (p.risk === 'none' || p.risk === 'routine' || p.risk === 'consequential') &&
+      isPrincipalId(p.principal) &&
+      isNonEmptyString(p.justification) &&
+      isNonEmptyString(p.proposal),
+  ),
+
+  'work.approval.approved': workRule(
+    ['approvalId', 'runId', 'stepId', 'decidedBy', 'decisionSource'],
+    (p) =>
+      isEventId(p.approvalId) &&
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isPrincipalId(p.decidedBy) &&
+      isNonEmptyString(p.decisionSource),
+  ),
+
+  'work.approval.denied': workRule(
+    ['approvalId', 'runId', 'stepId', 'decidedBy', 'decisionSource', 'reason'],
+    (p) =>
+      isEventId(p.approvalId) &&
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isPrincipalId(p.decidedBy) &&
+      isNonEmptyString(p.decisionSource) &&
+      isNonEmptyString(p.reason),
+  ),
+
+  'work.approval.cancelled': workRule(
+    ['approvalId', 'runId', 'stepId', 'reason'],
+    (p) =>
+      isEventId(p.approvalId) &&
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isNonEmptyString(p.reason),
+  ),
+
+  'work.approval.expired': workRule(
+    ['approvalId', 'runId', 'stepId', 'reason'],
+    (p) =>
+      isEventId(p.approvalId) &&
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isNonEmptyString(p.reason),
+  ),
+
+  'work.task.created': workRule(
+    ['taskId', 'titleLength'],
+    (p) => isEventId(p.taskId) && isPositiveInt(p.titleLength),
+  ),
+
+  'work.task.updated': workRule(
+    ['taskId', 'status'],
+    (p) => isEventId(p.taskId) && isNonEmptyString(p.status),
+  ),
+
+  'work.task.attached': workRule(
+    ['taskId', 'runId'],
+    (p) => isEventId(p.taskId) && isEventId(p.runId),
+  ),
+
+  'work.task.completed': workRule(
+    ['taskId', 'status'],
+    (p) => isEventId(p.taskId) && isNonEmptyString(p.status),
+  ),
+
+  'work.limits.exceeded': workRule(
+    ['runId', 'limit', 'reason', 'observed'],
+    (p) =>
+      isEventId(p.runId) &&
+      isNonEmptyString(p.limit) &&
+      isNonEmptyString(p.reason) &&
+      isNonNegativeInt(p.observed),
+  ),
+}
+
+/**
+ * One planned step inside `work.run.created`.
+ *
+ * Named fields only, exactly like `CONVERSATION_TURN`: a schema that passed the
+ * object through would let a hand-edited line attach a `label` or an `input` to a
+ * step seed, which is the precise hole that would turn the Work journal into a
+ * record of what Freya was asked to do.
+ */
+function isStepSeed(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const step = value as Record<string, unknown>
+  return (
+    isEventId(step.stepId) &&
+    isNonEmptyString(step.key) &&
+    isNonEmptyString(step.capability) &&
+    isNonEmptyString(step.verifier) &&
+    onlyNamedKeys(step, ['stepId', 'key', 'capability', 'verifier'])
+  )
+}
+
+/**
+ * Reject a payload field the schema does not name.
+ *
+ * ## Why only the Work family gets this
+ *
+ * The other rules read named fields and ignore the rest, which means a hand-edited
+ * line *can* carry an extra key past them — it simply has nowhere to be read from,
+ * so it never reaches a reducer or a projection. That is a real defence, and it is
+ * the reason this is not an urgent fix for the existing families.
+ *
+ * It is not enough for Work, though. The entire safety argument for putting
+ * execution history in this file is that there is **no field a body could hide
+ * in**: a step's input, an observation's text and a task's title are all things a
+ * person might not want in a backup. Ignoring an undeclared key means such a value
+ * can still be *written to disk* by anyone editing the file, and "the reducer
+ * ignores it" is a weaker statement than "it was never accepted".
+ *
+ * Work is new, so it starts the stronger way. Adding the same rule to an older
+ * family is a schema-version question, not a code one, and belongs with whatever
+ * next changes that family's payload.
+ */
+function onlyNamedKeys(payload: Record<string, unknown>, allowed: readonly string[]): boolean {
+  for (const key of Object.keys(payload)) {
+    if (!allowed.includes(key)) return false
+  }
+  return true
+}
+
+/** Wrap a Work payload rule with the no-unnamed-fields check. */
+function workRule(
+  allowed: readonly string[],
+  rule: (payload: Record<string, unknown>) => boolean,
+): (payload: Record<string, unknown>) => boolean {
+  return (payload) => onlyNamedKeys(payload, allowed) && rule(payload)
+}
+
+/**
+ * A Run's resolved ceilings.
+ *
+ * Positive integers, because a zero or negative ceiling in a durable record would
+ * either make every run instantly over budget or make "bounded" mean nothing.
+ */
+function isRunLimits(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const limits = value as Record<string, unknown>
+  return (
+    isPositiveInt(limits.maxSteps) &&
+    isPositiveInt(limits.maxActions) &&
+    isPositiveInt(limits.maxDurationMs) &&
+    isPositiveInt(limits.maxAttemptsPerStep)
+  )
 }

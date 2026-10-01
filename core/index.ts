@@ -31,6 +31,20 @@ import { EncryptedConversationStore } from './conversation/encrypted-store'
 import { MemoryConversationStore } from './conversation/memory-store'
 import { VoiceService } from './voice/service'
 import type { VoiceTranscriber, VoiceSynthesizer } from './voice/types'
+import { WorkEngine, type WorkCommandOutcome } from './work/engine'
+import { ABSENT_WORK_PROJECTION, type WorkProjection } from './work/projection'
+import {
+  registerPhaseSixCapabilities,
+  WorkRegistry,
+  type WorkCapability,
+} from './work/capability'
+import {
+  WORK_LIMITS,
+  TASK_STATUSES,
+  type RunLimits,
+  type TaskStatus,
+  type WorkStepPlan,
+} from './work/types'
 import type { ContextBudget } from './mind/context-compiler'
 import type { ConversationProjection, ConversationTurnView, VoiceProjection } from './protocol/conversation'
 import { describeActivity, mergeActivity } from './protocol/activity'
@@ -90,6 +104,15 @@ const SHUTDOWN_DRAIN_MS = 1_000
  * otherwise hold the application open for the whole 120s research ceiling.
  */
 const RESEARCH_DRAIN_MS = 1_000
+
+
+/**
+ * What a Run cancellation means when the caller did not say.
+ *
+ * Named here rather than left undefined so the default is a sentence a person
+ * reads on the board and in the journal, rather than a null reason.
+ */
+const WORK_CANCELLED = 'cancelled by the owner'
 
 export interface CoreOptions {
   /** Where the durable log lives. */
@@ -169,6 +192,16 @@ export interface CoreOptions {
   voiceSynthesizer?: VoiceSynthesizer
   /** Overrides the conversation context budget. For tests. */
   contextBudget?: ContextBudget
+  /**
+   * Extra Work capabilities to register.
+   *
+   * The seam Phase 5 (Searcher, managed browser) and Phase 7 (Missions) attach
+   * through. A capability is registered and nothing else changes: no engine edit,
+   * no new execution path, no new event family. Phase 6 registers only its own
+   * inert test set, so a Core built today can execute no external operation at all
+   * — which is the correct starting posture rather than a gap.
+   */
+  workCapabilities?: readonly WorkCapability[]
 }
 
 /**
@@ -230,6 +263,26 @@ export interface Core {
   brain(): BrainProjection
   /** Subscribe to the Brain projection. Same mirror semantics as the others. */
   onBrain(listener: (projection: BrainProjection) => void): () => void
+  /**
+   * Subscribe to the Work projection.
+   *
+   * The board's whole input. Same mirror semantics as the others: the current
+   * value is delivered on attach so a renderer that just reloaded knows where it
+   * stands, and a window cannot write a single field of what it receives.
+   */
+  onWork(listener: (projection: WorkProjection) => void): () => void
+  /**
+   * The current Work projection.
+   *
+   * Its own slot and its own channel, for the reason the Brain has one: this is
+   * where long-running execution state lives, and shipping it inside a security
+   * status would mean it is copied, cached and logged wherever status is.
+   *
+   * Reachable before `start()` finishes, where it reports `unavailable` with a
+   * stated reason rather than throwing — a surface must be able to render "Core is
+   * not up yet" during startup without special-casing the failure.
+   */
+  work(): WorkProjection
   readonly lifecycle: CoreLifecycle
 }
 
@@ -268,6 +321,7 @@ class FreyaCore implements Core {
   private readonly listeners = new Set<(status: CoreStatus) => void>()
   private readonly activityListeners = new Set<(activity: CoreActivityEvent[]) => void>()
   private readonly brainListeners = new Set<(projection: BrainProjection) => void>()
+  private readonly workListeners = new Set<(projection: WorkProjection) => void>()
   /** Display-ready activity, rebuilt from the log on every start. */
   private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
@@ -290,6 +344,14 @@ class FreyaCore implements Core {
   private mind!: MindService
   private conversations!: ConversationService
   private voiceService!: VoiceService
+  /**
+   * The Work engine, or undefined before it is built.
+   *
+   * Optional rather than definite so that `work()` can report `unavailable` during
+   * startup instead of throwing, the same way `brain()` does.
+   */
+  private workEngine: WorkEngine | undefined
+  private workRegistry: WorkRegistry | undefined
 
   constructor(private readonly options: CoreOptions) {
     this.newId = options.newId ?? (() => randomUUID())
@@ -561,6 +623,45 @@ class FreyaCore implements Core {
       newId: this.options.newId,
     })
 
+    /**
+     * Work, built after the owner exists and after the state subscription, for two
+     * reasons: the engine's authorizer closes over the owner principal, and any
+     * event it appended before that subscription would reach the journal without
+     * reaching the state — which is the disagreement between a window that attaches
+     * after a restart and one that never left.
+     *
+     * The registry is the capability boundary, and Phase 6 populates it with inert
+     * test capabilities only. Search, a browser, a terminal and an agent all
+     * register here when they exist; nothing in `core/work/` names any of them, so
+     * the engine can be proved without one.
+     */
+    this.workRegistry = new WorkRegistry()
+    for (const capability of this.workCapabilities()) {
+      this.workRegistry.register(capability)
+    }
+    registerPhaseSixCapabilities(this.workRegistry)
+    this.workEngine = new WorkEngine({
+      fabric: this.fabric,
+      // The one place Work asks Guard anything. The owner principal is baked in
+      // here in Core, so the engine holds no principal and cannot build one.
+      authorizer: {
+        evaluate: (capability) => this.guard.evaluate(this.owner, capability),
+      },
+      registry: this.workRegistry,
+      principalId: this.owner.id,
+      now: this.options.now,
+      newId: this.options.newId,
+      onChange: () => this.publishWork(),
+      // Read fresh at the moment of each decision, never copied into Work state.
+      // A Run cannot be the one thing that keeps going after the panic button.
+      stopAll: () => this.state.stopAll.active,
+      stopAllReason: () =>
+        this.state.stopAll.activatedBy === null
+          ? 'Freya is stopped'
+          : `Freya was stopped by ${this.state.stopAll.activatedBy}`,
+    })
+    await this.workEngine.open()
+
     const recoveredSequence = this.fabric.lastSequence
     this.startedAt = (this.options.now ?? (() => new Date()))().toISOString()
 
@@ -599,6 +700,13 @@ class FreyaCore implements Core {
     // by a previous process. Nothing is retried and nothing is spent: a question on
     // disk with no answer is the whole truth about a turn that did not finish.
     await this.conversations.recoverInterruptedTurns()
+
+    // And interrupted Work, for the same reason and with the same honesty. A Run
+    // the journal says was executing cannot be continued — its plan was in memory —
+    // so it is recorded as failed with the reason stated, its pending approvals are
+    // expired, and nothing is marked successful. History is not proof that
+    // something is currently executing.
+    await this.workEngine?.recoverInterruptedRuns()
 
     if (this.currentLifecycle === 'ready') {
       await this.fabric.append('core.ready', {}, { actor: 'system' })
@@ -671,6 +779,11 @@ class FreyaCore implements Core {
       // after its own journal event would be a record of something the log says
       // never happened.
       await this.brainService?.close()
+      // Work is closed on the same terms, and for the same reason: a capability
+      // still executing when the fabric closes would try to record its own outcome
+      // into a closed store, producing a failure *for having failed to record*.
+      // `close` aborts every live capability and waits for the loops to settle.
+      await this.workEngine?.close()
       await this.conversationStore?.close()
       await this.fabric?.close()
       this.notify()
@@ -924,6 +1037,96 @@ class FreyaCore implements Core {
     }
   }
 
+  /**
+   * The Work projection.
+   *
+   * A mirror like the others. A window holds what Core last built and cannot write
+   * to it, which is the whole of what "the renderer is a projection" means for
+   * execution state: reloading a window re-reads this, and the work it describes
+   * keeps running either way.
+   */
+  work(): WorkProjection {
+    // Booting or degraded the engine may not exist yet. A truthful empty
+    // projection rather than a throw, matching `brain()`: a board has to be able
+    // to say "Core is not up" without special-casing the failure.
+    if (this.workEngine === undefined) {
+      return {
+        ...ABSENT_WORK_PROJECTION,
+        reason: 'the Work engine is not available',
+      }
+    }
+    return this.workEngine.projection()
+  }
+
+  onWork(listener: (projection: WorkProjection) => void): () => void {
+    this.workListeners.add(listener)
+    // Delivered immediately, like every other subscription here, so a window that
+    // attaches late agrees with one that never left.
+    try {
+      listener(this.work())
+    } catch (error) {
+      console.error('[freya.core] Work subscriber threw', error)
+    }
+    return () => {
+      this.workListeners.delete(listener)
+    }
+  }
+
+  /** Re-publish the Work mirror. Called when Work's own state changes. */
+  private publishWork(): void {
+    if (this.workListeners.size === 0) return
+    const projection = this.work()
+    for (const listener of [...this.workListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Work listener threw', error)
+        this.workListeners.delete(listener)
+      }
+    }
+  }
+
+  /** The Work engine, refusing rather than throwing on a command. */
+  private requireWork(): WorkEngine {
+    if (this.workEngine === undefined) {
+      throw new Error('the Work engine is not available')
+    }
+    return this.workEngine
+  }
+
+  /**
+   * A refused Work command, in the one shape a surface has to render.
+   *
+   * `ok: false` on the envelope with a `refusal`, *and* a Work result — because a
+   * board that only reads `refusal` has to special-case Work, and a Work result
+   * that only appeared on success would leave the failure path unexplained. The
+   * same shape therefore arrives either way, which is also how a caller cannot
+   * tell a refusal from a crash by its shape.
+   */
+  private workRefusal(
+    requestId: string,
+    operation: string,
+    reason: string,
+  ): CoreCommandResult {
+    return {
+      requestId,
+      ok: false,
+      refusal: { reason },
+      work: { operation, ok: false, reason },
+    }
+  }
+
+  /**
+   * Extra capabilities to register beyond Phase 6's inert test set.
+   *
+   * The seam Phase 5 and Phase 7 attach through: a Searcher, a browser, an agent
+   * or a Mission arrives by being registered here and by nothing else. There is no
+   * Work-side branch to add, no engine edit, and no second execution path.
+   */
+  private workCapabilities(): readonly WorkCapability[] {
+    return this.options.workCapabilities ?? []
+  }
+
   subscribe(listener: (status: CoreStatus) => void): () => void {
     this.listeners.add(listener)
     // A subscriber receives the current projection immediately, so a renderer
@@ -960,7 +1163,8 @@ class FreyaCore implements Core {
       command !== 'security.status.read' &&
       command !== 'cognition.status.read' &&
       command !== 'voice.status.read' &&
-      command !== 'brain.status.read'
+      command !== 'brain.status.read' &&
+      command !== 'work.status.read'
     ) {
       return reject(envelope, `core is ${this.lifecycle} and cannot accept mutating commands`)
     }
@@ -1648,6 +1852,208 @@ class FreyaCore implements Core {
           }
         }
 
+
+        /* -------------------------------------------------------------- work */
+
+        case 'work.status.read':
+          // Read-only, so it is allowed while stopping, and it needs no
+          // capability: knowing what Freya is working on is the owner's own
+          // business.
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            work: { operation: 'status', ok: true },
+          }
+
+        case 'work.task.create': {
+          const decision = this.guard.evaluate(this.owner, 'work.task.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'work.task.manage', requestId)
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: decision.reason },
+              work: { operation: 'task-refused', ok: false, reason: decision.reason },
+            }
+          }
+          const title = readString(envelope.payload, 'title')
+          if (title === null) {
+            return this.workRefusal(requestId, 'task-refused', 'a task title is missing')
+          }
+          const outcome = await this.requireWork().createTask(title)
+          this.publishWork()
+          return { requestId, ok: outcome.ok, status: this.status(), work: workResult(outcome) }
+        }
+
+        case 'work.task.update': {
+          const decision = this.guard.evaluate(this.owner, 'work.task.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'work.task.manage', requestId)
+            return this.workRefusal(requestId, 'task-refused', decision.reason)
+          }
+          const taskId = readString(envelope.payload, 'taskId')
+          if (taskId === null) return this.workRefusal(requestId, 'task-refused', 'task id is missing')
+          const status = readString(envelope.payload, 'status')
+          if (status === null || !isTaskStatus(status)) {
+            return this.workRefusal(requestId, 'task-refused', 'task status is missing or unknown')
+          }
+          const outcome = await this.requireWork().updateTask(taskId, status)
+          this.publishWork()
+          return { requestId, ok: outcome.ok, status: this.status(), work: workResult(outcome) }
+        }
+
+        case 'work.run.create': {
+          const decision = this.guard.evaluate(this.owner, 'work.run.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'work.run.manage', requestId)
+            return this.workRefusal(requestId, 'run-created', decision.reason)
+          }
+          // A plan is a request. Everything in it is validated inside the engine
+          // against the registered capability set — the handler only has to make
+          // sure it arrived as a plan at all, and that it is not enormous.
+          const rawSteps = readRawArray(envelope.payload, 'steps')
+          if (rawSteps === undefined) return this.workRefusal(requestId, 'run-created', 'a run needs steps')
+          if (rawSteps.length === 0) return this.workRefusal(requestId, 'run-created', 'the plan contained no steps')
+          if (rawSteps.length > WORK_LIMITS.maxRunSteps) {
+            return this.workRefusal(
+              requestId,
+              'run-created',
+              `a plan may hold at most ${WORK_LIMITS.maxRunSteps} steps`,
+            )
+          }
+          const planSteps: WorkStepPlan[] = []
+          // Read before the loop so a malformed ceiling is refused before any step
+          // is even looked at. Clamping happens in the engine; this only checks the
+          // shape, because a caller may narrow a ceiling but never raise one.
+          const limits = readRunLimits(envelope.payload, 'limits')
+          if (limits === 'invalid') {
+            return this.workRefusal(requestId, 'run-created', 'the requested limits are malformed')
+          }
+          for (const raw of rawSteps) {
+            if (typeof raw !== 'object' || raw === null) {
+              return this.workRefusal(requestId, 'run-created', 'a step was malformed')
+            }
+            const step = raw as Record<string, unknown>
+            const key = typeof step.key === 'string' ? step.key : null
+            const capability = typeof step.capability === 'string' ? step.capability : null
+            const verifier = typeof step.verifier === 'string' ? step.verifier : null
+            const label = typeof step.label === 'string' ? step.label : null
+            if (!key || !capability || !verifier || label === null) {
+              return this.workRefusal(requestId, 'run-created', 'a step was missing a field')
+            }
+            // `input` is deliberately passed through uninspected: the engine
+            // sanitises it, and a second sanitiser here would be a second set of
+            // rules that could disagree with the one that matters.
+            planSteps.push({
+              key,
+              capability,
+              verifier,
+              label,
+              ...(step.input === undefined ? {} : { input: step.input as Record<string, unknown> }),
+              ...(step.requiresApproval === true ? { requiresApproval: true } : {}),
+            })
+          }
+          const parent = readParent(envelope.payload)
+          if (parent === 'invalid') {
+            return this.workRefusal(requestId, 'run-created', 'the parent reference is malformed')
+          }
+          const taskId = readString(envelope.payload, 'taskId')
+          const outcome = await this.requireWork().createRun({
+            steps: planSteps,
+            ...(taskId === null ? {} : { taskId }),
+            ...(parent === null ? {} : { parent }),
+            ...(limits === null ? {} : { limits }),
+          })
+          this.publishWork()
+          // A refusal is `ok: false` here, not a success carrying a reason. A
+          // window must not have to inspect a Work result to discover that the
+          // engine declined, because the one caller that reads `ok` and the one that
+          // reads `work` would otherwise disagree about whether anything happened.
+          //
+          // A created Run is `queued`, not running: starting one is a separate,
+          // explicit command, so nothing a renderer submits begins executing as a
+          // side effect of being accepted.
+          return { requestId, ok: outcome.ok, status: this.status(), work: workResult(outcome) }
+        }
+
+        case 'work.run.start': {
+          const decision = this.guard.evaluate(this.owner, 'work.run.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'work.run.manage', requestId)
+            return this.workRefusal(requestId, 'run-started', decision.reason)
+          }
+          const runId = readString(envelope.payload, 'runId')
+          if (runId === null) return this.workRefusal(requestId, 'run-started', 'run id is missing')
+          const outcome = await this.requireWork().startRun(runId)
+          this.publishWork()
+          return { requestId, ok: outcome.ok, status: this.status(), work: workResult(outcome) }
+        }
+
+        case 'work.run.pause':
+        case 'work.run.resume':
+        case 'work.run.cancel': {
+          // Pausing, resuming and cancelling are all `work.run.manage`. Cancelling
+          // deliberately does not latch anything security-wide: it stops one Run,
+          // exactly as `conversation.turn.cancel` stops one turn, and STOP ALL
+          // remains the separate, much larger control.
+          const capability: Capability = 'work.run.manage'
+          const decision = this.guard.evaluate(this.owner, capability)
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, capability, requestId)
+            return this.workRefusal(requestId, 'run-paused', decision.reason)
+          }
+          const runId = readString(envelope.payload, 'runId')
+          if (runId === null) return this.workRefusal(requestId, 'run-started', 'run id is missing')
+          const engine = this.requireWork()
+          const outcome =
+            command === 'work.run.pause'
+              ? await engine.pauseRun(runId)
+              : command === 'work.run.resume'
+                ? await engine.resumeRun(runId)
+                : await engine.cancelRun(runId, readString(envelope.payload, 'reason') ?? WORK_CANCELLED)
+          this.publishWork()
+          return { requestId, ok: outcome.ok, status: this.status(), work: workResult(outcome) }
+        }
+
+        case 'work.approval.decide': {
+          // The one command that means *a person is being trusted*, and the only
+          // Work capability that is not `work.run.manage`.
+          //
+          // Two properties are structural rather than checked in the payload:
+          // `decidedBy` has no field on the engine's function to be read from, and
+          // the worker capability set excludes `work.*` entirely. A model therefore
+          // cannot approve its own request by any route — and neither can a window,
+          // which reaches this as the owner because the owner is the only principal
+          // that reaches Core at all.
+          const decision = this.guard.evaluate(this.owner, 'work.approval.decide')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'work.approval.decide', requestId)
+            return this.workRefusal(requestId, 'approval-unknown', decision.reason)
+          }
+          const approvalId = readString(envelope.payload, 'approvalId')
+          if (approvalId === null) {
+            return this.workRefusal(requestId, 'approval-unknown', 'approval id is missing')
+          }
+          const verdict = readString(envelope.payload, 'decision')
+          if (verdict !== 'approved' && verdict !== 'denied') {
+            return this.workRefusal(
+              requestId,
+              'approval-unknown',
+              'a decision must be approved or denied',
+            )
+          }
+          const outcome = await this.requireWork().decideApproval(
+            approvalId,
+            verdict,
+            readString(envelope.payload, 'reason') ?? '',
+            this.owner.id,
+            'owner-surface',
+          )
+          this.publishWork()
+          return { requestId, ok: outcome.ok, status: this.status(), work: workResult(outcome) }
+        }
+
         default:
           return reject(envelope, `unknown command: ${String(command)}`)
       }
@@ -2023,7 +2429,53 @@ class FreyaCore implements Core {
   }
 }
 
-/** A valid CoreStatus for a Core whose log is not open. */
+/**
+ * Turn an engine outcome into the protocol's Work result.
+ *
+ * A thin rename rather than a translation, and the reason is worth a line: `ok`
+ * travels with every outcome including the refusals, because "the approval was
+ * denied" and "the engine could not be reached" must never render as success. The
+ * reason travels too, for the Vault's reason — a refusal nobody can read is
+ * indistinguishable from a refusal that was arbitrary.
+ */
+function workResult(outcome: WorkCommandOutcome): WorkCommandOutcome {
+  return {
+    operation: outcome.operation,
+    ok: outcome.ok,
+    ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+    ...(outcome.runId === undefined ? {} : { runId: outcome.runId }),
+    ...(outcome.stepId === undefined ? {} : { stepId: outcome.stepId }),
+    ...(outcome.approvalId === undefined ? {} : { approvalId: outcome.approvalId }),
+    ...(outcome.taskId === undefined ? {} : { taskId: outcome.taskId }),
+    ...(outcome.status === undefined ? {} : { runStatus: outcome.status }),
+  }
+}
+
+/** A refused Work command, in the one shape the surface has to render. */
+function isTaskStatus(value: string): value is TaskStatus {
+  return (TASK_STATUSES as readonly string[]).includes(value)
+}
+
+/**
+ * Read an opaque parent reference off a command payload.
+ *
+ * Three answers, because there are three honest ones: absent, present, or present
+ * and malformed. Collapsing the third into the first would let a renderer hand
+ * Work a reference Core could not read and have it silently dropped — which is how
+ * a Phase 7 Mission would end up orphaned from its Run with nobody told.
+ */
+function readParent(payload: unknown): { kind: string; id: string } | null | 'invalid' {
+  if (typeof payload !== 'object' || payload === null) return null
+  const value = (payload as Record<string, unknown>).parent
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) return 'invalid'
+  const parent = value as Record<string, unknown>
+  const kind = typeof parent.kind === 'string' ? parent.kind : null
+  const id = typeof parent.id === 'string' ? parent.id : null
+  if (kind === null || id === null) return 'invalid'
+  return { kind, id }
+}
+
 function degradedStatus(
   lifecycle: CoreLifecycle,
   state: CoreState,
@@ -2224,6 +2676,46 @@ function readStringArray(payload: unknown, key: string): string[] | undefined {
     .map((item) => item.trim())
     .filter((item) => item.length > 0)
     .slice(0, 32)
+}
+
+/**
+ * Read an array of unrecognised values.
+ *
+ * Deliberately *not* filtered: `readStringArray` keeps only the strings it
+ * understands, which is right for a list of tags and wrong for a list of step
+ * objects, where dropping one would mean quietly executing a smaller plan than
+ * the caller asked for. Every element is validated individually instead.
+ */
+function readRawArray(payload: unknown, key: string): unknown[] | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const value = (payload as Record<string, unknown>)[key]
+  return Array.isArray(value) ? value : undefined
+}
+
+/**
+ * Read a partial set of Run ceilings off a command payload.
+ *
+ * Three answers for the same reason `readParent` has three: absent, present, or
+ * present and wrong. A caller may narrow any ceiling; `resolveLimits` in the
+ * engine clamps everything downward afterwards, so nothing here can widen a bound.
+ */
+function readRunLimits(
+  payload: unknown,
+  key: string,
+): Partial<RunLimits> | null | 'invalid' {
+  if (typeof payload !== 'object' || payload === null) return null
+  const value = (payload as Record<string, unknown>)[key]
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) return 'invalid'
+  const raw = value as Record<string, unknown>
+  const limits: Partial<RunLimits> = {}
+  for (const name of ['maxSteps', 'maxActions', 'maxDurationMs', 'maxAttemptsPerStep'] as const) {
+    const entry = raw[name]
+    if (entry === undefined) continue
+    if (typeof entry !== 'number' || !Number.isFinite(entry) || entry <= 0) return 'invalid'
+    Object.assign(limits, { [name]: Math.floor(entry) })
+  }
+  return limits
 }
 
 function readString(payload: unknown, key: string): string | null {

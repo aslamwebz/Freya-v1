@@ -344,12 +344,21 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:work', projection)
   })
 
+  // Missions are a sixth channel for the same reason. A Mission projection moves when
+  // a Mission is created, moved or concluded, which is rare enough that it does not
+  // need the per-step cadence `freya:core:work` has — and keeping it separate is what
+  // stops a Mission's status riding along inside a security projection.
+  const detachMission = coreHost?.onMission((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:mission', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
     detachConversation?.()
     detachBrain?.()
     detachWork?.()
+    detachMission?.()
   })
 
   if (DEV_SERVER) {
@@ -420,6 +429,10 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:voice', () => requireCore().voice())
   ipcMain.handle('freya:core:brain', () => requireCore().brain())
   ipcMain.handle('freya:core:work', () => requireCore().work())
+  // Missions, same bargain: the projection crosses, the substance does not. There is
+  // deliberately no channel for a Mission's private text — that lives in the encrypted
+  // store and reaches a window only through Core's own read, not as a standing feed.
+  ipcMain.handle('freya:core:mission', () => requireCore().mission())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

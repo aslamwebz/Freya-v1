@@ -4,6 +4,7 @@ import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
 import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
+import type { MissionProjection } from '../core/missions/types'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 import { BraveSearchProvider } from '../core/research/providers/brave'
 import { ElectronBrowserTargetFactory } from './research/managedTarget'
@@ -107,6 +108,8 @@ export interface CoreHost {
    */
   onWork(send: (projection: WorkProjection) => void): () => void
   work(): WorkProjection | null
+  onMission(send: (projection: MissionProjection) => void): () => void
+  mission(): MissionProjection | null
   stop(reason?: string): Promise<void>
 }
 
@@ -170,6 +173,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly conversationWindows = new Set<(projection: ConversationProjection) => void>()
   private readonly brainWindows = new Set<(projection: BrainProjection) => void>()
   private readonly workWindows = new Set<(projection: WorkProjection) => void>()
+  private readonly missionWindows = new Set<(projection: MissionProjection) => void>()
 
   constructor(
     private readonly dataPath: string,
@@ -208,6 +212,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onConversation((projection) => this.broadcastConversation(projection))
       core.onBrain((projection) => this.broadcastBrain(projection))
       core.onWork((projection) => this.broadcastWork(projection))
+      core.onMission((projection) => this.broadcastMission(projection))
     })()
     try {
       await this.starting
@@ -380,6 +385,30 @@ export class ElectronCoreHost implements CoreHost {
     this.brainWindows.clear()
     this.workWindows.clear()
     await core?.stop(reason)
+  }
+
+  onMission(send: (projection: MissionProjection) => void): () => void {
+    this.missionWindows.add(send)
+    const projection = this.mission()
+    if (projection !== null) send(projection)
+    return () => {
+      this.missionWindows.delete(send)
+    }
+  }
+
+  mission(): MissionProjection | null {
+    return this.core?.mission() ?? null
+  }
+
+  private broadcastMission(projection: MissionProjection): void {
+    for (const send of [...this.missionWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Mission push threw', error)
+        this.missionWindows.delete(send)
+      }
+    }
   }
 
   private broadcastWork(projection: WorkProjection): void {

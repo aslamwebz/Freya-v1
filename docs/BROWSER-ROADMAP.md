@@ -36,23 +36,53 @@ run it, which is what makes the Relay phase an addition rather than a rewrite.
 
 ---
 
-## Phase 5 — Browser Service
+## Phase 5 — Browser Service (shipped, narrower than planned)
 
 A managed, isolated browser that Freya owns and launches.
 
-- **Browser intents** — declarative, typed requests: navigate, read, extract,
-  click, fill. Not a script, not arbitrary JavaScript, not "run this at the page".
-- **Browser actions** — the operations the service will perform, each one mapped
-  to an intent and each one requiring authorisation.
-- **Browser observations** — structured results. Text, links, form fields,
-  navigation events. An observation is data, not a DOM handle and not a code
-  fragment to be evaluated later.
-- **Execution-target abstraction** — the interface that lets the same intent run
-  against either target. Phase 5 ships the managed browser implementing it.
+- **Browser intents** — declarative, typed requests. **Shipped: `navigate` and
+  `read` only.** `click` and `fill` were in the original scope and are *not*
+  implemented; see "What did not ship" below.
+- **Browser actions** — each operation mapped to an intent and requiring
+  authorisation. Shipped as the Guard capability `browser.read`, evaluated before
+  the fetch rather than after it.
+- **Browser observations** — structured results: title, headings, plain text,
+  bounded links, metadata, retrieval time, length and truncation. An observation is
+  data, not a DOM handle and not a code fragment to be evaluated later.
+- **Execution-target abstraction** — `BrowserTarget` / `BrowserTargetFactory`,
+  letting the same intent run against either target. The managed Electron target
+  implements it.
 
-Isolation is the point of the managed browser: a profile Freya created, a process
-she started, cookies and storage that are hers rather than the user's. It is the
-reason to prefer it when the task does not need the user's session.
+Isolation is the point of the managed browser: a profile Freya created, cookies and
+storage that are hers rather than the user's. It is the reason to prefer it when the
+task does not need the user's session.
+
+### What actually ships
+
+`core/research/browser.ts` and `electron/research/managedTarget.ts`. A hidden,
+sandboxed, `contextIsolation` window with no preload and no node integration; the
+page fetched by the controlled transport and served on a session-owned internal URL
+under a restrictive CSP; every subresource, permission, popup, download, frame and
+page-initiated navigation denied; one fixed trusted extraction script run in an
+isolated world. Session partitions come from a bounded leased pool of four, because
+Electron cannot destroy a `Session` and one-per-read would accumulate. Full detail
+in [PHASE-5.md](PHASE-5.md) §4.
+
+### What did not ship, and why it matters
+
+**`click` and `fill` are not implemented, and their absence is deliberate.** They
+are the two intents that turn a page's text into an *action*. A page that can be
+clicked is a page whose author chose what Freya does next, and the injection
+containment described in [PHASE-5.md](PHASE-5.md) §10 depends on there being no
+executable surface for an injected instruction to reach.
+
+So the managed browser is a **reader**, not an agent. It cannot log in, cannot see
+behind authentication, and does not render JavaScript — a client-rendered page may
+yield nothing. That is a real limitation for anyone expecting a general browser, and
+it is the correct trade for a research subsystem.
+
+Anything that needs interaction belongs to a future phase, needs its own capability
+and its own authorisation, and should not be bolted onto this target by widening it.
 
 ---
 

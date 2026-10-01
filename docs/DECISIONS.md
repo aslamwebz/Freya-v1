@@ -335,3 +335,86 @@ The same pass removed the local acknowledgement. The command bar now waits for
 Core's reply and reports what Core said — including when Core refused it, or could
 not be reached. An acknowledgement the UI writes itself is one the user cannot
 check.
+
+## D20 — One key per domain, not one root with derived subkeys
+
+Conversation history and the Brain are separate stores holding separate classes of
+data, so they get separate 256-bit secrets, each wrapped separately by the OS
+secure storage. Phase 5 added a third domain — research — and did **not** add a
+fourth kind of secret to share.
+
+Deriving subkeys from one root is tidier to manage. It is also the case where
+recovering the root yields *every* domain at once, so "the conversation key leaked"
+stops being a bounded problem and becomes "Freya's entire memory leaked". Two
+secrets cost a migration and buy back a blast radius of one.
+
+Phase 3's single `.key` file is adopted byte-identically as the conversation secret
+on first run, so existing transcripts stay readable, and the old file is left in
+place — a migration that can lose access to history on its failure path is not one
+worth shipping.
+
+## D21 — Research privileges are three capabilities, not one
+
+`search.web`, `browser.read` and `research.start` are separate entries in the closed
+capability vocabulary. They are three kinds of privilege: asking a third party about
+the world, fetching an arbitrary public page and therefore rendering an attacker's
+HTML inside a sandbox, and starting a multi-stage operation that spends model calls.
+One collapsed `research.use` would make it impossible to widen one without widening
+all three.
+
+None is granted to a worker. A worker can already ask for cognition under a grant,
+and research model turns happen there; giving it the network or a browser as well
+would mean an agent could exfiltrate whatever it was told.
+
+## D22 — The managed browser reads; it does not click
+
+Phase 5's original browser scope included `click` and `fill`. They are not
+implemented, and the absence is the design rather than a shortfall.
+
+A page that can be clicked is a page whose author has chosen what Freya does next,
+and the injection containment in [PHASE-5.md](PHASE-5.md) §10 depends on there
+being no executable surface for an injected instruction to reach. Narrowing the
+target now is far cheaper than removing an action surface later, once research
+output is being acted on.
+
+## D23 — A research result is never admitted to memory
+
+Research results are ephemeral. Nothing a page says and nothing a model writes
+about it is written to the encrypted Brain, and nothing is badged verified.
+
+Two reasons. A page is untrusted content that would become a durable claim about the
+world, which is precisely the persistence an injection needs. And Phase 4 established
+that a stored claim is a record of a claim, not proof — writing research output
+straight into memory would quietly reverse that, by making retrieval look like
+knowledge.
+
+Promotion, when it is wanted, goes through the same trusted admission pathway as
+anything else, with a source class a caller cannot choose.
+
+## D24 — Research budgets are code-owned, and the bridge proves it
+
+`RESEARCH_LIMITS` is frozen. Core may configure lower values through a validated
+override; nothing may raise them. The preload bridge forwards `question` for
+`research.start` and nothing else — not `modelTurns`, not `durationMs`, not
+`maxOutputTokens`, not `limits` — so a compromised window cannot even put a larger
+number in front of Core to be ignored.
+
+Every research model turn also carries its own grant, revoked in a `finally`, so
+completion, failure, refusal and cancellation all release it. Per-turn rather than
+per-job because a per-job grant would have to be revoked from outside the model
+adapter, which is exactly where cancellation gets missed.
+
+## D25 — A research event has no slot for what was researched
+
+The eleven `research.*` stage events share one payload shape of ids, a closed stage,
+integer counters and a fixed failure code. The validator rejects an **unexpected
+key**, not merely an invalid one.
+
+That last part is the load-bearing decision. Reading named fields is not enough: a
+payload with the right fields *plus* a query would pass every field check and
+quietly keep the query, and the journal is exactly the place where a copy of what
+somebody searched for does not belong.
+
+There is deliberately no `research.recalled` event either. Recall happens constantly,
+and journalling it would make the log a permanent record of what Freya found
+interesting.

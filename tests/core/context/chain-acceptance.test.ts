@@ -527,6 +527,58 @@ describe('provenance and scope survive, and another conversation does not', () =
     expect(item.expiresAt).toBe(row.expiresAt)
   })
 
+  it('carries a Core-recorded Mission into the window’s words, in the session scope', async () => {
+    const core = await bootCore()
+    await sendContext(core, 'context.scope.activate', { scope: CONV_9 })
+
+    // A Mission becoming active is Core recording something about itself: the
+    // only lane allowed to place content in the `session` scope, and a source
+    // no payload can ever claim.
+    const created = await core.handleCommand({
+      command: 'mission.create',
+      requestId: 'm-1',
+      payload: { title: 'Land the lease renewal', intent: 'get it signed before Friday' },
+    })
+    const missionId = (created as { mission?: { missionId?: string } }).mission?.missionId
+    if (typeof missionId !== 'string') {
+      throw new Error(`mission.create failed: ${JSON.stringify(created)}`)
+    }
+    const activated = await core.handleCommand({
+      command: 'mission.activate',
+      requestId: 'm-2',
+      payload: { missionId },
+    })
+    expect(activated.ok).toBe(true)
+
+    const view = core.context()
+    const row = view.items.find((item) => item.kind === 'current_mission')
+    if (row === undefined) throw new Error('Core did not sync the Mission into context')
+    expect(row.source).toBe('core_record')
+    expect(row.originId).toBe(missionId)
+    expect(row.scopeKind).toBe('session')
+    expect(row.state).toBe('live')
+
+    const projection = windowWords(view)
+    const item = projection.items.find((entry) => entry.itemId === row.contextId)
+    if (item === undefined) throw new Error('the Mission item did not reach the window')
+    expect(item.provenance).toEqual({
+      sourceClass: 'core_record',
+      detail: missionId,
+      admittedAt: row.admittedAt,
+    })
+    // Session is ambient: it is visible from the conversation Core is pointed
+    // at, because that is what "for the whole session" means.
+    expect(item.scope).toEqual({ label: 'session', detail: 'session' })
+    expect(projection.counts.current).toBe(1)
+
+    // The Mission's private wording lives in an encrypted store this lane has
+    // no business reading: only the id and the closed status crossed.
+    expect(JSON.stringify(view)).not.toContain('Land the lease renewal')
+    expect(JSON.stringify(view)).not.toContain('get it signed before Friday')
+    expect(JSON.stringify(projection)).not.toContain('Land the lease renewal')
+    expect(JSON.stringify(projection)).not.toContain('get it signed before Friday')
+  })
+
   it('never lets another conversation’s item or count into the projection', async () => {
     const core = await bootCore()
     await sendContext(core, 'context.scope.activate', { scope: CONV_A })

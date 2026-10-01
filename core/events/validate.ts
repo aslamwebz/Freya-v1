@@ -5,6 +5,7 @@ import {
   type CoreEventType,
 } from './envelope'
 import { isPrincipalId } from '../security/guard'
+import { DEFAULT_MISSION_LIMITS } from '../missions/types'
 
 /**
  * Durable event validation.
@@ -300,6 +301,50 @@ const RESEARCH_STAGE = (p: Record<string, unknown>): boolean => {
   if (!exactKeys(counters as Record<string, unknown>, RESEARCH_STAGE_COUNTER_KEYS)) return false
   return RESEARCH_STAGE_COUNTER_KEYS.every((key) => isNonNegativeInt((counters as Record<string, unknown>)[key]))
 }
+
+/** Closed reason codes. A Mission event cannot carry free text as a reason. */
+const MISSION_REASON_CODES: ReadonlySet<string> = new Set([
+  'owner',
+  'verification_passed',
+  'verification_not_established',
+  'verification_timeout',
+  'no_child_runs',
+  'child_run_failed',
+  'child_run_unverified',
+  'deadline_expired',
+  'child_run_limit',
+  'concurrent_run_limit',
+  'retention_limit',
+  'lifetime_limit',
+  'recovery',
+  'shutdown',
+])
+
+/**
+ * A lifecycle transition.
+ *
+ * `from` and `to` are checked against the closed tables here as well as in the
+ * reducer. Validation is the door a replayed journal comes through, so an illegal
+ * pair should be refused before it ever reaches the fold.
+ */
+const MISSION_TRANSITION = workRule(
+  ['missionId', 'from', 'to', 'reason', 'verifierId'],
+  (p) =>
+    isEventId(p.missionId) &&
+    MISSION_STATUS_SET.has(p.from as string) &&
+    MISSION_STATUS_SET.has(p.to as string) &&
+    (p.reason === null || MISSION_REASON_CODES.has(p.reason as string)) &&
+    (p.verifierId === null || isEventId(p.verifierId)),
+)
+
+const MISSION_STATUS_SET: ReadonlySet<string> = new Set([
+  'draft',
+  'active',
+  'paused',
+  'completed',
+  'failed',
+  'cancelled',
+])
 
 const PAYLOAD_RULES: {
   [K in CoreEventType]: (payload: Record<string, unknown>) => boolean
@@ -774,6 +819,90 @@ const PAYLOAD_RULES: {
       isNonEmptyString(p.reason) &&
       isNonNegativeInt(p.observed),
   ),
+
+  /* --------------------------------------------------------------- mission */
+
+  // `workRule` refuses a field the schema does not name. That property is the whole
+  // reason a Mission journal is safe to keep: a Mission holds what a person is
+  // trying to achieve, there is no slot for a title or an intent, and a hand-edited
+  // line cannot attach one because the key set is checked exactly.
+  'mission.created': workRule(
+    ['missionId', 'status', 'createdAt', 'deadlineAt', 'limits'],
+    (p) =>
+      isEventId(p.missionId) &&
+      p.status === 'draft' &&
+      isInstant(p.createdAt) &&
+      isInstant(p.deadlineAt) &&
+      isMissionLimits(p.limits),
+  ),
+
+  'mission.activated': MISSION_TRANSITION,
+  'mission.resumed': MISSION_TRANSITION,
+  'mission.paused': MISSION_TRANSITION,
+  'mission.cancelled': MISSION_TRANSITION,
+  'mission.failed': MISSION_TRANSITION,
+  'mission.completed': MISSION_TRANSITION,
+
+  'mission.run.attached': workRule(
+    ['missionId', 'runId', 'taskId'],
+    (p) =>
+      isEventId(p.missionId) && isEventId(p.runId) && (p.taskId === null || isEventId(p.taskId)),
+  ),
+
+  'mission.verification.requested': workRule(
+    ['missionId', 'verifierId', 'runIds'],
+    (p) =>
+      isEventId(p.missionId) &&
+      isEventId(p.verifierId) &&
+      isIdList(p.runIds),
+  ),
+
+  'mission.verification.completed': workRule(
+    ['missionId', 'verifierId', 'outcome', 'reason'],
+    (p) =>
+      isEventId(p.missionId) &&
+      isEventId(p.verifierId) &&
+      (p.outcome === 'passed' ||
+        p.outcome === 'not_established' ||
+        p.outcome === 'timeout' ||
+        p.outcome === 'cancelled') &&
+      // A closed code, never a verifier's message. `reason` being free text here
+      // would make the verifier the one component able to write to the journal.
+      (p.reason === null || MISSION_REASON_CODES.has(p.reason as string)),
+  ),
+
+  'mission.limit.exceeded': workRule(
+    ['missionId', 'limit'],
+    (p) =>
+      isEventId(p.missionId) &&
+      (p.limit === 'maxChildRuns' || p.limit === 'maxConcurrentChildRuns' || p.limit === 'lifetimeMs'),
+  ),
+}
+
+function isIdList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= 64 &&
+    value.every((item) => typeof item === 'string' && item.length > 0 && item.length <= 256)
+  )
+}
+
+/**
+ * Mission ceilings as they appear in a durable record.
+ *
+ * Positive integers, re-checked against the code-owned ceilings on read: a
+ * hand-edited `maxChildRuns: 1000000` must not become a real ceiling the engine
+ * enforces, because then the only limit would exist on disk.
+ */
+function isMissionLimits(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const limits = value as Record<string, unknown>
+  if (!onlyNamedKeys(limits, Object.keys(DEFAULT_MISSION_LIMITS))) return false
+  if (!Object.values(limits).every(isPositiveInt)) return false
+  for (const [key, ceiling] of Object.entries(DEFAULT_MISSION_LIMITS)) {
+    if ((limits[key] as number) > ceiling) return false
+  }
+  return true
 }
 
 /**

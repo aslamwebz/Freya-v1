@@ -36,11 +36,24 @@ nothing plans, and nothing is ever concluded unattended.
 
 No Workforce or computer control yet.
 
-## Phase 8 — Workforce
+## Phase 8 — Workforce (Core landed)
 
-Named subordinate agents such as Alpha/Beta, specialization, teams, bounded
-concurrency, per-worker capability/context assignment, budgets and agent messaging.
-Agent permission claims are not authority.
+Named subordinate agents such as Alpha/Beta with stable ids, specialization, teams, bounded
+worker concurrency, per-worker capability/context assignment as Core-scoped claims,
+per-worker budgets, bounded attributable agent messaging, and a deterministic read-only
+projection.
+
+**Agent permission claims are data, never authority** — enforced as a type rather than a
+convention: a worker's scope has no method that grants anything, the only capability any
+worker may hold is `cognition.request`, and a claim is refused and journalled with a
+`decision` field that has exactly one legal value.
+
+What was built, and what was left out on purpose, is recorded in
+[PHASE-8.md](PHASE-8.md). The short version: this phase built the subordinates, not their
+autonomy. Nothing decomposes a Mission into assignments, and no assignment executes. No
+renderer, no protocol commands, and no host bridge yet — those are the integration lane.
+
+No computer control yet.
 
 ## Phase 9 — Context Awareness
 

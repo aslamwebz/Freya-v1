@@ -10,6 +10,7 @@ import { ResearchSurface } from './ResearchSurface'
 import { WorkSurface } from './WorkSurface'
 import { MissionSurface } from './MissionSurface'
 import { WorkforceSurface } from './WorkforceSurface'
+import { ContextSurface } from './ContextSurface'
 import type { SurfaceDefinition } from './types'
 
 /**
@@ -40,6 +41,11 @@ const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   // The Workforce view, registered against the `team` type — the window the
   // vocabulary has always called the place where agents and teams would live.
   team: () => <WorkforceSurface />,
+  // The Context view: a pure mirror of Core's projection. Registered even
+  // though Core reports nothing yet, because "no Context domain" rendered
+  // truthfully is the honest window, and a placeholder would advertise a
+  // system this transport is already wired to receive.
+  context: () => <ContextSurface />,
 }
 
 /** The registry, resolved once from the two catalogs it is built from. */

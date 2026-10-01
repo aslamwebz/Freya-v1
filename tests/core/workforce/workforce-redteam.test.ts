@@ -1129,19 +1129,43 @@ describe('attack 9: STOP ALL, cancellation and Mission interaction', () => {
     const h = await boot()
     const mission = await h.submit('mission.create', { title: 'a mission', intent: 'an intent' })
     expect(mission.ok).toBe(true)
+    const missionId = mission.mission?.missionId ?? ''
+    await h.submit('mission.activate', { missionId })
 
     await h.submit('security.stopAll', { reason: 'attack: mission stop' })
 
     const created = await h.submit('work.run.create', {
       steps: [verifyingStep('one')],
-      missionId: mission.mission?.missionId,
+      missionId,
     })
-    // The run is created (it is not itself stopped), but the Mission
-    // refuses the attachment while Freya is stopped.
-    expect(created.ok).toBe(true)
+    // The Mission refuses admission before Work's create callback runs, so
+    // the command is a hard refusal — not a success with a dangling parent.
+    expect(created.ok).toBe(false)
+    expect(created.refusal?.reason).toContain('stopped')
+    expect(created.mission?.ok).toBe(false)
+    expect(created.mission?.reason).toContain('stopped')
 
-    const view = h.core.mission().missions.find((m) => m.missionId === mission.mission?.missionId)
+    // No work.run.created is durably written with that Mission parent.
+    const workCreated = await h.eventsOfType('work.run.created')
+    expect(
+      workCreated.filter(
+        (event) => (event.payload as { parentId?: string | null }).parentId === missionId,
+      ),
+    ).toHaveLength(0)
+
+    // No mission.run.attached is written.
+    const attached = await h.eventsOfType('mission.run.attached')
+    expect(
+      attached.filter(
+        (event) => (event.payload as { missionId?: string }).missionId === missionId,
+      ),
+    ).toHaveLength(0)
+
+    // No dangling parent claim remains on either side.
+    const view = h.core.mission().missions.find((m) => m.missionId === missionId)
     expect(view?.counts.total).toBe(0)
+    const runs = h.core.work().runs.filter((run) => run.parentId === missionId)
+    expect(runs).toHaveLength(0)
   })
 
   it('refuses to resume a Mission while STOP ALL is latched', async () => {

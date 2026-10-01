@@ -17,6 +17,7 @@ import { DEFAULT_MISSION_LIMITS as MISSION_LIMITS } from '../core/missions/types
 import type { MissionProjection } from '../core/missions/types'
 import { WORKFORCE_NO_PAYLOAD } from '../core/protocol/workforce'
 import type { WorkforceProjection } from '../core/protocol/workforce'
+import type { ContextProjection } from '../core/protocol/context'
 
 export interface RuntimeInfo {
   version: string
@@ -237,6 +238,30 @@ const api = {
   },
 
   /**
+   * The Context projection: what Core says is around the current question.
+   *
+   * Two functions and no command. A window can pull what Core last reported
+   * and follow what it pushes, and there is nothing else — no item write, no
+   * revocation, no scope request, no reference resolution, and above all no
+   * way to attach a provenance, a trust class or an authority to anything.
+   * Context authority belongs to Core (issue #15); none of it is lent across
+   * this bridge, and `CORE_COMMANDS` below carries no `context.*` name because
+   * no such command exists yet and this lane does not get to invent one. The
+   * day #15/#16 add `context.status.read` to Core's vocabulary, a read arm is
+   * added *there* and mirrored here — and it will still be a read.
+   */
+  coreContext: (): Promise<ContextProjection | null> =>
+    ipcRenderer.invoke('freya:core:context'),
+
+  onCoreContext: (handler: (projection: ContextProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: ContextProjection): void => handler(projection)
+    ipcRenderer.on('freya:core:context', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:context', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -343,6 +368,17 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   // Workforce authority is Core's (issue #10); the renderer's entire privilege
   // in this lane is the ability to ask what is true.
   'workforce.status.read',
+
+  // Context, and the entry is deliberately nothing.
+  //
+  // Core's Context domain does not exist yet (issue #15) and its assembly is
+  // issue #16's, so there is no `context.status.read` in `CoreCommandName` to
+  // whitelist and a window naming one is refused as an unknown command before
+  // this list is even consulted — the correct answer for every spelling of
+  // "let me tell Core what is around me". The window's entire Context
+  // privilege is the two projection reads on the api object above: a pull and
+  // a subscription. There is no write verb to be tempted by because there is
+  // no write verb.
 ])
 
 /**

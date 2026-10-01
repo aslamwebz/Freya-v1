@@ -7,10 +7,10 @@ import {
   type ContextAdmissionChannel,
   type ContextBoundaryRefusal,
   type ContextCommandOutcome,
-  type ContextItemView,
-  type ContextOperation,
+  type ContextAuditRowView,
+  type ContextCommandOperation,
   type ContextProjectionView,
-  type ContextScopeView,
+  type ContextScopeRef,
 } from '../protocol/context'
 import { isValidContextInstant } from './item'
 import {
@@ -145,7 +145,7 @@ const NON_REQUESTABLE_CHANNELS = ['core_record', 'host_report', 'system', 'owner
  * ordinary answer like "nothing matched" — and the whole point of this layer is
  * that each of those is reported as itself.
  */
-const RESOLUTION_OPERATION: Readonly<Record<ContextRefusalReason, ContextOperation>> = Object.freeze({
+const RESOLUTION_OPERATION: Readonly<Record<ContextRefusalReason, ContextCommandOperation>> = Object.freeze({
   no_active_scope: 'unresolved-no-active-scope',
   no_candidates: 'unresolved-no-candidates',
   ambiguous: 'unresolved-ambiguous',
@@ -168,7 +168,7 @@ const RESOLUTION_OPERATION: Readonly<Record<ContextRefusalReason, ContextOperati
  */
 export interface ContextHostReport {
   readonly kind: string
-  readonly scope: ContextScopeView
+  readonly scope: ContextScopeRef
   readonly content: string
   readonly originId: string
   readonly label?: string | null
@@ -187,7 +187,7 @@ export interface ContextHostReport {
  */
 export interface ContextCoreRecord {
   readonly kind: string
-  readonly scope: ContextScopeView
+  readonly scope: ContextScopeRef
   readonly content: string
   readonly originId: string
   readonly label?: string | null
@@ -200,7 +200,7 @@ export interface ContextIntegrationOptions extends ContextStoreOptions {
   /** The instant, from Core. Never read from inside this file. */
   readonly now?: () => Date
   /** Scopes Core already knows, in declaration order. Bounded. */
-  readonly initialScopes?: readonly ContextScopeView[]
+  readonly initialScopes?: readonly ContextScopeRef[]
   /** Lowerable, never raisable above `CONTEXT_MAX_SCOPES`. */
   readonly maxScopes?: number
   /**
@@ -273,7 +273,7 @@ export type ContextResolutionOutcome =
   | { readonly ok: true; readonly operation: 'resolved'; readonly item: ContextItem }
   | {
       readonly ok: false
-      readonly operation: ContextOperation
+      readonly operation: ContextCommandOperation
       readonly reason: string
       /** Ids only. A refusal names what it could have pointed at and carries none of it. */
       readonly candidateIds: readonly string[]
@@ -281,11 +281,11 @@ export type ContextResolutionOutcome =
 
 /* ------------------------------------------------------------ the facade */
 
-function scopeKey(scope: ContextScopeView): string {
+function scopeKey(scope: ContextScopeRef): string {
   return `${scope.scopeKind}:${scope.scopeId}`
 }
 
-function scopeView(scope: ContextScopeView): ContextScopeView {
+function scopeView(scope: ContextScopeRef): ContextScopeRef {
   return { scopeKind: scope.scopeKind, scopeId: scope.scopeId }
 }
 
@@ -333,7 +333,7 @@ export class ContextIntegration {
   private readonly agentSource: ContextAgentSource | null
 
   /** Declaration order, because a surface should see them in the order they began. */
-  private readonly declared = new Map<string, ContextScopeView>()
+  private readonly declared = new Map<string, ContextScopeRef>()
   /** The live `current_mission` item's id, so "here" can be re-pointed rather than doubled. */
   private missionContextId: string | null = null
   /** Highest folded operation. Monotonic; bumped by every mutation. */
@@ -374,7 +374,7 @@ export class ContextIntegration {
    * true state, and it is exactly what makes `here` refuse with
    * `unresolved-no-active-scope` instead of guessing at a default scope.
    */
-  activateScope(scope: ContextScopeView | null): ContextCommandOutcome {
+  activateScope(scope: ContextScopeRef | null): ContextCommandOutcome {
     const now = this.clock()
     if (!now.ok) return now.outcome
     if (scope === null) {
@@ -406,7 +406,7 @@ export class ContextIntegration {
    * session, revoke it — that is an explicit act naming the session, and it is a
    * different, available one.
    */
-  forgetScope(scope: ContextScopeView, reason: string): ContextCommandOutcome {
+  forgetScope(scope: ContextScopeRef, reason: string): ContextCommandOutcome {
     const now = this.clock()
     if (!now.ok) return now.outcome
     if (!this.scopeIsUsable(scope)) return this.refuse('scope_unknown')
@@ -606,7 +606,7 @@ export class ContextIntegration {
    * session, not something a payload can trigger, and it is the correct response to
    * "stop sharing anything in this session".
    */
-  revokeScope(scope: ContextScopeView, reason: string): ContextCommandOutcome {
+  revokeScope(scope: ContextScopeRef, reason: string): ContextCommandOutcome {
     const now = this.clock()
     if (!now.ok) return now.outcome
     if (!this.scopeIsUsable(scope)) return this.refuse('scope_unknown')
@@ -707,7 +707,7 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
     const now = this.clock()
     const active = this.#store.activeScope
     const rows = now.ok && active !== null ? this.visibleRows(active, now.at) : []
-    const items: ContextItemView[] = rows.map((row) => ({ ...row }))
+    const items: ContextAuditRowView[] = rows.map((row) => ({ ...row }))
 
     const counts = {
       live: 0,
@@ -860,7 +860,7 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
   private storeSpec(
     fields: Record<string, unknown>,
     source: ContextAdmission['source'],
-    scope: ContextScopeView,
+    scope: ContextScopeRef,
   ): ContextAdmission {
     return {
       kind: fields.kind as ContextAdmission['kind'],
@@ -876,7 +876,7 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
   }
 
   /** The store's answer, in this class's vocabulary. */
-  private commit(spec: ContextAdmission, scope: ContextScopeView, at: Date): ContextCommandOutcome {
+  private commit(spec: ContextAdmission, scope: ContextScopeRef, at: Date): ContextCommandOutcome {
     const result = this.#store.admit(spec, at)
     if (!result.ok) {
       // The store's own code stays inside Core: a window gets the sentence and not the
@@ -913,7 +913,7 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
   }
 
   /** The rows a caller in `active` is allowed to hear about: theirs, plus the session's. */
-  private visibleRows(active: ContextScopeView, at: Date): readonly ContextItemView[] {
+  private visibleRows(active: ContextScopeRef, at: Date): readonly ContextAuditRowView[] {
     return this.#store.audit(at).filter(
       (row) =>
         row.scopeKind === 'session' ||
@@ -921,13 +921,13 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
     )
   }
 
-  private liveRowsIn(scope: ContextScopeView, at: Date): readonly ContextItemView[] {
+  private liveRowsIn(scope: ContextScopeRef, at: Date): readonly ContextAuditRowView[] {
     return this.#store.audit(at).filter(
       (row) => row.state === 'live' && row.scopeKind === scope.scopeKind && row.scopeId === scope.scopeId,
     )
   }
 
-  private revokeLiveIn(scope: ContextScopeView, reason: string, at: Date): number {
+  private revokeLiveIn(scope: ContextScopeRef, reason: string, at: Date): number {
     return this.takeBack(this.liveRowsIn(scope, at), reason, at)
   }
 
@@ -939,7 +939,7 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
    * cannot reach an already-expired record, and the count returned is what actually
    * changed rather than what was asked for.
    */
-  private takeBack(rows: readonly ContextItemView[], reason: string, at: Date): number {
+  private takeBack(rows: readonly ContextAuditRowView[], reason: string, at: Date): number {
     let revoked = 0
     for (const row of rows) {
       if (!this.#store.revoke(row.contextId, reason, at)) continue
@@ -962,7 +962,7 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
     return resolved.ok ? resolved.item : null
   }
 
-  private addScope(scope: ContextScopeView): boolean {
+  private addScope(scope: ContextScopeRef): boolean {
     const key = scopeKey(scope)
     if (this.declared.has(key)) return true
     // Refuse rather than evict. A scope losing its place to a newer one would change
@@ -972,7 +972,7 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
     return true
   }
 
-  private scopeIsUsable(scope: ContextScopeView): boolean {
+  private scopeIsUsable(scope: ContextScopeRef): boolean {
     if (typeof scope !== 'object' || scope === null) return false
     if (!isContextScopeKind(scope.scopeKind)) return false
     if (typeof scope.scopeId !== 'string') return false
@@ -981,12 +981,12 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
   }
 
   /** A scope off the wire, read defensively — an object is not yet a scope. */
-  private readScope(value: Record<string, unknown>): ContextScopeView | null {
+  private readScope(value: Record<string, unknown>): ContextScopeRef | null {
     const scopeKind = value.scopeKind
     const scopeId = value.scopeId
     if (!isContextScopeKind(scopeKind)) return null
     if (typeof scopeId !== 'string') return null
-    const scope: ContextScopeView = { scopeKind, scopeId: scopeId.trim() }
+    const scope: ContextScopeRef = { scopeKind, scopeId: scopeId.trim() }
     return this.scopeIsUsable(scope) ? scope : null
   }
 

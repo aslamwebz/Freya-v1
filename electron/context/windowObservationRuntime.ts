@@ -1,6 +1,8 @@
 import {
   WindowObservationService,
   createActiveWindowAdmitter,
+  createActiveWindowFacadeAdmitter,
+  type ActiveWindowAdmissionLane,
   type ActiveWindowInfo,
   type ActiveWindowProvider,
   type WindowAdmissionSink,
@@ -9,6 +11,7 @@ import {
   type WindowTimer,
 } from '../../core/context/sources/window'
 import type { ContextAdmissionResult, ContextScope } from '../../core/context/types'
+import type { ContextCommandOutcome } from '../../core/protocol/context'
 
 /**
  * THE OPT-IN WINDOW OBSERVATION RUNTIME.
@@ -22,29 +25,42 @@ import type { ContextAdmissionResult, ContextScope } from '../../core/context/ty
  * every call site where it could be missed.
  *
  * When enabled, it is only a coupler: the source service holds observations
- * and fires once per span; the admitter turns each fired observation into a
- * `ContextAdmission` handed to the sink the caller already owns and revokes
- * the one it superseded. The runtime owns no store, exposes no IPC, and adds
- * no method that could act on a window — it observes, and observation is not
- * a verb you point at a screen or a permission. Production enablement (a live
- * Core admission boundary and a real provider) is issue #27's and the native
- * host's; nothing in `main.ts`/`coreHost.ts`/`preload.ts` is changed by this
- * lane, and a test holds that line.
+ * and fires once per span; an admitter turns each fired observation into a
+ * request at one of the two narrow doors the domain owns — the caller-supplied
+ * store-shaped sink (`ContextStore` satisfies it structurally), or the merged
+ * Core facade's host lane (`ContextIntegration.admitHostReport`/`revoke`, via
+ * `createActiveWindowFacadeAdmitter`). The runtime owns no store, exposes no
+ * IPC, and adds no method that could act on a window — it observes, and
+ * observation is not a verb you point at a screen or a permission. Enabling
+ * this in production remains the host composition's explicit act — no file in
+ * `main.ts`/`coreHost.ts`/`preload.ts` constructs it, and a test holds that
+ * line — but since #27 the door it would hand its observations to exists.
  */
 
-export interface WindowObservationRuntimeOptions {
+/**
+ * The admission door, exactly one of two.
+ *
+ * The union is deliberate: a runtime that could admit to *both* would be one
+ * refactor away from double-writing provenance, and a runtime with *neither*
+ * would be observation for nobody — the very thing that keeps this lane out of
+ * `main.ts`. The caller must say which door, in the type, at construction.
+ */
+export type WindowObservationAdmission =
+  | { readonly sink: WindowAdmissionSink; readonly lane?: undefined }
+  | { readonly lane: ActiveWindowAdmissionLane; readonly sink?: undefined }
+
+export type WindowObservationRuntimeOptions = {
   /** The explicit opt-in. False means the runtime is inert by construction. */
   readonly enabled: boolean
   readonly provider: ActiveWindowProvider
-  readonly sink: WindowAdmissionSink
   readonly scope: ContextScope
   readonly clock?: () => Date
   readonly timer?: WindowTimer | null
   readonly ttlMs?: number | null
   readonly cadenceMs?: number | null
-  /** Read-only reporting hook; it cannot veto or rewrite an observation. */
-  readonly onAdmission?: (result: ContextAdmissionResult) => void
-}
+  /** Read-only reporting hook; it cannot veto or rewrite an admission. */
+  readonly onAdmission?: (result: ContextAdmissionResult | ContextCommandOutcome) => void
+} & WindowObservationAdmission
 
 export interface WindowObservationRuntime {
   readonly enabled: boolean
@@ -84,12 +100,19 @@ export function createWindowObservationRuntime(
     }
   }
 
-  const admit = createActiveWindowAdmitter({
-    sink: options.sink,
-    scope: options.scope,
-    clock: options.clock,
-    ttlMs: options.ttlMs,
-  })
+  const admit =
+    options.lane !== undefined
+      ? createActiveWindowFacadeAdmitter({
+          lane: options.lane,
+          scope: options.scope,
+          ttlMs: options.ttlMs,
+        })
+      : createActiveWindowAdmitter({
+          sink: options.sink,
+          scope: options.scope,
+          clock: options.clock,
+          ttlMs: options.ttlMs,
+        })
 
   const service = new WindowObservationService({
     provider: options.provider,

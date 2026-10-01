@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { readdirSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { ContextIntegration } from '../../core/context/coreIntegration'
 import {
   createOwnWindowProvider,
   createSystemWindowProvider,
@@ -289,5 +290,40 @@ describe('the opt-in runtime', () => {
     expect(runtime.current()?.appName).toBe('Browser')
     expect(runtime.stats().emitted).toBe(2)
     expect(store.tombstones(T0).some((row) => row.state === 'revoked')).toBe(true)
+  })
+
+  it('admits through the merged Core facade lane when that door is the one wired', () => {
+    const provider = new FakeActiveWindowProvider({ providerId: 'host-observer' })
+    let next = 0
+    const core = new ContextIntegration({
+      now: () => T0,
+      newId: () => {
+        next += 1
+        return `x-${String(next)}`
+      },
+    })
+    core.activateScope(conversation('c1'))
+    const runtime = createWindowObservationRuntime({
+      enabled: true,
+      provider,
+      lane: core,
+      scope: conversation('c1'),
+      clock: () => T0,
+      timer: null,
+    })
+
+    provider.queue(provider.info('Code Editor', 'notes.md', T0.toISOString()))
+    expect(runtime.start()).toBe('observed')
+    const view = core.read()
+    expect(view.counts.live).toBe(1)
+    const row = view.items.find((item) => item.kind === 'active_window')
+    expect(row?.source).toBe('host_report')
+    expect(row?.originId).toBe('host-observer:obs-0001')
+
+    provider.queue(provider.info('Browser', 'Search', T0.toISOString()))
+    runtime.poll()
+    expect(core.read().counts.live).toBe(1)
+    expect(core.read().counts.retained).toBe(2)
+    expect(core.read().items.find((item) => item.state === 'revoked')?.contextId).toBeDefined()
   })
 })

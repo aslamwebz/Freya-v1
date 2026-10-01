@@ -316,10 +316,14 @@ describe('resolution tells the five refusals apart', () => {
 
   it('answers a deferred kind by name rather than as an absence', () => {
     const integration = ready()
-    const resolved = integration.resolve({ term: 'here', kind: 'active_window' })
-    expect(resolved.operation).toBe('unresolved-kind-deferred')
-    if (resolved.ok) throw new Error('expected a refusal')
-    expect(resolved.reason).toContain('does not source that context kind yet')
+    const deferred = integration.resolve({ term: 'here', kind: 'agent_work' })
+    expect(deferred.operation).toBe('unresolved-kind-deferred')
+    if (deferred.ok) throw new Error('expected a refusal')
+    expect(deferred.reason).toContain('does not source that context kind yet')
+    // `active_window` gained its capture lane (#30): it is a real kind now, so
+    // the honest answer when nothing was observed is the absence itself.
+    const absent = integration.resolve({ term: 'here', kind: 'active_window' })
+    expect(absent.operation).toBe('unresolved-no-candidates')
   })
 
   it('refuses a reference it does not understand', () => {

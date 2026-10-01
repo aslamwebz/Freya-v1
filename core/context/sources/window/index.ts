@@ -32,6 +32,13 @@ export {
   type WindowAdmissionSink,
 } from './admit'
 export {
+  activeWindowHostReport,
+  createActiveWindowFacadeAdmitter,
+  type ActiveWindowAdmissionLane,
+  type ActiveWindowFacadeAdmitterOptions,
+  type ActiveWindowHostReportOptions,
+} from './facade'
+export {
   createUnavailableProvider,
   createUnsupportedProvider,
   type HonestProviderOptions,

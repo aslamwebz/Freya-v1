@@ -267,9 +267,13 @@ produce the same verdict.
 unchanged across a Mission created and activated, a scope activated, an admission, a
 reference read, a projection read and a revocation.
 
-Active-window capture is absent by construction: `active_window` is a deferred kind, so it
-is refused by name on every lane — including the Core-only lane, because a lane that
-bypassed the boundary would be a lane that bypassed the point.
+Active-window capture lives outside this facade and outside this file: the observation lane
+(`core/context/sources/window`, issue #30) is an explicit, opt-in, host-side reader of app and
+window *identity*, and it reaches the store only through the facade's own host door
+(`admitHostReport`), where the session scope is refused and the origin is mandatory. The
+boundary itself still sees nothing — `active_window` asserted through an owner channel or
+Core's record lane is refused by the provenance table, because a lane that bypassed the
+boundary would be a lane that bypassed the point.
 
 ---
 
@@ -282,6 +286,7 @@ bypassed the boundary would be a lane that bypassed the point.
 | Five named refusals, named revocations, the scoped read, the Mission adapter | `tests/core/context/context-core-integration.test.ts` |
 | No idle inference, no journal family, no content in any outcome, no authority | `tests/core/context/context-core-privacy.test.ts` |
 | Core builds it, points "here" at the current Mission, answers the five commands | `tests/core/context/context-core-wiring.test.ts` |
+| Opt-in observation, expiring window state, no-capture bounds, the host-door bridge | `tests/core/context/window/*.test.ts`, `tests/host/windowObservation.test.ts` (#30) |
 
 `tests/core/context/context-privacy.test.ts` (#15) asserted that every file in
 `core/context/` imports only its own directory. That assertion now names the five
@@ -311,8 +316,11 @@ touched here.
 
 **Deliberately absent**, stated plainly:
 
-- **No active-window or active-app capture.** `active_window` is a deferred kind. The
-  capture lane does not exist and this phase does not build one.
+- **No capture inside this boundary.** The facade reads no screen, window, app or device;
+  it is not where observation happens. `active_window` is admitted only through the
+  facade's own host door (`admitHostReport`, no session scope, mandatory origin), fed by the
+  separate opt-in observation lane (`core/context/sources/window`, issue #30) — identity
+  metadata only, never pixels, and not wired into the desktop entrypoints by that lane.
 - **No Workforce coupling.** No `WorkforceSource` is read, no worker or task is named, and
   the seam in §7 is a proposal rather than a dependency.
 - **No encrypted context store.** `mode: 'ephemeral'`, `durable: false`, and the

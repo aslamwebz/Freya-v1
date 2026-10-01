@@ -289,29 +289,54 @@ describe('the boundary cannot be walked around', () => {
     }
   })
 
-  it('refuses to decode the deferred kinds on every lane, Core included', () => {
-    // `active_window` needs a capture lane that does not exist and `agent_work` waits
-    // on #16. Neither may be smuggled in through the Core-only lane either — a lane
-    // that bypasses the boundary would be a lane that bypasses the point.
+  it('defers agent_work on every lane and sources active_window only on the host lane', () => {
+    // `agent_work` waits on #16: refused by name on every lane, Core's own included.
+    // `active_window` gained a real capture lane (issue #30), and the tables decide
+    // its provenance rather than its caller: exactly one door — the host's — may
+    // report it. An owner channel or Core's record lane asserting the front window
+    // is the same forgery the kind/source table refuses elsewhere.
     const integration = ready()
-    for (const kind of ['active_window', 'agent_work']) {
-      expect(refused(integration.admit(request({ kind }))).reason).toContain('does not source')
-      const core = integration.admitCoreRecord({
-        kind,
+    for (const lane of [
+      () => integration.admit(request({ kind: 'agent_work' })),
+      () =>
+        integration.admitCoreRecord({
+          kind: 'agent_work',
+          scope: { scopeKind: 'session', scopeId: 'session' },
+          content: 'whatever the desktop is showing',
+          originId: 'window-7',
+        }),
+      () =>
+        integration.admitHostReport({
+          kind: 'agent_work',
+          scope: conversation('c1'),
+          content: 'whatever the desktop is showing',
+          originId: 'window-7',
+        }),
+    ]) {
+      expect(refused(lane()).reason).toContain('does not source')
+    }
+
+    const ownerClaim = refused(integration.admit(request({ kind: 'active_window' })))
+    expect(ownerClaim.reason).toContain('does not come from that source')
+    const coreClaim = refused(
+      integration.admitCoreRecord({
+        kind: 'active_window',
         scope: { scopeKind: 'session', scopeId: 'session' },
         content: 'whatever the desktop is showing',
         originId: 'window-7',
-      })
-      expect(refused(core).reason).toContain('does not source')
-      const host = integration.admitHostReport({
-        kind,
-        scope: conversation('c1'),
-        content: 'whatever the desktop is showing',
-        originId: 'window-7',
-      })
-      expect(refused(host).reason).toContain('does not source')
-    }
+      }),
+    )
+    expect(coreClaim.reason).toContain('does not come from that source')
     expect(integration.read().counts.retained).toBe(0)
+
+    const hostLane = integration.admitHostReport({
+      kind: 'active_window',
+      scope: conversation('c1'),
+      content: 'whatever the desktop is showing',
+      originId: 'window-7',
+    })
+    expect(hostLane.ok).toBe(true)
+    expect(integration.read().counts.retained).toBe(1)
   })
 
   it('changes nothing at all when the clock cannot be read', () => {

@@ -361,11 +361,11 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:workforce', projection)
   })
 
-  // Context is an eighth channel, and the only one whose source may report
-  // nothing forever: Core has no Context domain yet (issue #15), so a window
+  // Context is an eighth channel, and the one whose source may report nothing
+  // forever: before a Core starts there is no Context to mirror, so a window
   // attaches to a channel that honestly stays quiet rather than one
-  // synthesising items to fill the air. What crosses when it starts is exactly
-  // what Core reported — no source, no resolver, no authority.
+  // synthesising items to fill the air. What crosses is exactly what Core
+  // reported — metadata only: no content, no resolver, no authority.
   const detachContext = coreHost?.onContext((projection) => {
     if (!window.isDestroyed()) window.webContents.send('freya:core:context', projection)
   })
@@ -459,10 +459,10 @@ function registerIpc(): void {
   // projection Core built.
   ipcMain.handle('freya:core:workforce', () => requireCore().workforce())
   // The Context projection, same bargain as every other channel: a read of
-  // what Core reported, and today that read answers `null` because no Core
-  // reports context yet. There is deliberately no `freya:core:context:write`
-  // and no context command — a window cannot put context *in*, because Context
-  // authority is issue #15's to hold inside Core, not this bridge's to lend.
+  // what Core reported, which answers `null` until a Core has started and
+  // reports one. There is deliberately no `freya:core:context:write` and no
+  // context command — a window cannot put context *in*, because Context
+  // authority is Core's to hold inside itself, not this bridge's to lend.
   ipcMain.handle('freya:core:context', () => requireCore().context())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {

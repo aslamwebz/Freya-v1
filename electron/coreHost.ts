@@ -130,6 +130,16 @@ export interface CoreHostOptions {
    */
   brainKey?: Uint8Array | null
   /**
+   * Missions' own key, from the keyring.
+   *
+   * A **third** independent secret, for the same reason as the other two: what a
+   * person asked Freya to accomplish is theirs, and recovering the conversation key
+   * must not yield it. See `electron/keyring.ts` for why the isolation is worth a
+   * secret per domain. Null means Missions fall back to an ephemeral store and
+   * report `durable: false` rather than implying a persistence they do not have.
+   */
+  missionKey?: Uint8Array | null
+  /**
    * The developer echo provider, when one was explicitly asked for.
    *
    * Forwarded verbatim to Core, which is the only place that decides what a
@@ -182,6 +192,7 @@ export class ElectronCoreHost implements CoreHost {
           ? { conversationKey: this.options.conversationKey }
           : {}),
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
+        ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),

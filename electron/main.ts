@@ -50,11 +50,14 @@ function e2eKey(variable: string): Uint8Array | null {
  * conversation survives and the Brain does not — or the reverse — and the failure
  * would look like a Brain bug rather than a harness that only half injected.
  */
-function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array } | null {
+function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array; mission: Uint8Array } | null {
   const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
   const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
-  if (conversation === null || brain === null) return null
-  return { conversation, brain }
+  const mission = e2eKey('FREYA_E2E_MISSION_KEY')
+  // All three or none, so a partial fixture cannot quietly run with a real keyring for
+  // the domain it forgot.
+  if (conversation === null || brain === null || mission === null) return null
+  return { conversation, brain, mission }
 }
 
 /**
@@ -454,6 +457,7 @@ app.whenReady().then(() => {
     ? Promise.resolve({
         conversation: { key: testKeys.conversation, reason: null as string | null },
         brain: { key: testKeys.brain, reason: null as string | null },
+        mission: { key: testKeys.mission, reason: null as string | null },
       })
     : loadKeyring(dataPath)
   void keyResult.then((result) => {
@@ -469,6 +473,11 @@ app.whenReady().then(() => {
       // Freya still answers. She just will not remember across a restart, and the
       // surface says exactly that rather than implying a memory that is not there.
       console.warn(`[freya] Freya will not remember across restarts — ${result.brain.reason}`)
+    }
+    if (result.mission.key === null) {
+      // Same shape as the Brain's: Missions still work for this session, and the
+      // surface reports `durable: false` rather than implying persistence it lacks.
+      console.warn(`[freya] Missions are not being saved — ${result.mission.reason}`)
     }
     const fixtureProvider = e2eResearchFixtureProvider(process.env)
     coreHost = new ElectronCoreHost(
@@ -492,6 +501,7 @@ app.whenReady().then(() => {
       {
         conversationKey: result.conversation.key,
         brainKey: result.brain.key,
+        missionKey: result.mission.key,
         // Opt-in, and named for what it is. Never inferred from a debug flag or
         // from a missing credential: a build that answers from a canned string
         // without saying so is the failure this guards against. The slow variant

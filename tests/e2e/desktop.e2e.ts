@@ -33,6 +33,14 @@ const E2E_CONVERSATION_KEY = Buffer.alloc(32, 0x5a).toString('base64')
  */
 const E2E_BRAIN_KEY = Buffer.alloc(32, 0x2b).toString('base64')
 /**
+ * A third secret, again different from the other two.
+ *
+ * Phase 7 gave Missions their own key for the same reason the Brain got one, and the
+ * harness has to inject all three together. Two of three would be the half-injected
+ * set the comment above describes, one domain further along.
+ */
+const E2E_MISSION_KEY = Buffer.alloc(32, 0x13).toString('base64')
+/**
  * Which monitor the suite drives Freya on.
  *
  * Overridable, because the right number depends on the desk: someone with three
@@ -81,6 +89,7 @@ async function launch(
       FREYA_E2E: '1',
       FREYA_E2E_CONVERSATION_KEY: E2E_CONVERSATION_KEY,
       FREYA_E2E_BRAIN_KEY: E2E_BRAIN_KEY,
+      FREYA_E2E_MISSION_KEY: E2E_MISSION_KEY,
       ...env,
     },
   })

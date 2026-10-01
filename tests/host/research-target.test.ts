@@ -147,6 +147,24 @@ describe('sandboxed Electron research target', () => {
     expect(ses.clearStorageData).toHaveBeenCalledTimes(1)
     expect(ses.listenerCount('will-download')).toBe(0)
   })
+  it('captures webContents before destroying a native window whose getters become invalid', async () => {
+    const target = await new ElectronBrowserTargetFactory(transport().value).create('session', signal())
+    Object.defineProperty(window, 'webContents', { configurable: true, get: () => { if (destroyed) throw new Error('Object has been destroyed'); return contents } })
+    await expect(target.close()).resolves.toBeUndefined()
+    expect(contents.listenerCount('render-process-gone')).toBe(0)
+    expect(ses.clearStorageData).toHaveBeenCalledTimes(1)
+  })
+  it('cleans externally destroyed windows using the retained WebContents', async () => {
+    const target = await new ElectronBrowserTargetFactory(transport().value).create('session', signal())
+    Object.defineProperty(window, 'webContents', { configurable: true, get: () => { if (destroyed) throw new Error('Object has been destroyed'); return contents } })
+    destroyed = true
+    expect(() => window.emit('closed')).not.toThrow()
+    await expect(target.close()).resolves.toBeUndefined()
+    expect(contents.listenerCount('render-process-gone')).toBe(0)
+    expect(ses.protocol.unhandle).toHaveBeenCalledWith('freya-research')
+    expect(ses.clearStorageData).toHaveBeenCalledTimes(1)
+    await expect(target.read(signal())).rejects.toMatchObject({ code: 'network_error' })
+  })
   it('close removes listeners/protocol and destroys synchronously, is idempotent', async () => {
     const target = await new ElectronBrowserTargetFactory(transport().value).create('session', signal())
     const closing = target.close()

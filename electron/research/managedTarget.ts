@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { BrowserWindow, session, type Session } from 'electron'
+import { BrowserWindow, session, type Session, type WebContents } from 'electron'
 import type { BrowserTarget, BrowserTargetFactory, ReadableDocument } from '../../core/research/browser'
 import { withResearchAbort } from '../../core/research/async'
 import { ResearchError, safeResearchError } from '../../core/research/errors'
@@ -13,6 +13,7 @@ const SCHEME = 'freya-research'
 
 class ElectronBrowserTarget implements BrowserTarget {
   private window?: BrowserWindow
+  private contents?: WebContents
   private closed = false
   private busy = false
   private loading = false
@@ -48,7 +49,7 @@ class ElectronBrowserTarget implements BrowserTarget {
         safeDialogs: true, disableDialogs: true, spellcheck: false, navigateOnDragDrop: false,
       },
     })
-    const contents = this.window.webContents
+    const contents = this.contents = this.window.webContents
     contents.setWindowOpenHandler(() => ({ action: 'deny' }))
     contents.on('will-navigate', this.prevent)
     contents.on('will-frame-navigate', this.prevent)
@@ -96,7 +97,7 @@ class ElectronBrowserTarget implements BrowserTarget {
   async read(signal: AbortSignal): Promise<ReadableDocument> {
     return this.run(signal, async () => {
       if (!this.source) throw new ResearchError('unsupported_document')
-      const data: unknown = await this.window!.webContents.executeJavaScriptInIsolatedWorld(1001, [{ code: EXTRACTION_SCRIPT }], false)
+      const data: unknown = await this.contents!.executeJavaScriptInIsolatedWorld(1001, [{ code: EXTRACTION_SCRIPT }], false)
       return normalizeExtractedDocument(data, { id: this.id, ...this.source })
     })
   }
@@ -110,14 +111,14 @@ class ElectronBrowserTarget implements BrowserTarget {
     this.lifetime.abort()
     // No asynchronous work precedes window destruction.
     if (this.window && !this.window.isDestroyed()) this.window.destroy()
-    if (this.window) {
-      const contents = this.window.webContents
+    if (this.contents) {
+      const contents = this.contents
       contents.removeListener('will-navigate', this.prevent)
       contents.removeListener('will-frame-navigate', this.prevent)
       contents.removeListener('will-redirect', this.prevent)
       contents.removeListener('will-attach-webview', this.prevent)
       contents.removeListener('render-process-gone', this.crashed)
-      this.window.removeListener('closed', this.externallyClosed)
+      this.window?.removeListener('closed', this.externallyClosed)
     }
     // Independent teardown steps: one failed Electron API must not skip the rest.
     for (const dispose of [

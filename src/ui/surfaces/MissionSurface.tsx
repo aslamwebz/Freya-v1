@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { MissionAction, MissionSummaryView } from '../../../core/missions/types'
+import type {
+  MissionAction,
+  MissionProjection,
+  MissionSummaryView,
+} from '../../../core/missions/types'
 import { missionMirror, type MissionCommandOutcome } from '../../platform/missionClient'
 import { useMission } from '../../core/useMission'
 
@@ -69,6 +73,21 @@ const TERMINAL_ACTIONS: readonly MissionAction[] = ['requestCompletion', 'cancel
 function bounded(text: string | undefined): string {
   if (text === undefined) return ''
   return text.length > MAX_REASON_CHARS ? `${text.slice(0, MAX_REASON_CHARS - 1)}…` : text
+}
+
+/**
+ * What the store can honestly be called.
+ *
+ * Three answers because there are three different situations, and the middle one used
+ * to be silently reported as the first: a store whose records fail authentication is
+ * encrypted and unreadable at the same time, and calling that `ENCRYPTED AT REST` tells
+ * a person their Missions are safe when nothing can be recovered from them.
+ */
+function persistenceLabel(persistence: MissionProjection['persistence']): string {
+  if (persistence.mode === 'encrypted') {
+    return persistence.durable ? 'ENCRYPTED AT REST' : 'UNREADABLE'
+  }
+  return 'FORGETS ON QUIT'
 }
 
 /**
@@ -165,7 +184,7 @@ export function MissionSurface() {
   return (
     <div className="mission-surface">
       <div className="mission-posture" data-durable={projection.persistence.durable ? 'true' : 'false'}>
-        <b>{projection.persistence.durable ? 'ENCRYPTED AT REST' : 'FORGETS ON QUIT'}</b>
+        <b>{persistenceLabel(projection.persistence)}</b>
         <span>
           {projection.persistence.durable
             ? 'Mission text is held in its own encrypted store, under its own key.'

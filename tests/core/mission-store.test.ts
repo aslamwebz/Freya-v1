@@ -182,6 +182,104 @@ describe('encrypted Mission content', () => {
   })
 })
 
+describe('a damaged store is read-only, and says so', () => {
+  /**
+   * Three Missions, with the middle record's ciphertext damaged.
+   *
+   * Corrupting the *middle* rather than the tail is the case that matters: replay
+   * stops at the first record that fails authentication, so the readable prefix is
+   * shorter than the file and anything after the break is invisible to the store.
+   */
+  async function damagedStore(): Promise<{ path: string; before: number }> {
+    const path = join(dir, 'damaged.enc')
+    const store = await EncryptedMissionStore.open({ path, key: missionKey })
+    for (const id of ['m1', 'm2', 'm3']) {
+      await store.write({
+        missionId: id,
+        title: `title ${id}`,
+        intent: `intent ${id}`,
+        successCriteria: [],
+        createdAt: '2026-10-01T09:00:00.000Z',
+      })
+    }
+    await store.close()
+
+    const lines = (await readFile(path, 'utf8')).split('\n').filter(Boolean)
+    const target = lines[1]
+    if (target === undefined) throw new Error('the fixture needs at least two records')
+    const damaged = JSON.parse(target) as { cipher: string }
+    lines[1] = JSON.stringify({
+      ...damaged,
+      cipher: `${damaged.cipher.slice(0, -4)}AAAA`,
+    })
+    await writeFile(path, `${lines.join('\n')}\n`)
+    return { path, before: lines.length }
+  }
+
+  it('reports the fault instead of claiming to be durable', async () => {
+    // `faultReason` was a hardcoded `null`, so the projection said `durable: true`
+    // and the board said ENCRYPTED AT REST over content that could not be read. The
+    // degradation was tracked; nothing a window could see was reading it.
+    const { path } = await damagedStore()
+    const store = await EncryptedMissionStore.open({ path, key: missionKey })
+    expect(store.faultReason).toMatch(/failed authentication/)
+    expect(store.health().health).toBe('degraded')
+    await store.close()
+  })
+
+  it('refuses to write rather than destroying the records it cannot see', async () => {
+    // The severe one. A write rewrites the whole file from the in-memory records, and
+    // those records stop at the break — so writing here deleted every Mission after it,
+    // permanently and invisibly, and the next open reported the store *healthy* because
+    // the evidence had just been overwritten. Measured before the fix: 3 records in,
+    // 2 out, holding m1 and m4.
+    const { path, before } = await damagedStore()
+    const store = await EncryptedMissionStore.open({ path, key: missionKey })
+
+    await expect(
+      store.write({
+        missionId: 'm4',
+        title: 'title m4',
+        intent: 'intent m4',
+        successCriteria: [],
+        createdAt: '2026-10-01T09:00:00.000Z',
+      }),
+    ).rejects.toThrow(MissionStoreError)
+
+    // Nothing on disk changed.
+    const after = (await readFile(path, 'utf8')).split('\n').filter(Boolean)
+    expect(after).toHaveLength(before)
+    expect(after.map((line) => (JSON.parse(line) as { missionId: string }).missionId)).toEqual([
+      'm1',
+      'm2',
+      'm3',
+    ])
+    await store.close()
+  })
+
+  it('keeps reporting the fault after a refused write', async () => {
+    // A refusal must not clear the diagnosis, or the next start would look clean.
+    const { path } = await damagedStore()
+    const store = await EncryptedMissionStore.open({ path, key: missionKey })
+    await store
+      .write({
+        missionId: 'm4',
+        title: 't',
+        intent: 'i',
+        successCriteria: [],
+        createdAt: '2026-10-01T09:00:00.000Z',
+      })
+      .catch(() => undefined)
+    expect(store.faultReason).not.toBeNull()
+
+    // And the fault survives the process entirely.
+    await store.close()
+    const reopened = await EncryptedMissionStore.open({ path, key: missionKey })
+    expect(reopened.faultReason).not.toBeNull()
+    await reopened.close()
+  })
+})
+
 describe('the ephemeral store', () => {
   it('says plainly that it is not durable', () => {
     // A Mission somebody is told is durable and which is not is worse than no

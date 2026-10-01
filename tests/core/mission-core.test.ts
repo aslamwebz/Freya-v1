@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCore, type Core, type CoreOptions } from '../../core/index'
@@ -335,6 +335,125 @@ describe('a window cannot manufacture authority over a Mission', () => {
     const result = await harness.send('mission.activate', { missionId: 'no-such-mission' })
     expect(result.ok).toBe(false)
     expect(result.mission?.reason).toMatch(/no such mission/)
+  })
+})
+
+describe('the read/manage split is real, not decorative', () => {
+  it('answers a Mission status read', async () => {
+    // `mission.status.read` was declared as a capability and bridged from the window,
+    // but Core had no handler for it, so it fell through to "unknown command". A
+    // documented privilege that nothing enforces is not a privilege.
+    const harness = await started()
+    const result = await harness.send('mission.status.read')
+    expect(result.ok).toBe(true)
+    expect(result.mission?.operation).toBe('status')
+  })
+
+  it('still reads after shutdown has started, but cannot mutate', async () => {
+    // A window winding down must still be able to say what Freya was working on, and
+    // must not be able to start anything new. `mission.status.read` was missing from
+    // the shutdown read allow-list, so it was refused exactly when a window most needs
+    // to read.
+    const harness = await started()
+    const missionId = await harness.mission('Winding down', 'Readable while stopping.')
+    await harness.send('mission.activate', { missionId })
+    await harness.core.stop('test-teardown')
+    core = undefined
+
+    const revived = createCore({
+      dataPath: join(dir, 'events.jsonl'),
+      missionKey: new Uint8Array(32).fill(9),
+    })
+    await revived.start()
+    core = revived
+
+    const read = await revived.handleCommand({
+      command: 'mission.status.read',
+      requestId: 'r-after-stop',
+    } as never)
+    expect((read as CoreResult).ok).toBe(true)
+
+    await revived.stop('t')
+    core = undefined
+
+    // After the stop, the read is still answered and nothing can be moved. Both halves
+    // matter: a read refused is a window that cannot explain itself, and a read that
+    // still mutates would mean shutdown never actually stopped anything.
+    const readAfter = await revived.handleCommand({
+      command: 'mission.status.read',
+      requestId: 'r-after-stop-2',
+    } as never)
+    expect((readAfter as CoreResult).ok).toBe(true)
+
+    const mutate = await revived.handleCommand({
+      command: 'mission.activate',
+      requestId: 'r-after-stop-3',
+      payload: { missionId },
+    } as never)
+    expect((mutate as CoreResult).ok).toBe(false)
+    expect(revived.mission().missions.find((m) => m.missionId === missionId)?.status).toBe('active')
+  })
+
+  it('does not let a status read reach any mutating path', async () => {
+    const harness = await started()
+    const missionId = await harness.mission('Read only', 'A read changes nothing.')
+    await harness.send('mission.status.read')
+    // Reading a Mission is not a way to move it.
+    expect(harness.core.mission().missions.find((m) => m.missionId === missionId)?.status).toBe('draft')
+  })
+})
+
+describe('a tampered journal cannot manufacture an outcome', () => {
+  it('refuses a hand-written completion with nothing behind it', async () => {
+    // `active → completed` is a legal edge, so the transition table cannot catch this.
+    // Only the reducer can, by requiring a verification that actually passed. This is
+    // the same three-line forgery that folded into `completed` before the guard existed.
+    const path = join(dir, 'events.jsonl')
+    const base = [
+      {
+        eventId: 'forged-1', sequence: 1, type: 'mission.created', schemaVersion: 1,
+        occurredAt: '2026-10-01T09:00:00.000Z', source: 'core', actor: 'owner',
+        correlationId: 'f', causationId: null,
+        payload: {
+          missionId: 'forged', status: 'draft',
+          createdAt: '2026-10-01T09:00:00.000Z',
+          deadlineAt: '2026-10-31T09:00:00.000Z',
+          limits: {
+            maxChildRuns: 64, maxConcurrentChildRuns: 4, lifetimeMs: 2_592_000_000,
+            verificationDeadlineMs: 60_000, maxRetainedMissions: 200,
+            maxTitleChars: 160, maxIntentChars: 4_000, maxSuccessCriteria: 16, maxCriterionChars: 500,
+          },
+        },
+      },
+      {
+        eventId: 'forged-2', sequence: 2, type: 'mission.activated', schemaVersion: 1,
+        occurredAt: '2026-10-01T09:00:02.000Z', source: 'core', actor: 'owner',
+        correlationId: 'f', causationId: null,
+        payload: { missionId: 'forged', from: 'draft', to: 'active', reason: 'owner', verifierId: null },
+      },
+      {
+        eventId: 'forged-3', sequence: 3, type: 'mission.completed', schemaVersion: 1,
+        occurredAt: '2026-10-01T09:00:03.000Z', source: 'core', actor: 'owner',
+        correlationId: 'f', causationId: null,
+        payload: {
+          missionId: 'forged', from: 'active', to: 'completed',
+          reason: 'verification_passed', verifierId: null,
+        },
+      },
+    ]
+    await writeFile(path, base.map((e) => JSON.stringify(e)).join(String.fromCharCode(10)) + String.fromCharCode(10))
+
+    const revived = createCore({
+      dataPath: path,
+      missionKey: new Uint8Array(32).fill(9),
+    })
+    await revived.start()
+    core = revived
+
+    const view = revived.mission().missions.find((m) => m.missionId === 'forged')
+    // Read the back as *not* completed, and with nothing pretending otherwise.
+    expect(view?.status).toBe('active')
+    expect(view?.verification).toBeNull()
   })
 })
 

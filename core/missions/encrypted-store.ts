@@ -70,7 +70,6 @@ export interface EncryptedMissionStoreOptions {
 export class EncryptedMissionStore implements MissionStore {
   readonly mode = 'encrypted' as const
   readonly durable = true
-  readonly faultReason = null
 
   private readonly path: string
   private readonly key: Buffer
@@ -80,6 +79,20 @@ export class EncryptedMissionStore implements MissionStore {
   private closed = false
   /** Serialised writes, so two Mission updates cannot interleave into a torn file. */
   private writeTail: Promise<unknown> = Promise.resolve()
+
+  /**
+   * Why this store cannot currently be trusted, or null when it can.
+   *
+   * A getter rather than a constant, because a hardcoded `null` here made the Mission
+   * projection report `durable: true` and the board say `ENCRYPTED AT REST` while every
+   * Mission record was failing authentication. The degradation was tracked, it was
+   * just never read by anything a window could see — which is the same failure mode as
+   * the Brain fault that is deliberately not a security event, except that one at least
+   * reported itself.
+   */
+  get faultReason(): string | null {
+    return this.degraded
+  }
 
   private constructor(options: EncryptedMissionStoreOptions) {
     this.path = options.path
@@ -178,6 +191,24 @@ export class EncryptedMissionStore implements MissionStore {
 
   async write(content: MissionContent): Promise<MissionContent> {
     if (this.closed) throw new MissionStoreError('unavailable', 'the Mission store is closed')
+    // Refused while degraded, and this is load-bearing rather than cautious.
+    //
+    // Replay stops at the first record that does not authenticate, so `records` holds
+    // only the readable *prefix*. A write rewrites the whole file from that map — so
+    // writing here would drop every Mission after the break, permanently and
+    // invisibly, and the next open would report the store healthy because the
+    // evidence was the thing just deleted.
+    //
+    // The Brain's rule, applied for the same reason (ARCHITECTURE §4.3): a degraded
+    // store is read-only. Refusing costs the owner the ability to add Missions until
+    // they resolve the fault, which is visible; truncating costs them Missions they
+    // already wrote, which is not.
+    if (this.degraded !== null) {
+      throw new MissionStoreError(
+        'unavailable',
+        `Mission content is not being written because this store is damaged: ${this.degraded}`,
+      )
+    }
     const validated = validate(content)
     if (!validated.ok) throw new MissionStoreError('invalid', validated.reason)
 

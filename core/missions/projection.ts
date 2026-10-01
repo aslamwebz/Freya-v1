@@ -96,9 +96,11 @@ export function missionProjection(
     persistence: {
       mode: persistence.mode,
       reason: persistence.reason,
-      // Never claimed unless the content store is actually encrypted. A Mission
-      // somebody was told is durable and which is not is worse than no Mission.
-      durable: persistence.mode === 'encrypted',
+      // Never claimed unless the content store is actually encrypted *and* readable
+      // now. A Mission somebody was told is durable and which is not is worse than no
+      // Mission — and a store whose records are failing authentication is not durable
+      // in any sense a person means by the word, however it is encrypted.
+      durable: persistence.mode === 'encrypted' && persistence.reason === null,
     },
     missions,
     counts,

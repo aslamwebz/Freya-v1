@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MissionEngine } from '../../core/missions/engine'
@@ -846,6 +846,71 @@ describe('recovery reconciles without inventing outcomes', () => {
     expect(second.engine.projection().missions[0]?.counts).toMatchObject({ total: 1, completed: 1 })
     await second.engine.close()
     await second.fabric.close()
+  })
+})
+
+describe('a damaged store is reported, not papered over', () => {
+  it('stops claiming to be durable when its records cannot be read', async () => {
+    // The engine builds persistence from the store's own fault reason, so a store that
+    // reports its damage is enough to stop the projection claiming `durable: true` over
+    // content nothing can read.
+    const { EncryptedMissionStore } = await import('../../core/missions/encrypted-store')
+    const path = join(directory, 'damaged.enc')
+    const damaged = await EncryptedMissionStore.open({ path, key: new Uint8Array(32).fill(5) })
+    await damaged.write({
+      missionId: 'm1',
+      title: 't',
+      intent: 'i',
+      successCriteria: [],
+      createdAt: '2026-10-01T09:00:00.000Z',
+    })
+    await damaged.close()
+
+    // Damage the only record, then reopen.
+    const raw = await readFile(path, 'utf8')
+    const line = JSON.parse(raw) as { cipher: string }
+    await writeFile(path, `${JSON.stringify({ ...line, cipher: `${line.cipher.slice(0, -4)}AAAA` })}
+`)
+
+    const reopened = await EncryptedMissionStore.open({ path, key: new Uint8Array(32).fill(5) })
+    const work = workStub()
+    const { engine, fabric } = await engineOver(work, undefined, { store: reopened })
+    const persistence = engine.projection().persistence
+
+    // Encrypted, yes. Durable, no — and the reason is the store's own words.
+    expect(persistence.mode).toBe('encrypted')
+    expect(persistence.durable).toBe(false)
+    expect(persistence.reason).toMatch(/failed authentication/)
+    await engine.close()
+    await fabric.close()
+  })
+
+  it('refuses to create a Mission rather than keep one it cannot store', async () => {
+    // The engine writes the private text *before* it records the Mission, so a store
+    // that refuses writes means creation is refused too — with a reason, and with no
+    // half-created Mission left in the journal. A Mission whose text could not be kept
+    // is not a Mission; the alternative is a row on the board that loses the owner's
+    // words on the next restart.
+    const { EncryptedMissionStore } = await import('../../core/missions/encrypted-store')
+    const path = join(directory, 'damaged2.enc')
+    const opened = await EncryptedMissionStore.open({ path, key: new Uint8Array(32).fill(6) })
+    await opened.close()
+    await writeFile(path, ['not a mission record at all', ''].join(String.fromCharCode(10)))
+
+    const reopened = await EncryptedMissionStore.open({ path, key: new Uint8Array(32).fill(6) })
+    const work = workStub()
+    const { engine, fabric } = await engineOver(work, undefined, { store: reopened })
+
+    const created = await engine.create({ title: 'During a fault', intent: 'Still allowed.' })
+    expect(created.ok).toBe(false)
+    expect(created.reason).toMatch(/could not be stored/i)
+
+    // And nothing was recorded, so the board does not show a Mission that has no words.
+    expect(engine.projection().counts.total).toBe(0)
+    // The projection is honest about why.
+    expect(engine.projection().persistence.durable).toBe(false)
+    await engine.close()
+    await fabric.close()
   })
 })
 

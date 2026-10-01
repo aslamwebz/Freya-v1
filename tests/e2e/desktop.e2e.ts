@@ -130,6 +130,33 @@ async function openChat(page: Page): Promise<void> {
 }
 
 /**
+ * Open the Work board and wait for it to report Core's engine.
+ *
+ * Idempotent for the same reason as `openChat` and `openVault`: a restored
+ * singleton toggles shut if clicked twice.
+ */
+async function openWork(page: Page): Promise<void> {
+  const dialog = page.locator('[role="dialog"][aria-label="Work"]')
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Work' })
+      .click()
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Work"] .work-surface', { timeout: 15_000 })
+  await page.waitForFunction(
+    () => {
+      const surface = document.querySelector('[role="dialog"][aria-label="Work"] .work-surface')
+      // Not the "waiting for Core" state: the checks below all depend on which of
+      // the two it is, so it has to be settled before any of them runs.
+      return surface !== null && !document.querySelector('.work-absent')
+    },
+    undefined,
+    { timeout: 15_000 },
+  )
+}
+
+/**
  * Open the Vault and wait for it to report Freya's memory.
  *
  * Idempotent for the same reason as `openChat`: a restored singleton toggles shut if
@@ -1436,6 +1463,14 @@ async function main(): Promise<void> {
           ),
         )
 
+        // Closed before the next launch, and the order matters. Two Electron apps
+        // alive at once means two Cores appending to the same journal, and their
+        // sequences interleave — which the following start correctly reads as
+        // corruption and truncates. Every other relaunch in this file closed its
+        // predecessor; this one did not, and it went unnoticed until a later phase
+        // launched again and found a degraded Core waiting for it.
+        await second.app.close().catch(() => {})
+
         const third = await launch(userData, DEV)
         await openVault(third.page)
         await third.page.waitForFunction(
@@ -1754,6 +1789,336 @@ async function main(): Promise<void> {
         await relaunched?.close().catch(() => {})
         await researchApp.close().catch(() => {})
         await rm(researchUserData, { recursive: true, force: true }).catch(() => {})
+      }
+    }
+
+
+    // =================================================================
+    // Phase 6: the Work engine — plans, gates, and what verification did
+    // =================================================================
+    {
+      const DEV = { FREYA_DEV_PROVIDER: 'slow-echo' }
+      const { app: workApp, page: work } = await launch(userData, DEV)
+
+      try {
+        await coreReady(work)
+
+        // --- 0. the orb must not move for any of this -------------------
+        // Measured before the window opens and again with it open, because a Work
+        // board is a lot of content in a glass surface and the one thing it must
+        // never do is reflow the command centre underneath itself.
+        const stageBox = (p: Page) =>
+          p.evaluate(() => {
+            const stage = document.querySelector('.presence-stage')
+            if (!stage) return null
+            const box = stage.getBoundingClientRect()
+            return {
+              x: box.x,
+              y: box.y,
+              width: box.width,
+              height: box.height,
+              centreX: box.x + box.width / 2,
+              centreY: box.y + box.height / 2,
+            }
+          })
+
+        await openWork(work)
+        const board = work.locator('[role="dialog"][aria-label="Work"] .work-surface')
+        const boardBefore = await stageBox(work)
+        await work.waitForTimeout(400)
+        const boardAfter = await stageBox(work)
+        check(
+          'opening the Work board does not move or resize Freya',
+          boardBefore !== null &&
+            boardAfter !== null &&
+            Math.abs(boardAfter.width - boardBefore.width) < 1 &&
+            Math.abs(boardAfter.height - boardBefore.height) < 1 &&
+            Math.abs(boardAfter.centreX - boardBefore.centreX) < 1 &&
+            Math.abs(boardAfter.centreY - boardBefore.centreY) < 1,
+          `before ${JSON.stringify(boardBefore)} after ${JSON.stringify(boardAfter)}`,
+        )
+
+        // --- 1. it reads Core, and names what Core can run --------------
+        check(
+          'the board states the limits before anything can be planned',
+          /up to 64 steps, 128 capability calls/.test((await board.locator('.work-limits').textContent()) ?? ''),
+          (await board.locator('.work-limits').textContent()) ?? 'no limits shown',
+        )
+        check(
+          'the board says it is idle when nothing is executing',
+          (await board.locator('.work-posture b').textContent()) === 'IDLE',
+        )
+        // Only inert capabilities. A Work engine demonstrated with a shell would be
+        // demonstrating the one thing Phase 6 must not build.
+        const capabilities = (await board.locator('.work-capabilities').textContent()) ?? ''
+        check(
+          'the capabilities Core lists start no process and reach no network',
+          /test\.record/.test(capabilities) && !/shell|exec|spawn|fs|http|net/i.test(capabilities),
+          capabilities,
+        )
+
+        // --- 1b. a task can be created, and the run joins it -------------
+        await board.locator('.work-field input').fill('prove the engine end to end')
+        await board.getByRole('button', { name: /add task/i }).click()
+        await work.waitForSelector('[role="dialog"][aria-label="Work"] .work-tasks li', { timeout: 15_000 })
+        check(
+          'a task can be created from the board and is shown back',
+          ((await board.locator('.work-task-title').first().textContent()) ?? '') ===
+            'prove the engine end to end',
+          (await board.locator('.work-task-title').first().textContent()) ?? 'no task listed',
+        )
+        check(
+          'a new task is open, and the engine says how many there are',
+          (await board.locator('.work-tasks li').first().getAttribute('data-status')) === 'open',
+        )
+
+        // --- 2. a run plans, executes, and then stops for approval ------
+        const callsBefore = await usage(work)
+        await board.getByRole('button', { name: /run until it asks/i }).click()
+        // The approval card appears, and it is the only thing on this window that
+        // can move the run forward.
+        await work.waitForSelector('[role="dialog"][aria-label="Work"] .work-approval', { timeout: 30_000 })
+        check('a consequential step stops the run for approval', true)
+
+        const approval = work.locator('[role="dialog"][aria-label="Work"] .work-approval').first()
+        const proposal = (await approval.locator('.work-approval-what').textContent()) ?? ''
+        check(
+          'the approval says what would happen and why it needs a person',
+          /test\.consequential/.test(proposal) &&
+            /would apply this effect/.test(proposal) &&
+            ((await approval.locator('.work-approval-why').textContent()) ?? '').length > 0,
+          proposal,
+        )
+        check(
+          'the approval names the capability Guard would have to allow',
+          /work\.execute/.test((await approval.locator('.work-approval-meta').textContent()) ?? ''),
+        )
+
+        // The first step is already verified while the second has not been
+        // attempted. That is the shape the whole model exists for: intended,
+        // attempted, observed, verified — and, separately, gated.
+        await work.waitForFunction(
+          () => {
+            const rows = [...document.querySelectorAll('[role="dialog"][aria-label="Work"] .work-steps li')]
+            const statuses = rows.map((row) => row.getAttribute('data-status'))
+            return (
+              statuses.filter((status) => status === 'verified').length >= 1 &&
+              statuses.some((status) => status === 'awaiting_approval')
+            )
+          },
+          undefined,
+          { timeout: 30_000 },
+        )
+        check('a verified step and a gated step are visibly different things', true)
+
+        // --- 3. denying prevents execution -----------------------------
+        const runsBefore = await board.locator('.work-run').count()
+        await approval.getByRole('button', { name: /deny/i }).click()
+        await work.waitForFunction(
+          () =>
+            document.querySelector('[role="dialog"][aria-label="Work"] .work-approval') === null &&
+            document.querySelector('[role="dialog"][aria-label="Work"] .work-run[data-status="failed"]') !== null,
+          undefined,
+          { timeout: 30_000 },
+        )
+        check('denying an approval withdraws the request', true)
+        const denial = (
+          await board.locator('.work-run[data-status="failed"] .work-run-reason').allTextContents()
+        ).join(' ')
+        check(
+          'denying leaves the run failed, with the refusal as the reason',
+          denial.toLowerCase().includes('denied'),
+          denial,
+        )
+        check(
+          'denying is why the step failed, not merely when',
+          denial.toLowerCase().includes('the step was not attempted'),
+          denial,
+        )
+        check('denying did not invent another run', (await board.locator('.work-run').count()) === runsBefore)
+
+        // --- 3b. approving resumes the run, and completes it ------------
+        // The other half of the gate. Denial proves the gate stops; this proves
+        // it is a gate rather than a wall.
+        await board.getByRole('button', { name: /run until it asks/i }).click()
+        await work.waitForSelector('[role="dialog"][aria-label="Work"] .work-approval', { timeout: 30_000 })
+        await work
+          .locator('[role="dialog"][aria-label="Work"] .work-approval')
+          .first()
+          .getByRole('button', { name: /approve/i })
+          .click()
+        await work.waitForFunction(
+          () =>
+            document.querySelector('[role="dialog"][aria-label="Work"] .work-approval') === null &&
+            document.querySelector('[role="dialog"][aria-label="Work"] .work-run[data-status="completed"]') !== null,
+          undefined,
+          { timeout: 30_000 },
+        )
+        check('approving resumes the run and it completes', true)
+        check(
+          'an approved run reports every step verified',
+          ((await board.locator('.work-run[data-status="completed"] .work-run-progress').first().textContent()) ?? '').includes(
+            'steps verified',
+          ),
+        )
+        check(
+          'the task the completed run belonged to is done',
+          (await board.locator('.work-tasks li').first().getAttribute('data-status')) === 'done',
+          (await board.locator('.work-tasks li').first().textContent()) ?? '',
+        )
+
+        // --- 4. verification, not the action, decided the outcome -------
+        // This run's second step returns a value that is not the one it intended.
+        // The capability *completes* successfully and the step still fails, which is
+        // the property the architecture names: an action is not evidence that it
+        // worked. A separate run from the gated one, because a run stops at its
+        // first failed step and could never then reach a gate.
+        await board.getByRole('button', { name: /run something unverifiable/i }).click()
+        // Wait for the fixed, code-owned verification failure reason. Verifier
+        // explanations can contain Step input or Observation data, so they are not
+        // durable UI text and must not be echoed back through the Work projection.
+        await work.waitForFunction(
+          () =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Work"] .work-step-meta')].some(
+              (row) =>
+                (row.textContent ?? '').includes('failed') &&
+                (row.textContent ?? '').includes('verification did not establish the intended result'),
+            ),
+          undefined,
+          { timeout: 30_000 },
+        )
+        const stepText = (await board.locator('.work-step-meta').allTextContents()).join(' ')
+        check(
+          'a step whose action succeeded but whose verification failed is shown as failed',
+          stepText.includes('failed'),
+          stepText,
+        )
+        check(
+          'verification failure is described without echoing evidence-derived data',
+          stepText.includes('verification did not establish the intended result') &&
+            !stepText.includes('something-else'),
+          stepText,
+        )
+        // The action is recorded as having completed. That is the whole point: the
+        // action succeeded, the step did not, and the board shows both.
+        check(
+          'the failing step still records the attempt that ran',
+          stepText.includes('attempt'),
+          stepText,
+        )
+
+        // --- 5. a third run, cancelled while it waits ------------------
+        await board.getByRole('button', { name: /run until it asks/i }).click()
+        await work.waitForSelector('[role="dialog"][aria-label="Work"] .work-approval', { timeout: 30_000 })
+        const cancels = board.getByRole('button', { name: /^cancel$/i })
+        check('a waiting run offers cancel', (await cancels.count()) >= 1)
+        await cancels.first().click()
+        await work.waitForFunction(
+          () =>
+            document.querySelector('[role="dialog"][aria-label="Work"] .work-approval') === null &&
+            document.querySelector('[role="dialog"][aria-label="Work"] .work-run[data-status="cancelled"]') !== null,
+          undefined,
+          { timeout: 30_000 },
+        )
+        check('cancelling settles the run and withdraws its approval', true)
+
+        // --- 6. a renderer reload changes nothing ----------------------
+        // The strongest claim this section can make. The renderer is disposable and
+        // Core is not. If a reload could erase or interrupt work, this window would
+        // be its only owner and the architecture would be wrong.
+        const beforeReload = await board.locator('.work-run').count()
+        const failedBeforeReload = await board.locator('.work-run[data-status="failed"]').count()
+        const usageBeforeReload = await usage(work)
+        await work.reload()
+        await coreReady(work)
+        await openWork(work)
+        await work.waitForFunction(
+          () =>
+            document.querySelectorAll('[role="dialog"][aria-label="Work"] .work-run').length > 0 &&
+            document.querySelector('[role="dialog"][aria-label="Work"] .work-absent') === null,
+          undefined,
+          { timeout: 20_000 },
+        )
+        check(
+          'a renderer reload finds Core still holding the same work',
+          (await work.locator('[role="dialog"][aria-label="Work"] .work-run').count()) === beforeReload,
+          `${beforeReload} -> ${await work.locator('[role="dialog"][aria-label="Work"] .work-run').count()}`,
+        )
+        check(
+          'the failed work is still failed after a reload, not quietly completed',
+          (await work.locator('[role="dialog"][aria-label="Work"] .work-run[data-status="failed"]').count()) ===
+            failedBeforeReload,
+        )
+        check(
+          'a renderer reload starts no model call',
+          (await usage(work)) === usageBeforeReload,
+          `${usageBeforeReload} -> ${await usage(work)}`,
+        )
+
+        // --- 7. idle Work spends nothing -------------------------------
+        // Everything above was capability calls, approval decisions, a denial, a
+        // cancellation and a reload. Not one of them was a thought, and the counter
+        // is how that is shown rather than asserted.
+        check(
+          'no work above cost a model call',
+          (await usage(work)) === callsBefore,
+          `${callsBefore} -> ${await usage(work)}`,
+        )
+
+        // --- 8. the window holds no work state -------------------------
+        const bridged = await work.evaluate(() =>
+          Object.keys((window as unknown as { freyaHost?: object }).freyaHost ?? {}).sort(),
+        )
+        check(
+          'the bridge exposes no capability, verifier or plan for Work',
+          !bridged.some((key) => /capabilit|verifier|plan|registry|executor/i.test(key)),
+          bridged.join(', '),
+        )
+
+        // --- 9. it survives an application relaunch --------------------
+        // History is in the journal, so this is the check that Work was recorded
+        // rather than cached in the window that is about to be destroyed.
+        const failedBeforeQuit = await work
+          .locator('[role="dialog"][aria-label="Work"] .work-run[data-status="failed"]')
+          .count()
+        await workApp.close()
+
+        const { app: workAgain, page: workRestored } = await launch(userData, DEV)
+        try {
+          await coreReady(workRestored)
+          await openWork(workRestored)
+          await workRestored.waitForFunction(
+            (expected: number) =>
+              document.querySelectorAll('[role="dialog"][aria-label="Work"] .work-run[data-status="failed"]')
+                .length >= expected,
+            failedBeforeQuit,
+            { timeout: 30_000 },
+          )
+          check('work history survives an application relaunch', true)
+          check(
+            'a relaunched window reports that step detail did not survive',
+            /step detail is not/i.test(
+              (await workRestored.locator('[role="dialog"][aria-label="Work"] .work-posture').textContent()) ?? '',
+            ),
+          )
+          // And nothing came back to life. A run the journal says was executing is
+          // reconciled as failed, never resumed and never marked successful.
+          check(
+            'no run came back to life after the restart',
+            (await workRestored
+              .locator('[role="dialog"][aria-label="Work"] .work-run[data-status="running"]')
+              .count()) === 0,
+          )
+          check(
+            'the relaunch cost no model call either',
+            (await usage(workRestored)) === callsBefore,
+            `${callsBefore} -> ${await usage(workRestored)}`,
+          )
+        } finally {
+          await workAgain.close().catch(() => {})
+        }
+      } finally {
+        await workApp.close().catch(() => {})
       }
     }
 

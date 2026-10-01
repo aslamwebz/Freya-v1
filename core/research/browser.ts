@@ -136,9 +136,25 @@ export class ManagedBrowserService {
       return await withResearchAbort(options.signal, 15000, async (signal) => {
         id = await this.create({ signal })
         await this.navigate(id, source, { signal })
-        return this.read(id, { signal })
+        const document = await this.read(id, { signal })
+        if (ManagedBrowserService.unreadable(document)) {
+          throw new ResearchError('unsupported_document')
+        }
+        return document
       })
     } catch (error) { throw safeResearchError(error, 'network_error') }
     finally { if (id) await this.close(id) }
+  }
+
+  /**
+   * True when a document carries nothing a person could read.
+   *
+   * A page whose only content was navigation and a cookie banner extracts to empty
+   * text. Returning that as a successful read would put an empty document in front of
+   * a person as though the page had been read, and into research as though a source
+   * had contributed something.
+   */
+  private static unreadable(document: ReadableDocument): boolean {
+    return document.text.trim().length === 0 && document.headings.length === 0 && document.links.length === 0
   }
 }

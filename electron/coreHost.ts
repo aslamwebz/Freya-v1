@@ -9,6 +9,7 @@ import { ElectronBrowserTargetFactory } from './research/managedTarget'
 import { fixtureSearchProvider, fixtureTransport, researchFixturesEnabled } from './research/e2eFixtures'
 import { SafeHttpTransport } from '../core/research/transport'
 import type { SearchProvider } from '../core/research/types'
+import type { ModelProvider } from '../core/model/provider'
 import type { BrowserTargetFactory } from '../core/research/browser'
 
 /**
@@ -124,6 +125,13 @@ export interface CoreHostOptions {
    */
   developerProvider?: 'echo' | 'slow-echo'
   /**
+   * Replaces the entire provider set. For tests.
+   *
+   * Whole-set rather than additive, so a run cannot accidentally reach a real
+   * provider. Production passes none of this.
+   */
+  providers?: ModelProvider[]
+  /**
    * Replaces the production research stack wholesale. For tests.
    *
    * Whole-stack rather than per-part, so a test cannot accidentally exercise the
@@ -164,6 +172,9 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),
+        // The *entire* provider set when one is supplied, forwarded verbatim so a
+        // test can never exercise the real provider while believing it is offline.
+        ...(this.options.providers ? { providers: this.options.providers } : {}),
       })
       await core.start()
       this.core = core

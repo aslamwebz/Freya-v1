@@ -4,6 +4,7 @@ import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
 import { ElectronCoreHost } from './coreHost'
 import { loadKeyring } from './keyring'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
+import type { ModelProvider } from '../core/model/provider'
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
@@ -54,6 +55,77 @@ function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array } | null {
   const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
   if (conversation === null || brain === null) return null
   return { conversation, brain }
+}
+
+/**
+ * The offline research fixture provider, if both E2E gates are present.
+ *
+ * Exists so the Phase 5 end-to-end suite can exercise real research - real Guard,
+ * real grants, real gateway, real sandboxed browser - without a live model. It is
+ * injected as the **entire** provider set, exactly like the developer providers, so
+ * a run cannot quietly reach a real one as well.
+ *
+ * It returns fixed structured JSON. It is not intelligence, it says so in its own
+ * status text, and it is unreachable unless `FREYA_E2E=1` and
+ * `FREYA_E2E_RESEARCH=fixtures` were both deliberately supplied to the process.
+ *
+ * The answers are deliberately keyed to the fixture pages, so an assertion can name
+ * the exact text it expects rather than pattern-matching a model's prose.
+ */
+function e2eResearchFixtureProvider(env: Record<string, string | undefined>): ModelProvider | null {
+  if (!(env.FREYA_E2E === '1' && env.FREYA_E2E_RESEARCH === 'fixtures')) return null
+  const plans = [
+    JSON.stringify({ queries: ['encrypted storage'], evidence: ['durability'], done: false }),
+    JSON.stringify({ queries: ['retention disagreement'], evidence: ['conflict'], done: false }),
+  ]
+  let turn = 0
+  return {
+    id: 'fixture-research',
+    kind: 'fake',
+    live: false,
+    status: () => ({
+      id: 'fixture-research',
+      kind: 'fake' as const,
+      status: 'configured' as const,
+      model: 'fixture-research-1',
+      detail:
+        'Offline E2E fixture. Returns fixed structured JSON for research planning and synthesis. Not intelligence.',
+      liveEnabled: false,
+    }),
+    complete: async (request) => {
+      // Planning turns get a fixed plan; synthesis cites the ids the coordinator
+      // actually supplied, read out of the evidence it was given.
+      //
+      // That is deliberate rather than a shortcut. Citing invented ids would be
+      // rejected by `parseSynthesis` - which is the citation-integrity property
+      // working - and would leave the E2E asserting nothing. Reading them from the
+      // prompt is what a real model does, and it keeps the assertion meaningful.
+      const stage = request.messages.some((m) => m.role === 'system' && m.content.includes('Stage: synthesizing'))
+      const sourceIds = [...request.prompt.matchAll(/"sourceId":"([^"]+)"/g)]
+        .map((match) => match[1] as string)
+        .filter((id, index, all) => all.indexOf(id) === index)
+      const text = stage
+        ? JSON.stringify({
+            findings: [
+              { text: 'FINDING_MARKER a local assistant keeps durable state encrypted.', sourceIds: sourceIds.slice(0, 1) },
+            ],
+            conflicts: [
+              { text: 'CONFLICT_MARKER the sources disagree about retention.', sourceIds: sourceIds.slice(0, 2) },
+            ],
+            uncertainties: ['UNCERTAINTY_MARKER neither fixture source is verified.'],
+          })
+        : (plans[Math.min(turn, plans.length - 1)] as string)
+      turn += 1
+      return {
+        requestId: `fixture-${turn}`,
+        providerId: 'fixture-research',
+        model: 'fixture-research-1',
+        text,
+        inputTokens: 1,
+        outputTokens: 1,
+      }
+    },
+  }
 }
 
 /**
@@ -387,6 +459,7 @@ app.whenReady().then(() => {
       // surface says exactly that rather than implying a memory that is not there.
       console.warn(`[freya] Freya will not remember across restarts — ${result.brain.reason}`)
     }
+    const fixtureProvider = e2eResearchFixtureProvider(process.env)
     coreHost = new ElectronCoreHost(
       dataPath,
       {
@@ -413,6 +486,9 @@ app.whenReady().then(() => {
         // without saying so is the failure this guards against. The slow variant
         // exists so the end-to-end suite has something to cancel.
         ...(developerProvider() ? { developerProvider: developerProvider() } : {}),
+        // The *entire* provider set when the research fixtures are gated on, so an
+        // E2E run cannot fall through to a real provider.
+        ...(fixtureProvider ? { providers: [fixtureProvider] } : {}),
       },
     )
     registerIpc()

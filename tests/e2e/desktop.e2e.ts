@@ -63,7 +63,20 @@ async function launch(
     // harmless on a single-monitor machine.
     args: [ROOT, `--user-data-dir=${userData}`, `--freya-display=${E2E_DISPLAY}`],
     env: {
+      // Spread first, then blank every live credential path explicitly.
+      //
+      // Inheriting a developer's real `NANOGPT_API_KEY` or `BRAVE_SEARCH_API_KEY`
+      // would mean the E2E could make a paid call on their account, and a suite that
+      // can does not reliably cost nothing. Every key is cleared here and the
+      // enable flags are set to 0, so the only providers reachable in this run are
+      // the ones a test injects.
       ...process.env,
+      NANOGPT_API_KEY: '',
+      NANOGPT_BASE_URL: '',
+      NANOGPT_MODEL: '',
+      FREYA_ALLOW_LIVE_MODEL: '0',
+      BRAVE_SEARCH_API_KEY: '',
+      FREYA_ALLOW_WEB_SEARCH: '0',
       NODE_ENV: 'production',
       FREYA_E2E: '1',
       FREYA_E2E_CONVERSATION_KEY: E2E_CONVERSATION_KEY,
@@ -110,7 +123,7 @@ async function launch(
 async function openChat(page: Page): Promise<void> {
   const dialog = page.locator('[role="dialog"][aria-label="Chat"]')
   if (!(await dialog.isVisible().catch(() => false))) {
-    await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Chat' }).click()
+    await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Chat', exact: true }).click()
   }
   await page.waitForSelector('[role="dialog"][aria-label="Chat"]', { timeout: 15_000 })
   await page.waitForSelector('[role="dialog"][aria-label="Chat"] .chat-compose', { timeout: 15_000 })
@@ -141,6 +154,52 @@ async function openVault(page: Page): Promise<void> {
     undefined,
     { timeout: 15_000 },
   )
+}
+
+/**
+ * Open the Search surface and wait for its query field.
+ *
+ * Idempotent, for the same reason as `openChat`.
+ */
+async function openSearch(page: Page): Promise<void> {
+  const dialog = page.locator('[role="dialog"][aria-label="Search"]')
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Search', exact: true })
+      .click()
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Search"] .search-section', { timeout: 15_000 })
+}
+
+/**
+ * Type a URL into the Search surface's read field and submit it.
+ *
+ * Selected by its accessible label rather than by position: the surface has two
+ * fields, and "the second one" is a selector that breaks the moment a third is
+ * added.
+ */
+async function readUrl(page: Page, url: string): Promise<void> {
+  const surface = page.locator('[role="dialog"][aria-label="Search"]')
+  await surface.getByLabel('URL to read').fill(url)
+  await surface.getByRole('button', { name: 'Read source', exact: true }).click()
+}
+
+/**
+ * Open the Research surface and wait for it to settle.
+ *
+ * Idempotent for the same reason as `openChat`: a restored singleton toggles shut if
+ * clicked twice.
+ */
+async function openResearch(page: Page): Promise<void> {
+  const dialog = page.locator('[role="dialog"][aria-label="Research"]')
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Research', exact: true })
+      .click()
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Research"] .research-surface', { timeout: 15_000 })
 }
 
 /** Send a message through the real composer, by pressing Enter. */
@@ -597,7 +656,7 @@ async function main(): Promise<void> {
     await page.waitForSelector('[role="dialog"][aria-label="Security"]', { state: 'detached' })
 
     // --- open Search ------------------------------------------------------
-    await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Search' }).click()
+    await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Search', exact: true }).click()
     await page.waitForSelector('[role="dialog"][aria-label="Search"]')
     check('opens the Search surface', await page.locator('[role="dialog"][aria-label="Search"]').isVisible())
 
@@ -672,7 +731,7 @@ async function main(): Promise<void> {
     await page.waitForSelector('[role="dialog"][aria-label="Search"]', { state: 'detached' })
     const searchStillInDock = await page
       .getByRole('toolbar', { name: /work surfaces/i })
-      .getByRole('button', { name: 'Search' })
+      .getByRole('button', { name: 'Search', exact: true })
       .isEnabled()
     check(
       'minimising hides the surface without destroying it',
@@ -683,7 +742,7 @@ async function main(): Promise<void> {
     await page.waitForSelector('[role="dialog"][aria-label="Harness"]')
 
     // Restore Search from the dock so both are on screen for the restart.
-    await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Search' }).click()
+    await page.getByRole('toolbar', { name: /work surfaces/i }).getByRole('button', { name: 'Search', exact: true }).click()
     await page.waitForSelector('[role="dialog"][aria-label="Search"]')
     check('opens a second surface alongside the first', (await page.locator('.surface-layer [role="dialog"]').count()) === 2)
 
@@ -1391,6 +1450,310 @@ async function main(): Promise<void> {
       } finally {
         await relaunched?.close().catch(() => {})
         await vaultApp.close().catch(() => {})
+      }
+    }
+
+    // =================================================================
+    // Phase 5: research, offline, through the real sandboxed browser
+    // =================================================================
+    {
+      // Fixtures are gated on two variables, and the live credential paths were
+      // cleared in `launch`. The provider below is injected through the existing
+      // CoreOptions.providers seam, so even the planning and synthesis turns go
+      // through the real cognition gateway rather than around it.
+      const FIXTURES = { FREYA_E2E_RESEARCH: 'fixtures' }
+
+      // The structured planning/synthesis provider is supplied by the gated
+      // main-process seam in electron/main.ts, so it is injected as the *entire*
+      // provider set and every one of its turns goes through the real cognition
+      // gateway. That is asserted below by reading the gateway's own durable call
+      // count rather than by trusting a stub.
+      // A clean profile. The earlier phases leave real surfaces open, and these are
+      // genuine floating windows: a leftover Vault overlapping Search would make
+      // this section fail on layout rather than on research.
+      const researchUserData = await mkdtemp(join(tmpdir(), 'freya-e2e-research-'))
+      const { app: researchApp, page: research } = await launch(researchUserData, FIXTURES)
+      let relaunched: ElectronApplication | null = null
+
+      try {
+        // --- the window is still sealed -----------------------------------
+        const keys = await research.evaluate(() =>
+          Object.keys((window as unknown as { freyaHost?: object }).freyaHost ?? {}).sort(),
+        )
+        check(
+          'the bridge exposes no browser handle, provider or storage path',
+          !keys.some((key) => /browser|target|session|provider|store|path|file|key/i.test(key)),
+          keys.join(', '),
+        )
+
+        // Search is driven first and Research is opened afterwards, because these
+        // are real floating windows: overlapping surfaces cannot both be clicked,
+        // and arranging the test around that would test the layout rather than
+        // research.
+        await openSearch(research)
+
+        // --- 1. nothing happens before somebody asks ----------------------
+
+        // --- 2. a search returns normalised rows -------------------------
+        await research
+          .locator('[role="dialog"][aria-label="Search"]')
+          .getByLabel('Web query')
+          .fill('encrypted storage')
+        await research
+          .locator('[role="dialog"][aria-label="Search"]')
+          .getByRole('button', { name: 'Search', exact: true })
+          .click()
+        await research.waitForSelector(
+          '[role="dialog"][aria-label="Search"] .search-result-list li',
+          { timeout: 20_000 },
+        )
+        const rows = await research.locator('[role="dialog"][aria-label="Search"] .search-result-list li').count()
+        check('search results are listed', rows > 0, `${rows} rows`)
+        check(
+          'each result carries a domain, so a snippet is never mistaken for a source',
+          ((await research.locator('[role="dialog"][aria-label="Search"] .search-result-list').textContent()) ?? '').includes(
+            'fixture.example.com',
+          ),
+        )
+
+        // --- 3. reading a source uses the real sandboxed target ----------
+        await readUrl(research, 'https://fixture.example.com/article')
+        await research.waitForSelector('[role="dialog"][aria-label="Search"] .search-document-text', {
+          timeout: 30_000,
+        })
+        const documentText =
+          (await research.locator('[role="dialog"][aria-label="Search"] .search-document-text').textContent()) ?? ''
+        check(
+          'a fetched page is extracted into real readable text',
+          documentText.includes('ENCRYPTION_MARKER'.replace('ENCRYPTION_MARKER', 'That storage is encrypted')),
+        )
+        check(
+          'navigation and cookie junk are stripped from the extraction',
+          !documentText.includes('Cookie settings') && !documentText.includes('Accept all cookies'),
+        )
+        check(
+          'content hidden by CSS is excluded from the extraction',
+          !documentText.includes('HIDDEN BY INLINE CSS'),
+        )
+
+        // --- 4. hostile content does not execute --------------------------
+        // Asserted on the absence of effects, because a page cannot be made to
+        // report its own failure.
+        await readUrl(research, 'https://fixture.example.com/hostile')
+        await research.waitForFunction(
+          () => {
+            const text = document.querySelector('[role="dialog"][aria-label="Search"] .search-document-text')
+            return text?.textContent?.includes('VISIBLE_TEXT_MARKER') === true
+          },
+          undefined,
+          { timeout: 30_000 },
+        )
+        const hostileText =
+          (await research.locator('[role="dialog"][aria-label="Search"] .search-document-text').textContent()) ?? ''
+        check('the visible half of a hostile page survives extraction', hostileText.includes('VISIBLE_TEXT_MARKER'))
+        check(
+          'text hidden by a stylesheet rule is excluded',
+          !hostileText.includes('STYLESHEET_HIDDEN_MARKER'),
+        )
+        check('text hidden inline is excluded', !hostileText.includes('INLINE_HIDDEN_MARKER'))
+
+        const sandboxed = await research.evaluate(() => {
+          const scope = window as unknown as Record<string, unknown>
+          return {
+            hostileRan: '__hostileRan' in scope,
+            fixtureScriptRan: '__freyaFixtureScriptRan' in scope,
+            scripts: document.querySelectorAll('[role="dialog"] script').length,
+            iframes: document.querySelectorAll('[role="dialog"] iframe').length,
+            imgs: document.querySelectorAll('[role="dialog"][aria-label="Search"] img').length,
+          }
+        })
+        check(
+          'no script from a fetched page executes, in the page or in the window',
+          !sandboxed.hostileRan && !sandboxed.fixtureScriptRan && sandboxed.scripts === 0,
+          JSON.stringify(sandboxed),
+        )
+        check('no frame or image from a fetched page is created', sandboxed.iframes === 0 && sandboxed.imgs === 0, JSON.stringify(sandboxed))
+
+        // --- 5. a blocked URL fails safely --------------------------------
+        await readUrl(research, 'http://169.254.169.254/latest/meta-data/')
+        await research.waitForSelector('[role="dialog"][aria-label="Search"] .search-status', { timeout: 20_000 })
+        const blocked = await research.locator('[role="dialog"][aria-label="Search"] .search-status').first().textContent()
+        check('a link-local URL is refused with a stated reason', (blocked ?? '').length > 0, blocked ?? '')
+
+        // --- 6. a page with nothing readable is a failure, not an answer ---
+        await readUrl(research, 'https://fixture.example.com/empty')
+        await research.waitForTimeout(2_000)
+        check(
+          'a page with no readable text produces no document rather than an empty one',
+          (await research.locator('[role="dialog"][aria-label="Search"] .search-document-text').count()) === 0,
+        )
+
+        // --- 7. research produces cited findings, conflicts and unknowns ---
+        await openResearch(research)
+        check(
+          'Research shows its code-owned limits before anything is asked for',
+          ((await research
+            .locator('[role="dialog"][aria-label="Research"] .research-limit-list')
+            .textContent()) ?? '').includes('5 model turns'),
+        )
+        await research
+          .locator('[role="dialog"][aria-label="Research"]')
+          .getByLabel('Research question')
+          .fill('how does a local assistant keep durable state?')
+        await research
+          .locator('[role="dialog"][aria-label="Research"]')
+          .getByRole('button', { name: /start research/i })
+          .click()
+        await research.waitForSelector('[role="dialog"][aria-label="Research"] .research-findings li', {
+          timeout: 60_000,
+        })
+        const findings = await research.locator('[role="dialog"][aria-label="Research"] .research-findings').textContent()
+        check('research produces a finding', (findings ?? '').includes('FINDING_MARKER'), findings ?? '')
+
+        const cited = await research
+          .locator('[role="dialog"][aria-label="Research"] .research-citations')
+          .first()
+          .textContent()
+        check(
+          'every finding names the sources it came from',
+          (cited ?? '').includes('fixture.example.com'),
+          cited ?? '',
+        )
+
+        check(
+          'a disagreement between sources is shown rather than resolved',
+          ((await research
+            .locator('[role="dialog"][aria-label="Research"] .research-conflicts')
+            .textContent()) ?? '').includes('CONFLICT_MARKER'),
+        )
+        check(
+          'what Freya does not know is shown',
+          ((await research
+            .locator('[role="dialog"][aria-label="Research"] .research-uncertainties')
+            .textContent()) ?? '').includes('UNCERTAINTY_MARKER'),
+        )
+
+        const sourceUrls = await research
+          .locator('[role="dialog"][aria-label="Research"] .research-source-url')
+          .allTextContents()
+        check(
+          'citations point at sources that were actually gathered',
+          sourceUrls.length > 0 && sourceUrls.every((url) => url.startsWith('https://')),
+          sourceUrls.join(' '),
+        )
+
+        // --- 8. nothing is labelled verified -----------------------------
+        // Checked as a label rather than as a word. The window legitimately says
+        // "an answer is not verified" and the fixture reports "neither fixture
+        // source is verified" - forbidding those disclaimers would forbid exactly
+        // what makes the point. What must not exist is a finding *badged* verified.
+        const verifiedBadges = await research
+          .locator('[role="dialog"][aria-label="Research"]')
+          .getByText(/^verified$/i)
+          .count()
+        check('no finding or source is badged verified', verifiedBadges === 0, `${verifiedBadges} badges`)
+
+        // --- 9. the gateway did the calling ------------------------------
+        // Read from Core's own durable counters, so this proves the turns went
+        // through the Model Gateway rather than trusting a stub's own claim.
+        const usage = await research.evaluate(() =>
+          [...document.querySelectorAll('[role="dialog"][aria-label="Research"] .research-usage')].map(
+            (row) => row.textContent ?? '',
+          ),
+        )
+        check(
+          'research spent model turns through the cognition gateway',
+          /[1-9] model turns/.test(usage.join(' ')),
+          usage.join(' | ') || 'no usage line',
+        )
+
+        // --- 10. sessions are destroyed, not left open -------------------
+        // A managed browser session that outlives its read is a window nobody
+        // closes and a cache nobody clears. Closing this process and opening
+        // another is the only honest way to observe that from outside.
+        const afterRelaunch = await launch(researchUserData, FIXTURES)
+        relaunched = afterRelaunch.app
+        await openResearch(afterRelaunch.page)
+        // Cancel only exists while an operation is running, so its absence is the
+        // real signal. The Start button's enabled state is not: it is also disabled
+        // by an empty question, which is true of a window that never started
+        // anything.
+        check(
+          'no research is still running after a relaunch',
+          (await afterRelaunch.page
+            .locator('[role="dialog"][aria-label="Research"]')
+            .getByRole('button', { name: /cancel/i })
+            .count()) === 0,
+        )
+
+        // --- 11. missing credentials make no external calls --------------
+        // A separate launch with the fixture gate off: research must refuse rather
+        // than reach for anything.
+        const bare = await launch(researchUserData, { FREYA_E2E_RESEARCH: 'off' })
+        await openResearch(bare.page)
+        await bare.page
+          .locator('[role="dialog"][aria-label="Research"]')
+          .getByLabel('Research question')
+          .fill('a question with no provider configured')
+        await bare.page
+          .locator('[role="dialog"][aria-label="Research"]')
+          .getByRole('button', { name: /start research/i })
+          .click()
+        // Brave has no key here, so the operation runs and ends `failed` with the
+        // refusal named. What matters is that it ends rather than hanging, and that
+        // it invents nothing.
+        // The usage line renders whenever a result settled, whatever it decided.
+        await bare.page.waitForSelector('[role="dialog"][aria-label="Research"] .research-usage', {
+          timeout: 30_000,
+        })
+        const bareFindings = await bare.page
+          .locator('[role="dialog"][aria-label="Research"] .research-findings li')
+          .count()
+        // The reason is the named failure code, not prose: research turns a missing
+        // provider into a bounded failure and the surface shows the code.
+        const bareFailureText = ((await bare.page
+          .locator('[role="dialog"][aria-label="Research"] .research-failures')
+          .textContent()) ?? '') + ((await bare.page
+          .locator('[role="dialog"][aria-label="Research"] .research-limits-note')
+          .textContent()) ?? '')
+        check(
+          'an unconfigured provider invents no findings',
+          bareFindings === 0,
+          `${bareFindings} findings`,
+        )
+        check(
+          'an unconfigured provider says why rather than failing silently',
+          bareFailureText.trim().length > 0,
+          bareFailureText.slice(0, 200),
+        )
+        await bare.app.close().catch(() => {})
+
+        // --- 12. the shell invariants still hold -------------------------
+        const orbGeometry = await research.evaluate(() => {
+          const canvas = document.querySelector('.presence-canvas') as HTMLCanvasElement | null
+          if (!canvas) return null
+          const box = canvas.getBoundingClientRect()
+          return { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) }
+        })
+        const afterResearchGeometry = await afterRelaunch.page.evaluate(() => {
+          const canvas = document.querySelector('.presence-canvas') as HTMLCanvasElement | null
+          if (!canvas) return null
+          const box = canvas.getBoundingClientRect()
+          return { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) }
+        })
+        check(
+          'research did not move or resize the orb',
+          orbGeometry !== null && afterResearchGeometry !== null &&
+            orbGeometry.x === afterResearchGeometry.x &&
+            orbGeometry.y === afterResearchGeometry.y &&
+            orbGeometry.width === afterResearchGeometry.width &&
+            orbGeometry.height === afterResearchGeometry.height,
+          `${JSON.stringify(orbGeometry)} vs ${JSON.stringify(afterResearchGeometry)}`,
+        )
+      } finally {
+        await relaunched?.close().catch(() => {})
+        await researchApp.close().catch(() => {})
+        await rm(researchUserData, { recursive: true, force: true }).catch(() => {})
       }
     }
 

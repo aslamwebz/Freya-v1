@@ -181,8 +181,10 @@ export class ElectronCoreHost implements CoreHost {
     const transport = new SafeHttpTransport()
     return {
       searchProvider: new BraveSearchProvider({ env: this.env, transport }),
-      // The Electron target needs a transport of its own, so a page read and a
-      // provider call cannot interfere with each other's pinning or budget.
+      // Shared deliberately: `SafeHttpTransport` holds no mutable instance state, so
+      // a page read and a provider call cannot interfere. Two instances would add an
+      // isolation boundary that does not exist and imply a separation the code does
+      // not have.
       browserFactory: new ElectronBrowserTargetFactory(transport),
     }
   }

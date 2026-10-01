@@ -485,8 +485,9 @@ describe('diagnostic containment is structural, not incidental', () => {
       expect(result.refusal?.reason).toMatch(/model|provider|refused|failed|unavailable/i)
     } else {
       // Absorbed: an honest 'failed' research with no findings, not a fabricated one.
-      expect(result.research?.result?.state).toBe('failed')
-      expect(result.research?.result?.findings).toEqual([])
+      const projected = result.research?.result as { state: string; findings: unknown[] } | undefined
+      expect(projected?.state).toBe('failed')
+      expect(projected?.findings).toEqual([])
     }
   })
 })

@@ -27,12 +27,18 @@ beforeEach(() => {
 })
 afterEach(() => vi.useRealTimers())
 describe('sandboxed Electron research target', () => {
-  it('uses unique in-memory partitions and explicit secure window settings without preload', async () => {
+  it('bounds and reuses non-persistent partitions, with explicit secure window settings', async () => {
     const factory = new ElectronBrowserTargetFactory(transport().value)
-    const a = await factory.create('a', signal()); await a.close()
-    const b = await factory.create('a', signal()); await b.close()
+    // Many sequential reads. Electron has no API to destroy a Session, so a partition
+    // per read would accumulate one per page for the life of the process.
+    for (let index = 0; index < 12; index += 1) {
+      const target = await factory.create('a', signal())
+      await target.close()
+    }
     const partitions = electron.fromPartition.mock.calls.map((call) => call[0] as string)
-    expect(new Set(partitions).size).toBe(2)
+    // Bounded, and reused rather than minted per read.
+    expect(partitions.length).toBeLessThanOrEqual(4)
+    expect(new Set(partitions).size).toBe(partitions.length)
     expect(partitions.every((value) => !value.startsWith('persist:'))).toBe(true)
     expect(electron.BrowserWindow.mock.calls[0]?.[0]).toMatchObject({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInWorker: false, nodeIntegrationInSubFrames: false, webSecurity: true, webviewTag: false, devTools: false } })
     expect(electron.BrowserWindow.mock.calls[0]?.[0].webPreferences).not.toHaveProperty('preload')
@@ -84,6 +90,19 @@ describe('sandboxed Electron research target', () => {
     await expect(new ElectronBrowserTargetFactory(transport().value).create('session', AbortSignal.abort())).rejects.toMatchObject({ code: 'cancelled' })
     expect(electron.BrowserWindow).not.toHaveBeenCalled()
   })
+  it('refuses rather than minting a fifth partition when all four are busy', async () => {
+    // A bounded pool that silently grows is not a bounded pool. Four concurrent
+    // reads lease everything; a fifth is refused instead of growing the pool.
+    const factory = new ElectronBrowserTargetFactory(transport().value)
+    const held = [await factory.create('a', signal()), await factory.create('b', signal()),
+      await factory.create('c', signal()), await factory.create('d', signal())]
+    await expect(factory.create('e', signal())).rejects.toMatchObject({ code: 'network_error' })
+    for (const target of held) await target.close()
+    // Released, so a later read succeeds.
+    const after = await factory.create('f', signal())
+    await after.close()
+  })
+
   it('redacts session allocation failures before any target exists', async () => {
     electron.fromPartition.mockImplementationOnce(() => { throw new Error('private-storage-path') })
     await expect(new ElectronBrowserTargetFactory(transport().value).create('session', signal())).rejects.toMatchObject({ code: 'network_error', message: 'The network request failed.' })
@@ -144,7 +163,10 @@ describe('sandboxed Electron research target', () => {
     ses.protocol.unhandle.mockImplementationOnce(() => { throw new Error('teardown-private') })
     await expect(target.close()).resolves.toBeUndefined()
     expect(window.destroy).toHaveBeenCalledTimes(1)
-    expect(ses.clearStorageData).toHaveBeenCalledTimes(1)
+    // Twice, deliberately: once when the partition is leased and once when it is
+    // released. A lease that cleared only on release would hand its storage to the
+    // next reader whenever a previous close was interrupted.
+    expect(ses.clearStorageData).toHaveBeenCalledTimes(2)
     expect(ses.listenerCount('will-download')).toBe(0)
   })
   it('captures webContents before destroying a native window whose getters become invalid', async () => {
@@ -152,7 +174,10 @@ describe('sandboxed Electron research target', () => {
     Object.defineProperty(window, 'webContents', { configurable: true, get: () => { if (destroyed) throw new Error('Object has been destroyed'); return contents } })
     await expect(target.close()).resolves.toBeUndefined()
     expect(contents.listenerCount('render-process-gone')).toBe(0)
-    expect(ses.clearStorageData).toHaveBeenCalledTimes(1)
+    // Twice, deliberately: once when the partition is leased and once when it is
+    // released. A lease that cleared only on release would hand its storage to the
+    // next reader whenever a previous close was interrupted.
+    expect(ses.clearStorageData).toHaveBeenCalledTimes(2)
   })
   it('cleans externally destroyed windows using the retained WebContents', async () => {
     const target = await new ElectronBrowserTargetFactory(transport().value).create('session', signal())
@@ -162,7 +187,10 @@ describe('sandboxed Electron research target', () => {
     await expect(target.close()).resolves.toBeUndefined()
     expect(contents.listenerCount('render-process-gone')).toBe(0)
     expect(ses.protocol.unhandle).toHaveBeenCalledWith('freya-research')
-    expect(ses.clearStorageData).toHaveBeenCalledTimes(1)
+    // Twice, deliberately: once when the partition is leased and once when it is
+    // released. A lease that cleared only on release would hand its storage to the
+    // next reader whenever a previous close was interrupted.
+    expect(ses.clearStorageData).toHaveBeenCalledTimes(2)
     await expect(target.read(signal())).rejects.toMatchObject({ code: 'network_error' })
   })
   it('close removes listeners/protocol and destroys synchronously, is idempotent', async () => {
@@ -174,6 +202,9 @@ describe('sandboxed Electron research target', () => {
     expect(ses.protocol.unhandle).toHaveBeenCalledWith('freya-research')
     expect(contents.listenerCount('render-process-gone')).toBe(0)
     expect(ses.listenerCount('will-download')).toBe(0)
-    expect(ses.clearStorageData).toHaveBeenCalledTimes(1)
+    // Twice, deliberately: once when the partition is leased and once when it is
+    // released. A lease that cleared only on release would hand its storage to the
+    // next reader whenever a previous close was interrupted.
+    expect(ses.clearStorageData).toHaveBeenCalledTimes(2)
   })
 })

@@ -7,8 +7,25 @@ import type { SafeHttpTransport } from '../../core/research/transport'
 import { assertPublicUrl } from '../../core/research/url-policy'
 import { EXTRACTION_SCRIPT, normalizeExtractedDocument } from './extract'
 
-// Inline presentation CSS preserves visibility; all stylesheet/resource URL loads are denied.
-export const RESEARCH_CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+/**
+ * The CSP served with every research document.
+ *
+ * `default-src 'none'` plus an explicit deny for scripts, connections, frames,
+ * popups, workers, objects and form submission. A page therefore cannot execute, cannot
+ * talk to anything, and cannot navigate itself anywhere.
+ *
+ * `style-src 'unsafe-inline' https:` is deliberate and load-bearing: the extractor's
+ * visibility pass can only exclude content hidden by CSS if that CSS is actually
+ * available to the renderer. A page that hides text with an external stylesheet would
+ * otherwise have its hidden text flow straight into the extracted evidence, which is
+ * both a citation-quality problem and a place to hide instructions.
+ *
+ * It grants no capability. `onBeforeRequest` independently cancels every
+ * subresource, so a stylesheet that loads changes how the page *looks* and nothing
+ * else; and the extractor strips `<style>` and `<link>` before returning text, so
+ * nothing stylesheet-derived survives into a `ReadableDocument`.
+ */
+export const RESEARCH_CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline' https:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
 const SCHEME = 'freya-research'
 
 class ElectronBrowserTarget implements BrowserTarget {
@@ -28,7 +45,14 @@ class ElectronBrowserTarget implements BrowserTarget {
   private readonly crashed = (): void => { this.terminalFailure = new ResearchError('network_error'); void this.close() }
   private readonly externallyClosed = (): void => { if (!this.closed) this.crashed() }
 
-  constructor(private readonly id: string, private readonly ses: Session, private readonly transport: SafeHttpTransport, private readonly now: () => Date) {}
+  constructor(
+    private readonly id: string,
+    private readonly ses: Session,
+    private readonly transport: SafeHttpTransport,
+    private readonly now: () => Date,
+    /** Returns the session partition to the pool. Idempotent. */
+    private readonly release: () => void = () => {},
+  ) {}
 
   initialize(): void {
     this.ses.setPermissionCheckHandler(() => false)
@@ -130,23 +154,79 @@ class ElectronBrowserTarget implements BrowserTarget {
     ]) {
       try { dispose() } catch { try { dispose() } catch { /* target stays closed and inaccessible */ } }
     }
-    this.cleanup = withResearchAbort(undefined, 1000, async () => { await Promise.allSettled([this.ses.clearStorageData(), this.ses.clearCache()]) }).catch(() => {})
+    this.cleanup = withResearchAbort(undefined, 1000, async () => { await Promise.allSettled([this.ses.clearStorageData(), this.ses.clearCache()]) })
+      .catch(() => {})
+      .then(() => { this.release() })
     return this.cleanup
   }
 }
 
+/**
+ * How many session partitions the factory holds.
+ *
+ * Small because reads are sequential in practice, and large enough that two
+ * concurrent reads do not have to queue behind each other.
+ */
+const POOL_SIZE = 4
+
 /** Main-process only. Requires Electron app readiness; no dependency installs or default session. */
 export class ElectronBrowserTargetFactory implements BrowserTargetFactory {
+  /**
+   * Per factory, not module-level.
+   *
+   * Production builds one, so this is one bounded pool. Keeping it on the instance
+   * means a test that constructs a factory gets a clean pool instead of inheriting
+   * whichever partitions the previous test happened to lease.
+   */
+  private readonly pool: { name: string; session: Session }[] = []
+  private readonly leased = new Set<string>()
+
   constructor(private readonly transport: SafeHttpTransport, private readonly now: () => Date = () => new Date()) {}
+
+  /**
+   * Take exclusive use of a partition, minting one if the pool has room.
+   *
+   * Refuses when all four are busy rather than minting a fifth: a bounded pool that
+   * silently grows is not a bounded pool, and refusing is the safe direction for a
+   * subsystem permitted to say no.
+   */
+  private lease(): { name: string; session: Session } {
+    for (const entry of this.pool) {
+      if (this.leased.has(entry.name)) continue
+      this.leased.add(entry.name)
+      return entry
+    }
+    if (this.pool.length < POOL_SIZE) {
+      const name = `freya-research-${randomUUID()}`
+      const created = { name, session: session.fromPartition(name, { cache: false }) }
+      this.pool.push(created)
+      this.leased.add(name)
+      return created
+    }
+    throw new ResearchError('network_error')
+  }
+
   async create(sessionId: string, signal: AbortSignal): Promise<BrowserTarget> {
     if (signal.aborted) throw new ResearchError('cancelled')
     let target: ElectronBrowserTarget | undefined
+    let lease: { name: string; session: Session } | undefined
     try {
-      const ses = session.fromPartition(`freya-research-${randomUUID()}`, { cache: false })
-      target = new ElectronBrowserTarget(sessionId, ses, this.transport, this.now)
+      lease = this.lease()
+      const ses = lease.session
+      // Cleared on acquire as well as on release, so a partition whose previous
+      // close was interrupted cannot hand its storage to the next reader.
+      await ses.clearStorageData().catch(() => undefined)
+      await ses.clearCache().catch(() => undefined)
+      target = new ElectronBrowserTarget(sessionId, ses, this.transport, this.now, () => {
+        this.leased.delete(lease!.name)
+      })
       target.initialize()
       if (signal.aborted) throw new ResearchError('cancelled')
       return target
-    } catch (error) { void target?.close(); throw safeResearchError(error, 'network_error') }
+    } catch (error) {
+      if (lease) this.leased.delete(lease.name)
+      void target?.close()
+      throw safeResearchError(error, 'network_error')
+    }
   }
 }

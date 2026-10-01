@@ -4,6 +4,28 @@ import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
 import type { BrainProjection } from '../core/brain/brain'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
+import { BraveSearchProvider } from '../core/research/providers/brave'
+import { ElectronBrowserTargetFactory } from './research/managedTarget'
+import { SafeHttpTransport } from '../core/research/transport'
+import type { SearchProvider } from '../core/research/types'
+import type { BrowserTargetFactory } from '../core/research/browser'
+
+/**
+ * The environment the host reads, main-process only.
+ *
+ * `BRAVE_SEARCH_API_KEY` and `FREYA_ALLOW_WEB_SEARCH` are named here so the shape
+ * of what main hands Core is explicit. Neither is returned by any projection, any
+ * status or any command: the provider keeps the key in a private field, and Core
+ * receives a `SearchProvider` it cannot inspect.
+ *
+ * `FREYA_ALLOW_WEB_SEARCH` is separate from the credential on purpose. A machine
+ * that happens to have a key in its environment must not start calling a paid
+ * search API because the key was there. Search is enabled explicitly.
+ */
+export interface HostEnv extends NanoGptEnv {
+  BRAVE_SEARCH_API_KEY?: string
+  FREYA_ALLOW_WEB_SEARCH?: string
+}
 
 /**
  * The Core host.
@@ -89,6 +111,13 @@ export interface CoreHostOptions {
    * provider is. The host does not construct one.
    */
   developerProvider?: 'echo' | 'slow-echo'
+  /**
+   * Replaces the production research stack wholesale. For tests.
+   *
+   * Whole-stack rather than per-part, so a test cannot accidentally exercise the
+   * real Brave provider or the real Electron target while believing it is offline.
+   */
+  research?: { searchProvider: SearchProvider; browserFactory: BrowserTargetFactory }
 }
 
 export class ElectronCoreHost implements CoreHost {
@@ -101,7 +130,7 @@ export class ElectronCoreHost implements CoreHost {
 
   constructor(
     private readonly dataPath: string,
-    private readonly env: NanoGptEnv = {},
+    private readonly env: HostEnv = {},
     private readonly options: CoreHostOptions = {},
   ) {}
 
@@ -109,9 +138,11 @@ export class ElectronCoreHost implements CoreHost {
     if (this.core) return
     if (this.starting) return this.starting
     this.starting = (async () => {
+      const research = this.options.research ?? this.buildResearchStack()
       const core = createCore({
         dataPath: this.dataPath,
         env: this.env,
+        ...(research ? { research } : {}),
         // Bytes in, and nowhere else. Core does not persist it, journal it, log it
         // or put it in a projection, so there is nothing for it to leak through.
         ...(this.options.conversationKey
@@ -134,6 +165,25 @@ export class ElectronCoreHost implements CoreHost {
       await this.starting
     } finally {
       this.starting = null
+    }
+  }
+
+  /**
+   * The production research stack: Brave from main's environment, and the real
+   * managed Electron DOM target.
+   *
+   * Both transports are constructed here, in the main process. Core receives two
+   * small interfaces and cannot construct a provider, read an environment variable
+   * or reach the filesystem, so there is no path from a model or a page to a
+   * credential even indirectly.
+   */
+  private buildResearchStack(): { searchProvider: SearchProvider; browserFactory: BrowserTargetFactory } {
+    const transport = new SafeHttpTransport()
+    return {
+      searchProvider: new BraveSearchProvider({ env: this.env, transport }),
+      // The Electron target needs a transport of its own, so a page read and a
+      // provider call cannot interfere with each other's pinning or budget.
+      browserFactory: new ElectronBrowserTargetFactory(transport),
     }
   }
 

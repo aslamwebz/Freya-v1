@@ -219,6 +219,15 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'brain.memory.write',
   'brain.memory.archive',
   'brain.recall',
+  // Phase 5 research. The owner may search, read a public page and start research;
+  // what it may *not* do is name a provider, a model, a limit, a budget or a
+  // capability. Those are Core's, and the payload contracts below rebuild each one
+  // from known fields so an ignored field never even reaches the main process.
+  'search.web',
+  'browser.read',
+  'research.start',
+  'research.cancel',
+  'research.status.read',
 ])
 
 type RendererPayloadResult =
@@ -226,6 +235,10 @@ type RendererPayloadResult =
   | { ok: false; reason: string }
 
 const MAX_ID_CHARS = 256
+/** Matches the Searcher's own ceiling, so the bridge and Core agree on the limit. */
+const MAX_SEARCH_QUERY_CHARS = 512
+const MAX_SOURCE_URL_CHARS = 2_048
+const MAX_RESEARCH_QUESTION_CHARS = 4_096
 const MAX_STOP_REASON_CHARS = 1_000
 const MAX_COMMAND_ORIGIN_CHARS = 128
 
@@ -264,6 +277,7 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     case 'voice.capture.start':
     case 'voice.capture.cancel':
     case 'brain.status.read':
+    case 'research.status.read':
       return { ok: true }
 
     case 'core.command.submit': {
@@ -393,6 +407,44 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
         ok: true,
         payload: { ...(query === undefined ? {} : { query }), ...(limit === undefined ? {} : { limit }) },
       }
+    }
+
+    case 'search.web': {
+      // One field. A renderer cannot attach a provenance class, a provider, a result
+      // count or a budget; the payload is rebuilt from `query` alone, so a large
+      // ignored blob never gets structured-cloned into the main process.
+      const query = string('query', MAX_SEARCH_QUERY_CHARS)
+      if (query === null || query === undefined) {
+        return { ok: false, reason: 'a search query is required' }
+      }
+      return { ok: true, payload: { query } }
+    }
+
+    case 'browser.read': {
+      const url = string('url', MAX_SOURCE_URL_CHARS)
+      if (url === null || url === undefined) {
+        return { ok: false, reason: 'a URL is required' }
+      }
+      return { ok: true, payload: { url } }
+    }
+
+    case 'research.start': {
+      const question = string('question', MAX_RESEARCH_QUESTION_CHARS)
+      if (question === null || question === undefined) {
+        return { ok: false, reason: 'a research question is required' }
+      }
+      // Nothing else is forwarded. In particular not `modelTurns`, `durationMs`,
+      // `maxOutputTokens` or `limits`: research budgets are code-owned, and a window
+      // that could raise them would make the whole ceiling advisory.
+      return { ok: true, payload: { question } }
+    }
+
+    case 'research.cancel': {
+      const researchId = string('researchId', MAX_ID_CHARS)
+      if (researchId === null || researchId === undefined) {
+        return { ok: false, reason: 'a research id is required' }
+      }
+      return { ok: true, payload: { researchId } }
     }
 
     // Grant governance is intentionally not in CORE_COMMANDS. Keeping a default

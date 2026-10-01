@@ -394,6 +394,11 @@ app.whenReady().then(() => {
         NANOGPT_BASE_URL: process.env.NANOGPT_BASE_URL,
         NANOGPT_MODEL: process.env.NANOGPT_MODEL,
         FREYA_ALLOW_LIVE_MODEL: process.env.FREYA_ALLOW_LIVE_MODEL,
+        // Phase 5. Both are read here and nowhere else, and neither is returned by
+        // anything: the provider holds the key in a private field and Core holds a
+        // provider object it cannot inspect.
+        BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY,
+        FREYA_ALLOW_WEB_SEARCH: process.env.FREYA_ALLOW_WEB_SEARCH,
       },
       {
         conversationKey: result.conversation.key,

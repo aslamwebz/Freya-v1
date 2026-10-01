@@ -457,6 +457,49 @@ describe('a tampered journal cannot manufacture an outcome', () => {
   })
 })
 
+describe('a Run is parented only by something Core can corroborate', () => {
+  it('refuses a Run parented to a Mission that does not exist', async () => {
+    // `work.run.created` records the parent it is given, so attaching after the fact and
+    // discovering the Mission is missing left the journal asserting a parent that
+    // nothing could confirm: a `work.run.created` with a mission parent and no
+    // `mission.run.attached` beside it. The Run now does not exist to make that claim.
+    const harness = await started()
+    const result = await harness.send('work.run.create', {
+      steps: [step('one')],
+      missionId: 'no-such-mission',
+    })
+    expect(result.ok).toBe(false)
+    expect(result.refusal?.reason).toMatch(/no Mission with that id/i)
+
+    // And nothing was recorded, so there is no uncorroborated parent claim left behind.
+    await core?.stop('test-teardown')
+    core = undefined
+    const raw = await readFile(join(dir, 'events.jsonl'), 'utf8')
+    expect(raw).not.toContain('"parentId":"no-such-mission"')
+  })
+
+  it('still parents a Run to a Mission that does exist', async () => {
+    const harness = await started()
+    const missionId = await harness.mission('Real', 'Has an id Core knows.')
+    await harness.send('mission.activate', { missionId })
+    const result = await harness.send('work.run.create', {
+      steps: [step('one')],
+      missionId,
+    })
+    expect(result.ok).toBe(true)
+
+    const view = harness.core.mission().missions.find((m) => m.missionId === missionId)
+    expect(view?.counts.total).toBe(1)
+  })
+
+  it('creates an unparented Run when no Mission is named', async () => {
+    const harness = await started()
+    const result = await harness.send('work.run.create', { steps: [step('one')] })
+    expect(result.ok).toBe(true)
+    expect(harness.core.work()?.runs[0]?.parentId ?? null).toBeNull()
+  })
+})
+
 describe('STOP ALL outranks Missions', () => {
   it('refuses to activate a Mission while stopped', async () => {
     const harness = await started()

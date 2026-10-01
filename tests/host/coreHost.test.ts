@@ -305,6 +305,18 @@ describe('the renderer bridge refuses what a window should not name', () => {
     expect(forwarded).not.toMatch(/\bparent\b\s*[,:}]/)
   })
 
+  it('rebuilds run limits from named ceilings instead of forwarding the object', async () => {
+    const { contract } = await contractBetween("case 'work.run.create'", "case 'work.run.start'")
+
+    // Every other field on this command is rebuilt so an ignored blob is never
+    // structured-cloned into the main process; `limits` was the one field that skipped
+    // that. It cannot raise a ceiling either way - Core clamps downward - but it could
+    // carry an arbitrarily large object across the boundary.
+    expect(contract).toContain('for (const name of')
+    expect(contract).toContain('Math.floor(value)')
+    expect(contract).not.toContain('limits: rawLimits')
+  })
+
   it('lets a Mission command carry its words and nothing else', async () => {
     const { contract } = await contractBetween("case 'mission.create'", "case 'core.command.submit':")
 

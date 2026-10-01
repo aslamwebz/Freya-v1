@@ -686,12 +686,35 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       }
       const missionId = string('missionId', MAX_ID_CHARS, false)
       if (missionId === null) return { ok: false, reason: 'mission id is invalid' }
+      // Rebuilt from the four named ceilings rather than forwarded as an object.
+      //
+      // Every other field on this command is rebuilt for one reason: an ignored blob
+      // would still be structured-cloned into the main process before Core could refuse
+      // it, so a window could attach an arbitrarily large payload to an otherwise valid
+      // command. `limits` was the one field that skipped that, for no stated reason.
+      //
+      // None of these can raise anything — Core clamps each one downward against
+      // WORK_LIMITS — so this is about the size of what crosses the boundary, not about
+      // what it can do.
       const rawLimits = record?.limits
-      if (
-        rawLimits !== undefined &&
-        (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits))
-      ) {
-        return { ok: false, reason: 'run limits are invalid' }
+      let limits: Record<string, number> | undefined
+      if (rawLimits !== undefined) {
+        if (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits)) {
+          return { ok: false, reason: 'run limits are invalid' }
+        }
+        const requested = rawLimits as Record<string, unknown>
+        limits = {}
+        for (const name of ['maxSteps', 'maxActions', 'maxDurationMs', 'maxAttemptsPerStep']) {
+          const value = requested[name]
+          if (value === undefined || value === null) continue
+          if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+            return { ok: false, reason: `run limit ${name} is invalid` }
+          }
+          limits[name] = Math.floor(value)
+        }
+        // An object carrying only unrecognised keys carries no request at all, and
+        // forwarding it would be forwarding an empty lie.
+        if (Object.keys(limits).length === 0) limits = undefined
       }
       return {
         ok: true,
@@ -699,7 +722,7 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
           steps,
           ...(taskId === undefined ? {} : { taskId }),
           ...(missionId === undefined ? {} : { missionId }),
-          ...(rawLimits === undefined ? {} : { limits: rawLimits }),
+          ...(limits === undefined ? {} : { limits }),
         },
       }
     }

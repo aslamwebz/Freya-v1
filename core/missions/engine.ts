@@ -444,6 +444,18 @@ export class MissionEngine {
   }
 
   /**
+   * Whether a Mission with this id exists.
+   *
+   * Exists so Core can answer "is this a real Mission?" before it writes a Run whose
+   * parent it is about to assert. The admission rules — active, not expired, under both
+   * ceilings — belong to {@link attachChildRun} and are deliberately not duplicated here;
+   * a second copy of those rules in Core is how the two would drift.
+   */
+  exists(missionId: string): boolean {
+    return this.state.missions.has(missionId)
+  }
+
+  /**
    * Attach a child Run.
    *
    * The only door to a new Run, and it enforces admission before anything happens:

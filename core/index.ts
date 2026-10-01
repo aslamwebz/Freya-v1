@@ -2234,6 +2234,15 @@ class FreyaCore implements Core {
               "a Run's parent is decided by Core; name a missionId instead of a parent",
             )
           }
+          // Checked before the Run is created, because `work.run.created` records the
+          // parent it is given. Attaching afterwards and discovering the Mission does not
+          // exist left the durable log claiming a parent that nothing could corroborate —
+          // a `work.run.created` with a `mission` parent and no `mission.run.attached`
+          // anywhere near it. Only *existence* is asked here; whether the attachment is
+          // admissible stays with the engine, so the rules live in one place.
+          if (missionId !== null && !this.requireMission().exists(missionId)) {
+            return this.workRefusal(requestId, 'run-created', 'there is no Mission with that id')
+          }
           const parent = missionId === null ? null : { kind: 'mission' as const, id: missionId }
           const outcome = await this.requireWork().createRun({
             steps: planSteps,

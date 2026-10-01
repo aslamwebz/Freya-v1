@@ -43,13 +43,18 @@
  *
  * ## Deferred kinds
  *
- * `agent_work` (Workforce state, which waits for issue #10) is *declared* so
- * that a caller asking for it is refused truthfully — `kind_deferred` in a word
- * — instead of silently receiving nothing, or worse, receiving something
- * invented. Declaring a kind is not sourcing it: admission refuses it until #10
- * lands. `active_window` was declared the same way; the Phase 9 observation lane
- * (issue #30) is the capture lane that sources it, as a `host_report` of app and
- * window *identity* — never pixels — from an explicit opt-in host sensor.
+ * `agent_work` (a different Workforce lane, which waits for issue #10) is
+ * *declared* so that a caller asking for it is refused truthfully —
+ * `kind_deferred` in a word — instead of silently receiving nothing, or worse,
+ * receiving something invented. Declaring a kind is not sourcing it: admission
+ * refuses it until #10 lands. `active_window` was declared the same way; the
+ * Phase 9 observation lane (issue #30) is the capture lane that sources it, as
+ * a `host_report` of app and window *identity* — never pixels — from an
+ * explicit opt-in host sensor.
+ *
+ * `active_worker` is the sourced Workforce kind (issue #31): bounded metadata
+ * about a worker Core currently has active, produced by the Workforce adapter
+ * from Core-owned projections.
  */
 
 /* ------------------------------------------------------------------ kinds */
@@ -80,6 +85,8 @@ export const CONTEXT_KINDS = [
   'shared_media',
   /** The active app/window identity, host-observed and TTL-bounded (issue #30). */
   'active_window',
+  /** A Workforce worker Core currently has active, summarised as bounded metadata. */
+  'active_worker',
 ] as const
 export type ContextKind = (typeof CONTEXT_KINDS)[number]
 
@@ -151,6 +158,9 @@ export const CONTEXT_KIND_SOURCES: Readonly<Record<ContextKind, readonly Context
     // never Core's invention: `host_report` alone, so an admitted active_window
     // always names the observation (`originId`) behind it.
     active_window: ['host_report'],
+    // Active worker is Core's own record of Workforce state (#31): the adapter
+    // derives it from Core projections, and nothing that is not Core may say so.
+    active_worker: ['core_record'],
   })
 
 /* ----------------------------------------------------------------- scopes */

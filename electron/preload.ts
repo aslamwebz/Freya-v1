@@ -245,10 +245,12 @@ const api = {
    * revocation, no scope request, no reference resolution, and above all no
    * way to attach a provenance, a trust class or an authority to anything.
    * Context authority belongs to Core (issue #15); none of it is lent across
-   * this bridge, and `CORE_COMMANDS` below carries no `context.*` name because
-   * no such command exists yet and this lane does not get to invent one. The
-   * day #15/#16 add `context.status.read` to Core's vocabulary, a read arm is
-   * added *there* and mirrored here — and it will still be a read.
+   * this bridge, and `CORE_COMMANDS` below carries no `context.*` name. Core's
+   * own vocabulary does carry `context.status.read` and its siblings, and this
+   * lane still whitelists none of them: a command arm is a door, and the
+   * projection read above is the whole of the window's Context privilege —
+   * whatever Core answers, it answers as metadata, with no argument this
+   * bridge could fill.
    */
   coreContext: (): Promise<ContextProjection | null> =>
     ipcRenderer.invoke('freya:core:context'),
@@ -371,11 +373,11 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
 
   // Context, and the entry is deliberately nothing.
   //
-  // Core's Context domain does not exist yet (issue #15) and its assembly is
-  // issue #16's, so there is no `context.status.read` in `CoreCommandName` to
-  // whitelist and a window naming one is refused as an unknown command before
-  // this list is even consulted — the correct answer for every spelling of
-  // "let me tell Core what is around me". The window's entire Context
+  // Core's vocabulary now carries `context.status.read` and four siblings, and
+  // none of them is whitelisted here: a window naming any `context.*` command
+  // is refused as an unknown command before this list is even consulted — the
+  // correct answer for every spelling of "let me tell Core what is around me".
+  // The window's entire Context
   // privilege is the two projection reads on the api object above: a pull and
   // a subscription. There is no write verb to be tempted by because there is
   // no write verb.

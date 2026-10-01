@@ -12,7 +12,8 @@ import { useContext } from '../../core/useContext'
  *
  * This window answers one question: *what does Core say is around the current
  * question, and what does it say about where that came from?* Everything on
- * screen arrived in a `ContextProjection` that Core built. There is no local
+ * screen arrived in a `ContextProjection` carrying Core's own report of what is
+ * held. There is no local
  * awareness, no optimistic item, and no simulated context — including when
  * there is nothing to show, in which case the window says plainly that no
  * Context domain is reporting rather than rendering an empty frame as though
@@ -21,14 +22,14 @@ import { useContext } from '../../core/useContext'
  * ## What it deliberately does not do
  *
  * There is not one control in this file, and there is not one command submitted
- * from it. The Workforce lane at least owns a payloadless read command; Context
- * has no command yet at all, because the vocabulary and the handler belong to
- * issues #15 and #16, not to a window. The one pull this surface makes on
- * mount exists so that a refusal to answer lands as a sentence on screen rather
- * than as a view that has quietly stopped being current — and a pull carries no
- * fields by construction, so there is nothing here that could smuggle a
- * provenance, a scope, a TTL or an authority toward Core even by accident.
- * Nothing captured, nothing selected, nothing revoked, nothing resolved.
+ * from it. Core's vocabulary carries context commands, and this window reaches
+ * none of them: the bridge whitelists no `context.*` name, so the one pull this
+ * surface makes on mount exists so that a refusal to answer lands as a sentence
+ * on screen rather than as a view that has quietly stopped being current — and
+ * a pull carries no fields by construction, so there is nothing here that could
+ * smuggle a provenance, a scope, a TTL or an authority toward Core even by
+ * accident. Nothing captured, nothing selected, nothing revoked, nothing
+ * resolved.
  *
  * ## Provenance, scope and TTL are Core's facts, shown as Core's words
  *
@@ -129,11 +130,11 @@ export function ContextSurface() {
 
   if (projection.health !== 'ready') {
     // Two different absences, and they must not read as each other: Core has
-    // said *no Context domain exists* (the truth about this build), or Core is
-    // simply not reporting context yet (the truth about every build until #15
-    // lands, and about a window that opened early). Matching the sentence Core
-    // exported is what keeps the headline honest without this window
-    // paraphrasing it into something stronger than Core claimed.
+    // said *no Context domain exists* (what a Core without one reports), or
+    // Core is simply not reporting context yet (a window that opened early,
+    // or a Core that has not started). Matching the sentence Core exported is
+    // what keeps the headline honest without this window paraphrasing it into
+    // something stronger than Core claimed.
     const noDomain = projection.reason === NO_CONTEXT_DOMAIN_REASON
     return (
       <div className="context-surface" data-health="unavailable">

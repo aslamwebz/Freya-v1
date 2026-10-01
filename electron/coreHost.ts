@@ -6,7 +6,7 @@ import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
 import type { MissionProjection } from '../core/missions/types'
 import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
-import type { ContextProjection } from '../core/protocol/context'
+import type { ContextProjection, ContextProjectionView } from '../core/protocol/context'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 import { BraveSearchProvider } from '../core/research/providers/brave'
 import { ElectronBrowserTargetFactory } from './research/managedTarget'
@@ -47,21 +47,24 @@ export interface HostEnv extends NanoGptEnv {
 /**
  * The far side of the Context seam, as the *host* sees it.
  *
- * This is the deferred hookup, stated as a type rather than as an edit to
- * `core/index.ts`: Core does not have `context()` or `onContext()` yet, because
- * producing Context authority is issue #15's and wiring Core's assembly is
- * issue #16's. Rather than either of those lanes being blocked by this one, or
- * this one guessing at internals it does not own, the host binds
- * *structurally*: a Core that reports context gets followed and mirrored, and
- * a Core that does not gets mirrored as exactly what it is — nothing reported.
+ * Core reports context in its own vocabulary — `context()` answers a
+ * `ContextProjectionView`, the audit-shaped projection the Context integration
+ * inside Core builds — and this host transports the *window's* vocabulary, the
+ * `ContextProjection` #24 declared. `ContextChannel` binds *structurally* to a
+ * candidate with both halves of the mirror contract, translates what arrives
+ * into the window's shape, and forwards it. A candidate that already speaks the
+ * window's shape (the seam #24 documented for a Core that grows its own mirror)
+ * is forwarded verbatim, because it is already the answer.
  *
  * `ContextChannel` cannot write into a Core, cannot substitute a projection,
  * and has no branch that runs when nothing binds. Electron owns no Context
- * authority here; it owns a forwarding box and a disposer.
+ * authority here; it owns a forwarding box, a translation and a disposer.
  */
 export interface ContextReportingCore {
-  context(): ContextProjection
-  onContext(listener: (projection: ContextProjection) => void): () => void
+  context(): ContextProjection | ContextProjectionView
+  onContext(
+    listener: (projection: ContextProjection | ContextProjectionView) => void,
+  ): () => void
 }
 
 /** Whether a Core object actually is a context reporter, checked by shape. */
@@ -72,6 +75,71 @@ export function isContextReportingCore(candidate: unknown): candidate is Context
     typeof record.context === 'function' &&
     typeof record.onContext === 'function'
   )
+}
+
+/**
+ * One projection of Core's Context truth, in the vocabulary a window reads.
+ *
+ * A Core reporting the window's own `ContextProjection` is already the answer
+ * and is returned as it came. A Core reporting `ContextProjectionView` — the
+ * shape this repository's Core actually answers — is translated field by field,
+ * and the translation is where every "Core does not say" is decided:
+ *
+ *  - **`label` is always null.** Core's audit row carries the *length* of a
+ *    label and never the label, because a file name is private in exactly the
+ *    way the content is. The surface falls back to `kind`, which is Core's own
+ *    word.
+ *  - **`ttlSeconds` is always null.** Core reports the instant an item stops
+ *    being valid; it does not report a granted lifetime, and arithmetic on two
+ *    instants would be this file inventing one.
+ *  - **`references` is always empty.** Core's projection holds no standing
+ *    references: `context.reference.read` resolves a term inside Core and is
+ *    consumed there, so "no open references" is the truth about the projection
+ *    rather than a gap in it.
+ *  - **scope and provenance are reported verbatim**, as ids and instants —
+ *    metadata, with nothing a sentence could hide in.
+ *
+ * Health follows the one fact a window cannot check for itself: a Core that has
+ * not built its Context integration reports zeroed limits, and one that has can
+ * only report positive ones (`contextLimits` clamps into `[1, ceiling]`), so an
+ * integration that is not there is `unavailable` in Core's own words rather
+ * than `ready` with an empty list.
+ */
+export function toContextProjection(
+  projection: ContextProjection | ContextProjectionView,
+): ContextProjection {
+  if ('health' in projection) return projection
+
+  const view = projection
+  const available = view.limits.maxItems > 0
+  return {
+    health: available ? 'ready' : 'unavailable',
+    reason: available ? null : (view.persistence.reason ?? 'Core has not reported a Context yet'),
+    items: view.items.map((row) => ({
+      itemId: row.contextId,
+      kind: row.kind,
+      label: null,
+      state: row.state,
+      provenance: {
+        sourceClass: row.source,
+        detail: row.originId,
+        admittedAt: row.admittedAt,
+      },
+      scope: { label: row.scopeKind, detail: row.scopeId },
+      expiresAt: row.expiresAt,
+      ttlSeconds: null,
+    })),
+    references: [],
+    counts: {
+      items: view.counts.retained,
+      current: view.counts.live,
+      expired: view.counts.expired,
+      revoked: view.counts.revoked,
+      references: 0,
+      unresolvedReferences: 0,
+    },
+    sequence: view.sequence,
+  }
 }
 
 /**
@@ -91,18 +159,20 @@ export class ContextChannel {
   private readonly windows = new Set<(projection: ContextProjection) => void>()
 
   /**
-   * Follow a Core that reports context. Anything else — today, every Core in
-   * this repository — binds to nothing and is not an error.
+   * Follow a Core that reports context. Anything else — a Core built without
+   * the Context facade — binds to nothing and is not an error.
    */
   bind(candidate: unknown): void {
     if (!isContextReportingCore(candidate)) return
     this.core = candidate
-    this.disposeCore = candidate.onContext((projection) => this.broadcast(projection))
+    this.disposeCore = candidate.onContext((projection) =>
+      this.broadcast(toContextProjection(projection)),
+    )
   }
 
   /** Core's last reported projection, or null when no Core is reporting. */
   pull(): ContextProjection | null {
-    return this.core === null ? null : this.core.context()
+    return this.core === null ? null : toContextProjection(this.core.context())
   }
 
   /**
@@ -231,11 +301,11 @@ export interface CoreHost {
    *
    * Its own channel like every subsystem's, and the note that matters is about
    * what is *not* here: the host has no way to write a context item, no source
-   * to hand to Core yet, and no projection of its own to substitute. Until a
-   * Core grows `context()` and `onContext()` — #15's domain, #16's assembly —
-   * `context()` answers `null` and this channel is a closed door with a
-   * disposer. Forwarding what Core says is the entire of what the host knows
-   * how to do with context.
+   * to hand to Core, and no projection of its own to substitute. A Core that
+   * reports no context leaves `context()` answering `null` and this channel a
+   * closed door with a disposer; a Core that does report one is followed, and
+   * what it says arrives translated into the window's vocabulary. Forwarding
+   * what Core says is the entire of what the host knows how to do with context.
    */
   onContext(send: (projection: ContextProjection) => void): () => void
   context(): ContextProjection | null
@@ -316,10 +386,10 @@ export class ElectronCoreHost implements CoreHost {
   private readonly missionWindows = new Set<(projection: MissionProjection) => void>()
   private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
   /**
-   * The Context transport box. Binds structurally to a reporting Core (none
-   * exists yet — see `ContextChannel`), holds a window set, and can write
-   * nothing. Deliberately not a field on Core's construction arguments,
-   * because Core cannot accept a context source until #15/#16 land.
+   * The Context transport box. Binds structurally to a reporting Core, holds a
+   * window set, and can write nothing — see `ContextChannel`. Deliberately not
+   * a field on Core's construction arguments: Core builds its own Context
+   * integration and takes no context source from the host.
    */
   private readonly contextChannel = new ContextChannel()
 
@@ -368,11 +438,10 @@ export class ElectronCoreHost implements CoreHost {
       core.onWork((projection) => this.broadcastWork(projection))
       core.onMission((projection) => this.broadcastMission(projection))
       core.onWorkforce((projection) => this.broadcastWorkforce(projection))
-      // The Context channel, bound by shape rather than by name. Today's Core
-      // has neither `context()` nor `onContext()`, so this binds nothing and
-      // the host mirrors the truthful absence; the day #15/#16 grow those
-      // methods, the same line starts following them, with no edit here and no
-      // authority moved into Electron.
+      // The Context channel, bound by shape rather than by name: a Core that
+      // reports `context()`/`onContext()` is followed and translated into the
+      // window's vocabulary, with no edit here and no authority moved into
+      // Electron. A Core that reports nothing still binds to nothing.
       this.contextChannel.bind(core)
     })()
     try {
@@ -604,11 +673,9 @@ export class ElectronCoreHost implements CoreHost {
   /**
    * Attach to the Context projection, as the channel saw it last.
    *
-   * Today this pushes nothing and pulls null, because the Core in this
-   * repository does not report context yet — the truthful answer, not a gap to
-   * paper over. The channel is where #15's domain will land when Core grows
-   * `context()`/`onContext()`, and nothing in this host decides what a
-   * projection means.
+   * Null until a Core starts reporting, then Core's own facts in the window's
+   * vocabulary — a window attaching late is pushed the current one, like every
+   * other channel here. Nothing in this host decides what a projection means.
    */
   onContext(send: (projection: ContextProjection) => void): () => void {
     return this.contextChannel.on(send)

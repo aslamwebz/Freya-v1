@@ -7,7 +7,12 @@ import { MissionEngine } from '../../core/missions/engine'
 import { MemoryMissionStore } from '../../core/missions/memory-store'
 import type { MissionStore } from '../../core/missions/store'
 import { MissionVerifierRegistry } from '../../core/missions/verifier'
-import { MISSION_REASONS, type MissionLimits, type MissionVerificationOutcome } from '../../core/missions/types'
+import {
+  DEFAULT_MISSION_LIMITS,
+  MISSION_REASONS,
+  type MissionLimits,
+  type MissionVerificationOutcome,
+} from '../../core/missions/types'
 import type { RunRecord, RunStatus, StepRecord } from '../../core/work/types'
 import { EventFabric } from '../../core/events/fabric'
 import { JsonlEventStore } from '../../core/events/jsonl-store'
@@ -723,6 +728,70 @@ describe('progress is derived, never invented', () => {
   })
 })
 
+describe('a stalled child is visible', () => {
+  it('flags an active Mission whose only child is paused', async () => {
+    // Nothing is failing and nothing was cancelled, so `failed`/`cancelled` both read
+    // zero — yet the Mission has stopped moving and will not resume on its own. Without
+    // this the board renders "1 run" with no warning, which is the quietest possible
+    // wrong answer.
+    const work = workStub()
+    const { engine, fabric } = await engineOver(work)
+    const missionId = (await engine.create({ title: 'Stalled', intent: 'Waiting for nothing.' })).missionId as string
+    await engine.activate(missionId)
+    work.runs.set('r1', runRecord('r1', 'paused'))
+    await engine.attachChildRun(missionId, 'r1')
+
+    const view = engine.projection().missions[0]
+    expect(view?.status).toBe('active')
+    expect(view?.needsAttention).toBe(true)
+    await engine.close()
+    await fabric.close()
+  })
+
+  it('flags an active Mission whose only child is waiting', async () => {
+    const work = workStub()
+    const { engine, fabric } = await engineOver(work)
+    const missionId = (await engine.create({ title: 'Waiting', intent: 'Blocked on a person.' })).missionId as string
+    await engine.activate(missionId)
+    work.runs.set('r1', runRecord('r1', 'waiting'))
+    await engine.attachChildRun(missionId, 'r1')
+
+    expect(engine.projection().missions[0]?.needsAttention).toBe(true)
+    await engine.close()
+    await fabric.close()
+  })
+
+  it('does not flag a paused Mission merely for having paused children', async () => {
+    // A Mission the owner paused is not a Mission needing attention; the pause is the
+    // answer, not the problem.
+    const work = workStub()
+    const { engine, fabric } = await engineOver(work)
+    const missionId = (await engine.create({ title: 'Held', intent: 'Paused on purpose.' })).missionId as string
+    await engine.activate(missionId)
+    work.runs.set('r1', runRecord('r1', 'paused'))
+    await engine.attachChildRun(missionId, 'r1')
+    await engine.pause(missionId)
+
+    expect(engine.projection().missions[0]?.needsAttention).toBe(false)
+    await engine.close()
+    await fabric.close()
+  })
+
+  it('does not flag a running child', async () => {
+    // The ordinary case: work in progress is not a problem to report.
+    const work = workStub()
+    const { engine, fabric } = await engineOver(work)
+    const missionId = (await engine.create({ title: 'Busy', intent: 'Working on it.' })).missionId as string
+    await engine.activate(missionId)
+    work.runs.set('r1', runRecord('r1', 'running'))
+    await engine.attachChildRun(missionId, 'r1')
+
+    expect(engine.projection().missions[0]?.needsAttention).toBe(false)
+    await engine.close()
+    await fabric.close()
+  })
+})
+
 describe('durability is reported honestly', () => {
   it('says encrypted when the content store is durable', async () => {
     const { EncryptedMissionStore } = await import('../../core/missions/encrypted-store')
@@ -846,6 +915,116 @@ describe('recovery reconciles without inventing outcomes', () => {
     expect(second.engine.projection().missions[0]?.counts).toMatchObject({ total: 1, completed: 1 })
     await second.engine.close()
     await second.fabric.close()
+  })
+})
+
+describe('journal failures degrade, they do not strand or crash', () => {
+  /** A Mission with one completed child, so completion is otherwise admissible. */
+  async function readyWithChild(): Promise<{
+    engine: MissionEngine
+    fabric: EventFabric
+    missionId: string
+    breakJournal: () => void
+    mendJournal: () => void
+  }> {
+    const work = workStub()
+    work.runs.set('r1', runRecord('r1', 'completed'))
+    work.steps.set('r1', stepRecords('r1', ['verified']))
+    const { engine, fabric } = await engineOver(work)
+    const missionId = (await engine.create({ title: 'Fragile', intent: 'Depends on the journal.' })).missionId as string
+    await engine.activate(missionId)
+    await engine.attachChildRun(missionId, 'r1')
+    const real = fabric.append.bind(fabric)
+    return {
+      engine,
+      fabric,
+      missionId,
+      breakJournal: () => {
+        ;(fabric as unknown as { append: () => Promise<never> }).append = async () => {
+          throw new Error('journal write failed (simulated)')
+        }
+      },
+      mendJournal: () => {
+        ;(fabric as unknown as { append: unknown }).append = real
+      },
+    }
+  }
+
+  it('releases the verification claim when the journal refuses the request', async () => {
+    // The claim is taken before the write that can fail, so without this the Mission is
+    // wedged behind a `verification-in-progress` refusal for the life of the process —
+    // after one disk error, and with no way for the owner to clear it.
+    const { engine, fabric, missionId, breakJournal, mendJournal } = await readyWithChild()
+    breakJournal()
+    await expect(engine.requestCompletion(missionId)).rejects.toThrow()
+    mendJournal()
+
+    const retry = await engine.requestCompletion(missionId)
+    expect(retry.operation).not.toBe('verification-in-progress')
+    expect(retry.ok).toBe(true)
+    expect(engine.snapshot().missions.get(missionId)?.status).toBe('completed')
+    await engine.close()
+    await fabric.close()
+  })
+
+  it('does not raise an unhandled rejection when a command fails', async () => {
+    // `result.finally(...)` returns a *new* promise. Handling `result` does not handle
+    // it, so a rejected command used to leave a rejected promise with no listener —
+    // which Node treats as an unhandled rejection, and by default as a process exit.
+    // A journal failure is exactly what this engine degrades from gracefully, so it
+    // must not take the process with it.
+    const rejections: unknown[] = []
+    const listener = (reason: unknown): void => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', listener)
+    try {
+      const { engine, fabric, missionId, breakJournal, mendJournal } = await readyWithChild()
+      breakJournal()
+      await engine.activate(missionId).catch(() => undefined)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      mendJournal()
+      await engine.close()
+      await fabric.close()
+    } finally {
+      process.off('unhandledRejection', listener)
+    }
+    expect(rejections).toEqual([])
+  })
+})
+
+describe('retention is reported, not hidden', () => {
+  it('says how many Missions exist beyond the ones it lists', async () => {
+    // `maxRetainedMissions` bounds the listing only, so a board that stopped listing
+    // Missions would read as "they were never created". Work reports this triple for
+    // its runs; without it the gap is invisible to anything watching.
+    const work = workStub()
+    const { engine, fabric } = await engineOver(work)
+    const stored: string[] = []
+    for (let index = 0; index < DEFAULT_MISSION_LIMITS.maxRetainedMissions + 5; index += 1) {
+      stored.push((await engine.create({ title: `m${index}`, intent: 'i' })).missionId as string)
+    }
+
+    const projection = engine.projection()
+    expect(projection.missionsTotal).toBe(DEFAULT_MISSION_LIMITS.maxRetainedMissions + 5)
+    expect(projection.missionsRetained).toBe(DEFAULT_MISSION_LIMITS.maxRetainedMissions)
+    expect(projection.missionsHidden).toBe(5)
+    // The in-memory fold keeps everything, so nothing was actually destroyed — which is
+    // precisely why the gap has to be declared rather than left to be noticed.
+    expect(engine.snapshot().missions.size).toBe(DEFAULT_MISSION_LIMITS.maxRetainedMissions + 5)
+    expect(stored).toHaveLength(DEFAULT_MISSION_LIMITS.maxRetainedMissions + 5)
+    await engine.close()
+    await fabric.close()
+  })
+
+  it('reports no hidden Missions when there are few', async () => {
+    const { engine, fabric } = await engineOver(workStub())
+    await engine.create({ title: 'only', intent: 'i' })
+    const projection = engine.projection()
+    expect(projection.missionsHidden).toBe(0)
+    expect(projection.missionsTotal).toBe(projection.missionsRetained)
+    await engine.close()
+    await fabric.close()
   })
 })
 

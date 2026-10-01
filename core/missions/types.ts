@@ -473,6 +473,18 @@ export interface MissionProjection {
     readonly needsAttention: number
   }
   readonly limits: MissionLimits
+  /**
+   * How many Missions this projection lists, out of how many exist, and how many are
+   * therefore not on screen.
+   *
+   * `maxRetainedMissions` bounds the *listing* and nothing else — not the journal, not
+   * the in-memory fold — so a viewer that quietly stopped listing Missions would read
+   * as "they were never created". These three make the gap visible instead. Same shape
+   * and same reason as Work's `runsRetained` / `runsTotal` / `runsHidden`.
+   */
+  readonly missionsRetained: number
+  readonly missionsTotal: number
+  readonly missionsHidden: number
   /** Highest sequence folded in, so a window can prove it is current. */
   readonly sequence: number
 }

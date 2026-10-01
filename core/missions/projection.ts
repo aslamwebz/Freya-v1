@@ -71,6 +71,9 @@ export const ABSENT_MISSION_PROJECTION: MissionProjection = Object.freeze({
     needsAttention: 0,
   }),
   limits: DEFAULT_MISSION_LIMITS,
+  missionsRetained: 0,
+  missionsTotal: 0,
+  missionsHidden: 0,
   sequence: 0,
 })
 
@@ -80,11 +83,13 @@ export function missionProjection(
   persistence: { mode: 'encrypted' | 'ephemeral' | 'unavailable'; reason: string | null },
   now: Date,
 ): MissionProjection {
-  const missions = [...state.missions.values()]
-    .sort(byRecencyThenId)
-    .slice(0, DEFAULT_MISSION_LIMITS.maxRetainedMissions)
-    .map((mission) => summarise(mission, work, now))
+  const all = [...state.missions.values()].sort(byRecencyThenId)
+  const retained = all.slice(0, DEFAULT_MISSION_LIMITS.maxRetainedMissions)
+  const missions = retained.map((mission) => summarise(mission, work, now))
 
+  // Per-status counts describe the *listed* Missions, because that is what a person
+  // is looking at. The retention triple below says how much of the truth is not on
+  // screen, which is the part a viewer cannot otherwise detect.
   const counts = { total: 0, draft: 0, active: 0, paused: 0, completed: 0, failed: 0, cancelled: 0, needsAttention: 0 }
   for (const mission of missions) {
     counts.total += 1
@@ -105,6 +110,16 @@ export function missionProjection(
     missions,
     counts,
     limits: DEFAULT_MISSION_LIMITS,
+    // The honest retention triple, the same shape Work reports for its runs.
+    //
+    // `maxRetainedMissions` bounds what a board *lists* and nothing else — not the
+    // journal, not the in-memory fold. So a viewer that silently stopped listing
+    // Missions would read as "they were never created", which is false, and the
+    // difference between `missionsTotal` and `missionsRetained` is exactly how much of
+    // the truth is off screen.
+    missionsRetained: missions.length,
+    missionsTotal: all.length,
+    missionsHidden: Math.max(0, all.length - missions.length),
     sequence: state.sequence,
   }
 }
@@ -112,7 +127,15 @@ export function missionProjection(
 export function summarise(mission: MissionRecord, work: WorkTruthPort, now: Date): MissionSummaryView {
   const counts = countChildren(mission, work)
   const expired = !isTerminalMissionStatus(mission.status) && Date.parse(now.toISOString()) >= Date.parse(mission.deadlineAt)
-  const needsAttention = expired || counts.failed > 0 || counts.cancelled > 0
+  // A child that stopped without the Mission stopping is the case that goes missing if
+  // only `failed` and `cancelled` are counted. A Mission can end up `active` with every
+  // one of its Runs `paused` or `waiting` — pause propagates to the children outside the
+  // Mission's lock, so a resume arriving mid-propagation can land before the pause
+  // finishes and leave the Run stopped with nobody resuming it. Nothing is failing, so
+  // this reads as "1 run" on the board with no warning at all.
+  const childStalled =
+    mission.status === 'active' && (counts.paused > 0 || counts.waiting > 0)
+  const needsAttention = expired || counts.failed > 0 || counts.cancelled > 0 || childStalled
 
   return {
     missionId: mission.missionId,

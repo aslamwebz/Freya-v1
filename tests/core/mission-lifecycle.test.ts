@@ -253,6 +253,26 @@ const CREATED = event('mission.created', { missionId: 'm1', status: 'draft', lim
 const ACTIVATED = event('mission.activated', { missionId: 'm1', from: 'draft', to: 'active' }, 2)
 const PAUSED = event('mission.paused', { missionId: 'm1', from: 'active', to: 'paused', reason: 'owner' }, 3)
 const RESUMED = event('mission.resumed', { missionId: 'm1', from: 'paused', to: 'active' }, 4)
+
+/**
+ * The two verification events that must precede a completion.
+ *
+ * They are part of the happy path rather than an afterthought, because a
+ * `mission.completed` line with nothing behind it is exactly the fabrication the
+ * reducer refuses. An earlier version of this file folded a bare `completed` and
+ * called it the happy path, which is the bug in test form.
+ */
+const VERIFICATION_REQUESTED = event(
+  'mission.verification.requested',
+  { missionId: 'm1', verifierId: 'mission.work.verified', runIds: [] },
+  5,
+)
+const VERIFICATION_PASSED = event(
+  'mission.verification.completed',
+  { missionId: 'm1', verifierId: 'mission.work.verified', outcome: 'passed', reason: 'verification_passed' },
+  6,
+)
+
 const COMPLETED = event(
   'mission.completed',
   { missionId: 'm1', from: 'active', to: 'completed', verifierId: 'mission.work.verified' },
@@ -270,8 +290,71 @@ describe('the fold', () => {
     expect(state.missions.get('m1')?.status).toBe('paused')
     state = reduceMissionState(state, RESUMED)
     expect(state.missions.get('m1')?.status).toBe('active')
+    // Asked, answered, and only then concluded.
+    state = reduceMissionState(state, VERIFICATION_REQUESTED)
+    state = reduceMissionState(state, VERIFICATION_PASSED)
     state = reduceMissionState(state, COMPLETED)
     expect(state.missions.get('m1')?.status).toBe('completed')
+    expect(state.missions.get('m1')?.verification?.state).toBe('passed')
+  })
+
+  it('refuses a completed claim with no verification behind it', () => {
+    // The sharpest forgery available, because `active → completed` is a *legal* edge
+    // and the transition table cannot catch it. Three hand-written lines — created,
+    // activated, completed — would otherwise fold into a Mission that reports itself
+    // achieved with nothing having established anything, which is the fabricated
+    // outcome the Red Team gauntlet calls zero-tolerance.
+    let state = reduceMissionState(initialMissionState(), CREATED)
+    state = reduceMissionState(state, ACTIVATED)
+    state = reduceMissionState(state, COMPLETED)
+    expect(state.missions.get('m1')?.status).toBe('active')
+    expect(state.missions.get('m1')?.verification).toBeNull()
+  })
+
+  it('refuses a completed claim naming a verifier that never passed', () => {
+    // The verifier id has to be the one that actually answered, or a journal could
+    // borrow a passing verifier's name from another Mission's history.
+    let state = reduceMissionState(initialMissionState(), CREATED)
+    state = reduceMissionState(state, ACTIVATED)
+    state = reduceMissionState(state, VERIFICATION_REQUESTED)
+    state = reduceMissionState(state, VERIFICATION_PASSED)
+    const borrowed = event(
+      'mission.completed',
+      { missionId: 'm1', from: 'active', to: 'completed', verifierId: 'mission.something.else' },
+      7,
+    )
+    state = reduceMissionState(state, borrowed)
+    expect(state.missions.get('m1')?.status).toBe('active')
+  })
+
+  it('refuses a completed claim whose verification did not pass', () => {
+    // A verification that asked and did not establish is not a licence to conclude,
+    // however confident the surrounding text is.
+    let state = reduceMissionState(initialMissionState(), CREATED)
+    state = reduceMissionState(state, ACTIVATED)
+    state = reduceMissionState(state, VERIFICATION_REQUESTED)
+    const notEstablished = event(
+      'mission.verification.completed',
+      { missionId: 'm1', verifierId: 'mission.work.verified', outcome: 'not_established', reason: 'child_run_unverified' },
+      6,
+    )
+    state = reduceMissionState(state, notEstablished)
+    state = reduceMissionState(state, COMPLETED)
+    expect(state.missions.get('m1')?.status).toBe('active')
+  })
+
+  it('refuses a completed claim with no verifier named at all', () => {
+    let state = reduceMissionState(initialMissionState(), CREATED)
+    state = reduceMissionState(state, ACTIVATED)
+    state = reduceMissionState(state, VERIFICATION_REQUESTED)
+    state = reduceMissionState(state, VERIFICATION_PASSED)
+    const anonymous = event(
+      'mission.completed',
+      { missionId: 'm1', from: 'active', to: 'completed', verifierId: null },
+      7,
+    )
+    state = reduceMissionState(state, anonymous)
+    expect(state.missions.get('m1')?.status).toBe('active')
   })
 
   it('refuses an impossible transition in a hand-written journal', () => {
@@ -285,8 +368,13 @@ describe('the fold', () => {
   })
 
   it('refuses to move a settled Mission', () => {
+    // Settled by a real completion — asked, passed, concluded — so the cancellation
+    // below is refused because the Mission is *settled*, not because the completion
+    // itself was refused.
     let state = reduceMissionState(initialMissionState(), CREATED)
     state = reduceMissionState(state, ACTIVATED)
+    state = reduceMissionState(state, VERIFICATION_REQUESTED)
+    state = reduceMissionState(state, VERIFICATION_PASSED)
     state = reduceMissionState(state, COMPLETED)
     state = reduceMissionState(state, CANCELLED)
     expect(state.missions.get('m1')?.status).toBe('completed')

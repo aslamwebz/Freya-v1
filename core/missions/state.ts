@@ -189,6 +189,22 @@ function transition(
   if (from !== mission.status) return state
   if (!canTransitionMission(from, to)) return state
 
+  // The third refusal, and the one that stops a fabricated outcome.
+  //
+  // A `mission.completed` line is a *claim* that something was established. The live
+  // engine never emits one without a `mission.verification.completed` saying `passed`
+  // first, and the verifier that said so has to be the one named on the transition.
+  // Without this check a three-line hand-written journal — created, activated,
+  // completed — folds into a Mission that reports `completed` with no verification
+  // behind it at all, which is precisely the fabricated outcome the Red Team gauntlet
+  // calls zero-tolerance. The transition table cannot catch it, because
+  // `active → completed` *is* a legal edge.
+  if (to === 'completed') {
+    const verification = mission.verification
+    if (verification === null || verification.state !== 'passed') return state
+    if (readId(payload, 'verifierId') !== verification.verifierId) return state
+  }
+
   const missions = new Map(state.missions)
   const at = event.occurredAt
   missions.set(missionId, {

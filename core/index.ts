@@ -31,6 +31,12 @@ import { EncryptedConversationStore } from './conversation/encrypted-store'
 import { MemoryConversationStore } from './conversation/memory-store'
 import { VoiceService } from './voice/service'
 import type { VoiceTranscriber, VoiceSynthesizer } from './voice/types'
+import { WorkforceEngine } from './workforce/engine'
+import type { SubordinateWorkerScope, WorkforceOwnerScope } from './workforce/authority'
+import { ABSENT_WORKFORCE_PROJECTION } from './workforce/projection'
+import { workerPrincipalId } from './workforce/types'
+import type { WORKFORCE_LIMITS } from './workforce/types'
+import type { WorkforceProjection, WorkforceWorkerDetail } from './workforce/types'
 import { MissionEngine, type WorkPort } from './missions/engine'
 import { ABSENT_MISSION_PROJECTION } from './missions/projection'
 import type { MissionCommandOutcome, MissionDetail, MissionProjection } from './missions/types'
@@ -57,10 +63,10 @@ import {
 import type { ContextBudget } from './mind/context-compiler'
 import type { ConversationProjection, ConversationTurnView, VoiceProjection } from './protocol/conversation'
 import {
-  ABSENT_WORKFORCE_PROJECTION,
+  ABSENT_WORKFORCE_PROJECTION as ABSENT_WORKFORCE_MIRROR,
   NO_WORKFORCE_DOMAIN_REASON,
   WORKFORCE_NO_PAYLOAD,
-  type WorkforceProjection,
+  type WorkforceProjection as WorkforceMirrorProjection,
   type WorkforceSource,
 } from './protocol/workforce'
 import { describeActivity, mergeActivity } from './protocol/activity'
@@ -208,6 +214,17 @@ export interface CoreOptions {
   /** Overrides the Mission content store wholesale. For tests. */
   missionStore?: MissionStore
   /**
+   * Narrowed Workforce ceilings. Can only *lower* the code-owned limits.
+   *
+   * A raise is ignored rather than clamped, so a misconfigured Core gets the tighter of
+   * the two behaviours and never a silent widening. There is deliberately no way to
+   * hand this subsystem extra capability names to distribute: which capabilities a
+   * worker may hold is a closed vocabulary in `core/protocol/core-protocol.ts`, not a
+   * configuration option, because "just this once, for this agent" is how a worker
+   * capability set grows until it includes `work.approval.decide`.
+   */
+  workforceLimits?: Partial<Record<keyof typeof WORKFORCE_LIMITS, number>>
+  /**
    * The Phase 5 research stack, injected whole.
    *
    * Core assembles it but never populates it: the search provider and the browser
@@ -249,6 +266,19 @@ export interface CoreOptions {
    */
   workforceSource?: WorkforceSource
 }
+
+/**
+ * The Workforce mirror Core serves, from whichever half is the source of truth.
+ *
+ * Two lanes authored this type from opposite ends, and this is a merge, not a
+ * rewrite: #16's Core-owned projection and #14's read-only protocol view are
+ * two shapes of the same facts. The intersection is what `workforce()` and
+ * `onWorkforce` serve. When #14's seam is filled, the source's projection is
+ * served verbatim and carries the protocol's fields; when it is not, Core's
+ * own Workforce engine produces the projection, with no second, parallel copy
+ * of the same state anywhere between them.
+ */
+type WorkforceMirror = WorkforceProjection & WorkforceMirrorProjection
 
 /**
  * The production capability surface of Core.
@@ -340,6 +370,14 @@ export interface Core {
    */
   mission(): MissionProjection
   /**
+   * One worker with its mailbox, decrypted from this process's memory.
+   *
+   * The counterpart to the projection, and the reason message bodies are kept out of
+   * both. Nothing but Core reaches it, and a body never enters a projection, the
+   * journal, or an activity row.
+   */
+  workforceDetail(workerId: string): Promise<WorkforceWorkerDetail | null>
+  /**
    * One Mission's private content, decrypted from the Mission store.
    *
    * The counterpart to the projection, and the reason the store is encrypted rather
@@ -351,18 +389,19 @@ export interface Core {
   /**
    * Core's account of the workforce: workers, teams, and what each is doing.
    *
-   * Read-only and never null. A Core with no Workforce domain returns a
-   * projection that says exactly that — because "there are no workers" and
-   * "there is no Workforce" are different facts and a surface must not have to
-   * guess which one it is looking at.
+   * Read-only and never null. A Core whose Workforce has never reported says so in
+   * words — because "there are no workers" and "there is no Workforce" are different
+   * facts and a surface must not have to guess which one it is looking at.
    *
-   * This is the far side of the `WorkforceSource` seam. Core reads a source it
-   * was built with; it has no method that takes an instruction about workers,
-   * so there is no path from this accessor to authority even in principle.
+   * One accessor serves both lanes without either owning the other's state. The
+   * `WorkforceSource` seam #14 defined (#16's `workforceSource` option filling it) is
+   * served verbatim when filled; otherwise Core's own engine projection IS the truth
+   * the seam would have reported — there is no method here that takes an instruction
+   * about workers, so no authority is reachable through this accessor in any direction.
    */
-  workforce(): WorkforceProjection
-  /** Subscribe to the Workforce projection. Same mirror semantics as the others. */
-  onWorkforce(listener: (projection: WorkforceProjection) => void): () => void
+  workforce(): WorkforceMirror
+  /** Subscribe to the Workforce mirror. Same mirror semantics as the others. */
+  onWorkforce(listener: (projection: WorkforceMirror) => void): () => void
   readonly lifecycle: CoreLifecycle
 }
 
@@ -403,13 +442,15 @@ class FreyaCore implements Core {
   private readonly brainListeners = new Set<(projection: BrainProjection) => void>()
   private readonly workListeners = new Set<(projection: WorkProjection) => void>()
   private readonly missionListeners = new Set<(projection: MissionProjection) => void>()
-  private readonly workforceListeners = new Set<(projection: WorkforceProjection) => void>()
+  private readonly workforceListeners = new Set<(projection: WorkforceMirror) => void>()
   /**
    * The Workforce seam, or null in every build where nothing has filled it.
    *
-   * Null is a real, reachable state rather than a branch nobody exercises: it
-   * is what production is today, and `workforce()` reports it in words instead
-   * of inventing an empty-but-ready workforce to stand in.
+   * #14's read-only view across the seam. When it is filled, Core serves what it
+   * reports verbatim; it is never a path to instruct anything, and no authority
+   * travels in either direction along it. When it is *not* filled, Core's own
+   * Workforce engine is the source of truth and the seam stays null rather than
+   * both lanes keeping a parallel copy of the same facts.
    */
   private workforceSource: WorkforceSource | null
   /** Detaches Core from the source's change channel. Set once, at start. */
@@ -444,6 +485,14 @@ class FreyaCore implements Core {
    */
   private workEngine: WorkEngine | undefined
   private missionEngine: MissionEngine | undefined
+  /**
+   * The Workforce engine, or undefined before it is built.
+   *
+   * Optional for the same reason `missionEngine` is: `workforce()` has to report
+   * `unavailable` during startup rather than throwing, so a surface can render "Core is
+   * not up yet" without special-casing the failure.
+   */
+  private workforceEngine: WorkforceEngine | undefined
   private workRegistry: WorkRegistry | undefined
 
   constructor(private readonly options: CoreOptions) {
@@ -477,6 +526,32 @@ class FreyaCore implements Core {
 
   issueWorkerAuthority(principalId: PrincipalId): WorkerAuthority {
     return this.service.workerAuthority(principalId)
+  }
+
+  /**
+   * The owner's face of the workforce.
+   *
+   * Same shape of decision as `issueOwnerAuthority`, for the same reason: holding the
+   * object *is* the authority, so there is no capability string a caller could pass to
+   * acquire it, and this method is not on the `Core` interface. It is reachable from
+   * `core/testing.ts` and from inside this module only.
+   *
+   * Every roster, team, assignment and budget operation in this subsystem hangs off this
+   * one object. A worker's scope has none of them — see `SubordinateWorkerScope`.
+   */
+  issueWorkforceOwnerScope(): WorkforceOwnerScope {
+    return this.requireWorkforce().ownerScope()
+  }
+
+  /**
+   * One worker's own scope.
+   *
+   * Issued by Core for a named worker, and the only subordinate surface that exists.
+   * `workerId` is fixed at issuance and `principalId` is derived from it, so neither is a
+   * parameter: a scope cannot speak as another agent, and cannot assert a principal.
+   */
+  issueSubordinateScope(workerId: string): SubordinateWorkerScope {
+    return this.requireWorkforce().ownerScope().scopeFor(workerId)
   }
 
   async start(): Promise<CoreStatus> {
@@ -774,12 +849,33 @@ class FreyaCore implements Core {
     })
     await this.missionEngine.open()
 
+    this.workforceEngine = new WorkforceEngine({
+      fabric: this.fabric,
+      core: {
+        requestCognition: (workerId, intent) =>
+          this.service.workerAuthority(workerPrincipalId(workerId)).request(intent),
+        missionExists: (missionId) => this.missionEngine?.exists(missionId) === true,
+      },
+      principalId: this.owner.id,
+      now: this.options.now,
+      newId: this.options.newId,
+      onChange: () => this.publishWorkforce(),
+      // Read fresh at the moment of each decision, never copied into worker state. An
+      // agent that could start work after the panic button is an agent the button missed.
+      stopAll: () => this.state.stopAll.active,
+      limits: this.options.workforceLimits,
+    })
+    await this.workforceEngine.open()
+
     // The Workforce seam, if anything filled it.
     //
     // Subscribed here rather than in the constructor so a source that pushes
     // during boot cannot reach a listener set nobody has attached to yet, and
     // disposed in `stop()` so a source cannot outlive the Core reading it. A
     // source without `subscribe` is simply read again on the next attach.
+    //
+    // A filled seam is the read-only view #14 exposes; the engine above stays
+    // the authoring half it cannot reach.
     this.disposeWorkforceSource =
       this.workforceSource?.subscribe?.(() => this.publishWorkforce()) ?? (() => {})
 
@@ -831,6 +927,11 @@ class FreyaCore implements Core {
     // Missions reconcile after Work has, because an expired Mission's Runs have to
     // already be settled before the Mission itself is concluded.
     this.publishMission()
+    // And the workforce reconciles last of the three, because a `working` worker may hold
+    // an assignment whose Run Work has just settled. Nothing is resumed and nothing is
+    // marked successful: a worker's plan was in memory, so history is not proof of
+    // execution.
+    this.publishWorkforce()
 
     if (this.currentLifecycle === 'ready') {
       await this.fabric.append('core.ready', {}, { actor: 'system' })
@@ -914,6 +1015,11 @@ class FreyaCore implements Core {
       // into a closed journal. Closing after Work is deliberate: the Mission may want
       // to consult a Run that Work has just finished recording.
       await this.missionEngine?.close()
+      // Workforce closes after Missions and Work for the same ordering reason: a
+      // reconciliation that had not finished would otherwise try to append into a
+      // journal that is already closed, producing a failure *for having failed to
+      // record* the shutdown.
+      await this.workforceEngine?.close()
       await this.conversationStore?.close()
       await this.fabric?.close()
       this.notify()
@@ -1168,6 +1274,91 @@ class FreyaCore implements Core {
   }
 
   /**
+   * The Workforce projection, and its mirror.
+   *
+   * Same semantics as every other projection here: Core built it, a listener cannot
+   * write a field of it, and it is delivered on attach so a surface that reloads knows
+   * where it stands.
+   *
+   * One source of truth, three honest readings:
+   *
+   *   - the `WorkforceSource` seam is filled, so what it reports is served
+   *     verbatim — a source is read, never instructed;
+   *   - no seam, and Core's own Workforce engine holds the domain, so its
+   *     projection IS what the seam would have reported — no second, parallel
+   *     state is kept anywhere; an engine whose fold is still empty reports the
+   *     same reading the seam would, in the same words, because at that point
+   *     "no worker or team exists" is still the whole truth;
+   *   - a source that threw, so an `unavailable` reading that says the read
+   *     failed, rather than a stale one that says everything is fine.
+   */
+  workforce(): WorkforceMirror {
+    if (this.workforceSource !== null) {
+      try {
+        return this.workforceSource.projection() as WorkforceMirror
+      } catch (error) {
+        return {
+          ...ABSENT_WORKFORCE_MIRROR,
+          reason: `the Workforce domain could not be read: ${describe(error)}`,
+        } as WorkforceMirror
+      }
+    }
+    if (this.workforceEngine === undefined) {
+      return {
+        ...ABSENT_WORKFORCE_PROJECTION,
+        reason: 'the Workforce engine is not available',
+      } as WorkforceMirror
+    }
+    const projection = this.workforceEngine.projection()
+    if (projection.sequence === 0) {
+      return {
+        ...ABSENT_WORKFORCE_MIRROR,
+        reason: NO_WORKFORCE_DOMAIN_REASON,
+      } as WorkforceMirror
+    }
+    return projection as WorkforceMirror
+  }
+
+  onWorkforce(listener: (projection: WorkforceMirror) => void): () => void {
+    this.workforceListeners.add(listener)
+    // Delivered immediately, like every other subscription here, so a window
+    // that attaches late agrees with one that never left.
+    try {
+      listener(this.workforce())
+    } catch (error) {
+      console.error('[freya.core] Workforce subscriber threw', error)
+    }
+    return () => {
+      this.workforceListeners.delete(listener)
+    }
+  }
+
+  async workforceDetail(workerId: string): Promise<WorkforceWorkerDetail | null> {
+    if (this.workforceEngine === undefined) return null
+    return await this.workforceEngine.detail(workerId)
+  }
+
+  private publishWorkforce(): void {
+    if (this.workforceListeners.size === 0) return
+    const projection = this.workforce()
+    for (const listener of [...this.workforceListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Workforce listener threw', error)
+        this.workforceListeners.delete(listener)
+      }
+    }
+  }
+
+  private requireWorkforce(): WorkforceEngine {
+    if (this.workforceEngine === undefined) {
+      throw new Error('the Workforce engine is not available')
+    }
+    return this.workforceEngine
+  }
+
+  /**
    * The Work projection.
    *
    * A mirror like the others. A window holds what Core last built and cannot write
@@ -1283,63 +1474,6 @@ class FreyaCore implements Core {
       } catch (error) {
         console.error('[freya.core] Mission listener threw', error)
         this.missionListeners.delete(listener)
-      }
-    }
-  }
-
-  /**
-   * Core's account of the workforce.
-   *
-   * Three outcomes, and no fourth:
-   *
-   *   - a source was supplied, so whatever it reports — verbatim;
-   *   - no source, so `NO_WORKFORCE_DOMAIN_REASON`, which is the truth about
-   *     every build of this repository today;
-   *   - a source that threw, so an `unavailable` projection that says the read
-   *     failed, rather than a stale one that says everything is fine.
-   *
-   * Never an empty-but-ready projection. "There are no workers" and "there is
-   * no Workforce" are different facts, and a surface that cannot tell them
-   * apart will eventually show a person a workforce that was never there.
-   */
-  workforce(): WorkforceProjection {
-    if (this.workforceSource === null) {
-      return { ...ABSENT_WORKFORCE_PROJECTION, reason: NO_WORKFORCE_DOMAIN_REASON }
-    }
-    try {
-      return this.workforceSource.projection()
-    } catch (error) {
-      return {
-        ...ABSENT_WORKFORCE_PROJECTION,
-        reason: `the Workforce domain could not be read: ${describe(error)}`,
-      }
-    }
-  }
-
-  onWorkforce(listener: (projection: WorkforceProjection) => void): () => void {
-    this.workforceListeners.add(listener)
-    // Delivered immediately, like every other subscription here, so a window
-    // that attaches late agrees with one that never left.
-    try {
-      listener(this.workforce())
-    } catch (error) {
-      console.error('[freya.core] Workforce subscriber threw', error)
-    }
-    return () => {
-      this.workforceListeners.delete(listener)
-    }
-  }
-
-  /** Re-publish the Workforce mirror. Called when the source says it moved. */
-  private publishWorkforce(): void {
-    if (this.workforceListeners.size === 0) return
-    const projection = this.workforce()
-    for (const listener of [...this.workforceListeners]) {
-      try {
-        listener(projection)
-      } catch (error) {
-        console.error('[freya.core] Workforce listener threw', error)
-        this.workforceListeners.delete(listener)
       }
     }
   }
@@ -1555,13 +1689,19 @@ class FreyaCore implements Core {
           // closing the gate costs nothing and can be undone, whereas a provider
           // call cannot be un-spent.
           this.gateway?.cancelAll(`STOP ALL: ${reason}`)
-          // Research admission closes in the *same synchronous turn*, for the same
-          // reason. The gateway is what stops a model turn; research also reaches
-          // the network and a browser, and neither is behind the gateway gate. A
+// Research admission closes in the *same synchronous turn*, for the same
+          // reason. The gateway is what stops a model turn; research also reaches the
+          // network and a browser, and neither is behind the gateway gate. A
           // research job cancelled only after an await would still be able to issue
           // its next search, and that next search is the request the owner just
           // asked to stop.
           this.closeResearch(`STOP ALL: ${reason}`)
+          // And the workforce, for the same reason and also without awaiting first. The
+          // latch here is set synchronously and stops every agent being assigned work or
+          // sending messages; the durable `stopped` transitions follow. Without this an
+          // agent could still be handed an assignment after the panic button, which
+          // would make the button a control over models only.
+          this.workforceEngine?.stopAll(`STOP ALL: ${reason}`)
 
           try {
             const event = await this.fabric.append(
@@ -1569,10 +1709,18 @@ class FreyaCore implements Core {
               { by: this.owner.id, reason },
               { actor: this.owner.id, correlationId: requestId },
             )
+            // The workforce's *consequences* are drained here, after the latch is durable,
+            // for the reason `Core.stop()` drains the gateway: the owner's stop still owes
+            // the journal an outcome, and answering before the agents' `stopped`
+            // transitions are written would report a stop over a board that has not been
+            // told yet. The gate itself was closed synchronously above, so nothing could
+            // slip in while this ran.
+            await this.workforceEngine?.settled()
             // The conversation projection reports whether Freya is stopped and
             // whether she can think, so a stop has to refresh it. Without this a
             // Chat window keeps a composer it believes is still open.
             this.conversations?.publish()
+            this.publishWorkforce()
             return { requestId, ok: true, status: this.status(), durableSequence: event.sequence }
           } catch (error) {
             // Fail closed. The owner's stop decision already closed the contact
@@ -1600,7 +1748,9 @@ class FreyaCore implements Core {
             // mutating commands are rejected above once lifecycle is stopping or
             // stopped, and degraded Core is rejected before command dispatch.
             this.gateway?.resume()
+            this.workforceEngine?.resume()
             this.conversations?.publish()
+            this.publishWorkforce()
             return { requestId, ok: true, status: this.status() }
           }
           const event = await this.fabric.append(
@@ -1609,9 +1759,15 @@ class FreyaCore implements Core {
             { actor: this.owner.id, correlationId: requestId },
           )
           this.gateway?.resume()
+          // Same for the workforce: only this path reopens it, and it changes nothing
+          // but whether a *new* assignment or message may begin. It restarts no work and
+          // returns nothing, so a worker stopped by a panic button stays stopped until
+          // somebody resumes it deliberately.
+          this.workforceEngine?.resume()
           // As above: a resume has to reach the surfaces that report it, or Chat
           // stays visibly locked after Core has reopened.
           this.conversations?.publish()
+          this.publishWorkforce()
           return { requestId, ok: true, status: this.status(), durableSequence: event.sequence }
         }
 

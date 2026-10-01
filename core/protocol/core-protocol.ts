@@ -386,6 +386,7 @@ export type CoreCommandName =
    * approver could approve its own request.
    */
   | 'work.approval.decide'
+  | 'mission.status.read'
   | 'mission.create'
   | 'mission.activate'
   | 'mission.pause'

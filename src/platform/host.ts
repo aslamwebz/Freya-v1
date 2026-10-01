@@ -7,6 +7,7 @@ import type { CoreActivityEvent } from '../../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../../core/protocol/conversation'
 import type { BrainProjection } from '../../core/brain/brain'
 import type { WorkProjection } from '../../core/work/projection'
+import type { MissionProjection } from '../../core/missions/types'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -103,6 +104,19 @@ export interface FreyaHostBridge {
    */
   coreWork(): Promise<WorkProjection | null>
   onCoreWork(handler: (projection: WorkProjection) => void): () => void
+
+  /**
+   * The Mission projection, and the Mission surface's own channel.
+   *
+   * Same bargain as every other subsystem here: the projection is what a window needs
+   * to render, and the substance does not cross. No title, no intent, no success
+   * criteria arrive on this channel — those are in the encrypted store and come back
+   * only from an explicit `coreMissionDetail` read. So a window sitting open does not
+   * hold a copy of what the owner asked Freya to do, and `persistence` crosses
+   * precisely so it can say `FORGETS ON QUIT` when that is the truth.
+   */
+  coreMission(): Promise<MissionProjection | null>
+  onCoreMission(handler: (projection: MissionProjection) => void): () => void
 }
 
 declare global {

@@ -111,7 +111,15 @@ export class SafeHttpTransport implements HttpTransport {
               if (count >= redirects) throw new ResearchError('too_many_redirects')
               const location = responseHeaders.location
               if (!location) throw new ResearchError('network_error')
-              url = assertPublicUrl(new URL(location, url).href)
+              const next = new URL(location, url)
+              // A downgrade is refused. Nothing else here leaks a credential on a
+              // redirect — a credential-bearing request refuses to follow one at all —
+              // but an https page that redirects to http lets an on-path attacker
+              // choose what Freya reads, and the read is what becomes evidence.
+              if (url.protocol === 'https:' && next.protocol !== 'https:') {
+                throw new ResearchError('unsafe_url')
+              }
+              url = assertPublicUrl(next.href)
               continue
             }
             if (Number(responseHeaders['content-length']) > maxBytes) throw new ResearchError('response_too_large')

@@ -71,6 +71,21 @@ describe('bounded transport', () => {
     await expect(transport.get('https://example.com', { ...options(), headers: { 'X-Subscription-Token': 'test-credential' } })).rejects.toMatchObject({ code: 'unsafe_url' })
     expect(request).toHaveBeenCalledTimes(1)
   })
+  it('refuses an https to http redirect downgrade', async () => {
+    // Nothing else here leaks a credential on a redirect, but a downgrade lets an
+    // on-path attacker choose what Freya reads, and the read becomes evidence.
+    const request = vi.fn(async () => reply(302, { location: 'http://example.com/' }))
+    const transport = new SafeHttpTransport({ resolver: async () => [{ address: '8.8.8.8', family: 4 }], request })
+    await expect(transport.get('https://example.com', options())).rejects.toMatchObject({ code: 'unsafe_url' })
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+  it('allows an http to https upgrade, which only improves the outcome', async () => {
+    const request = vi.fn(async ({ url }: { url: URL }) =>
+      url.protocol === 'http:' ? reply(302, { location: 'https://example.com/' }) : reply(200, {}, 'body'),
+    )
+    const transport = new SafeHttpTransport({ resolver: async () => [{ address: '8.8.8.8', family: 4 }], request })
+    await expect(transport.get('http://example.com', options())).resolves.toMatchObject({ status: 200 })
+  })
   it('stops after three redirects even when a caller raises the limit', async () => {
     const request = vi.fn(async () => reply(302, { location: '/next' }))
     const transport = new SafeHttpTransport({ resolver: async () => [{ address: '8.8.8.8', family: 4 }], request })

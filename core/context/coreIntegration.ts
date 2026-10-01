@@ -812,8 +812,11 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
     }
 
     const previous = held?.contextId ?? null
+    // `report.missionId` was validated above, so the record's required
+    // `originId` is satisfied even though the admission spec keeps it optional.
     const admitted = this.admitCoreRecord({
       ...missionContextAdmission(report),
+      originId: report.missionId,
       ttlMs: MISSION_CONTEXT_TTL_MS,
     })
     if (!admitted.ok) return admitted

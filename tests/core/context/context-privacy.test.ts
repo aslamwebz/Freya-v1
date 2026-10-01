@@ -179,16 +179,30 @@ describe('private context content reaches no generic surface', () => {
   })
 })
 
-describe('the context domain reaches nothing', () => {
+describe('the context foundation reaches nothing', () => {
   const dir = fileURLToPath(new URL('../../../core/context', import.meta.url))
 
+  /**
+   * The five files the foundation is made of.
+   *
+   * Named rather than globbed, because the directory now also holds the Core
+   * integration (`coreIntegration.ts`, `mission-adapter.ts`) and that is a
+   * *deliberate* seam: it imports Core's protocol vocabulary, because a file that
+   * decides what a caller may claim has to know what a claim looks like. Asserting
+   * the whole directory is import-hermetic would fail on exactly the code that is
+   * supposed to be the boundary, and quietly "fixing" that by loosening the glob
+   * would have removed the property this suite exists to hold.
+   *
+   * The integration gets its own, different assertions in
+   * `context-core-integration.test.ts`: no model, no journal, no network, no clock
+   * of its own.
+   */
   const FOUNDATION = ['audit.ts', 'item.ts', 'reference.ts', 'store.ts', 'types.ts']
 
-  function foundationSource(): string {
-    return FOUNDATION.map((name) => readFileSync(join(dir, name), 'utf8')).join('\n')
-  }
+  const foundationSource = (): string =>
+    FOUNDATION.map((name) => readFileSync(join(dir, name), 'utf8')).join('\n')
 
-  it('the foundation imports nothing outside its own directory', () => {
+  it('imports nothing outside its own directory', () => {
     const source = foundationSource()
     const specifiers = [...source.matchAll(/from\s+'([^']+)'/g)].map((match) => match[1])
 
@@ -206,15 +220,17 @@ describe('the context domain reaches nothing', () => {
   })
 
   it('is the whole of what the directory holds', () => {
-    // So that adding another file is a deliberate act and not a silent escape
-    // from the two assertions above.
+    // So that adding another foundation file is a deliberate act and not a
+    // silent escape from the two assertions above.
     const files = readdirSync(dir)
       .filter((name) => name.endsWith('.ts'))
       .sort()
-    expect(files).toEqual([...FOUNDATION, 'mission-adapter.ts', 'workforce-adapter.ts'].sort())
+    expect(files).toEqual(
+      [...FOUNDATION, 'coreIntegration.ts', 'mission-adapter.ts', 'workforce-adapter.ts'].sort(),
+    )
   })
 
-  it('the foundation contains no clock reads, no timers and nothing that can wait', () => {
+  it('contains no clock reads, no timers and nothing that can wait', () => {
     const source = foundationSource()
 
     // The instant always comes from the caller: same state, same instant, same

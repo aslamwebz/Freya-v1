@@ -8,8 +8,9 @@
  * that stops it — a test that only asserts "denied" is worth much less than one
  * that names the boundary.
  *
- * The production Context domain (issue #15) does not exist on this branch, so
- * this suite does two things and is explicit about which is which:
+ * The Context domain and Core's Context facade have landed on this branch
+ * (#15's store and vocabulary, #19's foundation, #27's boundary), so this suite
+ * does two things and is explicit about which is which:
  *
  *  1. It attacks the stable Core boundaries that already enforce the same
  *     properties a Context implementation must keep: Guard and the closed
@@ -512,14 +513,36 @@ describe('attack 5: an ambiguous reference is not guessed', () => {
   })
 
   it('exposes no production context resolver, so nothing can guess a referent', async () => {
-    // #15 has not landed on this branch. This is the honest state: there is no
-    // resolver to return a best-effort referent, so an ambiguous "this" cannot be
-    // guessed by anything. When #15 adds one, this test must be updated to attack
-    // its `unresolved` path instead.
+    // The Context domain and Core's Context facade have landed, so this is no
+    // longer a claim about an absent API — it is a claim about the API that
+    // exists. Core exposes `context()`, a *projection* of what is held, and no
+    // `resolveContext` that answers "which thing is this" with a referent: the
+    // only resolve in the vocabulary is `context.reference.read`, and it
+    // answers ids (or a named refusal) rather than choosing one for the
+    // caller. An ambiguous "this" still cannot be guessed by anything, and the
+    // one reader a caller does get has nowhere to put a guess: it is metadata
+    // from end to end.
     const h = await boot()
     const surface = h.core as unknown as Record<string, unknown>
     expect(surface.resolveContext).toBeUndefined()
-    expect(surface.context).toBeUndefined()
+    expect(typeof surface.context).toBe('function')
+
+    const view = h.core.context()
+    expect(Object.keys(view).sort()).toEqual([
+      'activeScope',
+      'agentContext',
+      'counts',
+      'declaredScopes',
+      'items',
+      'limits',
+      'persistence',
+      'sequence',
+    ])
+    for (const row of view.items) {
+      for (const forbidden of ['content', 'text', 'label', 'uri', 'authority']) {
+        expect(row).not.toHaveProperty(forbidden)
+      }
+    }
   })
 })
 

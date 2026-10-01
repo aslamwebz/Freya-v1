@@ -332,11 +332,21 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:brain', projection)
   })
 
+  // Work is a fifth channel for the same reason, and here the payload changes on a
+  // schedule unlike any of the others: it moves whenever a step, an action or an
+  // approval does. Folding it into status would force a status projection to be
+  // rebuilt and shipped on every one of those, and a security projection is the
+  // wrong home for a record of what is currently executing.
+  const detachWork = coreHost?.onWork((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:work', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
     detachConversation?.()
     detachBrain?.()
+    detachWork?.()
   })
 
   if (DEV_SERVER) {
@@ -406,6 +416,7 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:conversation', () => requireCore().conversation())
   ipcMain.handle('freya:core:voice', () => requireCore().voice())
   ipcMain.handle('freya:core:brain', () => requireCore().brain())
+  ipcMain.handle('freya:core:work', () => requireCore().work())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

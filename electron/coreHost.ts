@@ -3,6 +3,7 @@ import type { CoreCommandEnvelope, CoreCommandResult, CoreStatus } from '../core
 import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
 import type { BrainProjection } from '../core/brain/brain'
+import type { WorkProjection } from '../core/work/projection'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 import { BraveSearchProvider } from '../core/research/providers/brave'
 import { ElectronBrowserTargetFactory } from './research/managedTarget'
@@ -95,6 +96,17 @@ export interface CoreHost {
    */
   onBrain(send: (projection: BrainProjection) => void): () => void
   brain(): BrainProjection | null
+  /**
+   * Attach to the Work projection. Returns a disposer.
+   *
+   * Its own channel for the reason the Brain has one, and here the payload is
+   * *live execution state*: which capability is running, which run is waiting on a
+   * person. Shipping that inside a security status would put it wherever status is
+   * cached, logged or forwarded, and a security projection is exactly the wrong
+   * place for something that changes several times a second.
+   */
+  onWork(send: (projection: WorkProjection) => void): () => void
+  work(): WorkProjection | null
   stop(reason?: string): Promise<void>
 }
 
@@ -147,6 +159,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly activityWindows = new Set<(activity: CoreActivityEvent[]) => void>()
   private readonly conversationWindows = new Set<(projection: ConversationProjection) => void>()
   private readonly brainWindows = new Set<(projection: BrainProjection) => void>()
+  private readonly workWindows = new Set<(projection: WorkProjection) => void>()
 
   constructor(
     private readonly dataPath: string,
@@ -183,6 +196,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onActivity((activity) => this.broadcastActivity(activity))
       core.onConversation((projection) => this.broadcastConversation(projection))
       core.onBrain((projection) => this.broadcastBrain(projection))
+      core.onWork((projection) => this.broadcastWork(projection))
     })()
     try {
       await this.starting
@@ -315,6 +329,29 @@ export class ElectronCoreHost implements CoreHost {
     return this.core?.brain() ?? null
   }
 
+  /**
+   * Attach to the Work projection, pushed immediately.
+   *
+   * A window that reloads re-attaches to the same Core and is told where the work
+   * stands without asking — which is the property that makes a renderer reload
+   * something that does not interrupt anything.
+   */
+  onWork(send: (projection: WorkProjection) => void): () => void {
+    this.workWindows.add(send)
+    try {
+      send(this.work() ?? ABSENT_WORK)
+    } catch (error) {
+      console.error('[freya.core] window Work push threw', error)
+    }
+    return () => {
+      this.workWindows.delete(send)
+    }
+  }
+
+  work(): WorkProjection | null {
+    return this.core?.work() ?? null
+  }
+
   activity(): CoreActivityEvent[] {
     return this.core?.activity() ?? []
   }
@@ -330,7 +367,19 @@ export class ElectronCoreHost implements CoreHost {
     this.activityWindows.clear()
     this.conversationWindows.clear()
     this.brainWindows.clear()
+    this.workWindows.clear()
     await core?.stop(reason)
+  }
+
+  private broadcastWork(projection: WorkProjection): void {
+    for (const send of [...this.workWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Work push threw', error)
+        this.workWindows.delete(send)
+      }
+    }
   }
 
   private broadcastBrain(projection: BrainProjection): void {
@@ -376,6 +425,42 @@ export class ElectronCoreHost implements CoreHost {
       }
     }
   }
+}
+
+/**
+ * A valid Work projection for a host whose Core has not started.
+ *
+ * Stated as unavailable rather than as an empty board: "Freya is not up yet" and
+ * "there is no work" look identical otherwise, and they are very different things.
+ */
+const ABSENT_WORK: WorkProjection = {
+  health: 'unavailable',
+  reason: 'no Core has reported yet',
+  detailAvailable: false,
+  runs: [],
+  tasks: [],
+  approvals: [],
+  counts: {
+    runs: 0,
+    queued: 0,
+    running: 0,
+    waiting: 0,
+    awaitingApproval: 0,
+    paused: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+    pendingApprovals: 0,
+    tasks: 0,
+    liveCapabilities: 0,
+  },
+  runsRetained: 0,
+  runsTotal: 0,
+  runsHidden: 0,
+  capabilities: [],
+  verifiers: [],
+  limits: { maxSteps: 0, maxActions: 0, maxDurationMs: 0, maxAttemptsPerStep: 0 },
+  sequence: 0,
 }
 
 /** A valid status for a host whose Core has not started. Nothing is guessed. */

@@ -8,9 +8,11 @@ import type {
 import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
 import type { BrainProjection } from '../core/brain/brain'
+import type { WorkProjection } from '../core/work/projection'
 import { CONVERSATION_LIMITS } from '../core/conversation/types'
 import { VOICE_LIMITS } from '../core/voice/types'
 import { BRAIN_LIMITS } from '../core/brain/types'
+import { WORK_LIMITS } from '../core/work/types'
 
 export interface RuntimeInfo {
   version: string
@@ -164,6 +166,27 @@ const api = {
   },
 
   /**
+   * The Work projection: tasks, runs, steps, approvals and progress.
+   *
+   * What crosses is exactly what `core/work/projection.ts` says crosses: ids,
+   * statuses, counts, measured lengths, and the bounded labels this Core process is
+   * holding in memory. What does **not** cross is the substance of the work — no
+   * step input, no observation contents, no capability or verifier instance, no
+   * plan. A window can see that a step ran and whether it verified; it cannot read
+   * what a capability was given or what it returned, and it cannot reach the code
+   * that would let it describe its own approval.
+   */
+  coreWork: (): Promise<WorkProjection | null> => ipcRenderer.invoke('freya:core:work'),
+
+  onCoreWork: (handler: (projection: WorkProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: WorkProjection): void => handler(projection)
+    ipcRenderer.on('freya:core:work', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:work', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -228,7 +251,48 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'research.start',
   'research.cancel',
   'research.status.read',
+
+  // Work. A window may plan and drive work and decide an approval, and that is the
+  // whole list. Note what it still cannot do: it cannot name a capability Core does
+  // not have, cannot raise a ceiling above Core's own, cannot declare a step
+  // verified, cannot say who decided an approval, and cannot grant itself anything.
+  // `work.approval.decide` is reachable here precisely because a window *is* the
+  // owner's UI — and Core assigns that identity rather than reading one out of the
+  // payload.
+  'work.status.read',
+  'work.task.create',
+  'work.task.update',
+  'work.run.create',
+  'work.run.start',
+  'work.run.pause',
+  'work.run.resume',
+  'work.run.cancel',
+  'work.approval.decide',
 ])
+
+/**
+ * One bounded optional string.
+ *
+ * `undefined` and `''` are the same thing for an *optional* field: both mean "not
+ * supplied". Conflating them matters because an empty recall query is a real
+ * request — it asks for Freya's most recent memories — and treating the empty
+ * string as malformed made an ordinary button press fail as a bad payload. A
+ * *required* field still refuses an empty string, because there a blank value is a
+ * mistake rather than an absence.
+ */
+function readString(
+  record: Record<string, unknown> | null,
+  key: string,
+  max: number,
+  required = true,
+): string | null | undefined {
+  const value = record?.[key]
+  if (value === undefined) return required ? null : undefined
+  if (typeof value !== 'string') return null
+  if (value.length === 0) return required ? null : undefined
+  if (value.length > max) return null
+  return value
+}
 
 type RendererPayloadResult =
   | { ok: true; payload?: unknown }
@@ -248,24 +312,23 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       ? (payload as Record<string, unknown>)
       : null
 
+  const string = (key: string, max: number, required = true): string | null | undefined =>
+    readString(record, key, max, required)
+
   /**
-   * A bounded optional string.
+   * The same check, against some other object.
    *
-   * `undefined` and `''` are the same thing for an *optional* field: both mean
-   * "not supplied". Conflating them matters because an empty recall query is a real
-   * request — it asks for Freya's most recent memories — and treating the empty
-   * string as malformed made an ordinary button press fail as a bad payload. A
-   * *required* field still refuses an empty string, because there a blank value is
-   * a mistake rather than an absence.
+   * A step plan is a list of objects, so its fields cannot be read with the closure
+   * above — which reads the command payload. Getting that wrong once already
+   * happened here: every step came back "a step key is invalid", because the
+   * helper was reading a key from the top level of a command that has none.
    */
-  const string = (key: string, max: number, required = true): string | null | undefined => {
-    const value = record?.[key]
-    if (value === undefined) return required ? null : undefined
-    if (typeof value !== 'string') return null
-    if (value.length === 0) return required ? null : undefined
-    if (value.length > max) return null
-    return value
-  }
+  const from = (
+    source: Record<string, unknown>,
+    key: string,
+    max: number,
+    required = true,
+  ): string | null | undefined => readString(source, key, max, required)
 
   switch (command) {
     case 'core.status.read':
@@ -278,6 +341,9 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     case 'voice.capture.cancel':
     case 'brain.status.read':
     case 'research.status.read':
+      return { ok: true }
+
+    case 'work.status.read':
       return { ok: true }
 
     case 'core.command.submit': {
@@ -445,6 +511,135 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
         return { ok: false, reason: 'a research id is required' }
       }
       return { ok: true, payload: { researchId } }
+    }
+
+
+    case 'work.task.create': {
+      const title = string('title', WORK_LIMITS.maxLabelChars)
+      if (title === null || title === undefined) {
+        return { ok: false, reason: 'task title is too large or invalid' }
+      }
+      return { ok: true, payload: { title } }
+    }
+
+    case 'work.task.update': {
+      const taskId = string('taskId', MAX_ID_CHARS)
+      const status = string('status', 32)
+      if (taskId === null || taskId === undefined) return { ok: false, reason: 'task id is invalid' }
+      if (status === null || status === undefined) {
+        return { ok: false, reason: 'task status is invalid' }
+      }
+      return { ok: true, payload: { taskId, status } }
+    }
+
+    case 'work.run.create': {
+      /**
+       * A plan is a request, and this is where its *size* is bounded.
+       *
+       * Each step is rebuilt from named fields — key, capability, verifier, label,
+       * requiresApproval — and `input` is passed as the caller sent it, because the
+       * engine's sanitiser is the thing that decides what may reach a capability. A
+       * second sanitiser here would be a second set of rules that could disagree with
+       * the one that matters.
+       *
+       * What is dropped is everything else, so a window cannot attach an ignored
+       * blob to an otherwise valid plan and make the main process structured-clone
+       * it. Note also what a step cannot carry: a verdict. There is no field here
+       * for a window to say a step succeeded.
+       */
+      const rawSteps = record?.steps
+      if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
+        return { ok: false, reason: 'a run needs at least one step' }
+      }
+      if (rawSteps.length > WORK_LIMITS.maxRunSteps) {
+        return { ok: false, reason: `a plan may hold at most ${WORK_LIMITS.maxRunSteps} steps` }
+      }
+      const steps: Record<string, unknown>[] = []
+      for (const raw of rawSteps) {
+        if (typeof raw !== 'object' || raw === null) return { ok: false, reason: 'a step was malformed' }
+        const step = raw as Record<string, unknown>
+        const key = from(step, 'key', 64)
+        const capability = from(step, 'capability', 64)
+        const verifier = from(step, 'verifier', 64)
+        const label = from(step, 'label', WORK_LIMITS.maxLabelChars)
+        if (key === null || key === undefined) return { ok: false, reason: 'a step key is invalid' }
+        if (capability === null || capability === undefined) {
+          return { ok: false, reason: 'a step capability is invalid' }
+        }
+        if (verifier === null || verifier === undefined) {
+          return { ok: false, reason: 'a step verifier is invalid' }
+        }
+        if (label === null || label === undefined) return { ok: false, reason: 'a step label is invalid' }
+        steps.push({
+          key,
+          capability,
+          verifier,
+          label,
+          ...(step.input === undefined ? {} : { input: step.input }),
+          ...(step.requiresApproval === true ? { requiresApproval: true } : {}),
+        })
+      }
+
+      const taskId = string('taskId', MAX_ID_CHARS, false)
+      if (taskId === null) return { ok: false, reason: 'task id is invalid' }
+      const rawLimits = record?.limits
+      if (
+        rawLimits !== undefined &&
+        (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits))
+      ) {
+        return { ok: false, reason: 'run limits are invalid' }
+      }
+      return {
+        ok: true,
+        payload: {
+          steps,
+          ...(taskId === undefined ? {} : { taskId }),
+          ...(rawLimits === undefined ? {} : { limits: rawLimits }),
+        },
+      }
+    }
+
+    case 'work.run.start':
+    case 'work.run.pause':
+    case 'work.run.resume':
+    case 'work.run.cancel': {
+      const runId = string('runId', MAX_ID_CHARS)
+      if (runId === null || runId === undefined) return { ok: false, reason: 'run id is invalid' }
+      if (command === 'work.run.cancel') {
+        const reason = string('reason', MAX_STOP_REASON_CHARS, false)
+        if (reason === null) return { ok: false, reason: 'cancellation reason is invalid' }
+        return { ok: true, payload: reason === undefined ? { runId } : { runId, reason } }
+      }
+      return { ok: true, payload: { runId } }
+    }
+
+    case 'work.approval.decide': {
+      // The decision and its subject, and nothing else. There is deliberately no
+      // `decidedBy` here to read: identity for an approval is assigned by Core from
+      // the principal that reached the command. A window that appended one is
+      // ignored, and a window that could name its own approver could approve its own
+      // request.
+      const approvalId = string('approvalId', MAX_ID_CHARS)
+      const decision = string('decision', 16)
+      const reason = string('reason', MAX_STOP_REASON_CHARS, false)
+      if (approvalId === null || approvalId === undefined) {
+        return { ok: false, reason: 'approval id is invalid' }
+      }
+      if (decision === null || decision === undefined) {
+        return { ok: false, reason: 'approval decision is invalid' }
+      }
+      if (decision !== 'approved' && decision !== 'denied') {
+        return { ok: false, reason: 'an approval decision must be approved or denied' }
+      }
+      if (reason === null) return { ok: false, reason: 'approval reason is invalid' }
+      return {
+        ok: true,
+        payload: {
+          approvalId,
+          decision,
+          ...(reason === undefined ? {} : { reason }),
+        },
+      }
     }
 
     // Grant governance is intentionally not in CORE_COMMANDS. Keeping a default

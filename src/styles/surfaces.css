@@ -1866,3 +1866,344 @@
   color: var(--ink);
   font-weight: 500;
 }
+
+/* ---------------------------------------------------------------- work
+   The Work board. An approval is the loudest thing on this window, because
+   it is the one thing only the owner can move and the one thing that stops
+   all work in a run while it goes unanswered. */
+
+.work-surface {
+  padding: 18px 20px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  height: 100%;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.work-absent,
+.work-none,
+.work-note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+}
+
+.work-note {
+  max-width: 64ch;
+  margin-bottom: 10px;
+}
+
+/* The posture strip states the limits before anything can be planned, so a run
+   stopping on a ceiling is not the first time somebody hears the number. */
+.work-posture {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+}
+
+.work-posture b {
+  font: 500 14px/1 var(--font-display);
+  letter-spacing: 0.2em;
+  color: var(--gold-hi);
+}
+
+.work-posture span {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.work-limits {
+  color: var(--ink-3) !important;
+}
+
+.work-section h3 {
+  margin: 0 0 8px;
+  font: 400 10px/1 var(--font-display);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.work-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.work-field span {
+  font: var(--label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.work-field input {
+  font: 400 12.5px/1.5 var(--font);
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--gold-line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.work-field input:focus {
+  outline: none;
+  border-color: var(--gold-line-strong);
+}
+
+.work-button {
+  border: 1px solid var(--gold-line-strong);
+  background: var(--gold-soft);
+  color: var(--gold-hi);
+  border-radius: 9px;
+  padding: 7px 13px;
+  font: var(--label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.work-button:disabled {
+  opacity: 0.4;
+}
+
+.work-button-primary {
+  background: rgba(242, 180, 65, 0.14);
+}
+
+.work-button-small {
+  padding: 4px 9px;
+  font-size: 10px;
+}
+
+.work-reply {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--gold-line);
+  background: rgba(242, 180, 65, 0.07);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.work-reply[data-tone='refused'] {
+  border-color: rgba(224, 96, 96, 0.4);
+  background: rgba(224, 96, 96, 0.08);
+}
+
+/* An approval is a request for a decision, so it reads as a card rather than a
+   row: the effect, the reason it needs approval, and the two buttons. */
+.work-approvals {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.work-approval {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(242, 180, 65, 0.42);
+  background: rgba(242, 180, 65, 0.07);
+}
+
+.work-approval[data-risk='consequential'] {
+  border-color: rgba(224, 96, 96, 0.45);
+  background: rgba(224, 96, 96, 0.08);
+}
+
+.work-approval p {
+  margin: 0 0 5px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.work-approval-what b {
+  color: var(--gold-hi);
+  font-weight: 500;
+}
+
+.work-approval-meta {
+  color: var(--ink-3);
+}
+
+.work-approval-meta code {
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.work-approval-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.work-decided {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.work-tasks,
+.work-runs {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.work-tasks li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+.work-tasks li[data-status='done'],
+.work-tasks li[data-status='cancelled'] {
+  opacity: 0.55;
+}
+
+.work-task-title {
+  flex: 1;
+  color: var(--ink);
+}
+
+.work-task-meta {
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.work-task-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* A run is a group of steps, and a failed one is tinted rather than hidden —
+   a quiet failure is the failure nobody investigates. */
+.work-run {
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+}
+
+.work-run[data-status='failed'] {
+  border-color: rgba(224, 96, 96, 0.4);
+  background: rgba(224, 96, 96, 0.06);
+}
+
+.work-run[data-status='awaiting_approval'] {
+  border-color: rgba(242, 180, 65, 0.45);
+}
+
+.work-run[data-status='cancelled'] {
+  opacity: 0.6;
+}
+
+.work-run-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 0 0 4px;
+}
+
+.work-run-head b {
+  font: 500 12px/1 var(--font-display);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gold-hi);
+}
+
+.work-run-status,
+.work-run-limit {
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+/* Structural progress, in words. There is no progress bar here on purpose. */
+.work-run-progress {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+.work-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.work-steps li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.work-step-label {
+  color: var(--ink);
+}
+
+.work-step-meta {
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.work-steps li[data-status='verified'] .work-step-meta {
+  color: var(--good, #7fc99a);
+}
+
+.work-steps li[data-status='failed'] .work-step-meta,
+.work-steps li[data-status='skipped'] .work-step-meta {
+  color: var(--amber, #f2b441);
+}
+
+.work-run-reason {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.work-run-waiting {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--amber, #f2b441);
+}
+
+.work-run-actions {
+  display: flex;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.work-capabilities {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-3);
+}

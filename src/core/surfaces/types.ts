@@ -138,13 +138,14 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   work: {
     type: 'work',
     title: 'Work',
-    summary: 'Runs, tasks and approvals. The Work system is not implemented in Phase 0.',
+    summary:
+      'Runs, tasks and approvals: what Freya is executing, what is waiting on you, and what verified. Phase 6 registers only inert capabilities — nothing here starts a process.',
     width: 660,
     height: 520,
     minWidth: 420,
     minHeight: 320,
     instance: 'singleton',
-    status: 'placeholder',
+    status: 'working',
   },
   mission: {
     type: 'mission',

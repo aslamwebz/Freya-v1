@@ -6,6 +6,8 @@ import { HarnessSurface } from './HarnessSurface'
 import { SecuritySurface } from './SecuritySurface'
 import { VaultSurface } from './VaultSurface'
 import { ResearchSurface } from './ResearchSurface'
+
+import { WorkSurface } from './WorkSurface'
 import type { SurfaceDefinition } from './types'
 
 /**
@@ -31,6 +33,7 @@ const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   harness: () => <HarnessSurface />,
   security: () => <SecuritySurface />,
   vault: () => <VaultSurface />,
+  work: () => <WorkSurface />,
 }
 
 /** The registry, resolved once from the two catalogs it is built from. */

@@ -20,6 +20,7 @@ export type IconName =
   | 'foundry'
   | 'relay'
   | 'team'
+  | 'context'
   | 'office'
   | 'shield'
   | 'settings'
@@ -112,6 +113,15 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <circle cx="5" cy="17.5" r="2.1" />
       <circle cx="19" cy="17.5" r="2.1" />
       <path d="m10.4 6.6-4 9.2M13.6 6.6l4 9.2M7.2 17.5h9.6" />
+    </>
+  ),
+
+  // Four corner brackets around a subject dot: what is framed, not what is
+  // watched — context as Core reports it, never capture.
+  context: (
+    <>
+      <path d="M4 8.4V4h4.4M15.6 4H20v4.4M20 15.6V20h-4.4M8.4 20H4v-4.4" />
+      <circle cx="12" cy="12" r="2.3" />
     </>
   ),
 

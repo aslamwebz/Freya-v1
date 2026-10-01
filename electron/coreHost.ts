@@ -6,6 +6,7 @@ import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
 import type { MissionProjection } from '../core/missions/types'
 import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
+import type { ContextProjection } from '../core/protocol/context'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 import { BraveSearchProvider } from '../core/research/providers/brave'
 import { ElectronBrowserTargetFactory } from './research/managedTarget'
@@ -41,6 +42,109 @@ export interface HostEnv extends NanoGptEnv {
    */
   FREYA_E2E?: string
   FREYA_E2E_RESEARCH?: string
+}
+
+/**
+ * The far side of the Context seam, as the *host* sees it.
+ *
+ * This is the deferred hookup, stated as a type rather than as an edit to
+ * `core/index.ts`: Core does not have `context()` or `onContext()` yet, because
+ * producing Context authority is issue #15's and wiring Core's assembly is
+ * issue #16's. Rather than either of those lanes being blocked by this one, or
+ * this one guessing at internals it does not own, the host binds
+ * *structurally*: a Core that reports context gets followed and mirrored, and
+ * a Core that does not gets mirrored as exactly what it is — nothing reported.
+ *
+ * `ContextChannel` cannot write into a Core, cannot substitute a projection,
+ * and has no branch that runs when nothing binds. Electron owns no Context
+ * authority here; it owns a forwarding box and a disposer.
+ */
+export interface ContextReportingCore {
+  context(): ContextProjection
+  onContext(listener: (projection: ContextProjection) => void): () => void
+}
+
+/** Whether a Core object actually is a context reporter, checked by shape. */
+export function isContextReportingCore(candidate: unknown): candidate is ContextReportingCore {
+  if (typeof candidate !== 'object' || candidate === null) return false
+  const record = candidate as Partial<ContextReportingCore>
+  return (
+    typeof record.context === 'function' &&
+    typeof record.onContext === 'function'
+  )
+}
+
+/**
+ * The host's Context transport: a window set, one optional binding, and no
+ * authority.
+ *
+ * Every method is a read or a subscription. `bind` is called once per Core and
+ * only *follows* what that Core reports; `pull` repeats Core's last answer or
+ * says there is none. There is deliberately no `emit`, no `submit` and no way
+ * for a window — or this class — to introduce a context item, because an
+ * Electron-side route for context to get *in* would be Electron holding Context
+ * authority, which is exactly what issue #15's lane reserves for Core.
+ */
+export class ContextChannel {
+  private core: ContextReportingCore | null = null
+  private disposeCore: () => void = () => {}
+  private readonly windows = new Set<(projection: ContextProjection) => void>()
+
+  /**
+   * Follow a Core that reports context. Anything else — today, every Core in
+   * this repository — binds to nothing and is not an error.
+   */
+  bind(candidate: unknown): void {
+    if (!isContextReportingCore(candidate)) return
+    this.core = candidate
+    this.disposeCore = candidate.onContext((projection) => this.broadcast(projection))
+  }
+
+  /** Core's last reported projection, or null when no Core is reporting. */
+  pull(): ContextProjection | null {
+    return this.core === null ? null : this.core.context()
+  }
+
+  /**
+   * Attach a window. Returns a disposer. A window attaching to a reporting
+   * Core is pulled immediately, like every other channel; a window attaching
+   * to one that is not is told nothing, which is the honest silence.
+   */
+  on(send: (projection: ContextProjection) => void): () => void {
+    this.windows.add(send)
+    const projection = this.pull()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Context push threw', error)
+        this.windows.delete(send)
+      }
+    }
+    return () => {
+      this.windows.delete(send)
+    }
+  }
+
+  /** Detach everything and unbind. A stopped host has no Context to mirror. */
+  close(): void {
+    const dispose = this.disposeCore
+    this.disposeCore = () => {}
+    this.core = null
+    this.windows.clear()
+    dispose()
+  }
+
+  private broadcast(projection: ContextProjection): void {
+    for (const send of [...this.windows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Context push threw', error)
+        this.windows.delete(send)
+      }
+    }
+  }
 }
 
 /**
@@ -122,6 +226,19 @@ export interface CoreHost {
    */
   onWorkforce(send: (projection: WorkforceProjection) => void): () => void
   workforce(): WorkforceProjection | null
+  /**
+   * Attach to the Context projection, as Core last reported it.
+   *
+   * Its own channel like every subsystem's, and the note that matters is about
+   * what is *not* here: the host has no way to write a context item, no source
+   * to hand to Core yet, and no projection of its own to substitute. Until a
+   * Core grows `context()` and `onContext()` — #15's domain, #16's assembly —
+   * `context()` answers `null` and this channel is a closed door with a
+   * disposer. Forwarding what Core says is the entire of what the host knows
+   * how to do with context.
+   */
+  onContext(send: (projection: ContextProjection) => void): () => void
+  context(): ContextProjection | null
   stop(reason?: string): Promise<void>
 }
 
@@ -198,6 +315,13 @@ export class ElectronCoreHost implements CoreHost {
   private readonly workWindows = new Set<(projection: WorkProjection) => void>()
   private readonly missionWindows = new Set<(projection: MissionProjection) => void>()
   private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
+  /**
+   * The Context transport box. Binds structurally to a reporting Core (none
+   * exists yet — see `ContextChannel`), holds a window set, and can write
+   * nothing. Deliberately not a field on Core's construction arguments,
+   * because Core cannot accept a context source until #15/#16 land.
+   */
+  private readonly contextChannel = new ContextChannel()
 
   constructor(
     private readonly dataPath: string,
@@ -244,6 +368,12 @@ export class ElectronCoreHost implements CoreHost {
       core.onWork((projection) => this.broadcastWork(projection))
       core.onMission((projection) => this.broadcastMission(projection))
       core.onWorkforce((projection) => this.broadcastWorkforce(projection))
+      // The Context channel, bound by shape rather than by name. Today's Core
+      // has neither `context()` nor `onContext()`, so this binds nothing and
+      // the host mirrors the truthful absence; the day #15/#16 grow those
+      // methods, the same line starts following them, with no edit here and no
+      // authority moved into Electron.
+      this.contextChannel.bind(core)
     })()
     try {
       await this.starting
@@ -416,6 +546,7 @@ export class ElectronCoreHost implements CoreHost {
     this.brainWindows.clear()
     this.workWindows.clear()
     this.workforceWindows.clear()
+    this.contextChannel.close()
     await core?.stop(reason)
   }
 
@@ -468,6 +599,23 @@ export class ElectronCoreHost implements CoreHost {
 
   workforce(): WorkforceProjection | null {
     return this.core?.workforce() ?? null
+  }
+
+  /**
+   * Attach to the Context projection, as the channel saw it last.
+   *
+   * Today this pushes nothing and pulls null, because the Core in this
+   * repository does not report context yet — the truthful answer, not a gap to
+   * paper over. The channel is where #15's domain will land when Core grows
+   * `context()`/`onContext()`, and nothing in this host decides what a
+   * projection means.
+   */
+  onContext(send: (projection: ContextProjection) => void): () => void {
+    return this.contextChannel.on(send)
+  }
+
+  context(): ContextProjection | null {
+    return this.contextChannel.pull()
   }
 
   private broadcastWorkforce(projection: WorkforceProjection): void {

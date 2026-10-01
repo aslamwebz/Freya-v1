@@ -9,6 +9,7 @@ import type { BrainProjection } from '../../core/brain/brain'
 import type { WorkProjection } from '../../core/work/projection'
 import type { MissionProjection } from '../../core/missions/types'
 import type { WorkforceProjection } from '../../core/protocol/workforce'
+import type { ContextProjection } from '../../core/protocol/context'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -131,6 +132,22 @@ export interface FreyaHostBridge {
    */
   coreWorkforce(): Promise<WorkforceProjection | null>
   onCoreWorkforce(handler: (projection: WorkforceProjection) => void): () => void
+
+  /**
+   * The Context projection, exactly as Core last reported it — or `null` when
+   * no Core is reporting context at all, which is the truth about every build
+   * in this repository until issue #15's domain lands in Core.
+   *
+   * The note that matters is the same shape as every other channel's, and here
+   * it is even simpler: these are the *only* two Context functions on the
+   * bridge. There is nothing that names an item, files a provenance, requests
+   * a scope, sets an expiry, revokes anything or resolves a reference, because
+   * Context authority belongs to Core and no part of it is a construction this
+   * window is allowed to supply. The absence is structural: no channel carries
+   * a payload *in* this direction at all.
+   */
+  coreContext(): Promise<ContextProjection | null>
+  onCoreContext(handler: (projection: ContextProjection) => void): () => void
 }
 
 declare global {

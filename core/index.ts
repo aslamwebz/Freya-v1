@@ -55,6 +55,14 @@ import {
   type WorkStepPlan,
 } from './work/types'
 import type { ContextBudget } from './mind/context-compiler'
+import {
+  ContextIntegration,
+  contextRefusal,
+  type ContextIntegrationOptions,
+} from './context/coreIntegration'
+import type { ContextReference } from './context/types'
+import type { ContextCommandOutcome, ContextProjectionView, ContextScopeView } from './protocol/context'
+import { NO_ACTIVE_AGENT_CONTEXT_REASON } from './protocol/context'
 import type { ConversationProjection, ConversationTurnView, VoiceProjection } from './protocol/conversation'
 import {
   ABSENT_WORKFORCE_PROJECTION,
@@ -363,6 +371,22 @@ export interface Core {
   workforce(): WorkforceProjection
   /** Subscribe to the Workforce projection. Same mirror semantics as the others. */
   onWorkforce(listener: (projection: WorkforceProjection) => void): () => void
+  /**
+   * Core's account of context: what is held, in which scope, and what state.
+   *
+   * Metadata only, and that is not a rendering choice — the projection carries no
+   * field a selected sentence could hide in, and no command in the Core vocabulary
+   * returns one. What somebody shared stays in the Context Store, inside this
+   * process, and the only thing that reads it is the code that is about to act on
+   * the answer.
+   *
+   * There is nothing here about permission. Context says what "this" and "here"
+   * *point at*; it says nothing about what may then be done with them, and a
+   * context item can widen no grant and satisfy no capability.
+   */
+  context(): ContextProjectionView
+  /** Subscribe to the Context projection. Same mirror semantics as the others. */
+  onContext(listener: (projection: ContextProjectionView) => void): () => void
   readonly lifecycle: CoreLifecycle
 }
 
@@ -404,6 +428,19 @@ class FreyaCore implements Core {
   private readonly workListeners = new Set<(projection: WorkProjection) => void>()
   private readonly missionListeners = new Set<(projection: MissionProjection) => void>()
   private readonly workforceListeners = new Set<(projection: WorkforceProjection) => void>()
+  private readonly contextListeners = new Set<(projection: ContextProjectionView) => void>()
+  /**
+   * The Phase 9 Context integration, or undefined before `start()`.
+   *
+   * The whole of this lane: the store from #15 plus the Core boundary that decides
+   * what may go into it and how refusals are worded. There is nothing here that
+   * reaches the network, a provider or a file, so constructing it at boot costs
+   * nothing — no key is read, no capture lane starts, and no inference is
+   * scheduled.
+   */
+  private contextIntegration: ContextIntegration | undefined
+  /** Context wiring handed in by Core itself, never by a payload. */
+  private readonly contextOptions: Partial<ContextIntegrationOptions>
   /**
    * The Workforce seam, or null in every build where nothing has filled it.
    *
@@ -449,6 +486,15 @@ class FreyaCore implements Core {
   constructor(private readonly options: CoreOptions) {
     this.newId = options.newId ?? (() => randomUUID())
     this.workforceSource = options.workforceSource ?? null
+    // Only the clock and the id factory, both already Core's own. The Context
+    // integration is deliberately not a `CoreOptions` seam: every argument that
+    // could widen it — a scope, a channel, a source, an agent source — is a claim
+    // about provenance, and a host that could pass one would be a host that could
+    // assert what the owner did. #16 will fill the agent seam from inside Core.
+    this.contextOptions = {
+      now: options.now,
+      newId: this.newId,
+    }
   }
 
   get lifecycle(): CoreLifecycle {
@@ -767,12 +813,23 @@ class FreyaCore implements Core {
       principalId: this.owner.id,
       now: this.options.now,
       newId: this.options.newId,
-      onChange: () => this.publishMission(),
+      onChange: () => {
+        this.publishMission()
+        this.syncContextMission()
+      },
       // Read fresh at the moment of each decision. A Mission that could still be
       // activated after the panic button is a Mission that can go on creating work.
       stopAll: () => this.state.stopAll.active,
     })
     await this.missionEngine.open()
+
+    // Context sits beside Missions rather than above them: it reads which Mission is
+    // current and nothing else, and it is built here so the two are wired in one place.
+    //
+    // No host argument, no capture lane and no model. Constructing it opens nothing,
+    // and the one thing it is given from the outside is the clock Core already had.
+    this.contextIntegration = new ContextIntegration(this.contextOptions)
+    this.syncContextMission()
 
     // The Workforce seam, if anything filled it.
     //
@@ -1344,11 +1401,190 @@ class FreyaCore implements Core {
     }
   }
 
+  /**
+   * Point "here" at the current Mission, if there is one.
+   *
+   * The narrow adapter, called whenever the Mission board moves. Which Mission is
+   * *current* is the only thing read across — an id and a status — because that is
+   * all a Mission's open record carries; its title, intent and success criteria live
+   * in an encrypted store this deliberately cannot read, and admitting them here
+   * would move the most private text Freya holds into a process-lifetime store with
+   * no encryption at all.
+   *
+   * Idempotent, so a Mission board that re-renders cannot churn context ids. "Which
+   * Mission is active" is the read; "everything about the current Mission" is not,
+   * and this is the line.
+   */
+  private syncContextMission(): void {
+    if (this.contextIntegration === undefined || this.missionEngine === undefined) return
+    const active = this.missionEngine
+      .projection()
+      .missions.filter((mission) => mission.status === 'active')
+      // The board is sorted most-recent-first, so the head is the newest active
+      // Mission. Two active Missions at once is a state the Mission engine does not
+      // produce, and picking by recency is a tie-break that can be read, not guessed.
+      .at(0)
+    if (active === undefined) {
+      this.contextIntegration.syncMissionContext(null)
+      this.publishContext()
+      return
+    }
+    const outcome = this.contextIntegration.syncMissionContext({
+      missionId: active.missionId,
+      status: active.status,
+    })
+    if (outcome.operation !== 'unchanged') this.publishContext()
+  }
+
+  /**
+   * Core's account of context.
+   *
+   * Reachable before `start()` finishes, where it reports an empty projection with a
+   * stated reason rather than throwing — the same treatment Work gets, so a surface
+   * can render "Core is not up yet" during startup without special-casing the failure.
+   *
+   * Metadata only, and filtered to the active scope. A window learns which ids exist,
+   * in which scope, from which source, in what state, and how long they last. It does
+   * not learn a word of what was shared, and it cannot ask: there is no command in the
+   * vocabulary that returns an item.
+   */
+  context(): ContextProjectionView {
+    if (this.contextIntegration === undefined) {
+      return {
+        persistence: { mode: 'ephemeral', durable: false, reason: 'context is not available until Core has started' },
+        activeScope: null,
+        declaredScopes: [],
+        agentContext: {
+          wired: false,
+          available: false,
+          reason: NO_ACTIVE_AGENT_CONTEXT_REASON,
+        },
+        items: [],
+        counts: { live: 0, revoked: 0, expired: 0, retained: 0, declaredScopes: 0 },
+        limits: { maxItems: 0, maxLivePerScope: 0, maxScopes: 0 },
+        sequence: 0,
+      }
+    }
+    return this.contextIntegration.read()
+  }
+
+  onContext(listener: (projection: ContextProjectionView) => void): () => void {
+    this.contextListeners.add(listener)
+    // Delivered immediately, like every other mirror here, so a window that attaches
+    // late agrees with one that never left.
+    try {
+      listener(this.context())
+    } catch (error) {
+      console.error('[freya.core] Context subscriber threw', error)
+    }
+    return () => {
+      this.contextListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Re-publish the Context mirror.
+   *
+   * Called after every operation that could change what is held. A listener that
+   * throws is dropped rather than allowed to break the operation that reported the
+   * change — observability must not become a resource owner.
+   */
+  private publishContext(): void {
+    if (this.contextListeners.size === 0) return
+    const projection = this.context()
+    for (const listener of [...this.contextListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Context listener threw', error)
+        this.contextListeners.delete(listener)
+      }
+    }
+  }
+
   private requireMission(): MissionEngine {
     if (this.missionEngine === undefined) {
       throw new Error('the Mission engine is not available')
     }
     return this.missionEngine
+  }
+
+  /**
+   * The Context integration, or a refusal rather than a throw.
+   *
+   * The other `require*` helpers throw because reaching them without the subsystem
+   * would be a Core bug. This one returns, because a command can arrive before
+   * `start()` has built the integration, and answering that with a stack trace
+   * would turn an ordinary race into something a person sees.
+   */
+  private requireContext(): ContextIntegration | null {
+    return this.contextIntegration ?? null
+  }
+
+  /**
+   * Hand one Context command to the facade and render what it says.
+   *
+   * The facade does the deciding — provenance, scope, the field allowlist, which of
+   * the five refusals a resolution was — and this method's only job is to read named
+   * fields off an untrusted payload so the facade can refuse the rest. Notably absent
+   * from this list: `source`, `principal`, `authority`, `capability`, `grant`. They
+   * are not read here because reading them is half of accepting them, and the facade
+   * refuses them by name when it finds them on the object.
+   *
+   * Returns `null` only when there is no integration at all, which the caller turns
+   * into an envelope-level rejection.
+   */
+  private contextCommand(
+    command: CoreCommandName,
+    payload: unknown,
+    integration: ContextIntegration | null,
+  ): ContextCommandOutcome {
+    if (integration === null) {
+      return contextRefusal('malformed_request', 'context is not available until Core has started')
+    }
+    const fields = typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {}
+
+    if (command === 'context.status.read') {
+      // Same mirror discipline as the Workforce read: the *outcome* is on the command
+      // and the projection arrives on its own channel. The `context?` slot carries what
+      // one command produced and is deliberately not a second copy of the board, for
+      // the same reason every other subsystem's is a slot rather than a widened
+      // `status` — a projection that travelled inside a security status would be
+      // copied and cached wherever status is, and this one describes what a person
+      // selected.
+      return { operation: 'status', ok: true }
+    }
+    if (command === 'context.scope.activate') {
+      // A malformed scope is refused, not read as "clear the current one". `null` is
+      // the honest way to say nothing is current and it comes from Core's own code
+      // calling the facade directly; a payload with no usable scope is a broken
+      // request, and silently treating it as a reset would hand anyone who could
+      // send an empty object the ability to unscope every conversation in Core.
+      const scope = readContextScope(fields.scope)
+      if (scope === null) return contextRefusal('scope_unknown')
+      return integration.activateScope(scope)
+    }
+    if (command === 'context.admit') {
+      // The whole payload, not named fields. The facade is the parser: an allowlist
+      // only refuses what it recognises, so this must not arrive pre-filtered.
+      return integration.admit(payload)
+    }
+    if (command === 'context.revoke') {
+      return integration.revoke(readString(payload, 'contextId') ?? '', readString(payload, 'reason') ?? '')
+    }
+    if (command === 'context.revokeScope') {
+      const scope = readContextScope(fields.scope)
+      if (scope === null) return contextRefusal('scope_unknown')
+      return integration.revokeScope(scope, readString(payload, 'reason') ?? '')
+    }
+    // `context.reference.read`. Metadata resolution: ids and closed reasons, never
+    // the item. The content-bearing `resolve` is deliberately not reachable from here.
+    const term = readString(payload, 'term')
+    const kind = readString(payload, 'kind')
+    return integration.resolveMetadata({
+      term: (term === null ? '' : term) as ContextReference['term'],
+      kind: kind as ContextReference['kind'],
+    })
   }
 
   private requireWork(): WorkEngine {
@@ -1450,7 +1686,9 @@ class FreyaCore implements Core {
       command !== 'brain.status.read' &&
       command !== 'work.status.read' &&
       command !== 'workforce.status.read' &&
-      command !== 'mission.status.read'
+      command !== 'mission.status.read' &&
+      command !== 'context.status.read' &&
+      command !== 'context.reference.read'
     ) {
       return reject(envelope, `core is ${this.lifecycle} and cannot accept mutating commands`)
     }
@@ -2211,6 +2449,51 @@ class FreyaCore implements Core {
           const outcome = await run()
           this.publishMission()
           return { requestId, ok: outcome.ok, status: this.status(), mission: missionResult(outcome) }
+        }
+
+        /* ----------------------------------------------------------- context */
+
+        case 'context.status.read':
+        case 'context.reference.read':
+        case 'context.scope.activate':
+        case 'context.admit':
+        case 'context.revoke':
+        case 'context.revokeScope': {
+          // One block for all six, for the same reason the six Mission commands
+          // share one: they are one subsystem's write surface, and six near-identical
+          // handlers is six places for one of them to be handled less carefully than
+          // the other five.
+          //
+          // There is no capability on these, and that is deliberate rather than an
+          // oversight. Guard governs *authority* — what a principal may do — and
+          // context is not authority: admitting a selection grants nothing, and
+          // resolving "here" performs no action. Reading what the owner shared and
+          // choosing to share it are the owner's own business, exactly as
+          // `work.status.read` and `brain.status.read` are.
+          //
+          // What the block does *not* do is trust the payload. The facade owns every
+          // boundary decision below — provenance, scope, field allowlist — and this
+          // arm's whole job is to hand it `unknown` and render what came back.
+          const integration = this.requireContext()
+          const outcome = this.contextCommand(envelope.command, envelope.payload, integration)
+          // Every mutating context operation re-points or re-scopes something, so the
+          // mirror moves. Publishing on the read arms too keeps one rule: the mirror
+          // is rebuilt whenever a context command was understood.
+          if (isContextMutation(envelope.command)) this.publishContext()
+          // A refusal is `ok: false` on the envelope *and* a `refusal` on it, as well
+          // as the Context slot, so a window that only reads the envelope cannot
+          // report a declined admission as a success. `unchanged` is not that case:
+          // Core understood the request and there was nothing to do, which is a
+          // successful idempotent no-op — hence the test on `refusal` rather than
+          // `ok`, so one operation code cannot quietly redefine "refused".
+          const refused = outcome.refusal !== undefined
+          return {
+            requestId,
+            ok: !refused,
+            status: this.status(),
+            ...(refused ? { refusal: { reason: outcome.reason ?? outcome.refusal ?? 'refused' } } : {}),
+            context: outcome,
+          }
         }
 
         case 'work.status.read':
@@ -3002,6 +3285,41 @@ function isTaskStatus(value: string): value is TaskStatus {
  */
 function hasKey(payload: unknown, key: string): boolean {
   return typeof payload === 'object' && payload !== null && key in (payload as Record<string, unknown>)
+}
+
+/**
+ * The Context commands that change what is held, as opposed to reading it.
+ *
+ * Split out because the mirror has to move for exactly four of the six, and
+ * publishing after a read would make a window redraw on every poll — which is the
+ * kind of churn that looks like activity and teaches people to ignore the feed.
+ */
+function isContextMutation(command: CoreCommandName): boolean {
+  return (
+    command === 'context.scope.activate' ||
+    command === 'context.admit' ||
+    command === 'context.revoke' ||
+    command === 'context.revokeScope'
+  )
+}
+
+/**
+ * A scope off the wire, or null when the payload does not name a usable one.
+ *
+ * Read here only to hand the facade a well-formed-or-nothing value; the facade
+ * still checks the scope is one Core holds, and that it is not the ambient one. A
+ * missing scope is not defaulted to the session, because the session is the widest
+ * scope there is and defaulting into it would be the exact escalation this whole
+ * boundary exists to refuse.
+ */
+function readContextScope(value: unknown): ContextScopeView | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  const scopeKind = raw.scopeKind
+  if (scopeKind !== 'session' && scopeKind !== 'conversation' && scopeKind !== 'surface') return null
+  const scopeId = raw.scopeId
+  if (typeof scopeId !== 'string' || scopeId.trim().length === 0) return null
+  return { scopeKind, scopeId: scopeId.trim() }
 }
 
 /**

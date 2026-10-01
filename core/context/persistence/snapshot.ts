@@ -115,12 +115,12 @@ export function decodeContextItem(value: unknown, limits: ContextLimits): Contex
 
   const kind = value['kind']
   if (!isContextKind(kind)) {
-    // The deferred kinds are named rather than lumped in with the unknown ones,
-    // because they are a different failure: a record claiming to be an
-    // `active_window` or an `agent_work` is asserting a capability this build
-    // does not have, and it is refused rather than half-accepted.
+    // Deferred kinds are named rather than lumped in with unknown ones because
+    // they are a different failure: `agent_work` is declared for truthful refusal
+    // but is still not sourced by this build. (`active_window` became a real kind
+    // when the Phase 9 observation lane landed.)
     return refuse(
-      kind === 'active_window' || kind === 'agent_work'
+      kind === 'agent_work'
         ? `a context record claims a kind this build does not source: ${String(kind)}`
         : 'a context record has a kind this build does not know',
     )

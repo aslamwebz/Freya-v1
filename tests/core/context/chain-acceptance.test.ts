@@ -13,13 +13,20 @@ import {
   toContextProjection,
 } from '../../../electron/coreHost'
 import { CORE_EVENT_SCHEMA_VERSION, CORE_EVENT_TYPES } from '../../../core/events/envelope'
-import { CONTEXT_REFUSAL_TEXT, type ContextScope } from '../../../core/context/types'
+import {
+  CONTEXT_ADMISSION_REASONS,
+  CONTEXT_REFUSAL_TEXT,
+  type ContextScope,
+} from '../../../core/context/types'
+import { ContextIntegration } from '../../../core/context/coreIntegration'
+import { createActiveWindowFacadeAdmitter } from '../../../core/context/sources/window'
 import type { ContextProjection } from '../../../core/protocol/context'
 import {
   explicitSelectionAdmission,
   type ExplicitSelectionInput,
 } from '../../../core/context/adapters/explicit-selection'
 import { T0, conversation, sessionScope } from './fixture'
+import { FakeActiveWindowProvider } from './window/fakeProvider'
 import {
   CHAIN_SECRET,
   admitVia,
@@ -645,6 +652,159 @@ describe('provenance and scope survive, and another conversation does not', () =
   })
 })
 
+/* ------------------------------------------------- the observed window lane */
+
+/**
+ * The opt-in observation lane (#30, PR #42), as a chain.
+ *
+ * `active_window` is a sourced kind now: `host_report` alone, admitted only
+ * through the facade's host door via the composable bridge `#42` shipped.
+ * Issue #30 is explicitly read-only and opt-in — no transport file wires it,
+ * and nothing here asks for ambient default observation. What this lane proves
+ * is the chain an opt-in caller gets, using only merged production code:
+ *
+ *   observation → activeWindowCandidate / activeWindowHostReport
+ *     → ContextIntegration.admitHostReport (the host door)
+ *     → read() → toContextProjection → the window's ContextProjection
+ *
+ * plus the two boundary claims the window cares about: the owner door cannot
+ * launder an observation into an owner provenance, and the observation's
+ * private words never reach anything a window reads.
+ */
+describe('an observed window reaches the window’s words through the host door', () => {
+  function observationLane(scope: ContextScope): {
+    integration: ContextIntegration
+    observe: (observation: ReturnType<FakeActiveWindowProvider['info']>) => ReturnType<
+      ReturnType<typeof createActiveWindowFacadeAdmitter>
+    >
+    provider: FakeActiveWindowProvider
+  } {
+    const integration = new ContextIntegration({ now: () => T0 })
+    expect(integration.activateScope(scope).operation).toBe('scope-activated')
+    const provider = new FakeActiveWindowProvider()
+    return {
+      integration,
+      provider,
+      observe: createActiveWindowFacadeAdmitter({ lane: integration, scope }),
+    }
+  }
+
+  it('admits an observation as host_report and carries it into the window’s words', () => {
+    const { integration, observe, provider } = observationLane(CONV_A)
+    const observation = provider.info('Code Editor', 'notes.md', T0.toISOString())
+    const outcome = observe(observation)
+    expect(outcome.operation).toBe('admitted')
+
+    const view = integration.read()
+    const row = view.items[0]
+    if (row === undefined) throw new Error('the observation was not held')
+    expect(row.kind).toBe('active_window')
+    // The door fixed provenance: a report cannot express a source at all, and
+    // the foundation table admits this kind from exactly this one.
+    expect(row.source).toBe('host_report')
+    expect(row.scopeKind).toBe('conversation')
+    expect(row.scopeId).toBe('conv-a')
+    expect(row.originId).toBe(`${provider.providerId}:${observation.observationId}`)
+    expect(row.state).toBe('live')
+    // The label and the sentence exist, are measured, and are not carried.
+    expect(row.labelLength).toBeGreaterThan(0)
+    expect(row.contentLength).toBeGreaterThan(0)
+
+    const projection = toContextProjection(view)
+    expect(projection.health).toBe('ready')
+    expect(projection.items[0]).toEqual({
+      itemId: row.contextId,
+      kind: 'active_window',
+      label: null,
+      state: 'live',
+      provenance: {
+        sourceClass: 'host_report',
+        detail: row.originId,
+        admittedAt: row.admittedAt,
+      },
+      scope: { label: 'conversation', detail: 'conv-a' },
+      expiresAt: row.expiresAt,
+      ttlSeconds: null,
+    })
+    expect(projection.counts).toEqual({
+      items: 1,
+      current: 1,
+      expired: 0,
+      revoked: 0,
+      references: 0,
+      unresolvedReferences: 0,
+    })
+
+    // The observation's private words — the app name, the window title, and
+    // the sentence the candidate built from them — stay in the store.
+    for (const secret of ['Code Editor', 'notes.md', 'Host observation']) {
+      expect(JSON.stringify(view)).not.toContain(secret)
+      expect(JSON.stringify(projection)).not.toContain(secret)
+    }
+    expect(view.items[0]).not.toHaveProperty('label')
+    expect(view.items[0]).not.toHaveProperty('content')
+  })
+
+  it('supersedes an older observation, and the window is told which row is which', () => {
+    const { integration, observe, provider } = observationLane(CONV_A)
+    const first = provider.info('Code Editor', 'notes.md', T0.toISOString())
+    const second = provider.info('Terminal', 'build log', T0.toISOString())
+    expect(observe(first).operation).toBe('admitted')
+    expect(observe(second).operation).toBe('admitted')
+
+    const projection = toContextProjection(integration.read())
+    expect(projection.counts).toEqual({
+      items: 2,
+      current: 1,
+      expired: 0,
+      revoked: 1,
+      references: 0,
+      unresolvedReferences: 0,
+    })
+    const superseded = projection.items.find((item) => item.state === 'revoked')
+    const current = projection.items.find((item) => item.state === 'live')
+    if (superseded === undefined || current === undefined) {
+      throw new Error('expected one revoked and one live observation')
+    }
+    // Both rows keep the observation they came from, so a window can tell
+    // "the host saw this before" from "the host sees this now".
+    expect(superseded.provenance?.sourceClass).toBe('host_report')
+    expect(superseded.provenance?.detail).toBe(
+      `${provider.providerId}:${first.observationId}`,
+    )
+    expect(current.provenance?.detail).toBe(`${provider.providerId}:${second.observationId}`)
+    expect(current.kind).toBe('active_window')
+
+    // Neither observation's private words reach anything shared.
+    for (const secret of ['Code Editor', 'notes.md', 'Terminal', 'build log']) {
+      expect(JSON.stringify(projection)).not.toContain(secret)
+      expect(JSON.stringify(integration.read())).not.toContain(secret)
+    }
+  })
+
+  it('refuses the same observation through the owner door, so provenance cannot be laundered', async () => {
+    const core = await bootCore()
+    await sendContext(core, 'context.scope.activate', { scope: CONV_A })
+
+    // A payload claiming an observed window as the owner's own selection is
+    // refused by the kind/source table — the pairing `active_window` +
+    // `owner_selection` does not exist — before the store holds anything.
+    const claimed = await sendContext(core, 'context.admit', {
+      kind: 'active_window',
+      channel: 'owner_selection',
+      scope: CONV_A,
+      content: 'the frontmost app is Code Editor',
+      originId: 'fake-window:obs-0001',
+    })
+    expect(claimed.outcome.operation).toBe('refused')
+    expect(claimed.outcome.ok).toBe(false)
+    expect(claimed.outcome.reason).toBe(CONTEXT_ADMISSION_REASONS.source_not_permitted)
+    expect(core.context().items).toEqual([])
+    expect(core.context().counts.retained).toBe(0)
+    expect(JSON.stringify(core.context())).not.toContain('Code Editor')
+  })
+})
+
 /* ----------------------------------------------------------------- privacy */
 
 describe('the private part stays where the store put it', () => {
@@ -800,6 +960,7 @@ describe('the transport binds to the real facade and forwards, and writes nothin
 describe('the whole chain spends nothing', () => {
   it('makes zero model calls across every step it can take', async () => {
     const host = await bootHost()
+    const windowProvider = new FakeActiveWindowProvider()
     await sendContext(host, 'context.status.read')
     await sendContext(host, 'context.scope.activate', { scope: CONV_9 })
     const admitted = await admitSelection(host, CONV_9, CHAIN_SECRET)
@@ -809,6 +970,16 @@ describe('the whole chain spends nothing', () => {
       scope: CONV_9,
       reason: 'the conversation ended',
     })
+    // The opt-in observation lane (#30/#42) joins the chain here: its composable
+    // seam goes through the facade's host door, and it reaches no provider
+    // either.
+    const observed = new ContextIntegration({ now: () => new Date() })
+    expect(observed.activateScope(CONV_A).operation).toBe('scope-activated')
+    const observe = createActiveWindowFacadeAdmitter({ lane: observed, scope: CONV_A })
+    expect(observe(windowProvider.info('Code Editor', null, new Date().toISOString())).operation).toBe(
+      'admitted',
+    )
+    expect(toContextProjection(observed.read()).counts.current).toBe(1)
     // The window's vocabulary for all of that: the tombstone of what was
     // revoked is still listed — as revoked — and nothing is presented live.
     const projection = host.context()

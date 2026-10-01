@@ -10,6 +10,7 @@
  */
 
 import type { ConversationCommandOutcome, VoiceCommandOutcome } from './conversation'
+import type { ContextCommandOutcome } from './context'
 import type { WorkforceCommandOutcome } from './workforce'
 
 /* ------------------------------------------------------------ identity */
@@ -412,6 +413,31 @@ export type CoreCommandName =
   | 'mission.cancel'
   | 'mission.fail'
   | 'mission.requestCompletion'
+  /* ------------------------------------------------------------ context */
+  /**
+   * Phase 9. Context is *held*, not granted.
+   *
+   * Five commands, and none of them is a resolve. `context.reference.read` answers
+   * whether "this" resolves and names ids; there is deliberately no command whose
+   * result carries the content somebody selected, because the answer to "here" is
+   * consumed by the code inside Core that was about to use it and must not become
+   * a value a window can hold, log or replay. See `core/protocol/context.ts`.
+   *
+   * `context.admit` takes a `channel` from a closed list of the *owner's* doors and
+   * no `source`, no `principal` and no authority of any kind: Core decides where
+   * content came from, and a request that names one is refused whole rather than
+   * stripped. Its `scope` must be a scope Core already holds, and the ambient
+   * `session` scope is never a wire target — Core places a Mission there itself.
+   *
+   * A window reaching for `context.resolve`, `context.item.read` or any `context.*`
+   * name outside this list finds `unknown command`, which is the correct answer.
+   */
+  | 'context.status.read'
+  | 'context.scope.activate'
+  | 'context.admit'
+  | 'context.revoke'
+  | 'context.revokeScope'
+  | 'context.reference.read'
 
 export interface CoreCommandEnvelope {
   command: CoreCommandName
@@ -511,6 +537,22 @@ export interface CoreCommandResult {
    * facts.
    */
   workforce?: WorkforceCommandOutcome
+
+  /**
+   * The Context view of a Context command's result.
+   *
+   * Its own slot for the same reason every other subsystem's exists, and for one
+   * more reason as well: this is the one subsystem whose *content* is not merely
+   * private but has no business being in a projection that gets copied, cached and
+   * logged. So the outcome carries ids, closed reasons and counts, and the only
+   * thing in this file that could hold a selected sentence is deliberately absent.
+   *
+   * A refusal lands here separately from `ok` for the same reason as the Mission
+   * slot: "Core understood you and declined" and "Core did not understand you" are
+   * different facts, and a window that cannot tell them apart reports one as the
+   * other.
+   */
+  context?: ContextCommandOutcome
 }
 
 /**

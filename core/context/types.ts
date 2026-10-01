@@ -41,11 +41,15 @@
  *
  * ## Deferred kinds
  *
- * `active_window` (app/window capture) and `agent_work` (Workforce state, which
- * waits for issue #10) are *declared* so that a caller asking for them is
- * refused truthfully — `kind_deferred` in a word — instead of silently
+ * `active_window` (app/window capture) and `agent_work` (a different Workforce
+ * lane, which waits for issue #10) are *declared* so that a caller asking for
+ * them is refused truthfully — `kind_deferred` in a word — instead of silently
  * receiving nothing, or worse, receiving something invented. Declaring a kind is
  * not sourcing it: admission refuses both until the capture lane and #10 land.
+ *
+ * `active_worker` is the sourced Workforce kind (issue #31): bounded metadata
+ * about a worker Core currently has active, produced by the Workforce adapter
+ * from Core-owned projections.
  */
 
 /* ------------------------------------------------------------------ kinds */
@@ -69,6 +73,8 @@ export const CONTEXT_KINDS = [
   'shared_tab',
   /** Media (image/audio/video/document) the owner shared. */
   'shared_media',
+  /** A Workforce worker Core currently has active, summarised as bounded metadata. */
+  'active_worker',
 ] as const
 export type ContextKind = (typeof CONTEXT_KINDS)[number]
 
@@ -136,6 +142,7 @@ export const CONTEXT_KIND_SOURCES: Readonly<Record<ContextKind, readonly Context
     file: ['owner_authorization', 'owner_selection', 'host_report'],
     shared_tab: ['owner_share', 'host_report'],
     shared_media: ['owner_share', 'host_report'],
+    active_worker: ['core_record'],
   })
 
 /* ----------------------------------------------------------------- scopes */

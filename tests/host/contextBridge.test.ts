@@ -7,12 +7,14 @@ import {
   ContextChannel,
   ElectronCoreHost,
   isContextReportingCore,
+  toContextProjection,
   type ContextReportingCore,
 } from '../../electron/coreHost'
 import {
   ABSENT_CONTEXT_PROJECTION,
   NO_CONTEXT_DOMAIN_REASON,
   type ContextProjection,
+  type ContextProjectionView,
 } from '../../core/protocol/context'
 
 /**
@@ -21,12 +23,12 @@ import {
  * Three halves, and they answer different questions:
  *
  *  - The **host shell** is a transport that owns no authority: a window that
- *    attaches to a Core which does not report context receives *nothing*, and
- *    a host with no Core says so by answering `null`. The full production chain
- *    — a Core with `context()`/`onContext()` — is deferred to #15 (the domain)
- *    and #16 (Core's assembly), so the "a Core that reports" half is exercised
- *    through the channel against an object that satisfies the documented
- *    mirror contract. That is the same fake-as-a-seam the Workforce lane tests
+ *    attaches to a Core which does not report context receives *nothing*, and a
+ *    host with no Core says so by answering `null`. Core now reports context in
+ *    its own vocabulary, and the channel translates that into the window's, so
+ *    the "a Core that reports" half is driven two ways: against a real Core,
+ *    and against an object that satisfies the documented mirror contract for
+ *    the shape-level claims — the same fake-as-a-seam the Workforce lane tests
  *    with, pinned to the host's door instead of Core's.
  *  - The **preload bridge** is the capability boundary, and its tests read the
  *    bridge's own source: the strongest claim here — there is no context
@@ -115,6 +117,47 @@ function fakeReportingCore(initial: ContextProjection): {
   }
 }
 
+/**
+ * A projection in *Core's* vocabulary — what `core.context()` answers.
+ *
+ * The other half of this boundary, built here rather than borrowed so that the
+ * file sees both shapes the channel has to carry and the translation between
+ * them is asserted rather than assumed.
+ */
+function coreView(over: Partial<ContextProjectionView> = {}): ContextProjectionView {
+  return {
+    persistence: {
+      mode: 'ephemeral',
+      durable: false,
+      reason: 'context is held in this process only',
+    },
+    activeScope: { scopeKind: 'conversation', scopeId: 'c1' },
+    declaredScopes: [{ scopeKind: 'conversation', scopeId: 'c1' }],
+    agentContext: { wired: false, available: false, reason: 'no active agent context' },
+    items: [
+      {
+        contextId: 'ctx-1',
+        kind: 'explicit-selection',
+        source: 'owner_selection',
+        scopeKind: 'conversation',
+        scopeId: 'c1',
+        originId: 'share-1',
+        capturedAt: '2026-10-01T09:00:00.000Z',
+        admittedAt: '2026-10-01T09:00:00.000Z',
+        expiresAt: '2026-10-01T09:15:00.000Z',
+        revokedAt: null,
+        state: 'live',
+        contentLength: 42,
+        labelLength: 9,
+      },
+    ],
+    counts: { live: 1, revoked: 0, expired: 0, retained: 1, declaredScopes: 1 },
+    limits: { maxItems: 64, maxLivePerScope: 16, maxScopes: 8 },
+    sequence: 4,
+    ...over,
+  }
+}
+
 describe('the host owns no Context authority and says so structurally', () => {
   it('answers null before Core has started', () => {
     // Not an absent *projection*: a host with no Core has nothing Core reported,
@@ -126,26 +169,49 @@ describe('the host owns no Context authority and says so structurally', () => {
     expect(seen).toHaveLength(0)
   })
 
-  it('still answers null after a real Core starts, because nothing has filled the seam yet', async () => {
+  it('answers a real Core with Core\'s own context truth, in the window\'s words', async () => {
     await host!.start()
-    // The deferred hookup, tested as a *presence of absence*: Core's Context
-    // mirror is #15's domain in #16's assembly, and until that day the honest
-    // host answer stays `null` rather than an empty-but-ready projection or —
-    // worse — a frame invented to fill the window.
-    expect(host!.context()).toBeNull()
+    // The seam is filled: a started Core has built its Context integration, so
+    // the host no longer answers `null`. What crosses is Core's projection
+    // translated into the window's vocabulary — `ready` because Core built the
+    // integration, and not one field of content, because Core's audit row does
+    // not carry any.
+    const reported = host!.context()
+    expect(reported).not.toBeNull()
+    expect(reported?.health).toBe('ready')
+    expect(reported?.reason).toBeNull()
+    // Nothing admitted, and a projection of "nothing admitted" says so with
+    // zeroes rather than with an absent frame.
+    expect(reported?.items).toEqual([])
+    expect(reported?.counts).toEqual({
+      items: 0,
+      current: 0,
+      expired: 0,
+      revoked: 0,
+      references: 0,
+      unresolvedReferences: 0,
+    })
+
+    // A window attaching now is pushed that projection immediately, like every
+    // other channel: a reloaded window knows where it stands without asking.
     const seen: ContextProjection[] = []
     const dispose = host!.onContext((projection) => seen.push(projection))
-    expect(seen).toHaveLength(0)
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.health).toBe('ready')
     dispose()
   })
 
-  it('has no Context command to submit, in either door', async () => {
+  it('refuses the context names Core deliberately does not own', async () => {
     await host!.start()
-    // `context.status.read` does not exist in `CoreCommandName` yet — that
-    // vocabulary is #15/#16's to widen — so a window that names any context
-    // command is refused before anything else happens. Refused, not ignored:
-    // code that guessed a command shape is told its guess does not exist.
-    for (const command of ['context.status.read', 'context.item.write', 'context.revoke']) {
+    // Core owns a context vocabulary now: `context.status.read`, `context.admit`
+    // and the rest are Core's own commands, and the window door carries none of
+    // them (asserted against `CORE_COMMANDS` below). What this door must still
+    // refuse are the names that were never going to exist — a resolve, an item
+    // read, a write — because "a window asks Core to hand over the thing this
+    // refers to" is the exact answer `core-protocol.ts` keeps out of the
+    // vocabulary on purpose. Refused, not ignored: code that guessed a command
+    // shape is told its guess does not exist.
+    for (const command of ['context.resolve', 'context.item.read', 'context.item.write']) {
       const result = await host!.submit({ command: command as never, requestId: 'c-1' })
       expect(result.ok).toBe(false)
       expect(result.refusal?.reason).toMatch(/unknown command/)
@@ -233,6 +299,116 @@ describe('the ContextChannel forwards, and only forwards', () => {
     channel.on((projection) => seen.push(projection))
     expect(seen[0]?.health).toBe('unavailable')
     expect(seen[0]?.reason).toBe(NO_CONTEXT_DOMAIN_REASON)
+    channel.close()
+  })
+})
+
+describe("the host translates Core's context vocabulary into the window's", () => {
+  it('reports one audit row as one item, in the window keys and no more', () => {
+    const projection = toContextProjection(coreView())
+
+    expect(projection.health).toBe('ready')
+    expect(projection.reason).toBeNull()
+    expect(projection.sequence).toBe(4)
+    expect(Object.keys(projection.items[0] ?? {}).sort()).toEqual([
+      'expiresAt',
+      'itemId',
+      'kind',
+      'label',
+      'provenance',
+      'scope',
+      'state',
+      'ttlSeconds',
+    ])
+    expect(projection.items[0]).toEqual({
+      itemId: 'ctx-1',
+      kind: 'explicit-selection',
+      // Core's audit row carries the *length* of a label and never the label:
+      // a file name is private in exactly the way the content is, so the
+      // surface heads the row with Core's `kind` instead.
+      label: null,
+      state: 'live',
+      provenance: {
+        sourceClass: 'owner_selection',
+        detail: 'share-1',
+        admittedAt: '2026-10-01T09:00:00.000Z',
+      },
+      scope: { label: 'conversation', detail: 'c1' },
+      expiresAt: '2026-10-01T09:15:00.000Z',
+      // Core reports the instant an item stops being valid, not a granted
+      // lifetime — arithmetic on two instants would be this file inventing one.
+      ttlSeconds: null,
+    })
+    expect(projection.counts).toEqual({
+      items: 1,
+      current: 1,
+      expired: 0,
+      revoked: 0,
+      references: 0,
+      unresolvedReferences: 0,
+    })
+    // Core holds no standing references: `context.reference.read` resolves a
+    // term inside Core and is consumed there, so "no open references" is the
+    // truth about the projection rather than a gap in it.
+    expect(projection.references).toEqual([])
+  })
+
+  it("keeps a Core whose Context is not built unavailable, in Core's own words", () => {
+    // What `core.context()` answers before `start()` finishes: zeroed limits,
+    // because there is no integration to hold any. Reported as `unavailable`
+    // with Core's sentence — never `ready` with an empty list, which would read
+    // as "Freya is looking at nothing" rather than "Core is not up yet".
+    const projection = toContextProjection(
+      coreView({
+        persistence: {
+          mode: 'ephemeral',
+          durable: false,
+          reason: 'context is not available until Core has started',
+        },
+        activeScope: null,
+        declaredScopes: [],
+        items: [],
+        counts: { live: 0, revoked: 0, expired: 0, retained: 0, declaredScopes: 0 },
+        limits: { maxItems: 0, maxLivePerScope: 0, maxScopes: 0 },
+        sequence: 0,
+      }),
+    )
+    expect(projection.health).toBe('unavailable')
+    expect(projection.reason).toBe('context is not available until Core has started')
+    expect(projection.items).toEqual([])
+  })
+
+  it('forwards a projection already in the window vocabulary verbatim', () => {
+    // #24's own seam, still honoured: a far side that already speaks the
+    // window's shape is the answer, and rewording it would be this file
+    // disagreeing with what Core sent.
+    const already = readyProjection()
+    expect(toContextProjection(already)).toBe(already)
+  })
+
+  it('translates a push as well as a pull, so a window never sees both shapes', () => {
+    const pushed: { report: (projection: ContextProjectionView) => void } = {
+      report: () => {},
+    }
+    const channel = new ContextChannel()
+    channel.bind({
+      context: () => coreView(),
+      onContext: (listener: (projection: ContextProjectionView) => void) => {
+        pushed.report = listener
+        return () => {
+          pushed.report = () => {}
+        }
+      },
+    })
+
+    const seen: ContextProjection[] = []
+    const dispose = channel.on((projection) => seen.push(projection))
+    expect(seen[0]?.items[0]?.itemId).toBe('ctx-1')
+
+    pushed.report(coreView({ sequence: 9 }))
+    expect(seen.at(-1)?.sequence).toBe(9)
+    expect(seen.at(-1)?.items[0]?.label).toBeNull()
+    dispose()
     channel.close()
   })
 })

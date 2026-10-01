@@ -64,6 +64,12 @@ Every context item has scope, TTL and revocation.
 
 No omniscient global screen privilege.
 
+The store and its refusal rules are [PHASE-9's foundation lane](PHASE-9.md) — provenance,
+scope, TTL, revocation and the ambiguity-safe resolver. What sits in front of it is the
+Core-owned boundary: five operations a caller can reach, none of which lets the caller
+decide where content came from or how wide it is. See [PHASE-9.md](PHASE-9.md) for the
+anti-forgery argument and for what is deferred to the agent and renderer lanes.
+
 ## Phase 10 — Harness and Computer Hands
 
 Bounded capability families for Browser, Files, Editor, Apps, Computer and

@@ -21,13 +21,12 @@ import { hostBridge } from './host'
  * Two things, and both are reads: `attach()` starts following Core's pushes and
  * pulls once as a backstop, and `read()` pulls the projection again. Neither
  * submits a command. There is deliberately **no `coreSubmit` call in this
- * file**: the Workforce lane has one payloadless read command, and Context has
- * no command at all yet, because the command vocabulary and its handler live in
- * `core-protocol.ts` and `core/index.ts` — #15's and #16's authority. When a
- * `context.status.read` exists, it will be added there first and this client
- * can mirror it; until then the projection channel is the whole of the surface,
- * and there is no route from a window into the Context lane carrying a
- * provenance, a scope, a TTL, an authority or an item.
+ * file**: Core's own vocabulary carries `context.status.read` and its siblings
+ * now, and the Workforce lane has a payloadless read command of its own, but
+ * the window's door whitelists no `context.*` name — so this client keeps to
+ * the projection channel, which is the whole of the surface, and there is no
+ * route from a window into the Context lane carrying a provenance, a scope, a
+ * TTL, an authority or an item.
  *
  * There is also no `select`, no `revoke`, no `resolve` and no `capture`. Not
  * "not implemented yet": absent. Naming what is around a question, deciding

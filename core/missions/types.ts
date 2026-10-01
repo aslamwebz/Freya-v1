@@ -108,6 +108,7 @@ export const MISSION_REASONS = Object.freeze({
   verification_timeout: 'verification_timeout',
   no_child_runs: 'no_child_runs',
   child_run_failed: 'child_run_failed',
+  child_run_cancelled: 'child_run_cancelled',
   child_run_unverified: 'child_run_unverified',
   deadline_expired: 'deadline_expired',
   child_run_limit: 'child_run_limit',

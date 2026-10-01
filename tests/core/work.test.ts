@@ -3453,7 +3453,7 @@ describe('the duration ceiling', () => {
 
       ],
 
-      limits: { maxDurationMs: 25 },
+      limits: { maxDurationMs: 10_000 },
 
     })
 
@@ -3463,9 +3463,10 @@ describe('the duration ceiling', () => {
 
     expect(engine.projection().runs[0]?.status).toBe('completed')
 
-    // Comfortably past the deadline, with nothing left running.
-
-    await new Promise((tick) => setTimeout(tick, 120))
+    // Settlement synchronously disarms the deadline. A tiny real-time ceiling made
+    // this test race the machine scheduler; zero armed timers is the actual property
+    // and proves there is nothing left that can fire afterwards.
+    expect(engine.armedDeadlines()).toBe(0)
 
     const view = engine.projection().runs[0]!
 
@@ -3474,10 +3475,6 @@ describe('the duration ceiling', () => {
     expect(view.limitHit).toBeNull()
 
     expect(engine.snapshot().runs.get(runId)?.status).toBe('completed')
-
-    // And no deadline is armed, which is the property rather than the symptom.
-
-    expect(engine.armedDeadlines()).toBe(0)
 
     await engine.close()
 

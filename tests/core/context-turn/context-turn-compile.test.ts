@@ -196,16 +196,22 @@ describe('an ambiguous reference is never guessed', () => {
     expect(block.report.references[0]).toMatchObject({ kind: null })
   })
 
-  it('keeps an explicit window noun on the active-window kind instead of resolving an unrelated file', () => {
+  it('does not narrow active_window after the observation lane makes it live', () => {
     const store = scopedStore()
     admitOrThrow(store, fileSpec())
+    admitOrThrow(store, {
+      kind: 'shared_tab',
+      source: 'owner_share',
+      scope: conversation(),
+      content: 'a tab',
+      label: 'docs',
+    })
 
+    // active_window is sourceable now. Treating the adjacent noun as a kind hint
+    // would choose past a real ambiguity, so the compiler keeps the reference broad.
     const block = compile(store, 'what is this window')
-    expect(block.report.references[0]).toMatchObject({ term: 'this', kind: 'active_window' })
-    expect(reasonOf(block)).toBe('no_candidates')
-    // The observation lane now sources active_window. With no observed window in
-    // scope, the truthful answer is absence — never the unrelated file above.
-    expect(blockOf(block)).toMatch(/no live context item in this scope matches that reference/)
+    expect(block.report.references[0]).toMatchObject({ term: 'this', kind: null })
+    expect(reasonOf(block)).toBe('ambiguous')
   })
 
   it('says so when nothing is in scope at all, and when no scope is current', () => {

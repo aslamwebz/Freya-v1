@@ -310,6 +310,7 @@ const MISSION_REASON_CODES: ReadonlySet<string> = new Set([
   'verification_timeout',
   'no_child_runs',
   'child_run_failed',
+  'child_run_cancelled',
   'child_run_unverified',
   'deadline_expired',
   'child_run_limit',

@@ -496,6 +496,7 @@ export type MissionOperation =
   | 'settled-failed'
   | 'verification-passed'
   | 'verification-not-established'
+  | 'verification-in-progress'
   | 'verification-timeout'
   | 'run-attached'
   | 'run-refused'

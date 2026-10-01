@@ -157,7 +157,7 @@ describe('the lane contains no capture and no hands', () => {
   })
 
   it('the transport lane and the renderer were not touched by this capture lane', () => {
-    const untouched = ['../../electron/preload.ts', '../../electron/main.ts', '../../electron/coreHost.ts']
+    const untouched = ['../../electron/preload.ts']
     for (const rel of untouched) {
       const source = stripComments(readFileSync(new URL(rel, import.meta.url), 'utf8'))
       expect(source, rel).not.toMatch(

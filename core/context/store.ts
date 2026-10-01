@@ -60,13 +60,15 @@ import { contextAuditRecords } from './audit'
  *
  * ## Ephemeral by statement, not by accident
  *
- * `mode: 'ephemeral'` and `durable: false` say what this lane is: context does
- * not survive a restart, because no encrypted context store has been built and
- * the alternative — a plaintext file of people's selections — is exactly the
- * outcome the Constitution's private-by-default rule exists to prevent.
- * Durability is a deferred integration point, not a silent omission.
+ * This store itself is synchronous and process-local. Core assembly supplies
+ * validated recovery records and a private snapshot callback to its encrypted
+ * persistence lifecycle; no key or filesystem operation enters this module.
  */
 export interface ContextStoreOptions {
+  /** Validated, retired recovery records, supplied only by Core assembly. */
+  readonly initialRecords?: readonly ContextItem[]
+  /** Private snapshot sink. Receives independent copies after a record changes. */
+  readonly onChange?: (records: readonly ContextItem[]) => void
   /** Injected id factory for tests and deterministic replay. */
   readonly newId?: () => string
   /** Ceilings may be lowered here and never raised above `CONTEXT_LIMITS`. */
@@ -88,10 +90,17 @@ export class ContextStore {
   private readonly customId: (() => string) | null
   private counter = 0
   private active: ContextScope | null = null
+  private readonly onChange: (records: readonly ContextItem[]) => void
 
   constructor(options: ContextStoreOptions = {}) {
     this.limits = contextLimits(options.limits ?? {})
     this.customId = options.newId ?? null
+    this.onChange = options.onChange ?? (() => {})
+    for (const item of options.initialRecords ?? []) {
+      this.records.set(item.contextId, this.copy(item))
+      const numericId = /^ctx-(\d+)$/.exec(item.contextId)
+      if (numericId) this.counter = Math.max(this.counter, Number(numericId[1]))
+    }
   }
 
   /** The scope "here" currently means, or null when nothing is current. */
@@ -215,6 +224,7 @@ export class ContextStore {
       revocationReason: null,
     }
     this.records.set(item.contextId, item)
+    this.changed()
     return { ok: true, item, evicted }
   }
 
@@ -269,6 +279,7 @@ export class ContextStore {
       revokedAt: now.toISOString(),
       revocationReason: reason,
     })
+    this.changed()
     return true
   }
 
@@ -291,6 +302,7 @@ export class ContextStore {
     for (const item of targets) {
       this.records.set(item.contextId, { ...retireContextItem(item), revokedAt: at, revocationReason: reason })
     }
+    this.changed()
     return targets.length
   }
 
@@ -310,6 +322,7 @@ export class ContextStore {
         removed.push(id)
       }
     }
+    if (removed.length > 0) this.changed()
     return removed
   }
 
@@ -356,6 +369,20 @@ export class ContextStore {
     return contextAuditRecords(orderedContextItems(this.records.values()), now)
   }
 
+  /** Core-private retained snapshot, including tombstones; never a projection. */
+  snapshot(now: Date): readonly ContextItem[] {
+    this.retireExpired(now)
+    return orderedContextItems(this.records.values()).map((item) => this.copy(item))
+  }
+
+  private copy(item: ContextItem): ContextItem {
+    return { ...item, scope: { ...item.scope }, provenance: { ...item.provenance } }
+  }
+
+  private changed(): void {
+    this.onChange(orderedContextItems(this.records.values()).map((item) => this.copy(item)))
+  }
+
   /* -------------------------------------------------------------- private */
 
   /**
@@ -368,11 +395,17 @@ export class ContextStore {
   private retireExpired(now: Date): void {
     if (!isValidContextInstant(now)) return
     const at = now.getTime()
+    let changed = false
     for (const [id, item] of this.records) {
       if (item.revokedAt === null && Date.parse(item.expiresAt) <= at) {
-        this.records.set(id, retireContextItem(item))
+        const retired = retireContextItem(item)
+        if (retired !== item) {
+          this.records.set(id, retired)
+          changed = true
+        }
       }
     }
+    if (changed) this.changed()
   }
 
   /** Hold both retention bounds, before the new record is inserted. */

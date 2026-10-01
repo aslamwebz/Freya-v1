@@ -12,7 +12,7 @@ import {
   type ContextProjectionView,
   type ContextScopeRef,
 } from '../protocol/context'
-import { isValidContextInstant } from './item'
+import { contextItemState, isValidContextInstant } from './item'
 import {
   CONTEXT_MISSION_REVOKED_REASON,
   isReportableMissionStatus,
@@ -21,6 +21,7 @@ import {
   type ContextMissionReport,
 } from './mission-adapter'
 import { ContextStore, type ContextStoreOptions } from './store'
+import { contextItemsInScope, resolveContextReference } from './reference'
 import {
   CONTEXT_ADMISSION_REASONS,
   CONTEXT_REFUSAL_TEXT,
@@ -30,6 +31,7 @@ import {
   type ContextItem,
   type ContextLimits,
   type ContextReference,
+  type ContextResolution,
   type ContextRefusalReason,
 } from './types'
 
@@ -199,6 +201,7 @@ export interface ContextCoreRecord {
 }
 
 export interface ContextIntegrationOptions extends ContextStoreOptions {
+  readonly persistenceHealth?: () => ContextProjectionView['persistence']
   /** The instant, from Core. Never read from inside this file. */
   readonly now?: () => Date
   /** Scopes Core already knows, in declaration order. Bounded. */
@@ -333,6 +336,7 @@ export class ContextIntegration {
   private readonly readNow: () => Date
   private readonly maxScopes: number
   private readonly agentSource: ContextAgentSource | null
+  private readonly persistenceHealth: (() => ContextProjectionView['persistence']) | null
 
   /** Declaration order, because a surface should see them in the order they began. */
   private readonly declared = new Map<string, ContextScopeRef>()
@@ -343,6 +347,8 @@ export class ContextIntegration {
 
   constructor(options: ContextIntegrationOptions = {}) {
     this.#store = new ContextStore({
+      initialRecords: options.initialRecords,
+      onChange: options.onChange,
       ...(options.newId === undefined ? {} : { newId: options.newId }),
       ...(options.limits === undefined ? {} : { limits: options.limits }),
     })
@@ -352,6 +358,7 @@ export class ContextIntegration {
     // caller mint a scope per admission and make "which scope is this" open.
     this.maxScopes = clamp(options.maxScopes ?? CONTEXT_MAX_SCOPES, 1, CONTEXT_MAX_SCOPES)
     this.agentSource = options.agentSource ?? null
+    this.persistenceHealth = options.persistenceHealth ?? null
 
     // The session scope is declared by Core and cannot be undeclared, because it is
     // the one scope every conversation and surface resolves against.
@@ -721,7 +728,7 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
     for (const row of items) counts[row.state] += 1
 
     return {
-      persistence: {
+      persistence: this.persistenceHealth?.() ?? {
         mode: 'ephemeral',
         durable: false,
         reason:
@@ -742,6 +749,20 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
   }
 
   /* --------------------------------------------------------------- mission */
+
+  /** Read-only turn source. Scope is the actual turn's conversation, owned by Core. */
+  turnSource(scope: ContextScopeRef): {
+    readonly activeScope: ContextScopeRef
+    list(now: Date): readonly ContextItem[]
+    resolve(reference: ContextReference, now: Date): ContextResolution
+  } {
+    return {
+      activeScope: scopeView(scope),
+      list: (now) => contextItemsInScope(this.#store.snapshot(now), scope)
+        .filter((item) => contextItemState(item, now) === 'live'),
+      resolve: (reference, now) => resolveContextReference(reference, this.#store.snapshot(now), scope, now),
+    }
+  }
 
   /**
    * Point "here" at the current Mission, or at nothing.
@@ -766,18 +787,13 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
     if (!now.ok) return now.outcome
 
     if (report === null) {
-      if (this.missionContextId === null) {
+      const held = this.liveRowsIn(SESSION_CONTEXT_SCOPE, now.at).filter((row) => row.kind === 'current_mission')
+      if (held.length === 0) {
         return { operation: 'revoke-not-found', ok: false, reason: 'no current Mission context is held' }
       }
-      const previous = this.missionContextId
-      const taken = this.revoke(previous, CONTEXT_MISSION_REVOKED_REASON)
-      return taken.ok
-        ? taken
-        : {
-            operation: 'revoke-already-settled',
-            ok: false,
-            reason: 'the current Mission context had already settled',
-          }
+      const revoked = this.takeBack(held, CONTEXT_MISSION_REVOKED_REASON, now.at)
+      this.sequence += 1
+      return { operation: 'revoked', ok: true, contextId: held[0]!.contextId, revokedCount: revoked }
     }
 
     // Checked, not assumed. The report type says `MissionStatus`, but the value
@@ -963,7 +979,8 @@ return { operation: 'scope-revoked', ok: true, scope: scopeView(scope), revokedC
    * would resolve to, which is the property the idempotency check depends on.
    */
   private heldMissionContent(at: Date): ContextItem | null {
-    const resolved = this.#store.resolve({ term: 'this', kind: 'current_mission' }, at)
+    const resolved = resolveContextReference({ term: 'this', kind: 'current_mission' },
+      this.#store.snapshot(at), SESSION_CONTEXT_SCOPE, at)
     return resolved.ok ? resolved.item : null
   }
 

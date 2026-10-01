@@ -1029,7 +1029,7 @@ describe('restart and degradation tell the truth about context', () => {
     const core = await bootCore()
     expect(core.context().persistence.mode).toBe('ephemeral')
     expect(core.context().persistence.durable).toBe(false)
-    expect(core.context().persistence.reason).toMatch(/no encrypted context store/)
+    expect(core.context().persistence.reason).toMatch(/secure Context key/)
 
     await sendContext(core, 'context.scope.activate', { scope: CONV_9 })
     await admitSelection(core, CONV_9, CHAIN_SECRET)

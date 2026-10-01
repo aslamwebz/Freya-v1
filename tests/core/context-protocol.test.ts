@@ -13,22 +13,21 @@ import {
 /**
  * The Context protocol, on its own.
  *
- * Core's Context domain is issue #15's, and Core's assembly is issue #16's, so
- * this lane cannot test a running Core's context mirror — the seam is not
- * connected yet, and pretending otherwise would be guessing at internals. What
- * it *can* pin down is the vocabulary itself, and the claims that file alone is
- * on the hook for:
+ * The file now carries two vocabularies — Core's own (admissions, boundary
+ * refusals, audit rows, command outcomes) and the window's read-only view — so
+ * what this lane pins down is the part the *window's* half is on the hook for:
  *
- *  1. The runtime surface of the protocol is two honest constants. No
- *     projection can be *submitted* through this file because there is nothing
- *     here that accepts one.
+ *  1. The runtime surface of the protocol is data and one guard. No projection
+ *     can be *submitted* through this file because there is nothing here that
+ *     accepts one, and the list below is pinned exactly so that a runtime
+ *     export added later has to be argued here rather than arriving quietly.
  *  2. The absent projection is absent — `unavailable`, frozen, and never a
  *     `ready` frame with invented zeroes dressed as a report.
  *  3. The key set of every view is exactly what it declares, so a field added
  *     is a visible vocabulary change and a field left out is reported as null
  *     rather than guessed.
- *  4. The seam a future domain fills is *readable and nothing else* — the
- *     smallest object that satisfies `ContextSource` really is just a reader.
+ *  4. The seam a reader fills is *readable and nothing else* — the smallest
+ *     object that satisfies `ContextSource` really is just a reader.
  */
 
 function item(over: Partial<ContextItemView> = {}): ContextItemView {
@@ -50,15 +49,32 @@ function item(over: Partial<ContextItemView> = {}): ContextItemView {
 }
 
 describe('the protocol exposes a report and no verbs', () => {
-  it('has exactly two runtime exports, both absences stated in words', () => {
-    // Everything else in the file is a type, which is to say a shape, which is
-    // to say nothing a caller can *do*. Two frozen constants are the whole of
-    // what this vocabulary can execute, and neither of them can carry an item
-    // into anything.
+  it('has a runtime surface of closed vocabularies, two absences and one guard', () => {
+    // Everything in the file is a *shape* except these: closed vocabularies
+    // Core's boundary quotes, the words a refusal is worded in, the two
+    // sentences a surface prints, and one predicate over a list. Nothing here
+    // accepts a projection, so there is still no path through this file into
+    // anything — and the list is exact, so a runtime export added later is a
+    // visible change to this test rather than a quiet widening of what a
+    // caller can reach.
     expect(Object.keys(contextProtocol).sort()).toEqual([
       'ABSENT_CONTEXT_PROJECTION',
+      'CONTEXT_ADMISSION_CHANNELS',
+      'CONTEXT_AUTHORITY_FIELDS',
+      'CONTEXT_BOUNDARY_REFUSALS',
+      'CONTEXT_BOUNDARY_REFUSAL_TEXT',
+      'CONTEXT_SCOPE_KINDS',
+      'NO_ACTIVE_AGENT_CONTEXT_REASON',
       'NO_CONTEXT_DOMAIN_REASON',
+      'SESSION_CONTEXT_SCOPE',
+      'isContextAdmissionChannel',
     ])
+    // One callable thing, and it is a guard over a closed list: a predicate,
+    // not an operation. Every other export is data.
+    const callable = Object.keys(contextProtocol).filter(
+      (name) => typeof (contextProtocol as Record<string, unknown>)[name] === 'function',
+    )
+    expect(callable).toEqual(['isContextAdmissionChannel'])
   })
 
   it('names no mutating verb anywhere in its runtime surface', () => {

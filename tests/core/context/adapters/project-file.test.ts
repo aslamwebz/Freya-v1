@@ -131,7 +131,9 @@ describe('the authorised file', () => {
     )
     expectRefusal(
       authorizedFileAdmission(fileInput({ kind: 'active_window' })),
-      'kind_deferred',
+      // A real kind since the observation lane (#30) — and still not a file
+      // adapter's to produce: mismatch is the truthful word.
+      'kind_mismatch',
     )
   })
 

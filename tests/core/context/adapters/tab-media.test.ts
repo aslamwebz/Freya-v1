@@ -92,7 +92,9 @@ describe('the shared tab', () => {
     }
     expectRefusal(sharedTabAdmission(tabInput({ kind: 'project' })), 'kind_mismatch')
     expectRefusal(sharedMediaAdmission(mediaInput({ kind: 'shared_tab' })), 'kind_mismatch')
-    expectRefusal(sharedTabAdmission(tabInput({ kind: 'active_window' })), 'kind_deferred')
+    // `active_window` is a real kind since the observation lane (#30) — a tab
+    // adapter still has no hand in it.
+    expectRefusal(sharedTabAdmission(tabInput({ kind: 'active_window' })), 'kind_mismatch')
   })
 })
 

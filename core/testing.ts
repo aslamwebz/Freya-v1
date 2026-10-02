@@ -4,6 +4,7 @@ import type { PrincipalId } from './protocol/core-protocol'
 import type { SubordinateWorkerScope, WorkforceOwnerScope } from './workforce/authority'
 import type { AttentionSourceScope } from './attention/engine'
 import type { AttentionSource } from './attention/types'
+import type { SkillOwnerScope } from './skills/engine'
 
 /**
  * TEST SEAMS. NOT PART OF THE PRODUCTION CAPABILITY SURFACE.
@@ -24,6 +25,7 @@ interface AuthorityIssuer {
   issueWorkforceOwnerScope(): WorkforceOwnerScope
   issueSubordinateScope(workerId: string): SubordinateWorkerScope
   issueAttentionSourceScope(source: AttentionSource): AttentionSourceScope
+  issueSkillOwnerScope(): SkillOwnerScope
 }
 
 /** The owner's authority. Grant governance is only on this interface. */
@@ -72,4 +74,16 @@ export function subordinateScope(core: Core, workerId: string): SubordinateWorke
  */
 export function attentionSource(core: Core, source: AttentionSource): AttentionSourceScope {
   return (core as unknown as AuthorityIssuer).issueAttentionSourceScope(source)
+}
+
+/**
+ * The owner's face of skills.
+ *
+ * Holding it is the authority to admit, revise, evaluate, promote, retire and propose
+ * an improvement, and it is issued by Core rather than acquired by naming a
+ * capability. It cannot execute a skill, grant a capability, decide an approval or
+ * touch a protected domain: the engine has no such method, which is the point.
+ */
+export function skillOwnerScope(core: Core): SkillOwnerScope {
+  return (core as unknown as AuthorityIssuer).issueSkillOwnerScope()
 }

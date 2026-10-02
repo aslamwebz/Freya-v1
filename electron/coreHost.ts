@@ -8,6 +8,7 @@ import type { MissionProjection } from '../core/missions/types'
 import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
+import type { SkillProjection } from '../core/protocol/skills'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
 import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
 import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
@@ -338,6 +339,17 @@ export interface CoreHost {
    */
   onAttention(send: (projection: AttentionProjection) => void): () => void
   attention(): AttentionProjection | null
+
+  /**
+   * Attach to the Skills projection. Returns a disposer.
+   *
+   * Same mirror semantics as every other channel: Core pushes, a window holds what
+   * it was given, and there is no window-side write path into any field of it. The
+   * owner's mutating commands go through `coreSubmit` and Core's own tables.
+   */
+  onSkills(send: (projection: SkillProjection) => void): () => void
+  /** The Skills projection Core reports, or null before Core has started. */
+  skills(): SkillProjection | null
   /**
    * Evaluate due attention schedules. The bounded wake, driven by the composition
    * root. Performs no model call and no provider contact; it only fires schedules
@@ -377,6 +389,15 @@ export interface CoreHostOptions {
    */
   missionKey?: Uint8Array | null
   contextKey?: Uint8Array | null
+  /**
+   * Skills' own key — Phase 17's fifth independent secret.
+   *
+   * Forwarded whole and never derived here. Absent means the Skill domain keeps
+   * procedures in this process only and says so, which is the correct fallback and
+   * never a plaintext stand-in: a weaker store silently representing an encrypted one
+   * is a worse bug than forgetting a procedure.
+   */
+  skillKey?: Uint8Array | null
   /** Explicit main-process opt-in; never accepted from a renderer. */
   windowObservation?: {
     enabled: boolean
@@ -451,6 +472,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
   private readonly personalityWindows = new Set<(projection: PersonalityProjection) => void>()
   private readonly attentionWindows = new Set<(projection: AttentionProjection) => void>()
+  private readonly skillWindows = new Set<(projection: SkillProjection) => void>()
   /**
    * The Context transport box. Binds structurally to a reporting Core, holds a
    * window set, and can write nothing — see `ContextChannel`. Deliberately not
@@ -486,6 +508,7 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
         ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),
         contextKey: this.options.contextKey ?? null,
+        skillKey: this.options.skillKey ?? null,
         // The Workforce seam, forwarded whole. Nothing is derived from it here:
         // the host neither reads nor interprets a workforce, it only hands Core
         // the reader it was given and mirrors what Core reports.
@@ -526,6 +549,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onWorkforce((projection) => this.broadcastWorkforce(projection))
       core.onPersonality((projection) => this.broadcastPersonality(projection))
       core.onAttention((projection) => this.broadcastAttention(projection))
+      core.onSkills((projection) => this.broadcastSkills(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -729,6 +753,7 @@ export class ElectronCoreHost implements CoreHost {
     this.workforceWindows.clear()
     this.personalityWindows.clear()
     this.attentionWindows.clear()
+    this.skillWindows.clear()
     this.contextChannel.close()
     await core?.stop(reason)
   }
@@ -836,6 +861,33 @@ export class ElectronCoreHost implements CoreHost {
     return this.core?.attention() ?? null
   }
 
+  /**
+   * Attach to the Skills projection, pushed immediately.
+   *
+   * The immediate push is what makes a window that just reloaded agree with one that
+   * never left, and returning `null` before Core starts is the honest reading rather
+   * than a manufactured "no procedures".
+   */
+  onSkills(send: (projection: SkillProjection) => void): () => void {
+    this.skillWindows.add(send)
+    const projection = this.skills()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Skills push threw', error)
+        this.skillWindows.delete(send)
+      }
+    }
+    return () => {
+      this.skillWindows.delete(send)
+    }
+  }
+
+  skills(): SkillProjection | null {
+    return this.core?.skills() ?? null
+  }
+
   async attentionTick(): Promise<number> {
     return (await this.core?.attentionTick()) ?? 0
   }
@@ -847,6 +899,17 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window Attention push threw', error)
         this.attentionWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastSkills(projection: SkillProjection): void {
+    for (const send of [...this.skillWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Skills push threw', error)
+        this.skillWindows.delete(send)
       }
     }
   }

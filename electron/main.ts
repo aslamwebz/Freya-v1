@@ -68,15 +68,24 @@ function e2eKey(variable: string): Uint8Array | null {
  * conversation survives and the Brain does not — or the reverse — and the failure
  * would look like a Brain bug rather than a harness that only half injected.
  */
-function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array; mission: Uint8Array; context: Uint8Array } | null {
+function e2eKeys(): {
+  conversation: Uint8Array
+  brain: Uint8Array
+  mission: Uint8Array
+  context: Uint8Array
+  skill: Uint8Array
+} | null {
   const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
   const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
   const mission = e2eKey('FREYA_E2E_MISSION_KEY')
   const context = e2eKey('FREYA_E2E_CONTEXT_KEY')
-  // All four or none, so a partial fixture cannot quietly run with a real keyring for
+  const skill = e2eKey('FREYA_E2E_SKILL_KEY')
+  // All five or none, so a partial fixture cannot quietly run with a real keyring for
   // the domain it forgot.
-  if (conversation === null || brain === null || mission === null || context === null) return null
-  return { conversation, brain, mission, context }
+  if (conversation === null || brain === null || mission === null || context === null || skill === null) {
+    return null
+  }
+  return { conversation, brain, mission, context, skill }
 }
 
 /**
@@ -413,6 +422,16 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:attention', projection)
   })
 
+  /**
+   * Skills: a twelfth channel. Core owns the truth about procedures, their lifecycle
+   * and their evidence; this window only displays what Core pushed. There is
+   * deliberately no `freya:core:skills:write` channel and no preload method that
+   * accepts a skill body, so the bridge cannot become a second admission door.
+   */
+  const detachSkills = coreHost?.onSkills((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:skills', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -424,6 +443,7 @@ function createWindow(): BrowserWindow {
     detachContext?.()
     detachPersonality?.()
     detachAttention?.()
+    detachSkills?.()
   })
 
   if (DEV_SERVER) {
@@ -521,6 +541,11 @@ function registerIpc(): void {
   // `attention.tick` command — a window cannot decide, spend a budget, bypass a
   // cooldown or drive the scheduler.
   ipcMain.handle('freya:core:attention', () => requireCore().attention())
+  // The Skills projection, same bargain as every other channel: a read of what Core
+  // reports. There is deliberately no `freya:core:skills:write` and no
+  // `skill.tick`/`skill.evaluate` command — a renderer cannot decide a verdict, move a
+  // status, or burn a model call on its own.
+  ipcMain.handle('freya:core:skills', () => requireCore().skills())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)
@@ -560,6 +585,7 @@ app.whenReady().then(() => {
         brain: { key: testKeys.brain, reason: null as string | null },
         mission: { key: testKeys.mission, reason: null as string | null },
         context: { key: testKeys.context, reason: null as string | null },
+        skill: { key: testKeys.skill, reason: null as string | null },
       })
     : loadKeyring(dataPath)
   void keyResult.then((result) => {
@@ -605,6 +631,7 @@ app.whenReady().then(() => {
         brainKey: result.brain.key,
         missionKey: result.mission.key,
         contextKey: result.context.key,
+        skillKey: result.skill.key,
         // Explicit host setting; own-app sees only Freya. System is honestly unsupported.
         ...(['own-app', 'system'].includes(process.env.FREYA_CONTEXT_WINDOW_OBSERVATION ?? '') ? {
           windowObservation: {

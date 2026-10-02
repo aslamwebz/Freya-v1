@@ -26,6 +26,22 @@ import {
   isSeverityHint,
   isUrgencyLevel,
 } from '../attention/types'
+import {
+  EVALUATION_AUTHORS,
+  EVALUATION_REASONS,
+  EVALUATION_SUBJECT_KINDS,
+  isImprovementTarget,
+  isSkillKind,
+  isSkillRefusalCode,
+  isSkillRetirementReason,
+  isSkillSource,
+  isSkillTrustClass,
+  isSkillVerdict,
+  SKILL_LIMITS,
+  SKILL_STATUSES,
+} from '../skills/types'
+import { PROMOTION_REASONS } from '../skills/promotion'
+import { targetIsProtected } from '../skills/state'
 
 /**
  * Durable event validation.
@@ -376,6 +392,92 @@ const MISSION_STATUS_SET: ReadonlySet<string> = new Set([
   'failed',
   'cancelled',
 ])
+
+/** The name/applicability slug shape, checked identically everywhere. */
+const SKILL_SLUG = /^[a-z0-9][a-z0-9-]*$/
+
+const SKILL_STATUS_SET: ReadonlySet<string> = new Set(SKILL_STATUSES)
+const EVALUATION_SUBJECT_KIND_SET: ReadonlySet<string> = new Set(EVALUATION_SUBJECT_KINDS)
+const EVALUATION_AUTHOR_SET: ReadonlySet<string> = new Set(EVALUATION_AUTHORS)
+const EVALUATION_REASON_SET: ReadonlySet<string> = new Set(EVALUATION_REASONS)
+const PROMOTION_REASON_SET: ReadonlySet<string> = new Set(PROMOTION_REASONS)
+// `SKILL_REFUSAL_CODES` is read through `isSkillRefusalCode` rather than through a
+// second Set, so there is exactly one closed list of refusal codes in the build.
+
+/**
+ * One admitted or revised skill version.
+ *
+ * `applicability` is a bounded list of the *same* slug shape as a name, checked
+ * exactly. That is the one piece of a skill's *content* the journal keeps, and the
+ * justification is that selection has to match on it: a closed-shape token is what
+ * makes "which procedures apply here?" an auditable question rather than a fuzzy one.
+ * A sentence could not be in that field, and the length bound means it cannot hide one.
+ */
+const SKILL_VERSION = workRule(
+  [
+    'skillId',
+    'name',
+    'nameLength',
+    'kind',
+    'version',
+    'contentHash',
+    'source',
+    'trustClass',
+    'admittedBy',
+    'originRef',
+    'stepCount',
+    'requiredCapabilityCount',
+    'applicabilityCount',
+    'applicability',
+    'inputCount',
+    'outputCount',
+    'preconditionCount',
+    'postconditionCount',
+    'summaryLength',
+  ],
+  (p) =>
+    isEventId(p.skillId) &&
+    typeof p.name === 'string' &&
+    SKILL_SLUG.test(p.name) &&
+    p.name.length <= SKILL_LIMITS.maxNameChars &&
+    isPositiveInt(p.nameLength) &&
+    isSkillKind(p.kind) &&
+    isPositiveInt(p.version) &&
+    typeof p.contentHash === 'string' &&
+    /^[a-f0-9]{8,64}$/.test(p.contentHash) &&
+    isSkillSource(p.source) &&
+    isSkillTrustClass(p.trustClass) &&
+    isNonEmptyString(p.admittedBy) &&
+    (p.originRef === null || isNonEmptyString(p.originRef)) &&
+    isNonNegativeInt(p.stepCount) &&
+    isNonNegativeInt(p.requiredCapabilityCount) &&
+    isNonNegativeInt(p.applicabilityCount) &&
+    Array.isArray(p.applicability) &&
+    p.applicability.length <= SKILL_LIMITS.maxApplicabilityTags &&
+    p.applicability.every(
+      (tag) =>
+        typeof tag === 'string' && tag.length > 0 && tag.length <= SKILL_LIMITS.maxTagChars && SKILL_SLUG.test(tag),
+    ) &&
+    p.applicabilityCount === p.applicability.length &&
+    isNonNegativeInt(p.inputCount) &&
+    isNonNegativeInt(p.outputCount) &&
+    isNonNegativeInt(p.preconditionCount) &&
+    isNonNegativeInt(p.postconditionCount) &&
+    isNonNegativeInt(p.summaryLength),
+)
+
+/** Four integers the promotion engine counted itself. */
+function isPromotionEvidence(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const evidence = value as Record<string, unknown>
+  return (
+    onlyNamedKeys(evidence, ['version', 'established', 'contradicted', 'distinctSubjects']) &&
+    isPositiveInt(evidence.version) &&
+    isNonNegativeInt(evidence.established) &&
+    isNonNegativeInt(evidence.contradicted) &&
+    isNonNegativeInt(evidence.distinctSubjects)
+  )
+}
 
 const PAYLOAD_RULES: {
   [K in CoreEventType]: (payload: Record<string, unknown>) => boolean
@@ -1147,6 +1249,147 @@ const PAYLOAD_RULES: {
   'attention.schedule.cancelled': workRule(
     ['scheduleId', 'reason'],
     (p) => isEventId(p.scheduleId) && isNonEmptyString(p.reason),
+  ),
+
+  /* ---------------------------------------------------------------- skills */
+
+  // The Work rule, applied to Skills for the same reason and with the same force: an
+  // undeclared key is refused rather than ignored. This family's whole safety
+  // argument is that there is **no slot a skill body could occupy** — no summary
+  // text, no contract description, no step input, no commentary. A payload with the
+  // right fields plus a `summary` string would pass every field check and quietly
+  // write a procedure into a backup.
+  'skill.admitted': SKILL_VERSION,
+  'skill.revised': SKILL_VERSION,
+
+  // `evidence` is nullable so a downgrade (which needs no evidence) records honestly.
+  // When present it is four integers the engine counted itself; there is no field here
+  // a caller could write a verdict into.
+  'skill.transitioned': workRule(
+    ['skillId', 'from', 'to', 'reason', 'evidence'],
+    (p) =>
+      isEventId(p.skillId) &&
+      SKILL_STATUS_SET.has(p.from as string) &&
+      SKILL_STATUS_SET.has(p.to as string) &&
+      PROMOTION_REASON_SET.has(p.reason as string) &&
+      // `promoted` is the only status this family may reach with a lifecycle line,
+      // and retirement has its own event so a terminal status cannot hide its reason.
+      (p.to !== 'retired' && p.to !== 'blocked') &&
+      (p.evidence === null || isPromotionEvidence(p.evidence)),
+  ),
+
+  'skill.retired': workRule(
+    ['skillId', 'version', 'to', 'reason'],
+    (p) =>
+      isEventId(p.skillId) &&
+      isPositiveInt(p.version) &&
+      (p.to === 'retired' || p.to === 'blocked') &&
+      isSkillRetirementReason(p.reason),
+  ),
+
+  // `author` is checked against the two-member `EVALUATION_AUTHORS` set rather than
+  // being a free string, so there is no spelling of this payload in which a model
+  // authored an evaluation. `version` is a positive integer because the fold compares
+  // it against the record's own version, and a mismatch is refused there.
+  'skill.evaluation.recorded': workRule(
+    [
+      'evaluationId',
+      'skillId',
+      'version',
+      'subjectKind',
+      'subjectRef',
+      'author',
+      'verdict',
+      'reason',
+      'deterministicCount',
+      'positiveCount',
+      'negativeCount',
+      'commentaryChars',
+    ],
+    (p) =>
+      isEventId(p.evaluationId) &&
+      isEventId(p.skillId) &&
+      isPositiveInt(p.version) &&
+      EVALUATION_SUBJECT_KIND_SET.has(p.subjectKind as string) &&
+      isEventId(p.subjectRef) &&
+      EVALUATION_AUTHOR_SET.has(p.author as string) &&
+      isSkillVerdict(p.verdict) &&
+      EVALUATION_REASON_SET.has(p.reason as string) &&
+      isNonNegativeInt(p.deterministicCount) &&
+      isNonNegativeInt(p.positiveCount) &&
+      isNonNegativeInt(p.negativeCount) &&
+      isNonNegativeInt(p.commentaryChars),
+  ),
+
+  'skill.execution.planned': workRule(
+    ['skillId', 'version', 'runId', 'stepId', 'stepCount'],
+    (p) =>
+      isEventId(p.skillId) &&
+      isPositiveInt(p.version) &&
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isPositiveInt(p.stepCount),
+  ),
+
+  // `targetRef` is checked against the protected-domain table as well as the id shape,
+  // so a hand-edited line cannot record a proposal against the Constitution or a
+  // source path. A refusal is the *event* one level up, and this is the second place
+  // the same claim is made.
+  'skill.improvement.proposed': workRule(
+    [
+      'proposalId',
+      'target',
+      'targetRef',
+      'skillId',
+      'baseVersion',
+      'summaryLength',
+      'basisEvaluationIds',
+      'proposedBy',
+      'openProposalsAt',
+    ],
+    (p) =>
+      isEventId(p.proposalId) &&
+      isImprovementTarget(p.target) &&
+      isNonEmptyString(p.targetRef) &&
+      p.targetRef.length <= SKILL_LIMITS.maxRefChars &&
+      !targetIsProtected(p.targetRef) &&
+      (p.skillId === null || isEventId(p.skillId)) &&
+      (p.baseVersion === null || isPositiveInt(p.baseVersion)) &&
+      isNonNegativeInt(p.summaryLength) &&
+      isIdList(p.basisEvaluationIds) &&
+      EVALUATION_AUTHOR_SET.has(p.proposedBy as string) &&
+      isNonNegativeInt(p.openProposalsAt),
+  ),
+
+  'skill.improvement.settled': workRule(
+    ['proposalId', 'decision', 'reason'],
+    (p) =>
+      isEventId(p.proposalId) &&
+      (p.decision === 'accepted' || p.decision === 'refused') &&
+      // An accepted proposal carries the word `accepted`, which is also a legal refusal
+      // code — that overlap is intentional, so a line cannot claim "accepted" while
+      // naming a refusal reason that contradicts it.
+      (p.reason === 'accepted' || isSkillRefusalCode(p.reason)),
+  ),
+
+  // A closed refusal code and a bounded reference. There is no field here for the text
+  // that was refused, which is the whole point: the submitted text is the attack.
+  'skill.proposal.rejected': workRule(
+    ['attemptId', 'code', 'targetRef'],
+    (p) =>
+      isEventId(p.attemptId) &&
+      isNonEmptyString(p.code) &&
+      p.code.length <= 64 &&
+      (p.targetRef === null || isEventId(p.targetRef)),
+  ),
+
+  'skill.runtime.promotion.refused': workRule(
+    ['artifactId', 'targetRef', 'reason'],
+    (p) =>
+      isEventId(p.artifactId) &&
+      isNonEmptyString(p.targetRef) &&
+      !targetIsProtected(p.targetRef) &&
+      (p.reason === 'runtime-promotion-unavailable' || p.reason === 'artifact-refused' || p.reason === 'boundary-violation'),
   ),
 }
 

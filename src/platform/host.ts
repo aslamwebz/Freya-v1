@@ -12,6 +12,7 @@ import type { WorkforceProjection } from '../../core/protocol/workforce'
 import type { ContextProjection } from '../../core/protocol/context'
 import type { PersonalityProjection } from '../../core/protocol/personality'
 import type { AttentionProjection } from '../../core/protocol/attention'
+import type { SkillProjection } from '../../core/protocol/skills'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -179,6 +180,14 @@ export interface FreyaHostBridge {
    */
   coreAttention(): Promise<AttentionProjection | null>
   onCoreAttention(handler: (projection: AttentionProjection) => void): () => void
+
+  /**
+   * The Skills projection and its subscription. A read and a follow, and nothing else:
+   * the bridge has no method that writes a skill body, sets a status, submits a
+   * verification record or moves a promotion threshold.
+   */
+  coreSkills(): Promise<SkillProjection | null>
+  onCoreSkills(handler: (projection: SkillProjection) => void): () => void
 }
 
 declare global {

@@ -185,11 +185,25 @@ describe('one secret per domain', () => {
     // The record is there so a keyring written on one platform is never read as
     // though it had been written the same way on another.
     expect(file.protection).toBe('gnome_libsecret')
-    expect(Object.keys(file.keys).sort()).toEqual(['brain', 'context', 'conversation', 'mission'])
+    // Phase 17 added `skill` for stored procedure bodies, so the closed set is five
+    // domains. Naming it here rather than asserting a length is deliberate: a sixth
+    // domain added without a secret for it would fail this test loudly, which is the
+    // point of a closed list.
+    expect(Object.keys(file.keys).sort()).toEqual([
+      'brain',
+      'context',
+      'conversation',
+      'mission',
+      'skill',
+    ])
     // Separate wrapped blobs: recovering one domain never unwraps another.
     expect(file.keys.brain).not.toBe(file.keys.conversation)
     expect(file.keys.mission).not.toBe(file.keys.conversation)
     expect(file.keys.mission).not.toBe(file.keys.brain)
+    expect(file.keys.skill).not.toBe(file.keys.conversation)
+    expect(file.keys.skill).not.toBe(file.keys.brain)
+    expect(file.keys.skill).not.toBe(file.keys.mission)
+    expect(file.keys.skill).not.toBe(file.keys.context)
   })
 
   it('returns the same secrets on the next run', async () => {
@@ -262,7 +276,13 @@ describe('the Mission domain, and the migration that introduces it', () => {
     const file = JSON.parse(await readFile(`${dataPath()}.keyring.json`, 'utf8')) as {
       keys: Record<string, string>
     }
-    expect(Object.keys(file.keys).sort()).toEqual(['brain', 'context', 'conversation', 'mission'])
+    expect(Object.keys(file.keys).sort()).toEqual([
+      'brain',
+      'context',
+      'conversation',
+      'mission',
+      'skill',
+    ])
   })
 
   it('gives the migrated Mission key a different secret from both existing ones', async () => {

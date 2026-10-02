@@ -3,6 +3,7 @@ import { emptyGrantUsage, type CognitionGrant, type CognitionGrantUsage } from '
 import { accumulateAttempt, accumulateReported, accumulateUsage, emptyUsage, withdrawAttempt } from './model/usage'
 import type { ModelUsage, PrincipalId } from './protocol/core-protocol'
 import { initialAttentionState, reduceAttention, type AttentionState } from './attention/state'
+import { initialSkillState, reduceSkillState, type SkillState } from './skills/state'
 
 /**
  * Everything Core knows, derived from durable events.
@@ -67,6 +68,13 @@ export interface CoreState {
    * cooldowns and dedupe survive a restart without a second store.
    */
   attention: AttentionState
+  /**
+   * Skills' folded state: records, lifecycle status, verification, version history,
+   * evaluation records and open improvement proposals. Derived from `skill.*` events
+   * like everything else, so promotions, contradictions and retirement survive a
+   * restart without a second store.
+   */
+  skills: SkillState
 }
 
 /** A `core.integrity_fault` as recovered from the journal. */
@@ -90,6 +98,7 @@ export function initialCoreState(): CoreState {
     integrityFault: null,
     pendingRequests: [],
     attention: initialAttentionState(),
+    skills: initialSkillState(),
   }
 }
 
@@ -317,6 +326,13 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
       if (event.type.startsWith('attention.')) {
         const attention = reduceAttention(state.attention, event)
         return attention === state.attention ? state : { ...state, attention }
+      }
+      // Skills own their own slice and their own reducer, for the same reason: the
+      // lifecycle table, the version arithmetic and the evidence window are three
+      // invariants that belong together and should not be spread across this switch.
+      if (event.type.startsWith('skill.')) {
+        const skills = reduceSkillState(state.skills, event)
+        return skills === state.skills ? state : { ...state, skills }
       }
       return state
   }

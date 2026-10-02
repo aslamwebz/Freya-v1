@@ -13,6 +13,7 @@ import { WorkforceSurface } from './WorkforceSurface'
 import { ContextSurface } from './ContextSurface'
 import { PersonalitySurface } from './PersonalitySurface'
 import { AttentionSurface } from './AttentionSurface'
+import { SkillsSurface } from './SkillsSurface'
 import type { SurfaceDefinition } from './types'
 
 /**
@@ -58,6 +59,10 @@ const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   // actions Core permits — submit an event, register a schedule. Core assigns the
   // source and decides; nothing here can invent an urgency or an interruption.
   attention: () => <AttentionSurface />,
+  // The Skills view: a mirror of Core's projection plus the owner actions Core
+  // permits. Everything it shows is Core's own label; nothing here can assert a
+  // verdict, submit a verification record, or set a threshold.
+  skills: () => <SkillsSurface />,
 }
 
 /** The registry, resolved once from the two catalogs it is built from. */

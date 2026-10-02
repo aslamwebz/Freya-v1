@@ -22,6 +22,9 @@ import type { PersonalityProjection } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import { ATTENTION_NO_PAYLOAD } from '../core/protocol/attention'
 import { ATTENTION_LIMITS } from '../core/attention/types'
+import type { SkillProjection } from '../core/protocol/skills'
+import { SKILL_NO_PAYLOAD } from '../core/protocol/skills'
+import { SKILL_LIMITS } from '../core/skills/types'
 
 export interface RuntimeInfo {
   version: string
@@ -319,6 +322,28 @@ const api = {
   },
 
   /**
+   * The Skills projection: procedures, lifecycle status, evidence as verdicts and
+   * counts, and whether bodies survive a restart.
+   *
+   * A mirror, like every other channel here. What is deliberately **not** on it: any
+   * method that writes a skill body, sets a status, submits a verification record, or
+   * moves a promotion threshold. The renderer's route to those is `coreSubmit` with a
+   * narrow payload contract per command, and Core's own admission, evaluation and
+   * promotion tables sit behind them.
+   */
+  coreSkills: (): Promise<SkillProjection | null> =>
+    ipcRenderer.invoke('freya:core:skills'),
+
+  onCoreSkills: (handler: (projection: SkillProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: SkillProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:skills', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:skills', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -467,6 +492,26 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'attention.schedule.register',
   'attention.schedule.cancel',
   'attention.inbox.read',
+
+  // Skills. Nine names, and the omissions are the point: there is no
+  // `skill.execute`, no `skill.verify`, no `skill.promote.artifact`, no
+  // `skill.threshold.set` and no `skill.tick` in this list, so a window naming any of
+  // them is refused as an unknown command before this list is even consulted.
+  //
+  // Every payload below is rebuilt from *named* fields, so a `trustClass`, a `status`,
+  // a `verdict`, a `verification` array or a `threshold` a window supplies never even
+  // reaches the main process — Core would refuse it, but this bridge does not forward
+  // it, which is a stronger statement than "Core ignores it".
+  'skill.status.read',
+  'skill.admit',
+  'skill.revise',
+  'skill.recordEvaluation',
+  'skill.transition',
+  'skill.retire',
+  'skill.propose',
+  'skill.proposal.settle',
+  'skill.select',
+  'skill.detail.read',
 ])
 
 /**
@@ -521,6 +566,131 @@ const MAX_SOURCE_URL_CHARS = 2_048
 const MAX_RESEARCH_QUESTION_CHARS = 4_096
 const MAX_STOP_REASON_CHARS = 1_000
 const MAX_COMMAND_ORIGIN_CHARS = 128
+
+
+/**
+ * A bounded, validated contract, or null.
+ *
+ * Rebuilt here rather than forwarded, for the same reason every other payload in this
+ * file is: a `contract` the bridge passes through unchanged could carry any shape at
+ * all, and Core's admission would then be the only thing standing between a window and
+ * an unbounded skill body. Four lists, each at most `maxContractEntries` entries, each
+ * entry a bounded slug plus a bounded description — and the whole thing refused whole
+ * rather than trimmed, because a procedure that silently lost an output would be one
+ * the owner believes is complete.
+ */
+function boundedSkillContract(raw: unknown): Record<string, unknown> | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const source = raw as Record<string, unknown>
+  const keys = ['inputs', 'outputs', 'preconditions', 'postconditions']
+  const contract: Record<string, unknown> = {}
+  for (const key of keys) {
+    const list = source[key]
+    if (!Array.isArray(list) || list.length > SKILL_LIMITS.maxContractEntries) return null
+    const entries: { name: string; description: string }[] = []
+    for (const item of list) {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
+      const entry = item as Record<string, unknown>
+      if (typeof entry.name !== 'string' || entry.name.length === 0) return null
+      if (entry.name.length > SKILL_LIMITS.maxNameChars) return null
+      if (typeof entry.description !== 'string') return null
+      if (entry.description.length > SKILL_LIMITS.maxEntryChars) return null
+      entries.push({ name: entry.name, description: entry.description })
+    }
+    contract[key] = entries
+  }
+  return contract
+}
+
+/** A bounded list of applicability slugs, or null. Never trimmed. */
+function boundedSkillTags(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length > SKILL_LIMITS.maxApplicabilityTags) return null
+  const tags: string[] = []
+  for (const item of raw) {
+    if (typeof item !== 'string' || item.length === 0 || item.length > SKILL_LIMITS.maxTagChars) {
+      return null
+    }
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(item)) return null
+    tags.push(item)
+  }
+  return tags
+}
+
+/**
+ * A bounded list of capability names, or null.
+ *
+ * The *names* only. This bridge has no way to express what a capability grants, and
+ * that is the point: the list a window supplies becomes a *declaration* of what a
+ * procedure will ask for, which Core then checks against the forbidden list and
+ * against what the executing Run already holds.
+ */
+function boundedCapabilities(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > SKILL_LIMITS.maxRequiredCapabilities) {
+    return null
+  }
+  const capabilities: string[] = []
+  for (const item of raw) {
+    if (typeof item !== 'string' || item.length === 0 || item.length > MAX_ID_CHARS) return null
+    capabilities.push(item)
+  }
+  return capabilities
+}
+
+/** A bounded list of step seeds, or null. Each needs a capability *and* a verifier. */
+function boundedSkillSteps(raw: unknown): unknown[] | null {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > SKILL_LIMITS.maxSteps) return null
+  const steps: { key: string; capability: string; verifier: string }[] = []
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
+    const step = item as Record<string, unknown>
+    if (typeof step.key !== 'string' || step.key.length === 0 || step.key.length > 64) return null
+    if (typeof step.capability !== 'string' || step.capability.length === 0) return null
+    if (typeof step.verifier !== 'string' || step.verifier.length === 0) return null
+    steps.push({ key: step.key, capability: step.capability, verifier: step.verifier })
+  }
+  return steps
+}
+
+/**
+ * A bounded list of evidence items, or null.
+ *
+ * `kind`, `code`, `count` and nothing else — and no `at`, because an evidence item's
+ * instant is Core's clock, not a window's. A window supplies what it observed; Core
+ * stamps when it was told.
+ */
+function boundedEvidenceItems(raw: unknown): unknown[] | null {
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw) || raw.length > SKILL_LIMITS.maxEvidenceItems) return null
+  const items: { kind: string; code: string; count: number }[] = []
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
+    const entry = item as Record<string, unknown>
+    if (typeof entry.kind !== 'string' || entry.kind.length === 0) return null
+    if (typeof entry.code !== 'string' || entry.code.length === 0) return null
+    if (typeof entry.count !== 'number' || !Number.isInteger(entry.count) || entry.count < 0) {
+      return null
+    }
+    items.push({ kind: entry.kind, code: entry.code, count: entry.count })
+  }
+  return items
+}
+
+/** A bounded list of metric measurements, or null. Never trimmed. */
+function boundedMetrics(raw: unknown): unknown[] | null {
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw) || raw.length > SKILL_LIMITS.maxMetrics) return null
+  const metrics: { name: string; value: number }[] = []
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
+    const entry = item as Record<string, unknown>
+    if (typeof entry.name !== 'string' || entry.name.length === 0) return null
+    if (typeof entry.value !== 'number' || !Number.isInteger(entry.value) || entry.value < 0) {
+      return null
+    }
+    metrics.push({ name: entry.name, value: entry.value })
+  }
+  return metrics
+}
 
 function rendererPayload(command: CoreCommandName, payload: unknown): RendererPayloadResult {
   const record =
@@ -787,6 +957,196 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
         return { ok: false, reason: 'attention event id is invalid' }
       }
       return { ok: true, payload: { eventId } }
+    }
+
+    /* ----------------------------------------------------------- skills */
+    //
+    // Each arm rebuilds its payload from named fields, so a field this bridge does not
+    // name is not merely refused by Core — it never crosses the bridge. The named
+    // omissions are the security argument:
+    //
+    //   - `skill.admit` / `skill.revise` take no `source`, no `trustClass`, no
+    //     `status`, no `verification` and no `version`. Core assigns the source, reads
+    //     the version from the record, and derives verification from evaluations.
+    //   - `skill.recordEvaluation` takes only evidence items with a `kind`, a `code` and
+    //     a `count`, plus an optional commentary **length**. There is no field here for
+    //     a verification record, for a verdict, or for commentary text — so a window
+    //     cannot forge verification and cannot submit an opinion as evidence.
+    //   - `skill.transition` takes a status *name* and nothing else. The evidence,
+    //     the thresholds and the age window are Core's.
+    //   - `skill.propose` takes a target kind, a target reference and a summary. The
+    //     basis evaluations are derived by Core, so a window cannot choose which
+    //     evidence a proposal rests on.
+    //
+    // There is no arm for offering an artifact into the runtime, and there is no
+    // channel that accepts a source-file path. A window cannot ask Core to rewrite
+    // itself, because there is nothing here to ask with.
+
+    case 'skill.status.read': {
+      // A payloadless read, like `attention.status.read` and `workforce.status.read`.
+      if (!carriesNothing(payload)) return { ok: false, reason: SKILL_NO_PAYLOAD }
+      return { ok: true }
+    }
+
+    case 'skill.admit':
+    case 'skill.revise': {
+      const name = string('name', SKILL_LIMITS.maxNameChars)
+      const kind = string('kind', 24)
+      const summary = string('summary', SKILL_LIMITS.maxSummaryChars)
+      if (name === null || name === undefined) return { ok: false, reason: 'a skill name is required' }
+      if (kind === null || kind === undefined) return { ok: false, reason: 'a skill kind is required' }
+      if (summary === null || summary === undefined) {
+        return { ok: false, reason: 'a skill summary is required' }
+      }
+      const contract = boundedSkillContract(record?.contract)
+      if (contract === null) return { ok: false, reason: 'the skill contract is invalid or too large' }
+      const applicability = boundedSkillTags(record?.applicability)
+      if (applicability === null) return { ok: false, reason: 'skill applicability tags are invalid' }
+      const requiredCapabilities = boundedCapabilities(record?.requiredCapabilities)
+      if (requiredCapabilities === null) {
+        return { ok: false, reason: 'skill required capabilities are invalid' }
+      }
+      const steps = boundedSkillSteps(record?.steps)
+      if (steps === null) return { ok: false, reason: 'skill steps are invalid' }
+      const base = { name, kind, summary, contract, applicability, requiredCapabilities, steps }
+      if (command === 'skill.admit') return { ok: true, payload: base }
+      const skillId = string('skillId', MAX_ID_CHARS)
+      if (skillId === null || skillId === undefined) {
+        return { ok: false, reason: 'a revision needs the skill id it revises' }
+      }
+      return { ok: true, payload: { ...base, skillId } }
+    }
+
+    case 'skill.recordEvaluation': {
+      const skillId = string('skillId', MAX_ID_CHARS)
+      if (skillId === null || skillId === undefined) {
+        return { ok: false, reason: 'an evaluation needs the skill it is about' }
+      }
+      const subjectKind = string('subjectKind', 24)
+      if (subjectKind === null || subjectKind === undefined) {
+        return { ok: false, reason: 'an evaluation needs a subject kind' }
+      }
+      const subjectRef = string('subjectRef', MAX_ID_CHARS)
+      if (subjectRef === null || subjectRef === undefined) {
+        return { ok: false, reason: 'an evaluation needs a subject reference' }
+      }
+      const evidence = boundedEvidenceItems(record?.evidence)
+      if (evidence === null) return { ok: false, reason: 'evaluation evidence is invalid' }
+      const metrics = boundedMetrics(record?.metrics)
+      if (metrics === null) return { ok: false, reason: 'evaluation metrics are invalid' }
+      // A *length*, never text. There is no `commentary` string field on this bridge,
+      // so there is no way for a window to hand Core an opinion as anything but a
+      // count of characters — which is the only shape `evaluateOutcome` ever reads.
+      const commentaryLength = record?.commentaryLength
+      if (
+        commentaryLength !== undefined &&
+        (typeof commentaryLength !== 'number' ||
+          !Number.isInteger(commentaryLength) ||
+          commentaryLength < 0 ||
+          commentaryLength > SKILL_LIMITS.maxCommentaryChars)
+      ) {
+        return { ok: false, reason: 'commentary is recorded as a character count' }
+      }
+      return {
+        ok: true,
+        payload: {
+          skillId,
+          subjectKind,
+          subjectRef,
+          evidence,
+          metrics,
+          ...(commentaryLength === undefined ? {} : { commentaryLength }),
+        },
+      }
+    }
+
+    case 'skill.transition': {
+      const skillId = string('skillId', MAX_ID_CHARS)
+      const to = string('to', 24)
+      if (skillId === null || skillId === undefined) {
+        return { ok: false, reason: 'a transition needs the skill id' }
+      }
+      if (to === null || to === undefined) return { ok: false, reason: 'a transition needs a status' }
+      return { ok: true, payload: { skillId, to } }
+    }
+
+    case 'skill.retire': {
+      const skillId = string('skillId', MAX_ID_CHARS)
+      const reason = string('reason', 40)
+      if (skillId === null || skillId === undefined) {
+        return { ok: false, reason: 'a retirement needs the skill id' }
+      }
+      if (reason === null || reason === undefined) return { ok: false, reason: 'a retirement needs a reason' }
+      return { ok: true, payload: { skillId, reason } }
+    }
+
+    case 'skill.propose': {
+      const target = string('target', 32)
+      const targetRef = string('targetRef', SKILL_LIMITS.maxRefChars)
+      const summary = string('summary', SKILL_LIMITS.maxSummaryChars, false)
+      if (target === null || target === undefined) return { ok: false, reason: 'a proposal needs a target kind' }
+      if (targetRef === null || targetRef === undefined) {
+        return { ok: false, reason: 'a proposal needs a target reference' }
+      }
+      if (summary === null) return { ok: false, reason: 'the proposal summary is invalid' }
+      return {
+        ok: true,
+        payload: { target, targetRef, ...(summary === undefined ? {} : { summary }) },
+      }
+    }
+
+    case 'skill.proposal.settle': {
+      const proposalId = string('proposalId', MAX_ID_CHARS)
+      const decision = string('decision', 16)
+      if (proposalId === null || proposalId === undefined) {
+        return { ok: false, reason: 'a settlement needs the proposal id' }
+      }
+      if (decision === null || decision === undefined) {
+        return { ok: false, reason: 'a settlement needs a decision' }
+      }
+      const reason = string('reason', 48, false)
+      if (reason === null) return { ok: false, reason: 'the settlement reason is invalid' }
+      return {
+        ok: true,
+        payload: { proposalId, decision, ...(reason === undefined ? {} : { reason }) },
+      }
+    }
+
+    case 'skill.select': {
+      const applicability = record?.applicability
+      const tags = boundedSkillTags(applicability ?? [])
+      if (tags === null) return { ok: false, reason: 'selection applicability tags are invalid' }
+      const includeTrial = record?.includeTrial
+      const includeVerified = record?.includeVerified
+      for (const value of [includeTrial, includeVerified]) {
+        if (value !== undefined && typeof value !== 'boolean') {
+          return { ok: false, reason: 'selection flags are booleans' }
+        }
+      }
+      const limit = record?.limit
+      if (
+        limit !== undefined &&
+        (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 0 || limit > 64)
+      ) {
+        return { ok: false, reason: 'the selection limit is invalid' }
+      }
+      return {
+        ok: true,
+        payload: {
+          applicability: tags,
+          ...(includeTrial === undefined ? {} : { includeTrial }),
+          ...(includeVerified === undefined ? {} : { includeVerified }),
+          ...(limit === undefined ? {} : { limit }),
+        },
+      }
+    }
+
+    case 'skill.detail.read': {
+      const skillId = string('skillId', MAX_ID_CHARS)
+      if (skillId === null || skillId === undefined) {
+        return { ok: false, reason: 'a detail read needs the skill id' }
+      }
+      return { ok: true, payload: { skillId } }
     }
 
     case 'voice.capture.end': {

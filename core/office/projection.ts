@@ -334,7 +334,7 @@ function workerStation(
     kind: 'worker',
     zone: 'workforce',
     entityId: worker.workerId,
-    label: clamp(worker.name, OFFICE_LIMITS.maxLabelChars),
+    label: workerLabel(worker.specialisation),
     state,
     reason: workerStationReason(worker.status),
     position: gridPosition('workforce', index),
@@ -352,6 +352,16 @@ function workerStation(
     activeStepKey: null,
     openAssignments,
     approval: null,
+  }
+}
+
+function workerLabel(specialisation: string): string {
+  switch (specialisation) {
+    case 'research': return 'Research worker'
+    case 'analysis': return 'Analysis worker'
+    case 'code': return 'Code worker'
+    case 'writing': return 'Writing worker'
+    default: return 'General worker'
   }
 }
 
@@ -428,7 +438,7 @@ function approvalStation(
     state: 'waiting',
     reason: OFFICE_REASONS.waitingApproval,
     position: gridPosition('approvals', index),
-    detail: clamp(approval.justification || approval.proposal, OFFICE_LIMITS.maxDetailChars),
+    detail: OFFICE_REASONS.waitingApproval,
     status: approval.status,
     counts: emptyCounts(),
     live: true,

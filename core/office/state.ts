@@ -90,6 +90,8 @@ export function reduceOfficeState(state: OfficeState, event: AnyCoreEvent): Offi
   }
 }
 
+const OFFICE_WORKER_ID = /^[A-Za-z0-9._:-]{1,128}$/
+
 function readWorkerId(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : null
+  return typeof value === 'string' && OFFICE_WORKER_ID.test(value) ? value : null
 }

@@ -2918,6 +2918,20 @@ class FreyaCore implements Core {
               office: { operation: 'refused', ok: false, reason: 'a workerId is required' },
             }
           }
+          if (
+            typeof envelope.payload !== 'object' ||
+            envelope.payload === null ||
+            Array.isArray(envelope.payload) ||
+            Object.keys(envelope.payload as Record<string, unknown>).some((key) => key !== 'workerId') ||
+            !/^[A-Za-z0-9._:-]{1,128}$/.test(workerId)
+          ) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'presence request accepts only a valid workerId' },
+              office: { operation: 'refused', ok: false, reason: 'presence request accepts only a valid workerId' },
+            }
+          }
           // STOP ALL is latched, so Freya is not acting and the office is not
           // asking for agents to join a desktop that is not in use.
           if (this.state.stopAll.active) {

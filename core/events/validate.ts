@@ -1151,12 +1151,12 @@ const PAYLOAD_RULES: {
 
   'office.presence.requested': workRule(
     ['workerId'],
-    (p) => isNonEmptyString(p.workerId),
+    (p) => isEventId(p.workerId),
   ),
 
   'office.presence.fulfilled': workRule(
     ['workerId'],
-    (p) => isNonEmptyString(p.workerId),
+    (p) => isEventId(p.workerId),
   ),
 }
 

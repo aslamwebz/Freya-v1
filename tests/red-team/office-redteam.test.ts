@@ -27,7 +27,7 @@ import type { AnyCoreEvent } from '../../core/events/envelope'
 
 import { workforceOwnerScope } from '../../core/testing'
 
-import { expectNoSentinels } from './harness'
+import { expectNoSentinels, RED_TEAM_SENTINELS } from './harness'
 
 /**
  * OFFICE RED TEAM.
@@ -343,7 +343,7 @@ describe('office red team', () => {
         workers: [
           {
             workerId: 'alpha',
-            name: 'Alpha',
+            name: RED_TEAM_SENTINELS[0],
             specialisation: 'research',
             status: 'idle',
             createdAt: NOW,
@@ -365,10 +365,32 @@ describe('office red team', () => {
       }
       const projection = projectOffice(makeInput({ workforce }))
       expectNoSentinels('office projection', projection)
+      expect(projection.stations[0]?.label).toBe('Research worker')
+    })
+
+    it('does not leak pending approval prose through the projection', () => {
+      const work: WorkProjection = {
+        ...emptyWorkProjection(),
+        approvals: [{
+          approvalId: 'approval-1', runId: 'run-1', stepId: 'step-1', status: 'pending',
+          capability: 'test.record', requiredCapability: 'work.execute', risk: 'consequential',
+          requestedAt: NOW, decidedAt: null, decidedBy: null, decisionSource: null, reason: null,
+          justification: RED_TEAM_SENTINELS[0], proposal: RED_TEAM_SENTINELS[1],
+        }],
+        counts: { ...emptyWorkProjection().counts, pendingApprovals: 1 },
+      }
+      const projection = projectOffice(makeInput({ work }))
+      expectNoSentinels('office projection', projection)
+      expect(projection.stations[0]?.detail).toBe('waiting for your approval')
     })
   })
 
   describe('window/event storms', () => {
+    it('rejects malformed worker ids in the durable Office fold', () => {
+      const state = reduceOfficeState(initialOfficeState(), makeEvent('office.presence.requested', { workerId: 'worker\nsecret' }, 1))
+      expect(state.requests.size).toBe(0)
+    })
+
     it('does not grow the office without bound under a flood of events', () => {
       let state = initialOfficeState()
       for (let i = 0; i < 100; i++) {
@@ -477,6 +499,21 @@ describe('office red team through a real Core', () => {
     })
     expect(result.ok).toBe(false)
     expect(result.office?.reason).toBe('no such worker')
+  })
+
+  it('refuses extra fields and malformed ids at the Core boundary', async () => {
+    const extra = await core.handleCommand({
+      command: 'office.presence.request', requestId: 'r-extra',
+      payload: { workerId: 'ghost', authority: 'owner' },
+    })
+    expect(extra.ok).toBe(false)
+    expect(extra.office?.reason).toBe('presence request accepts only a valid workerId')
+
+    const malformed = await core.handleCommand({
+      command: 'office.presence.request', requestId: 'r-bad', payload: { workerId: 'ghost worker' },
+    })
+    expect(malformed.ok).toBe(false)
+    expect(malformed.office?.reason).toBe('presence request accepts only a valid workerId')
   })
 
   it('refuses a presence request while STOP ALL is latched', async () => {

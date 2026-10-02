@@ -299,6 +299,7 @@ describe('office projection', () => {
     const workerStations = projection.stations.filter((s) => s.kind === 'worker')
     expect(workerStations).toHaveLength(1)
     expect(workerStations[0]?.entityId).toBe('alpha')
+    expect(workerStations[0]?.label).toBe('Research worker')
     expect(workerStations[0]?.state).toBe('working')
     expect(workerStations[0]?.openAssignments).toBe(1)
   })
@@ -331,6 +332,8 @@ describe('office projection', () => {
     expect(approvalStations).toHaveLength(1)
     expect(approvalStations[0]?.entityId).toBe('apr-1')
     expect(approvalStations[0]?.state).toBe('waiting')
+    expect(approvalStations[0]?.detail).toBe('waiting for your approval')
+    expect(JSON.stringify(approvalStations[0])).not.toContain('overwrite the configuration')
   })
 
   it('caps stations and states how many are hidden', () => {

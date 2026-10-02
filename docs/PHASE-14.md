@@ -69,12 +69,15 @@ Freya's state is derived from Core's own status, never invented:
 ## What crosses, and what deliberately does not
 
 Crosses: ids, statuses, kinds, counts, measured lengths, instants, closed
-labels, and the deterministic layout positions derived from them.
+labels, and the deterministic layout positions derived from them. Worker
+stations use a code-owned label derived only from the worker specialisation;
+pending approvals use the fixed `waiting for your approval` detail.
 
 Does **not** cross:
 
 - **Step input, observation contents, message bodies, task titles, mission
-  text.** The Office shows structure and state, never substance.
+  text, worker display names, approval proposals and approval justifications.**
+  The Office shows structure and state, never substance.
 - **Any authority object, capability instance or policy.** The Office is a
   viewer. It has no method that grants, decides, cancels or redirects.
 - **Any model call.** The Office is a pure function of Core state.
@@ -83,8 +86,10 @@ Does **not** cross:
 
 `office.presence.request` asks that an agent join the desktop Presence. It
 takes a `workerId` and nothing else — no principal, no authority, no
-capability, no expression. Core validates the worker exists, journals the
-request as `office.presence.requested`, and the Office reports it as pending.
+capability, no expression. Preload and Core exact-key check that payload and
+require the same bounded journal-safe id grammar used by durable event ids.
+Core then validates the worker exists, journals the request as
+`office.presence.requested`, and the Office reports it as pending.
 Whether and how the agent actually appears on the desktop is a Presence
 concern (Phase 13), not the Office's — the Office can ask, and it can show that
 it asked, and it can do nothing else.
@@ -144,8 +149,9 @@ the temptation to invent activity is strongest. The red-team attacks are in
 5. **Cancel/redirect bypass.** The Office owns no action authority.
 6. **Fake progress.** A forged `work.step.verified` for a step that never ran
    must not inflate a run's progress.
-7. **Private journal leakage.** A sentinel in a step's input, a task title or
-   a worker's context must not reach the Office projection.
+7. **Private journal leakage.** Sentinels in step input, worker display names,
+   approval proposals or approval justifications must not reach the Office
+   projection.
 8. **Window/event storms.** A flood of events must not grow the office without
    bound.
 9. **Agent impersonation.** A worker cannot request presence as another worker.

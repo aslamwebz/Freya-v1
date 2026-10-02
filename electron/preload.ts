@@ -845,9 +845,15 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       // grant the agent anything, or choose how it appears. The request is a
       // question to Presence (Phase 13), not an instruction, and the bridge
       // forwards the workerId and refuses the rest.
-      const workerId = string('workerId', MAX_ID_CHARS)
+      const workerId = string('workerId', 128)
       if (workerId === null || workerId === undefined) {
         return { ok: false, reason: 'a workerId is required' }
+      }
+      if (record === null || Object.keys(record).some((key) => key !== 'workerId')) {
+        return { ok: false, reason: 'presence request accepts only workerId' }
+      }
+      if (!/^[A-Za-z0-9._:-]+$/.test(workerId)) {
+        return { ok: false, reason: 'workerId is invalid' }
       }
       return { ok: true, payload: { workerId } }
     }

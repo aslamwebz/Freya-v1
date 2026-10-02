@@ -4,9 +4,11 @@
  * Everything here is pure: closed vocabularies, bounded tables, frozen
  * identity/temperament data, exact-key admission for relationship records,
  * deterministic interpretation, catalogue-only expression planning, metadata
- * cue ledger, offline evaluation. No I/O, no clock reads, no randomness, no
- * model. Host wiring (Mind splicing, persistence, projection) is a later
- * slice and enters through these functions, never around them.
+ * cue ledger, offline evaluation, and — the seam outward — the projection that
+ * turns those domain values into the read-only vocabulary a window may hold.
+ * No I/O, no clock reads, no randomness, no model. Host wiring (Mind splicing,
+ * persistence) is a later slice and enters through these functions, never
+ * around them.
  */
 
 export * from './types'
@@ -65,3 +67,4 @@ export {
   type PersonalityEvalCheck,
   type PersonalityEvalReport,
 } from './evaluate'
+export { projectPersonality, type PersonalityProjectionInput } from './projection'

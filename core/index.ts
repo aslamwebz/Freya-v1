@@ -83,6 +83,12 @@ import {
 } from './protocol/workforce'
 import { describeActivity, mergeActivity } from './protocol/activity'
 import type { CoreActivityEvent } from './protocol/activity'
+import {
+  ABSENT_PERSONALITY_PROJECTION,
+  NO_PERSONALITY_DOMAIN_REASON,
+  type PersonalityProjection,
+  type PersonalitySource,
+} from './protocol/personality'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
 import type { CognitionGrantSpec } from './cognition/grants'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
@@ -279,6 +285,22 @@ export interface CoreOptions {
    * from a renderer.
    */
   workforceSource?: WorkforceSource
+  /**
+   * The Phase 11 Personality & Relationship seam.
+   *
+   * The *entire* integration surface this lane assumes: Core may be handed
+   * something it can read a `PersonalityProjection` from, and optionally follow.
+   * Unset — the state of every build in this repository — Core reports
+   * `NO_PERSONALITY_DOMAIN_REASON` and an `unavailable` projection, which is the
+   * honest reading rather than an empty relationship.
+   *
+   * A source carries no authority by virtue of being one, and here the reason is
+   * sharper than elsewhere: what it reports is *relationship truth* — records,
+   * confidences, provenance classes, cue eligibility. It can be read; it cannot
+   * be instructed through this option; and nothing in it is reachable from a
+   * renderer, which has no function that names it.
+   */
+  personalitySource?: PersonalitySource
 }
 
 /**
@@ -417,6 +439,24 @@ export interface Core {
   /** Subscribe to the Workforce mirror. Same mirror semantics as the others. */
   onWorkforce(listener: (projection: WorkforceMirror) => void): () => void
   /**
+   * Core's account of personality: temperament, the relationship record as
+   * *metadata*, deterministic interpretation, and at most one cue for Presence.
+   *
+   * Read-only, and the shape of the read is the whole policy: `text`, `tags` and
+   * `admissionReason` are not fields of the projection, so no caller of this
+   * accessor can receive what was recorded about the person — only that it
+   * exists, what kind it is, and how much Core trusts it. A source that reports
+   * is served and never instructed; there is no method here that admits,
+   * supersedes or interprets anything, in either direction.
+   *
+   * A Core with no `personalitySource` answers `NO_PERSONALITY_DOMAIN_REASON`
+   * rather than an empty record, because "nothing has been recorded" and "this
+   * build records nothing" are different facts to a person reading them.
+   */
+  personality(): PersonalityProjection
+  /** Subscribe to the Personality projection. Same mirror semantics as the others. */
+  onPersonality(listener: (projection: PersonalityProjection) => void): () => void
+  /**
    * Core's account of context: what is held, in which scope, and what state.
    *
    * Metadata only, and that is not a rendering choice — the projection carries no
@@ -501,6 +541,20 @@ class FreyaCore implements Core {
   private workforceSource: WorkforceSource | null
   /** Detaches Core from the source's change channel. Set once, at start. */
   private disposeWorkforceSource: () => void = () => {}
+  private readonly personalityListeners = new Set<(projection: PersonalityProjection) => void>()
+  /**
+   * The Phase 11 Personality seam, or null in every build where nothing has
+   * filled it — which is every build in this repository, Slice A being pure.
+   *
+   * Read-only in the strongest sense available: `projection()` answers and
+   * `subscribe?` follows. There is no admission method, no ledger writer and no
+   * interpretation hook on the other side of this field, so the seam cannot be
+   * used to *record* anything about the person, only to report what Core already
+   * holds.
+   */
+  private personalitySource: PersonalitySource | null
+  /** Detaches Core from the Personality source's change channel. Set once, at start. */
+  private disposePersonalitySource: () => void = () => {}
   /** Display-ready activity, rebuilt from the log on every start. */
   private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
@@ -555,6 +609,7 @@ class FreyaCore implements Core {
   constructor(private readonly options: CoreOptions) {
     this.newId = options.newId ?? (() => randomUUID())
     this.workforceSource = options.workforceSource ?? null
+    this.personalitySource = options.personalitySource ?? null
     // Only the clock and the id factory, both already Core's own. The Context
     // integration is deliberately not a `CoreOptions` seam: every argument that
     // could widen it — a scope, a channel, a source, an agent source — is a claim
@@ -981,6 +1036,13 @@ class FreyaCore implements Core {
     this.disposeWorkforceSource =
       this.workforceSource?.subscribe?.(() => this.publishWorkforce()) ?? (() => {})
 
+    // The Personality seam, on the same terms and for the same reason: subscribed
+    // after boot has somewhere to publish to, disposed in `stop()` so a source
+    // cannot outlive the Core reading it, and a source without `subscribe` is
+    // simply read again the next time a window attaches.
+    this.disposePersonalitySource =
+      this.personalitySource?.subscribe?.(() => this.publishPersonality()) ?? (() => {})
+
     const recoveredSequence = this.fabric.lastSequence
     this.startedAt = (this.options.now ?? (() => new Date()))().toISOString()
 
@@ -1096,6 +1158,8 @@ class FreyaCore implements Core {
       this.disposeState()
       this.disposeWorkforceSource()
       this.disposeWorkforceSource = () => {}
+      this.disposePersonalitySource()
+      this.disposePersonalitySource = () => {}
       this.service?.dispose()
       this.currentLifecycle = 'stopped'
       // Research is drained *before* the fabric closes, and on a bound: a browser
@@ -1459,6 +1523,61 @@ class FreyaCore implements Core {
       throw new Error('the Workforce engine is not available')
     }
     return this.workforceEngine
+  }
+
+  /**
+   * The Personality projection, and its two honest readings.
+   *
+   *   - the `personalitySource` seam is filled, so what it reports is served
+   *     verbatim — a source is read, never instructed, and this accessor has no
+   *     argument for it to be instructed *with*;
+   *   - no seam, which is every build in this repository until relationship
+   *     persistence exists, so `NO_PERSONALITY_DOMAIN_REASON` and an
+   *     `unavailable` projection — "no relationship record exists, and none is
+   *     simulated" rather than a warm, empty relationship;
+   *   - a source that threw, so an `unavailable` reading that says the read
+   *     failed instead of a stale one that says everything is fine.
+   */
+  personality(): PersonalityProjection {
+    if (this.personalitySource === null) {
+      return { ...ABSENT_PERSONALITY_PROJECTION, reason: NO_PERSONALITY_DOMAIN_REASON }
+    }
+    try {
+      return this.personalitySource.projection()
+    } catch (error) {
+      return {
+        ...ABSENT_PERSONALITY_PROJECTION,
+        reason: `the Personality domain could not be read: ${describe(error)}`,
+      }
+    }
+  }
+
+  onPersonality(listener: (projection: PersonalityProjection) => void): () => void {
+    this.personalityListeners.add(listener)
+    // Delivered immediately, like every subscription here, so a window that
+    // attaches late agrees with one that never left — including on the honest
+    // sentence a build with no Personality domain reports.
+    try {
+      listener(this.personality())
+    } catch (error) {
+      console.error('[freya.core] Personality subscriber threw', error)
+    }
+    return () => {
+      this.personalityListeners.delete(listener)
+    }
+  }
+
+  private publishPersonality(): void {
+    if (this.personalityListeners.size === 0) return
+    const projection = this.personality()
+    for (const listener of [...this.personalityListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Personality listener threw', error)
+        this.personalityListeners.delete(listener)
+      }
+    }
   }
 
   /**

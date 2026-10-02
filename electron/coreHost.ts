@@ -6,6 +6,7 @@ import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
 import type { MissionProjection } from '../core/missions/types'
 import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
+import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
 import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
 import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
@@ -312,6 +313,18 @@ export interface CoreHost {
    */
   onContext(send: (projection: ContextProjection) => void): () => void
   context(): ContextProjection | null
+  /**
+   * Attach to the Personality projection. Returns a disposer.
+   *
+   * Its own channel like every subsystem's, and the note that matters is what
+   * is *not* here: the host cannot record a preference, admit a habit, file an
+   * inside joke, choose a cue or report a confidence. It reads a projection and
+   * forwards it. What a window receives is Core's report of relationship
+   * *metadata* — never the recorded text, never a key, never a path — and this
+   * host is a forwarding box on the way to that, not a second author of it.
+   */
+  onPersonality(send: (projection: PersonalityProjection) => void): () => void
+  personality(): PersonalityProjection | null
   stop(reason?: string): Promise<void>
 }
 
@@ -384,6 +397,18 @@ export interface CoreHostOptions {
    * is to hand over a reader and then mirror what comes back.
    */
   workforceSource?: WorkforceSource
+  /**
+   * Fills Core's Personality seam. For assembly and tests; production passes
+   * none, and the host does not build one.
+   *
+   * Forwarded *into* Core and nowhere else, exactly like `workforceSource`.
+   * This is not Electron deciding what Freya knows about the person — it
+   * cannot, because the type it forwards answers a question rather than takes
+   * an instruction. Relationship authority lives in Core, in the Phase 11
+   * personality domain; the host's job is to hand over a reader and then mirror
+   * what comes back.
+   */
+  personalitySource?: PersonalitySource
 }
 
 export class ElectronCoreHost implements CoreHost {
@@ -397,6 +422,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly workWindows = new Set<(projection: WorkProjection) => void>()
   private readonly missionWindows = new Set<(projection: MissionProjection) => void>()
   private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
+  private readonly personalityWindows = new Set<(projection: PersonalityProjection) => void>()
   /**
    * The Context transport box. Binds structurally to a reporting Core, holds a
    * window set, and can write nothing — see `ContextChannel`. Deliberately not
@@ -438,6 +464,13 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.workforceSource
           ? { workforceSource: this.options.workforceSource }
           : {}),
+        // The Personality seam, forwarded whole for the same reason. It is a
+        // reader, not a door: the option reaches Core, not a window, and a
+        // renderer has no name for it — so nothing a window can send arrives
+        // here, and the only thing that travels back out is what Core reports.
+        ...(this.options.personalitySource
+          ? { personalitySource: this.options.personalitySource }
+          : {}),
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),
@@ -459,6 +492,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onWork((projection) => this.broadcastWork(projection))
       core.onMission((projection) => this.broadcastMission(projection))
       core.onWorkforce((projection) => this.broadcastWorkforce(projection))
+      core.onPersonality((projection) => this.broadcastPersonality(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -660,6 +694,7 @@ export class ElectronCoreHost implements CoreHost {
     this.brainWindows.clear()
     this.workWindows.clear()
     this.workforceWindows.clear()
+    this.personalityWindows.clear()
     this.contextChannel.close()
     await core?.stop(reason)
   }
@@ -716,6 +751,32 @@ export class ElectronCoreHost implements CoreHost {
   }
 
   /**
+   * Attach to the Personality projection, pushed immediately.
+   *
+   * Null before the Core has started, so a host with nothing to report says
+   * nothing rather than manufacturing a temperament or an empty relationship —
+   * the same rule the Workforce attach follows, for the same reason.
+   */
+  onPersonality(send: (projection: PersonalityProjection) => void): () => void {
+    this.personalityWindows.add(send)
+    const projection = this.personality()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Personality push threw', error)
+      }
+    }
+    return () => {
+      this.personalityWindows.delete(send)
+    }
+  }
+
+  personality(): PersonalityProjection | null {
+    return this.core?.personality() ?? null
+  }
+
+  /**
    * Attach to the Context projection, as the channel saw it last.
    *
    * Null until a Core starts reporting, then Core's own facts in the window's
@@ -737,6 +798,17 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window Workforce push threw', error)
         this.workforceWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastPersonality(projection: PersonalityProjection): void {
+    for (const send of [...this.personalityWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Personality push threw', error)
+        this.personalityWindows.delete(send)
       }
     }
   }

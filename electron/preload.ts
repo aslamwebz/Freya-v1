@@ -18,6 +18,7 @@ import type { MissionProjection } from '../core/missions/types'
 import { WORKFORCE_NO_PAYLOAD } from '../core/protocol/workforce'
 import type { WorkforceProjection } from '../core/protocol/workforce'
 import type { ContextProjection } from '../core/protocol/context'
+import type { PersonalityProjection } from '../core/protocol/personality'
 
 export interface RuntimeInfo {
   version: string
@@ -264,6 +265,35 @@ const api = {
   },
 
   /**
+   * The Personality projection: temperament, the relationship record as
+   * metadata, and one optional cue for Presence to draw.
+   *
+   * Two functions and no command, same as Context and tighter in reason. What
+   * crosses is ids, code-owned keys, closed labels, counts and instants — what
+   * does **not** cross is what the record *says*: no `text`, no `tags`, no
+   * admission reason, no provenance sentence and no expression guidance, so a
+   * window cannot hold the private half of a relationship by simply being open.
+   *
+   * And there is no function here that files one. A compromised renderer gets
+   * from this bridge exactly two argument-free reads; it cannot record a
+   * preference, mark a habit, name an inside joke, assert a confidence or pick
+   * a cue, because no field of any request can reach Core through this lane at
+   * all. Relationship truth, provenance, trust and authority stay in Core, and
+   * this bridge lends none of them in either direction.
+   */
+  corePersonality: (): Promise<PersonalityProjection | null> =>
+    ipcRenderer.invoke('freya:core:personality'),
+
+  onCorePersonality: (handler: (projection: PersonalityProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: PersonalityProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:personality', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:personality', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -389,6 +419,17 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   // privilege is the two projection reads on the api object above: a pull and
   // a subscription. There is no write verb to be tempted by because there is
   // no write verb.
+
+  // Personality, and the entry is nothing — deliberately, and for a sharper
+  // reason than Context's.
+  //
+  // Not one `personality.*` name is whitelisted, so a window naming one is
+  // refused as an unknown command before this list is even consulted. The
+  // window's entire Personality privilege is the pull and the subscription on
+  // the api object above, and that asymmetry is the whole defence: the thing a
+  // caller would most want to supply here is relationship truth — "the owner
+  // prefers this", "we have an inside joke about that" — and a door that takes
+  // no payload cannot be talked into taking one.
 ])
 
 /**

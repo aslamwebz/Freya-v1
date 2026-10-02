@@ -88,4 +88,32 @@ describe('private event text does not leak', () => {
     await work.ingestInternal({ kind: 'work-failed', text: ATTENTION_SENTINEL, sourceRef: 'run-x' })
     expect(await journalText(fixture)).not.toContain(ATTENTION_SENTINEL)
   })
+  it('cannot smuggle private text into the journal through schedule cancellation', async () => {
+    const fixture = await startAttentionCore()
+    fixtures.push(fixture)
+
+    const registered = await submit(fixture, 'attention.schedule.register', {
+      kind: 'reminder',
+      text: 'private schedule body',
+      dueAt: new Date(fixture.clock.now.getTime() + 60_000).toISOString(),
+    })
+    expect(registered.ok).toBe(true)
+    const scheduleId = fixture.core.attention().schedules[0]?.scheduleId
+    expect(scheduleId).toBeTruthy()
+
+    const cancelled = await submit(fixture, 'attention.schedule.cancel', {
+      scheduleId,
+      reason: ATTENTION_SENTINEL,
+    })
+    expect(cancelled.ok).toBe(true)
+
+    const journal = await journalText(fixture)
+    expect(journal).not.toContain(ATTENTION_SENTINEL)
+    const cancellation = journal
+      .split('\n')
+      .filter((line) => line.includes('"attention.schedule.cancelled"'))
+      .map((line) => JSON.parse(line) as { payload: { reason?: string } })
+      .at(-1)
+    expect(cancellation?.payload.reason).toBe('owner-cancelled')
+  })
 })

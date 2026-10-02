@@ -2764,8 +2764,7 @@ class FreyaCore implements Core {
           if (scheduleId === null) {
             return { requestId, ok: false, refusal: { reason: 'scheduleId is missing' } }
           }
-          const reason = readString(envelope.payload, 'reason') ?? 'cancelled by the owner'
-          const cancelled = await this.requireAttention().cancelSchedule(scheduleId, reason)
+          const cancelled = await this.requireAttention().cancelSchedule(scheduleId)
           if (!cancelled) {
             const refusal = 'no pending schedule with that id'
             return {

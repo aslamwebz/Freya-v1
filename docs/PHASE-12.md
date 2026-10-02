@@ -98,8 +98,11 @@ already-authorized state (`always`, `focus-available`, `goal-open`). The wake is
 driven by the composition root on a coarse interval; there is deliberately no
 `attention.tick` command, so a renderer cannot make a schedule fire.
 
-A schedule's text is process-local. A schedule recovered from the journal after a
-restart cannot fire without its content, so it is **cancelled with a stated reason**
+A schedule's text is process-local. Cancellation reasons are closed metadata:
+owner-cancelled, restart, or content-unavailable. Renderer cancellation accepts only the
+schedule id; free-form cancellation prose is refused before Core, and durable event
+validation rejects any other cancellation reason. A schedule recovered from the journal
+after a restart cannot fire without its content, so it is **cancelled with a stated reason**
 — the same honesty Work applies to an interrupted run.
 
 ## Integration through narrow ports
@@ -126,8 +129,8 @@ the detail read truthfully returns nothing.
 ## Renderer
 
 The `attention` surface is a pure mirror plus the two owner actions Core permits:
-submit an event, register or cancel a schedule. It cannot decide, escalate, spend a
-budget, bypass a cooldown or drive the scheduler. The status area draws at most one
+submit an event, register or cancel a schedule. Cancellation carries only the schedule id,
+never renderer prose. It cannot decide, escalate, spend a budget, bypass a cooldown or drive the scheduler. The status area draws at most one
 attention cue, labelled from a closed table this codebase owns.
 
 ## Verification

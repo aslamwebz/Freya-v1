@@ -20,6 +20,7 @@ import {
   isAttentionEventKind,
   isAttentionOutcome,
   isAttentionReason,
+  isAttentionScheduleCancelReason,
   isAttentionSource,
   isFocusState,
   isImportanceLevel,
@@ -1146,7 +1147,7 @@ const PAYLOAD_RULES: {
 
   'attention.schedule.cancelled': workRule(
     ['scheduleId', 'reason'],
-    (p) => isEventId(p.scheduleId) && isNonEmptyString(p.reason),
+    (p) => isEventId(p.scheduleId) && isAttentionScheduleCancelReason(p.reason),
   ),
 }
 

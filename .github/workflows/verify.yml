@@ -48,6 +48,12 @@ jobs:
       - name: Run headless verification
         run: npm run typecheck && npm run lint && npm run test && npm run build
 
+      - name: Run Phase 18 release check
+        run: npm run release:check
+
+      - name: Generate release artifact manifest
+        run: npm run release:manifest
+
       # Give Electron a fresh virtual display immediately before it launches.
       # Keeping Xvfb alive through the entire typecheck/test/build chain proved
       # unreliable on GitHub runners and is unnecessary for headless steps.

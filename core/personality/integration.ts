@@ -64,7 +64,7 @@ import { SOCIAL_WINDOWS, interpretSocialContext, validateInteractionFact } from 
 import { buildExpressionPlan } from './expression'
 import { emptyCueLedger, recordCueUse, restoreCueLedger } from './repetition'
 import { projectPersonality } from './projection'
-import { readOwnerDirectives } from './directives'
+import { readOwnerDirectives, STANDING_RELEVANCE_TAGS } from './directives'
 import { FREYA_TEMPERAMENT } from './temperament'
 import type { PersonalityPersistenceHealth } from './persistence/port'
 import type { PersonalityProjection } from '../protocol/personality'
@@ -207,7 +207,13 @@ export class PersonalityIntegration implements ExpressionMemory {
       if (!adoptable(item)) continue
       kept.push(item.status === 'retired' ? { ...item, text: '' } : item)
     }
-    this.items = this.bound(kept).kept
+    const bounded = this.bound(kept)
+    this.items = bounded.kept
+    // A record the retention bound drops during recovery is still a record that
+    // existed, and it is reported rather than silently shed — the same closed
+    // reason, the same lifecycle event, whether the bound was reached at boot or
+    // at the next admission.
+    this.reportDrops(bounded.dropped)
     this.lastContactAtMs = newestInstant(kept)
     this.observe('session-start', this.now().toISOString(), null)
     this.persistence.commit(this.items, this.ledger)
@@ -543,22 +549,17 @@ export class PersonalityIntegration implements ExpressionMemory {
   }
 
   /**
-   * Context tokens for preference matching, derived from the admitted records'
-   * tags.
+   * The tokens this build matches admitted preferences against.
    *
-   * Closed slugs only, because `interpretSocialContext` matches by set
-   * intersection and anything word-shaped would either be dropped or — worse —
-   * become a matching surface.
+   * The standing-register vocabulary from `./directives`, and nothing derived from
+   * the records or the turn. That is the point: relevance here is a code-owned
+   * statement about what a *standing* instruction means, not a guess about which
+   * preference applies to which sentence. A topic-scoped preference added later
+   * carries a tag outside this list and therefore matches only when a lane
+   * supplies that token.
    */
   private contextTokens(): readonly string[] {
-    const tokens: string[] = []
-    for (const item of this.items) {
-      if (item.status !== 'admitted') continue
-      for (const tag of item.tags) {
-        if (isSlug(tag) && !tokens.includes(tag)) tokens.push(tag)
-      }
-    }
-    return tokens.slice(0, PERSONALITY_LIMITS.maxContextTokens)
+    return STANDING_RELEVANCE_TAGS.slice(0, PERSONALITY_LIMITS.maxContextTokens)
   }
 
   /* ------------------------------------------------------------ retention */

@@ -23,6 +23,7 @@
  */
 
 import {
+  CANNOT_WEAKEN_ITEMS,
   PERSONALITY_LIMITS,
   type CueCandidate,
   type FreyaTemperament,
@@ -30,8 +31,8 @@ import {
 } from './types'
 import { FREYA_TEMPERAMENT, IDENTITY_CUES, identityCueLines, temperamentCueIds } from './temperament'
 import { admitRelationshipItem, createRelationshipCandidate, eligibleCueCandidates } from './relationship'
-import { interpretSocialContext } from './interpretation'
-import { buildExpressionPlan, serializeExpressionPlan } from './expression'
+import { SOCIAL_WINDOWS, interpretSocialContext } from './interpretation'
+import { PLAN_PRECEDENCE_SENTENCE, buildExpressionPlan, serializeExpressionPlan } from './expression'
 import { emptyCueLedger, recordCueUse, selectCues, normalizeRepetitionPolicy } from './repetition'
 
 /** Field names no structure in this domain may ever carry. */
@@ -113,8 +114,10 @@ export interface PersonalityEvalReport {
   readonly allPassed: boolean
   readonly modelIndependent: boolean
   readonly identityConsistent: boolean
+  readonly continuityHonest: boolean
   readonly bounded: boolean
   readonly noAuthorityFields: boolean
+  readonly authorityContained: boolean
   readonly antiRepetitionHolds: boolean
 }
 
@@ -290,6 +293,111 @@ export function runPersonalityEval(temperament: FreyaTemperament = FREYA_TEMPERA
     ),
   )
 
+  // 8. Continuity: the reading of "is this a new relationship, a returning one, or
+  //    a live exchange" is decided by admitted records and observed facts alone, and
+  //    moves in the only order the evidence permits.
+  //
+  //    This is the check that a style layer cannot fake. A system that reported
+  //    `sustained` because a model said something warm would be claiming a shared
+  //    past it does not have — and C6 makes that the worst available failure. So
+  //    the ladder is walked in both directions: `new` with nothing admitted, then
+  //    `renewed` once something is, then `sustained` only when contact is actually
+  //    recent, and back down again when it is not.
+  const emptyReading = interpretSocialContext({ now: FIXTURE_AT, facts: [], relationship: [] })
+  const returnedReading = interpretSocialContext({ now: FIXTURE_AT, facts: [], relationship: items })
+  const liveReading = interpretSocialContext({
+    now: FIXTURE_AT,
+    facts: [
+      {
+        factId: 'f-live',
+        kind: 'exchange',
+        observedAt: FIXTURE_AT,
+        sourceRef: 'turn-fixture-1',
+        tags: ['exchange'],
+      },
+    ],
+    relationship: items,
+  })
+  const staleReading = interpretSocialContext({
+    now: new Date(Date.parse(FIXTURE_AT) + SOCIAL_WINDOWS.recentContactMs + 1_000).toISOString(),
+    facts: [
+      {
+        factId: 'f-old',
+        kind: 'exchange',
+        observedAt: FIXTURE_AT,
+        sourceRef: 'turn-fixture-1',
+        tags: ['exchange'],
+      },
+    ],
+    relationship: items,
+  })
+  const greetingOnly = interpretSocialContext({
+    now: FIXTURE_AT,
+    facts: [
+      {
+        factId: 'f-greet',
+        kind: 'greeting-received',
+        observedAt: FIXTURE_AT,
+        sourceRef: 'turn-fixture-1',
+        tags: ['greeting'],
+      },
+    ],
+    // Nothing admitted, so this is a first contact and a greeting is not yet a
+    // continuation of anything.
+    relationship: [],
+  })
+  const continuityHonest =
+    emptyReading.continuity === 'new' &&
+    returnedReading.continuity === 'renewed' &&
+    liveReading.continuity === 'sustained' &&
+    staleReading.continuity === 'renewed' &&
+    greetingOnly.continuity === 'new' &&
+    greetingOnly.greetingEligible
+  checks.push(
+    check(
+      'continuity-honest',
+      continuityHonest,
+      `no records=${emptyReading.continuity}; records, no contact=${returnedReading.continuity}; ` +
+        `recent contact=${liveReading.continuity}; stale contact=${staleReading.continuity}`,
+    ),
+  )
+
+  // 9. Authority containment: the cannot-weaken claim is present on every artefact,
+  //    in full, and is not something a caller supplied.
+  //
+  //    Checked three ways because "cannot weaken safety" is a claim that can fail
+  //    quietly. The list can be *shortened* — that is the attack. It can be
+  //    *displaced* — a plan whose first line is something else. And it can be
+  //    *reordered* behind a personality line, so it reads as a footnote rather than
+  //    as the first thing a model sees.
+  const everyPlanCarriesTheFullList =
+    [plan1, buildExpressionPlan({ interpretation: emptyReading, at: FIXTURE_AT })].every(
+      (plan) => plan.cannotWeaken.length === CANNOT_WEAKEN_ITEMS.length,
+    ) &&
+    CANNOT_WEAKEN_ITEMS.every((item) => plan1.cannotWeaken.includes(item))
+  const precedenceFirst = plan1.guidance[0] === PLAN_PRECEDENCE_SENTENCE
+  const cannotWeakenLinePresent = plan1.guidance.some((line) =>
+    line.includes(`cannot weaken: ${CANNOT_WEAKEN_ITEMS.join(', ')}`),
+  )
+  const temperamentAlsoCarriesIt =
+    temperament.subordination.cannotOverride.length === CANNOT_WEAKEN_ITEMS.length &&
+    CANNOT_WEAKEN_ITEMS.every((item) => temperament.subordination.cannotOverride.includes(item))
+  const authorityContained =
+    everyPlanCarriesTheFullList &&
+    precedenceFirst &&
+    cannotWeakenLinePresent &&
+    temperamentAlsoCarriesIt &&
+    // And nothing in the plan has been given a key that could carry a permission.
+    findForbiddenFieldNames({ plan: plan1, temperament }).length === 0
+  checks.push(
+    check(
+      'authority-contained',
+      authorityContained,
+      `cannotWeaken=${plan1.cannotWeaken.length}/${CANNOT_WEAKEN_ITEMS.length}, precedence first=${precedenceFirst}, ` +
+        `cannot-weaken line present=${cannotWeakenLinePresent}, temperament carries it=${temperamentAlsoCarriesIt}`,
+    ),
+  )
+
   const allPassed = checks.every((c) => c.passed)
   const valueOf = (id: string): boolean => checks.find((c) => c.id === id)?.passed === true
   return Object.freeze({
@@ -298,8 +406,10 @@ export function runPersonalityEval(temperament: FreyaTemperament = FREYA_TEMPERA
     allPassed,
     modelIndependent: valueOf('model-independence'),
     identityConsistent: valueOf('identity-consistency'),
+    continuityHonest: valueOf('continuity-honest'),
     bounded: valueOf('bounded'),
     noAuthorityFields: valueOf('no-authority-fields'),
+    authorityContained: valueOf('authority-contained'),
     antiRepetitionHolds: valueOf('anti-repetition'),
   })
 }

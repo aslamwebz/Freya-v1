@@ -42,6 +42,15 @@ const E2E_BRAIN_KEY = Buffer.alloc(32, 0x2b).toString('base64')
 const E2E_MISSION_KEY = Buffer.alloc(32, 0x13).toString('base64')
 const E2E_CONTEXT_KEY = Buffer.alloc(32, 0x47).toString('base64')
 /**
+ * A fifth secret, again different from the other four.
+ *
+ * Phase 11 gave what Freya records about a person its own key, and the harness has
+ * to inject all five together for the same reason: four of five would be the
+ * half-injected set, and it would fail in a way that reads as a Brain bug rather
+ * than as a harness that only half injected.
+ */
+const E2E_PERSONALITY_KEY = Buffer.alloc(32, 0x7e).toString('base64')
+/**
  * Which monitor the suite drives Freya on.
  *
  * Overridable, because the right number depends on the desk: someone with three
@@ -92,6 +101,7 @@ async function launch(
       FREYA_E2E_BRAIN_KEY: E2E_BRAIN_KEY,
       FREYA_E2E_MISSION_KEY: E2E_MISSION_KEY,
       FREYA_E2E_CONTEXT_KEY: E2E_CONTEXT_KEY,
+      FREYA_E2E_PERSONALITY_KEY: E2E_PERSONALITY_KEY,
       FREYA_CONTEXT_WINDOW_OBSERVATION: '',
       ...env,
     },
@@ -190,6 +200,36 @@ async function openWork(page: Page): Promise<void> {
       // Not the "waiting for Core" state: the checks below all depend on which of
       // the two it is, so it has to be settled before any of them runs.
       return surface !== null && !document.querySelector('.work-absent')
+    },
+    undefined,
+    { timeout: 15_000 },
+  )
+}
+
+/**
+ * Open the Personality window and wait for it to report a real domain.
+ *
+ * Waits past the "unavailable" state for the same reason `openVault` does:
+ * durability has to be settled before anything is asserted about it, and every
+ * check below depends on which of the two states the surface is showing.
+ */
+async function openPersonality(page: Page): Promise<void> {
+  const dialog = page.locator('[role="dialog"][aria-label="Personality"]')
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Personality', exact: true })
+      .click()
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Personality"] .personality-surface', {
+    timeout: 15_000,
+  })
+  await page.waitForFunction(
+    () => {
+      const surface = document.querySelector(
+        '[role="dialog"][aria-label="Personality"] .personality-surface',
+      )
+      return surface !== null && !document.querySelector('.personality-surface[data-health="absent"]')
     },
     undefined,
     { timeout: 15_000 },
@@ -1200,6 +1240,77 @@ async function main(): Promise<void> {
         )
         check('the transcript survives a renderer reload', true)
 
+        // --- Phase 11: a real relationship, through the real UI -----------
+        //
+        // Nothing here is a fixture. The owner types a standing instruction into
+        // the real composer, Core reads it with its closed directive table, and
+        // the record that results has to appear in a read-only window — as
+        // metadata, with its code-owned slug, and with durability stated rather
+        // than implied. Then the application restarts and the record has to still
+        // be there, which is the only honest proof that what she recorded about a
+        // person was actually written down encrypted rather than held in a process
+        // that is about to end.
+        await openPersonality(chat)
+        check(
+          'the Personality window opens on a real, non-absent domain',
+          await chat.locator('[data-health="ready"]').isVisible(),
+        )
+        check(
+          'it states that records are encrypted at rest',
+          (await chat.locator('.personality-durability').getAttribute('data-durable')) === 'true',
+        )
+        check(
+          'it renders Core\'s frozen temperament table',
+          (await chat.locator('.personality-dimension').count()) === 5,
+        )
+        check(
+          'it carries the subordination claim as data, not as prose',
+          (await chat.locator('.personality-subordination').textContent())?.includes(
+            'style may never weaken',
+          ) === true,
+        )
+        check(
+          'an empty relationship is drawn as a ready domain, not an absent one',
+          (await chat.locator('.personality-posture b').textContent()) === 'PERSONALITY',
+        )
+        await chat.getByRole('button', { name: 'Close Personality' }).click()
+        await chat.waitForSelector('[role="dialog"][aria-label="Personality"]', { state: 'detached' })
+
+        await openChat(chat)
+        await sendChatMessage(chat, 'please keep it short from now on')
+        await chat.waitForFunction(
+          () =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].some((r) =>
+              (r.textContent ?? '').includes('developer echo provider'),
+            ),
+          undefined,
+          { timeout: 40_000 },
+        )
+
+        await openPersonality(chat)
+        const record = await chat.locator('.personality-record[data-status="admitted"]').textContent()
+        check(
+          'an explicit standing instruction becomes an admitted record',
+          (await chat.locator('.personality-record[data-status="admitted"]').count()) === 1,
+        )
+        check(
+          'the record shows Core\'s slug, kind, status, trust class and confidence',
+          record?.includes('conciseness-short') === true &&
+            record?.includes('preference') === true &&
+            record?.includes('owner-assertion') === true,
+          record ?? 'no record',
+        )
+        check(
+          'the window shows the record, not the words the owner used',
+          !(await chat.locator('.personality-surface').textContent())?.includes('please keep it short'),
+        )
+        check(
+          'it says the window cannot record, admit or forget anything',
+          await chat.getByText(/cannot record, admit, forget or choose anything/i).isVisible(),
+        )
+        await chat.getByRole('button', { name: 'Close Personality' }).click()
+        await chat.waitForSelector('[role="dialog"][aria-label="Personality"]', { state: 'detached' })
+
         // --- 7-8. and an application relaunch ----------------------------
         // The encrypted store is the only thing that can outlive a process, so
         // this is the check that conversation history is really persisted.
@@ -1220,6 +1331,56 @@ async function main(): Promise<void> {
           'the conversation is listed as history, not only on screen',
           (await second.page.locator('[role="dialog"][aria-label="Chat"] .chat-list-item').count()) > 0,
         )
+
+        // The relationship survived the same restart the transcript did, and it
+        // came back *admitted* rather than as a candidate.
+        await openPersonality(second.page)
+        check(
+          'the relationship record survives an application relaunch',
+          (await second.page.locator('.personality-record[data-status="admitted"]').count()) === 1,
+        )
+        check(
+          'and it is still stated to be encrypted at rest',
+          (await second.page.locator('.personality-durability').getAttribute('data-durable')) ===
+            'true',
+        )
+        check(
+          'and it still shows only metadata, never the recorded words',
+          !(await second.page.locator('.personality-surface').textContent())?.includes(
+            'please keep it short',
+          ),
+        )
+
+        // The owner reverses it through the same composer, and the window shows a
+        // tombstone with a stated cause rather than a row quietly disappearing.
+        await second.page.getByRole('button', { name: 'Close Personality' }).click()
+        await second.page
+          .waitForSelector('[role="dialog"][aria-label="Personality"]', { state: 'detached' })
+        await openChat(second.page)
+        const beforeWithdrawal = await replyCount(second.page)
+        await sendChatMessage(second.page, 'forget that you keep it short')
+        await second.page.waitForFunction(
+          (n) =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].filter((r) =>
+              (r.textContent ?? '').includes('developer echo provider'),
+            ).length > n,
+          beforeWithdrawal,
+          { timeout: 40_000 },
+        )
+        await openPersonality(second.page)
+        check(
+          'withdrawing a record takes it out of the admitted set',
+          (await second.page.locator('.personality-record[data-status="admitted"]').count()) === 0,
+        )
+        check(
+          'and leaves a tombstone that says why and when',
+          (await second.page
+            .locator('.personality-record[data-status="retired"]')
+            .textContent())?.includes('owner withdrew this record') === true,
+        )
+        await second.page.getByRole('button', { name: 'Close Personality' }).click()
+        await second.page
+          .waitForSelector('[role="dialog"][aria-label="Personality"]', { state: 'detached' })
 
         // --- 9-12. stop one response; Freya stays able to think ----------
         await sendChatMessage(second.page, 'a long question that will be interrupted')

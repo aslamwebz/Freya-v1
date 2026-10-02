@@ -289,6 +289,20 @@ export interface MindServiceOptions {
    */
   relationshipItems?: () => readonly RelationshipItem[]
   /**
+   * Code-owned tokens for preference matching, supplied by Core.
+   *
+   * `interpretSocialContext` decides whether an admitted preference is *relevant*
+   * by intersecting its tags against these, so they are the whole of "what is this
+   * turn about". They must be slugs from a closed vocabulary that trusted code
+   * chose — not words extracted from the owner's message, because a matcher
+   * guessing at relevance is how an unrelated preference starts steering a reply.
+   *
+   * Absent means no preference is ever judged relevant, which is the conservative
+   * reading: the record is still held, still visible, and still withdrawable, it
+   * simply does not appear in guidance.
+   */
+  preferenceTokens?: () => readonly string[]
+  /**
    * The owner's own message, once per turn, after the terminal event is written.
    *
    * This is the Phase 11 production admission path, and it lives in the Mind
@@ -342,6 +356,7 @@ export class MindService {
   private readonly expressionMemory: ExpressionMemory | null
   private readonly interactionFacts: () => readonly InteractionFact[]
   private readonly relationshipItems: () => readonly RelationshipItem[]
+  private readonly preferenceTokens: () => readonly string[]
   private readonly onOwnerMessage: ((message: OwnerMessageEvent) => void) | null
 
   /**
@@ -388,6 +403,7 @@ export class MindService {
     this.expressionMemory = options.expressionMemory ?? null
     this.interactionFacts = options.interactionFacts ?? (() => [])
     this.relationshipItems = options.relationshipItems ?? (() => [])
+    this.preferenceTokens = options.preferenceTokens ?? (() => [])
     this.onOwnerMessage = options.onOwnerMessage ?? null
   }
 
@@ -493,6 +509,7 @@ export class MindService {
         now: at,
         facts: this.interactionFacts(),
         relationship: this.relationshipItems(),
+        contextTokens: this.preferenceTokens(),
         ledger,
       })
     } catch (error) {

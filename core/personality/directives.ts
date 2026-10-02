@@ -126,7 +126,11 @@ const STANDING_PATTERNS: readonly { readonly key: string; readonly pattern: RegE
   },
   {
     key: 'conciseness-detailed',
-    pattern: /\b(?:keep|make)\s+(?:it|your\s+(?:answers?|replies|responses?))\s+(?:longer|detailed|thorough)\b|\bmore\s+detail\b|\belaborate\b/i,
+    // Every alternative here has to be an instruction about Freya's answers, not
+    // a remark about one artefact. A bare "more detail" is how "the summary you
+    // just wrote needed more detail" becomes a permanent preference, so the phrase
+    // only counts when it is anchored to an answer, a reply or a response.
+    pattern: /\b(?:keep|make)\s+(?:it|your\s+(?:answers?|replies|responses?))\s+(?:longer|more\s+detailed|detailed|thorough)\b|\bmore\s+detail\s+in\s+(?:your\s+)?(?:answers?|replies|responses?)\b/i,
   },
   {
     key: 'relaxed',
@@ -214,14 +218,26 @@ function boundClause(text: string, start: number, end: number): string {
  * Read the owner's message for standing instructions and withdrawals.
  *
  * Pure, synchronous, total, and bounded: at most one standing directive and one
- * withdrawal come back from a message, because a message that both asks for a
- * register and retracts it is a message this table declines to interpret.
+ * withdrawal come back from a message.
  *
  * The message is *not* stored, journalled or returned in any form beyond the
  * matched clause, which is the minimum necessary disclosure (C2): the full
  * message is already in the encrypted conversation store, and duplicating a whole
  * turn into the relationship record would be the only new exposure this path
  * creates.
+ *
+ * ## A retraction wins over an instruction it contains
+ *
+ * "Forget that you keep it short" is, lexically, both a withdrawal and a request
+ * for short answers — the very phrase it is retracting is still in the sentence.
+ * Reading it as an instruction as well would be a self-defeating outcome: the owner
+ * asks Freya to stop doing something, and Freya records a standing preference for
+ * it.
+ *
+ * So a withdrawal anywhere in the message is the whole reading, and no new record
+ * is created from a sentence that also retracts. That is the conservative
+ * direction — a message that might mean two things produces no new belief — and
+ * it is the direction that leaves the owner with less recorded, not more.
  */
 export function readOwnerDirectives(text: unknown): readonly OwnerDirectiveOutcome[] {
   if (typeof text !== 'string') return Object.freeze([])
@@ -231,25 +247,23 @@ export function readOwnerDirectives(text: unknown): readonly OwnerDirectiveOutco
   }
   const lower = trimmed.toLowerCase()
 
-  const withdrawals: OwnerWithdrawalMatch[] = []
   const withdrawal = trimmed.match(WITHDRAWAL_PATTERN)
   if (withdrawal !== null) {
-    withdrawals.push(
+    return Object.freeze([
       Object.freeze({
         kind: 'withdrawal' as const,
         clause: boundClause(trimmed, withdrawal.index ?? 0, (withdrawal.index ?? 0) + withdrawal[0].length),
         key: withdrawalKey(lower),
       }),
-    )
+    ])
   }
 
-  const standing: OwnerDirectiveMatch[] = []
   for (const { key, pattern } of STANDING_PATTERNS) {
     const match = trimmed.match(pattern)
     if (match === null) continue
     const directive = STANDING_DIRECTIVES.find((entry) => entry.key === key)
     if (directive === undefined) continue
-    standing.push(
+    return Object.freeze([
       Object.freeze({
         kind: 'standing' as const,
         key: directive.key,
@@ -258,16 +272,10 @@ export function readOwnerDirectives(text: unknown): readonly OwnerDirectiveOutco
         clause: boundClause(trimmed, match.index ?? 0, (match.index ?? 0) + match[0].length),
         explicitStanding: hasStandingMarker(lower),
       }),
-    )
-    break
+    ])
   }
 
-  // A message that retracts what it also asks for is ambiguous, and this table's
-  // whole value is that it never has to guess. Reporting nothing is correct here,
-  // not a gap.
-  if (withdrawals.length > 0 && standing.length > 0) return Object.freeze([])
-
-  return Object.freeze([...withdrawals, ...standing])
+  return Object.freeze([])
 }
 
 /**
@@ -311,3 +319,33 @@ export function ownerDirectiveKeys(): readonly string[] {
 export function ownerDirectiveCueKind(): CueKind | null {
   return null
 }
+
+/**
+ * The tags a standing instruction is relevant to, and the tokens Core supplies for
+ * preference matching.
+ *
+ * ## Why this is a constant and not a guess
+ *
+ * `interpretSocialContext` matches an admitted preference against caller-supplied
+ * tokens by set intersection, and the caller has to supply *something*. The
+ * temptation is to derive the tokens from the turn's own words, which would mean
+ * running a matcher over free text to decide which preferences are relevant — a
+ * guess, and the exact failure this whole file is built to avoid.
+ *
+ * So the answer is the honest one. An instruction about **register** — how Freya
+ * talks — is by definition relevant to every turn, because "from now on" is what
+ * makes it standing. These four tags are what that looks like as data, and they are
+ * code-owned slugs with no route from anything a person said.
+ *
+ * A future topic-scoped preference ("keep emails formal") would carry a topic tag
+ * outside this list, and would then match only when a lane supplies that token. The
+ * narrow path is preserved for the day something can narrow it; today there is
+ * nothing honest that can, and pretending otherwise would have been a preference
+ * that applied whenever a matcher felt like it.
+ */
+export const STANDING_RELEVANCE_TAGS: readonly string[] = Object.freeze([
+  'style',
+  'formality',
+  'conciseness',
+  'directness',
+])

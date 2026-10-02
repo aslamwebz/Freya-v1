@@ -93,6 +93,7 @@ import {
   PersonalityIntegration,
   type PersonalityLifecycleEvent,
 } from './personality/integration'
+import { STANDING_RELEVANCE_TAGS } from './personality/directives'
 import { PersonalityPersistenceRuntime } from './personalityPersistence'
 import type { InteractionFactKind } from './personality/types'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
@@ -145,7 +146,7 @@ const GREETING_OPENERS: readonly string[] = Object.freeze([
 ])
 
 /** Punctuation and salutation noise, stripped before an opener is compared. */
-const GREETING_NOISE = /^[\s"'`*~_(\[{<>*#\-—–.!?,;:'`]+/
+const GREETING_NOISE = /^[\s"'`*~_([{<>*#\-—–.!?,;:'`]+/
 
 /**
  * Which interaction facts one owner turn produced.
@@ -1020,6 +1021,11 @@ class FreyaCore implements Core {
       expressionMemory: this.personalityDomain ?? undefined,
       interactionFacts: () => this.personalityDomain?.interactionFacts() ?? [],
       relationshipItems: () => this.personalityDomain?.admittedItems() ?? [],
+      // Relevance tokens come from the domain's own closed table, not from a
+      // matcher over the owner's words. A standing instruction about register
+      // applies to every turn; a topic-scoped one will carry a tag outside this
+      // list and match only when something can honestly supply it.
+      preferenceTokens: () => STANDING_RELEVANCE_TAGS,
       // The owner's own words, handed over once and forgotten. Core decides what
       // they mean; the Mind never does.
       onOwnerMessage: (message) => this.observeOwnerMessage(message),

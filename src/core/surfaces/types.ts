@@ -251,14 +251,14 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   },
   personality: {
     type: 'personality',
-    // The Phase 11 read-only surface. The window is real and renders exactly
-    // what Core reports — which today is the honest sentence that no Personality
-    // domain is reporting, because relationship persistence does not exist in
-    // this build. A placeholder would understate the transport; a populated
-    // frame would be worse than either, because nothing here may be simulated.
+    // The Phase 11 read-only surface. Core owns a real Personality domain, so this
+    // window has real records to render — metadata only, with the durability of
+    // the store stated above them. Still nothing simulated and still nothing
+    // writable: the bridge carries no `personality.*` command, so a window cannot
+    // file a preference, record a habit or declare an inside joke.
     title: 'Personality',
     summary:
-      'Who Freya is as a temperament, and what she has actually recorded about you: every record shown as metadata with the source class and confidence Core assigned it, and never the recorded text. Nothing on this surface is simulated and nothing here can be written.',
+      'Who Freya is as a temperament, and what she has actually recorded about you: whether the records are encrypted at rest, every record as metadata with the source class and confidence Core assigned it, and never the recorded text. Nothing on this surface is simulated and nothing here can be written.',
     width: 640,
     height: 540,
     minWidth: 400,

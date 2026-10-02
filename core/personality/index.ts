@@ -37,6 +37,8 @@ export {
   ownerDirectiveKeys,
   ownerDirectiveCueKind,
   isKnownOwnerDirectiveKey,
+  outboundRelationshipKey,
+  PRIVATE_SHORTHAND_KEY,
   type OwnerDirectiveOutcome,
   type OwnerDirectiveMatch,
   type OwnerWithdrawalMatch,

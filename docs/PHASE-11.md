@@ -173,9 +173,11 @@ to find out why.
 `"Call it the dragon from now on"` is not a preference to be inferred. It is a word the
 owner hands over, and the record's whole purpose is that Freya may use it later.
 
-The name has to survive becoming a **slug**, because the expression plan prints the key
-into guidance and this domain's safety argument is that nothing word-shaped reaches a
-model from here. So it is validated, not trusted:
+The name has to survive becoming a **slug**, because the expression plan prints the private
+key into model-facing guidance. That does not make it public metadata: the slug is still
+derived from the owner's own words, so journal and renderer projection surfaces replace it
+with the fixed code-owned marker private-shorthand. Inside the encrypted domain the real
+shorthand remains available to expression and anti-repetition. It is validated, not trusted:
 
 - lower-cased, words joined with single dashes;
 - at most **four** words — a nickname, not a phrase that could read as a sentence;
@@ -405,8 +407,9 @@ personality.degraded         { reason, mode, durable: false }
 ```
 
 There is **no payload slot** for a recorded text, for the owner's clause, or for a
-free-text reason of any kind. `key` is a code-owned slug, `lifecycleReason` is a closed
-label, and the reason in a `degraded` event is a fixed sentence that cannot reflect a
+free-text reason of any kind. Standing-preference keys are closed code-owned slugs; an
+owner-named shorthand is replaced by the fixed code-owned marker private-shorthand before it
+reaches the journal. The lifecycle reason is a closed label, and the reason in a `degraded` event is a fixed sentence that cannot reflect a
 decoder or filesystem error. An exact-key check means an extra field is refused rather than
 retained and ignored, which is what makes "no private relationship text in the journal" a
 property of the *type* rather than of everyone's attention.

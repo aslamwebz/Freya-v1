@@ -64,7 +64,7 @@ import { SOCIAL_WINDOWS, interpretSocialContext, validateInteractionFact } from 
 import { buildExpressionPlan } from './expression'
 import { emptyCueLedger, recordCueUse, restoreCueLedger } from './repetition'
 import { projectPersonality } from './projection'
-import { readOwnerDirectives, STANDING_RELEVANCE_TAGS } from './directives'
+import { outboundRelationshipKey, readOwnerDirectives, STANDING_RELEVANCE_TAGS } from './directives'
 import { FREYA_TEMPERAMENT } from './temperament'
 import type { PersonalityPersistenceHealth } from './persistence/port'
 import type { PersonalityProjection } from '../protocol/personality'
@@ -649,7 +649,7 @@ export class PersonalityIntegration implements ExpressionMemory {
       operation: event.operation,
       itemId: event.item.itemId,
       kind: event.item.kind,
-      key: event.item.key,
+      key: outboundRelationshipKey(event.item),
       sourceType: event.item.provenance.sourceType,
       confidence,
       lifecycleReason: event.lifecycleReason,

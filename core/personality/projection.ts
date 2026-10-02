@@ -61,6 +61,7 @@ import {
   type SocialInterpretation,
 } from './types'
 import type { PersonalityPersistenceHealth } from './persistence/port'
+import { outboundRelationshipKey } from './directives'
 
 export { ABSENT_PERSONALITY_PROJECTION, NO_PERSONALITY_DOMAIN_REASON } from '../protocol/personality'
 
@@ -143,7 +144,7 @@ function itemView(item: RelationshipItem): PersonalityRelationshipItemView {
   return {
     itemId: item.itemId,
     kind: item.kind,
-    key: item.key,
+    key: outboundRelationshipKey(item),
     status: item.status,
     cueKind: item.cueKind,
     sourceType: item.provenance.sourceType,

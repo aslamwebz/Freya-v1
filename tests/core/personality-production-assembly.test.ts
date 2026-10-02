@@ -10,7 +10,7 @@ import { MemoryConversationStore } from '../../core/conversation/memory-store'
 import type { ModelRequest } from '../../core/model/provider'
 import type { ConversationCommandOutcome } from '../../core/protocol/conversation'
 import type { PersonalityProjection } from '../../core/protocol/personality'
-import { EXPRESSION_BLOCK_MARKER } from '../../core/personality'
+import { EXPRESSION_BLOCK_MARKER, PRIVATE_SHORTHAND_KEY } from '../../core/personality'
 
 /**
  * PRODUCTION ASSEMBLY — the tests that attack the wiring rather than the pieces.
@@ -203,6 +203,34 @@ describe('the owner’s own words become a real, encrypted relationship record',
     expect(JSON.stringify(c.activity())).not.toContain('keep it short')
     // Nor the projection, which is the only thing a window ever holds.
     expect(JSON.stringify(c.personality())).not.toContain('keep it short')
+  })
+
+  it('keeps an owner-named shorthand private outside the encrypted domain', async () => {
+    const c = await boot()
+    await send('Call it the midnight dragon from now on')
+
+    const projection = c.personality()
+    expect(projection.counts.admitted).toBe(1)
+    expect(projection.items[0]?.kind).toBe('inside-joke')
+    expect(projection.items[0]?.cueKind).toBe('inside-joke')
+    expect(projection.items[0]?.key).toBe(PRIVATE_SHORTHAND_KEY)
+    expect(JSON.stringify(projection)).not.toContain('the-midnight-dragon')
+    expect(JSON.stringify(projection)).not.toContain('midnight dragon')
+
+    const journal = await readFile(journalPath(), 'utf8')
+    expect(journal).not.toContain('the-midnight-dragon')
+    expect(journal).not.toContain('midnight dragon')
+    const lifecycle = journal
+      .split('\n')
+      .filter((line) => line.includes('"personality.record_changed"'))
+      .map((line) => JSON.parse(line) as { payload: Record<string, unknown> })
+    expect(lifecycle).toHaveLength(1)
+    expect(lifecycle[0]?.payload.key).toBe(PRIVATE_SHORTHAND_KEY)
+
+    // The private shorthand still exists inside the encrypted domain and can
+    // drive a later expression plan; only copied audit/UI surfaces are redacted.
+    await send('What do you think?', 't2')
+    expect(JSON.stringify(onlyRequest(1))).toContain('the-midnight-dragon')
   })
 
   it('destroys the clause when the owner takes the record back', async () => {
@@ -514,7 +542,7 @@ describe('a shorthand the owner named is a real, bounded, persistent cue', () =>
     const c = await boot()
     await send('Call it the dragon from now on')
     const record = c.personality().items.find((item) => item.status === 'admitted')
-    expect(record?.key).toBe('the-dragon')
+    expect(record?.key).toBe(PRIVATE_SHORTHAND_KEY)
     expect(record?.cueKind).toBe('inside-joke')
     expect(record?.sourceType).toBe('owner-assertion')
     // The name crossed into the relationship as a slug and a closed kind label. The

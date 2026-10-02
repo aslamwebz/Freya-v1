@@ -69,6 +69,7 @@ import {
   PERSONALITY_LIMITS,
   isSlug,
   type CueKind,
+  type RelationshipItem,
   type RelationshipItemKind,
 } from './types'
 
@@ -108,6 +109,32 @@ const WITHDRAWN_KEYS: ReadonlySet<string> = new Set(STANDING_DIRECTIVES.map((d) 
 /** Whether this build can address a withdrawal to a named key. */
 export function isKnownOwnerDirectiveKey(value: unknown): value is string {
   return typeof value === 'string' && WITHDRAWN_KEYS.has(value)
+}
+
+/**
+ * Code-owned replacement for a relationship key that came from the owner's own
+ * words. The real key stays inside the encrypted Personality domain where it can
+ * still drive expression and anti-repetition; copied surfaces get only this label.
+ */
+export const PRIVATE_SHORTHAND_KEY = 'private-shorthand'
+
+/**
+ * The key that may cross into journals and renderer projections.
+ *
+ * Standing preference keys come from the closed table above and are safe metadata.
+ * A named shorthand is different: its key is a normalized form of the owner's
+ * phrase. Even though it is a safe slug for model guidance, it is still private
+ * relationship content and must not become plaintext audit/UI metadata.
+ */
+export function outboundRelationshipKey(item: RelationshipItem): string {
+  const ownerNamedShorthand =
+    item.kind === 'inside-joke' &&
+    item.cueKind === 'inside-joke' &&
+    item.provenance.sourceType === 'owner-assertion' &&
+    item.tags.length === 1 &&
+    item.tags[0] === 'shorthand'
+
+  return ownerNamedShorthand ? PRIVATE_SHORTHAND_KEY : item.key
 }
 
 /**

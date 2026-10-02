@@ -119,7 +119,7 @@ export function isCueKind(value: unknown): value is CueKind {
  * An item's position in its life. Same discipline as Brain memory: writing
  * text down does not make it recallable; only `admitted` items feed anything.
  */
-export const RELATIONSHIP_STATUSES = ['candidate', 'admitted', 'rejected', 'superseded'] as const
+export const RELATIONSHIP_STATUSES = ['candidate', 'admitted', 'rejected', 'superseded', 'retired'] as const
 export type RelationshipStatus = (typeof RELATIONSHIP_STATUSES)[number]
 
 /** The safe continuity readings a deterministic interpretation may report. */

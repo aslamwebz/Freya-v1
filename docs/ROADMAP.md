@@ -130,10 +130,23 @@ No decorative fake work.
 Artifacts, reusable tools, modules and applications built through Work/Harness with
 verification and review.
 
-## Phase 16 — Relay
+## Phase 16 — Relay (Core landed)
 
 Email, calendar, GitHub and external connectors through bounded capabilities rather
-than raw account access.
+than raw account access. Relay is a capability-gated transport/control plane: not a
+credential vault, not a model-controlled account bridge.
+
+Every action is separately bounded — one capability per action, read never implies
+write. Write/send/mutate actions flow through Guard, a durable budget ledger, an
+explicit owner approval and STOP ALL. Idempotency keys give restart-safe replay
+protection; the retry policy is bounded and explicit. Adapters sit behind narrow
+ports with deterministic offline fakes; raw credentials never enter the renderer,
+the journal, a generic projection, a model prompt or a log line. Connector events
+integrate with attention only through the authorized Phase 12 source seams, with
+no new surveillance authority.
+
+What was built, and what was left out on purpose, is recorded in
+[PHASE-16.md](PHASE-16.md).
 
 ## Phase 17 — Skills, evaluation and controlled improvement
 

@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createCore } from '../../../core/index'
-import type { Capability, Core, CoreCommandResult } from '../../../core/protocol/core-protocol'
+import { createCore, type Core } from '../../../core/index'
+import type { Capability, CoreCommandResult } from '../../../core/protocol/core-protocol'
 import {
   FakeCalendarAdapter,
   FakeEmailAdapter,

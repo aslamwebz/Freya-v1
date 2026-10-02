@@ -16,6 +16,12 @@ export default defineConfig({
     emptyOutDir: true,
     target: 'chrome130',
     assetsInlineLimit: 0,
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        presence: fileURLToPath(new URL('./presence.html', import.meta.url)),
+      },
+    },
   },
   server: {
     port: 5273,

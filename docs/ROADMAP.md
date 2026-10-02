@@ -108,14 +108,18 @@ is Phase 16's Relay boundary; OS-wide focus sensing remains unsupported; and voi
 delivery of `speak`/`interrupt` is a Presence concern, not this phase's.
 
 
-## Phase 13 — Desktop Presence
+## Phase 13 — Desktop Presence (done)
 
-Prototype with Electron/Three.js first: transparent frameless character window,
-dragging, click-through, animations, voice, contextual cards, monitor placement
-and dashboard transitions.
+Transparent frameless presence window with click-through, bounded animations,
+voice seam, contextual cards and monitor-aware placement. Presence consumes a
+platform-neutral protocol so a future native/Godot renderer can replace it
+without moving Core.
 
-Presence consumes a platform-neutral protocol so a future native/Godot renderer can
-replace it without moving Core.
+What was built, and what was left out on purpose, is recorded in
+[PHASE-13.md](PHASE-13.md). The short version: this phase built the presence
+presentation layer, not a synthetic character with feelings. A real synthesis
+engine and a real transcription engine are future phases; thinking as a
+distinct state is a future phase; a native/Godot renderer is a future phase.
 
 ## Phase 14 — Office
 

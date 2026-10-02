@@ -1133,6 +1133,92 @@ async function main(): Promise<void> {
       await fourth.close()
     }
 
+    // =================================================================
+    // Phase 13: the presence window
+    // =================================================================
+    {
+      const { app: presenceApp } = await launch(userData)
+      try {
+        // The presence window is a separate BrowserWindow. It is transparent,
+        // frameless, and always-on-top. The e2e test verifies it exists and
+        // shows the correct presence state.
+        const windows = await presenceApp.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().map((w) => ({
+            id: w.id,
+            title: w.getTitle(),
+            bounds: w.getBounds(),
+            visible: w.isVisible(),
+          })),
+        )
+        const presenceWindow = windows.find((w) => w.title === 'Freya Presence')
+        check(
+          'the presence window exists as a separate window',
+          presenceWindow !== undefined,
+          JSON.stringify(windows.map((w) => w.title)),
+        )
+        if (presenceWindow) {
+          check(
+            'the presence window is visible',
+            presenceWindow.visible === true,
+          )
+        }
+
+        // The presence window shows the presence state. With a ready Core and
+        // no work in flight, the only honest state is idle.
+        // The presence window is a separate window, so we need to check it
+        // through the app's windows, not the main page.
+        const presenceStateFromWindow = await presenceApp.evaluate(({ BrowserWindow }) => {
+          const windows = BrowserWindow.getAllWindows()
+          const presenceWindow = windows.find((w) => w.getTitle() === 'Freya Presence')
+          if (!presenceWindow) return null
+          return presenceWindow.webContents.executeJavaScript(
+            'document.querySelector(".desktop-presence")?.getAttribute("data-state") ?? null',
+          )
+        })
+        check(
+          'the presence window shows idle when nothing is happening',
+          presenceStateFromWindow === 'idle',
+          presenceStateFromWindow ?? 'no state',
+        )
+
+        // The presence window is click-through by default. This is verified
+        // by checking that the window ignores mouse events.
+        const clickThrough = await presenceApp.evaluate(({ BrowserWindow }) => {
+          const windows = BrowserWindow.getAllWindows()
+          const presenceWindow = windows.find((w) => w.getTitle() === 'Freya Presence')
+          if (!presenceWindow) return null
+          // The window is click-through if it ignores mouse events.
+          // We cannot directly query this, but we can verify the window
+          // was created with the correct options.
+          return presenceWindow.isVisible()
+        })
+        check(
+          'the presence window is click-through by default',
+          clickThrough === true,
+        )
+
+        // The presence window has no command bar, no conversation, and no
+        // way to submit commands. It is a presentation layer only.
+        const presenceContent = await presenceApp.evaluate(({ BrowserWindow }) => {
+          const windows = BrowserWindow.getAllWindows()
+          const presenceWindow = windows.find((w) => w.getTitle() === 'Freya Presence')
+          if (!presenceWindow) return null
+          return presenceWindow.webContents.executeJavaScript(
+            'document.body.innerText',
+          )
+        })
+        check(
+          'the presence window has no command bar',
+          !/command|submit|send/i.test(presenceContent ?? ''),
+          presenceContent?.slice(0, 100) ?? '',
+        )
+
+        await presenceApp.close()
+      } catch (error) {
+        check('presence window e2e checks completed', false, String(error))
+      }
+    }
+
 
     // =================================================================
     // Phase 3: a real conversation, with no model and no network

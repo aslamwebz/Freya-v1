@@ -3,6 +3,7 @@ import { emptyGrantUsage, type CognitionGrant, type CognitionGrantUsage } from '
 import { accumulateAttempt, accumulateReported, accumulateUsage, emptyUsage, withdrawAttempt } from './model/usage'
 import type { ModelUsage, PrincipalId } from './protocol/core-protocol'
 import { initialAttentionState, reduceAttention, type AttentionState } from './attention/state'
+import { initialRelayState, reduceRelay, type RelayState } from './relay/state'
 
 /**
  * Everything Core knows, derived from durable events.
@@ -67,6 +68,12 @@ export interface CoreState {
    * cooldowns and dedupe survive a restart without a second store.
    */
   attention: AttentionState
+  /**
+   * Relay's folded state: action records, approvals, idempotency keys and budget
+   * instants. Derived from `relay.*` events, so replay protection and rate
+   * limits survive a restart without a second store.
+   */
+  relay: RelayState
 }
 
 /** A `core.integrity_fault` as recovered from the journal. */
@@ -90,6 +97,7 @@ export function initialCoreState(): CoreState {
     integrityFault: null,
     pendingRequests: [],
     attention: initialAttentionState(),
+    relay: initialRelayState(),
   }
 }
 
@@ -311,12 +319,16 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
     }
 
     default:
-      // Attention owns its own slice and its own reducer. Delegating here keeps
-      // `reduceCoreState` from growing a case per attention event while leaving a
-      // single fold that replay and live operation both run.
+      // Attention and Relay each own their slice and their own reducer.
+      // Delegating here keeps `reduceCoreState` from growing a case per event
+      // while leaving a single fold that replay and live operation both run.
       if (event.type.startsWith('attention.')) {
         const attention = reduceAttention(state.attention, event)
         return attention === state.attention ? state : { ...state, attention }
+      }
+      if (event.type.startsWith('relay.')) {
+        const relay = reduceRelay(state.relay, event)
+        return relay === state.relay ? state : { ...state, relay }
       }
       return state
   }

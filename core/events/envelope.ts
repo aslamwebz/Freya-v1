@@ -11,6 +11,12 @@ import type {
   SeverityHint,
   UrgencyLevel,
 } from '../attention/types'
+import type {
+  RelayAction,
+  RelayConnectorId,
+  RelayFailureCode,
+  RelayRiskClass,
+} from '../relay/types'
 
 /**
  * The durable Core event envelope.
@@ -280,6 +286,31 @@ export const CORE_EVENT_TYPES = [
   'attention.schedule.registered',
   'attention.schedule.fired',
   'attention.schedule.cancelled',
+
+  // Relay (Phase 16) — metadata only, and the family where the target is the
+  // most that may be recorded.
+  //
+  // A Relay event describes *that an action was requested, decided or settled*
+  // and *what kind* of action it was. There is no slot for content: no message
+  // body, no subject, no event title, no issue text, no repo file, no
+  // credential. The `summary` field is a bounded sentence Core wrote from the
+  // request's targets — who will be affected and what will happen — and it is
+  // the only human-readable field in the family.
+  //
+  // `relay.action.requested` and `relay.approval.requested` are recorded
+  // separately even though one gates the other, because a board has to be able
+  // to tell "a person is being asked" from "something was attempted": the
+  // approval event exists strictly before any adapter call, which is also what
+  // makes "nothing ran yet" checkable.
+  'relay.action.requested',
+  'relay.approval.requested',
+  'relay.approval.decided',
+  'relay.approval.expired',
+  'relay.action.executed',
+  'relay.action.failed',
+  'relay.action.cancelled',
+  'relay.connector.faulted',
+  'relay.limits.exceeded',
 ] as const
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number]
@@ -1201,6 +1232,123 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
   'attention.schedule.cancelled': {
     scheduleId: string
     reason: string
+  }
+
+  /* ----------------------------------------------------------------- relay */
+
+  /**
+   * A write action was requested, and the Core stopped for a decision.
+   *
+   * `summary` is the bounded target sentence — never content. `idempotencyKey`
+   * is the client's replay token, recorded so a re-delivery of the same request
+   * is answered with the original outcome instead of a second execution. It is
+   * an opaque id like a request id, not a secret.
+   */
+  'relay.action.requested': {
+    actionId: string
+    connector: RelayConnectorId
+    action: RelayAction
+    risk: RelayRiskClass
+    idempotencyKey: string
+    summary: string
+  }
+
+  /**
+   * The approval a write is waiting on.
+   *
+   * Recorded before any adapter call, so "nothing ran yet" is checkable from
+   * the journal alone. The payload is the request's metadata again — the
+   * approval is the request, seen from the decision's side.
+   */
+  'relay.approval.requested': {
+    approvalId: string
+    actionId: string
+    connector: RelayConnectorId
+    action: RelayAction
+    risk: RelayRiskClass
+    summary: string
+  }
+
+  /**
+   * The owner decided.
+   *
+   * `decidedBy` is assigned by Core from the principal that reached the
+   * command — never read from a payload, so a window cannot name its own
+   * approver. `decision` has exactly two legal values; there is no spelling of
+   * this event that records a claim being honoured.
+   */
+  'relay.approval.decided': {
+    approvalId: string
+    actionId: string
+    decision: 'approved' | 'denied'
+    decidedBy: PrincipalId
+  }
+
+  /**
+   * The system withdrew an approval that could not be honoured.
+   *
+   * The one case: a pending approval recovered from the journal after a
+   * restart, whose content did not survive. It is expired rather than fired
+   * without its content — the same honesty attention applies to a schedule
+   * whose text is gone.
+   */
+  'relay.approval.expired': {
+    approvalId: string
+    actionId: string
+  }
+
+  /**
+   * An action settled successfully.
+   *
+   * `resultKind` is a closed label naming what was produced (a draft, a sent
+   * message, an event, an issue). The id of the produced thing is deliberately
+   * absent: the result crossed once, in the command's bounded result slot, and
+   * the journal records that it happened and what kind it was.
+   */
+  'relay.action.executed': {
+    actionId: string
+    connector: RelayConnectorId
+    action: RelayAction
+    outcome: 'read' | 'write'
+    resultKind: string
+    retries: number
+  }
+
+  /**
+   * An action failed. `failureCode` is a closed code; `retries` is how many
+   * bounded transient retries it already had.
+   */
+  'relay.action.failed': {
+    actionId: string
+    connector: RelayConnectorId
+    action: RelayAction
+    failureCode: RelayFailureCode
+    retries: number
+  }
+
+  /** An action was withdrawn before it settled. */
+  'relay.action.cancelled': {
+    actionId: string
+    failureCode: RelayFailureCode
+  }
+
+  /**
+   * The host marked a connector faulted.
+   *
+   * Host authority, never a window's: a renderer cannot fault a connector to
+   * make an action fail, nor unfault one to make it succeed.
+   */
+  'relay.connector.faulted': {
+    connector: RelayConnectorId
+    reason: string
+  }
+
+  /** A code-owned ceiling was reached. Durable, so a restart cannot hide one. */
+  'relay.limits.exceeded': {
+    connector: RelayConnectorId
+    action: RelayAction
+    limit: string
+    observed: number
   }
 }
 

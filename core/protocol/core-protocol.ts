@@ -13,6 +13,7 @@ import type { ConversationCommandOutcome, VoiceCommandOutcome } from './conversa
 import type { ContextCommandOutcome } from './context'
 import type { WorkforceCommandOutcome } from './workforce'
 import type { AttentionCommandOutcome } from './attention'
+import type { RelayCommandOutcome } from './relay'
 
 /* ------------------------------------------------------------ identity */
 
@@ -88,6 +89,42 @@ export const CAPABILITIES = [
   // which is the one thing nobody should reach by accident.
   'mission.status.read',
   'mission.manage',
+
+  // Relay — Phase 16.
+  //
+  // Email, calendar, GitHub and external connectors through bounded capabilities
+  // rather than raw account access. Every action is separately bounded: one
+  // capability per action, so there is no `relay.use` that widens every
+  // connector at once.
+  //
+  // Reads and writes are different names on purpose. `relay.email.read` does not
+  // imply `relay.email.send`; a principal holding every read capability and no
+  // write capability can read and nothing else. Write/send/mutate actions
+  // (`relay.email.send`, `relay.calendar.create`, `relay.github.issue.create`,
+  // `relay.external.invoke`, …) each name their own capability, and each is
+  // evaluated by Guard before the privileged work happens.
+  //
+  // `relay.approval.decide` is separate from every action capability because it
+  // is the one Relay capability that means *a person is being trusted* with an
+  // effect that leaves the building. Splitting it out means it can be withheld,
+  // audited or re-gated without touching the rest of Relay.
+  //
+  // None of these is a grant a model or a worker can obtain. They are held by
+  // the owner principal only, and `WORKER_CAPABILITIES` below deliberately adds
+  // none of them: a worker can ask to think, and that is the end of it.
+  'relay.status.read',
+  'relay.email.read',
+  'relay.email.draft',
+  'relay.email.send',
+  'relay.calendar.read',
+  'relay.calendar.create',
+  'relay.calendar.update',
+  'relay.calendar.cancel',
+  'relay.github.read',
+  'relay.github.issue.create',
+  'relay.github.pr.create',
+  'relay.external.invoke',
+  'relay.approval.decide',
 ] as const
 
 export type Capability = (typeof CAPABILITIES)[number]
@@ -477,6 +514,36 @@ export type CoreCommandName =
   | 'attention.schedule.register'
   | 'attention.schedule.cancel'
   | 'attention.inbox.read'
+  /* --------------------------------------------------------------- relay */
+  /**
+   * Phase 16. Connectors through bounded capabilities.
+   *
+   * A window may read the Relay projection, request a read on a connector, and
+   * request a write — which creates a pending approval and executes only after
+   * the owner decides. It may **not** name a capability, a credential, a budget
+   * or a limit; it may not execute a write without an approval; and it may not
+   * decide an approval that is not pending.
+   *
+   * There is deliberately no `relay.connector.register`, no `relay.connector.fault`
+   * and no `relay.allowlist.set` in this vocabulary: connector registration,
+   * faulting and the GitHub repo allowlist are Core/host authority, and a
+   * window that could register a connector could launder an arbitrary adapter
+   * into the transport plane. A window reaching for any of those names finds
+   * `unknown command`, which is the correct answer.
+   */
+  | 'relay.status.read'
+  | 'relay.email.read'
+  | 'relay.email.draft.create'
+  | 'relay.email.send'
+  | 'relay.calendar.read'
+  | 'relay.calendar.create'
+  | 'relay.calendar.update'
+  | 'relay.calendar.cancel'
+  | 'relay.github.read'
+  | 'relay.github.issue.create'
+  | 'relay.github.pr.create'
+  | 'relay.external.invoke'
+  | 'relay.approval.decide'
 
 export interface CoreCommandEnvelope {
   command: CoreCommandName
@@ -616,6 +683,22 @@ export interface CoreCommandResult {
    * than a second copy of the state.
    */
   attention?: AttentionCommandOutcome
+
+  /**
+   * The Relay view of a Relay command's result.
+   *
+   * Its own slot for the same reason every other subsystem's exists: whether
+   * Core accepted an action request, created a pending approval or refused a
+   * read is a fact about Relay and must never have to be dug out of a security
+   * projection. The projection itself arrives on its own channel — see
+   * `relay.status.read` and the Relay mirror — so this slot carries the
+   * *outcome* of one command rather than a second copy of the state.
+   *
+   * The `result` slot is the one place bounded content crosses: the messages
+   * a read returned, or the id of what an approved write created. It is
+   * present only on that one command's answer, and the next push overwrites it.
+   */
+  relay?: RelayCommandOutcome
 }
 
 /**

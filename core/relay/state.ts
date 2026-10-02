@@ -173,6 +173,17 @@ export function reduceRelay(state: RelayState, event: AnyCoreEvent): RelayState 
           ? { ...action, status: 'completed' as const, settledAt, retries: event.payload.retries }
           : action,
       )
+      // A read counts toward the per-connector budget too: a read storm is
+      // still a storm, and the connector's rate limit applies to every call.
+      const connector = event.payload.connector
+      const actionInstants = {
+        ...state.actionInstants,
+        [connector]: pushInstant(
+          state.actionInstants[connector] ?? [],
+          settledAt,
+          RELAY_LIMITS.maxActionsPerConnectorPerWindow * 4,
+        ),
+      }
       let sendInstants = state.sendInstants
       let draftInstants = state.draftInstants
       let externalInstants = state.externalInstants
@@ -185,7 +196,7 @@ export function reduceRelay(state: RelayState, event: AnyCoreEvent): RelayState 
       if (event.payload.action === 'external.invoke') {
         externalInstants = pushInstant(externalInstants, settledAt, RELAY_LIMITS.maxExternalInvokesPerWindow * 4)
       }
-      return { ...state, actions, sendInstants, draftInstants, externalInstants }
+      return { ...state, actions, actionInstants, sendInstants, draftInstants, externalInstants }
     }
 
     case 'relay.action.failed': {

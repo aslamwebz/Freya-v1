@@ -211,9 +211,13 @@ export function createRelayMirror(): RelayMirror {
     async attach() {
       const bridge = hostBridge()
       // A bridge that predates this lane (or a test double that does not model it)
-      // is tolerated rather than crashing a window: the mirror simply stays absent,
-      // which is the honest reading of "no Relay channel here".
-      if (!bridge || typeof bridge.onCoreRelay !== 'function') return () => {}
+      // is tolerated rather than crashing a window: the mirror reports the
+      // frozen absent projection, which is the honest reading of "no Relay
+      // channel here".
+      if (!bridge || typeof bridge.onCoreRelay !== 'function') {
+        publish(ABSENT)
+        return () => {}
+      }
       const own = bridge.onCoreRelay((projection) => publish(projection))
       subscriptions.add(own)
       try {

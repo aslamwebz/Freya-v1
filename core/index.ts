@@ -1422,12 +1422,17 @@ class FreyaCore implements Core {
         requestId,
         ok: false,
         refusal: { reason },
-        relay: { operation: 'refused', ok: false, reason },
+        relay: { operation: 'refused', ok: false, failureCode: 'connector_unavailable', reason },
       }
     }
     if (!this.relayAdmissionOpen || this.state.stopAll.active) {
       const reason = 'Freya is stopped. Every connector action is refused.'
-      return { requestId, ok: false, refusal: { reason }, relay: { operation: 'refused', ok: false, reason } }
+      return {
+        requestId,
+        ok: false,
+        refusal: { reason },
+        relay: { operation: 'refused', ok: false, failureCode: 'stop_all', reason },
+      }
     }
     return null
   }
@@ -2683,6 +2688,10 @@ class FreyaCore implements Core {
           // returns nothing, so a worker stopped by a panic button stays stopped until
           // somebody resumes it deliberately.
           this.workforceEngine?.resume()
+          // And Relay, for the same reason: only this path reopens it. A connector
+          // action is an external request, and one refused at the door during a stop
+          // must not silently become allowed the instant the latch clears.
+          this.relayAdmissionOpen = true
           // As above: a resume has to reach the surfaces that report it, or Chat
           // stays visibly locked after Core has reopened.
           this.conversations?.publish()

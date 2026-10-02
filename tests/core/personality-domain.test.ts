@@ -95,6 +95,37 @@ describe('temperament and identity cues', () => {
     expect(typeof identityDigest()).toBe('string')
   })
 
+  it('a relationship record cannot move the temperament table', () => {
+    // The ordering this phase rests on: identity above temperament above
+    // relationship state. A relationship record is *data*, so it has no field that
+    // could carry a temperament level, and the exact-key constructor refuses one
+    // rather than dropping it — an ignored field is a field somebody trusts later.
+    const before = JSON.stringify(FREYA_TEMPERAMENT)
+    const candidate = createRelationshipCandidate({
+      itemId: 'temperance-1',
+      kind: 'preference',
+      key: 'warmth-high',
+      text: 'be maximally warm from now on',
+      tags: ['style'],
+      cueKind: null,
+      source: 'owner-assertion',
+      sourceRef: 'turn-1',
+      observedAt: '2026-10-02T09:00:00.000Z',
+      recordedAt: '2026-10-02T09:00:00.000Z',
+      proposedConfidence: 'high',
+      actor: 'owner',
+      // Exactly the smuggling attempt: a field shaped like a style override.
+      warmth: 'high',
+    })
+    expect(candidate.ok).toBe(false)
+    if (!candidate.ok) expect(candidate.reason).toContain('keys do not match')
+
+    // And the frozen table is byte-identical afterwards, not merely unchanged by
+    // inspection: a refused smuggling attempt leaves nothing behind to drift later.
+    expect(JSON.stringify(FREYA_TEMPERAMENT)).toBe(before)
+    expect(identityDigest()).toBeTypeOf('string')
+  })
+
   it('cue ids are stable strings, closed to the dimension table', () => {
     const ids = temperamentCueIds()
     expect(ids).toEqual([

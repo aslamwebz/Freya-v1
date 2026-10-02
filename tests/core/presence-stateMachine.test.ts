@@ -147,6 +147,10 @@ function input(overrides: Partial<PresenceInput> = {}): PresenceInput {
   }
 }
 
+function makeFrame(value: PresenceInput, stateSince = 1_234): ReturnType<typeof buildPresenceFrame> {
+  return buildPresenceFrame(value, stateSince)
+}
+
 describe('presence state machine', () => {
   it('derives idle when nothing is happening', () => {
     expect(derivePresenceState(input())).toBe('idle')
@@ -275,23 +279,31 @@ describe('presence work summary', () => {
 })
 
 describe('presence frame builder', () => {
+  it('is deterministic and preserves the host-supplied state entry time', () => {
+    const source = input()
+    const first = makeFrame(source, 42)
+    const second = makeFrame(source, 42)
+    expect(first).toEqual(second)
+    expect(first.stateSince).toBe(42)
+  })
+
   it('builds a frame with the correct schema version', () => {
-    const frame = buildPresenceFrame(input())
+    const frame = makeFrame(input())
     expect(frame.schemaVersion).toBe(1)
   })
 
   it('builds a frame with the correct state', () => {
-    const frame = buildPresenceFrame(input({ core: coreStatus({ activeProviderCalls: 1 }) }))
+    const frame = makeFrame(input({ core: coreStatus({ activeProviderCalls: 1 }) }))
     expect(frame.state).toBe('working')
   })
 
   it('builds a frame with the correct animation', () => {
-    const frame = buildPresenceFrame(input({ core: coreStatus({ activeProviderCalls: 1 }) }))
+    const frame = makeFrame(input({ core: coreStatus({ activeProviderCalls: 1 }) }))
     expect(frame.animation).toBe('glow')
   })
 
   it('builds a frame with voice capture status', () => {
-    const frame = buildPresenceFrame(
+    const frame = makeFrame(
       input({ voice: voiceProjection({ capturing: true, sessionId: 'test-session' }) }),
     )
     expect(frame.voiceCapture.active).toBe(true)
@@ -309,7 +321,7 @@ describe('presence frame builder', () => {
       urgency: 'normal' as const,
       decidedAt: new Date().toISOString(),
     }
-    const frame = buildPresenceFrame(
+    const frame = makeFrame(
       input({ attention: attentionProjection({ directive }) }),
     )
     expect(frame.attention).not.toBeNull()
@@ -317,7 +329,7 @@ describe('presence frame builder', () => {
   })
 
   it('builds a frame with work summary', () => {
-    const frame = buildPresenceFrame(
+    const frame = makeFrame(
       input({ work: workProjection({ counts: { runs: 1, queued: 0, running: 1, waiting: 0, awaitingApproval: 0, paused: 0, completed: 0, failed: 0, cancelled: 0, pendingApprovals: 0, tasks: 1, liveCapabilities: 1 } }) }),
     )
     expect(frame.work).not.toBeNull()

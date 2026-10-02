@@ -111,6 +111,16 @@ describe('presence frame validation', () => {
     expect(result).toBe('presence animation is invalid')
   })
 
+  it('refuses an animation that does not correspond to the state', () => {
+    const result = validatePresenceFrame({ ...validFrame, state: 'working', animation: 'breathe' })
+    expect(result).toBe('presence animation does not match state')
+  })
+
+  it('refuses unknown top-level and nested keys', () => {
+    expect(validatePresenceFrame({ ...validFrame, authority: 'owner' })).toBe('presence frame has invalid keys')
+    expect(validatePresenceFrame({ ...validFrame, voiceCapture: { ...validFrame.voiceCapture, secret: true } })).toBe('voiceCapture has invalid keys')
+  })
+
   it('refuses a frame with a wrong schema version', () => {
     const result = validatePresenceFrame({ ...validFrame, schemaVersion: 999 })
     expect(result).toBe(`presence schema version must be ${PRESENCE_SCHEMA_VERSION}`)
@@ -140,6 +150,12 @@ describe('presence frame validation', () => {
       voiceSynthesis: { active: false, available: false, label: 42 },
     })
     expect(result).toBe('voiceSynthesis.label is invalid')
+  })
+
+  it('validates attention, personality and work recursively', () => {
+    expect(validatePresenceFrame({ ...validFrame, attention: { eventId: 'e1' } })).toBe('presence attention has invalid keys')
+    expect(validatePresenceFrame({ ...validFrame, personalityCue: { cueId: 'c1', kind: 'greeting', mode: 'offer', extra: true } })).toBe('presence personalityCue has invalid keys')
+    expect(validatePresenceFrame({ ...validFrame, work: { running: 1, waiting: 0, awaitingApproval: 0, label: 'secret work' } })).toBe('presence work.label is invalid')
   })
 
   it('refuses a frame that is not an object', () => {

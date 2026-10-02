@@ -141,7 +141,7 @@ export function deriveWorkSummary(work: WorkProjection | null): PresenceWorkSumm
  * The only constructor of a presence frame. A renderer never builds a frame
  * itself; it receives one from the host and draws it.
  */
-export function buildPresenceFrame(input: PresenceInput): PresenceFrame {
+export function buildPresenceFrame(input: PresenceInput, stateSince: number): PresenceFrame {
   const state = derivePresenceState(input)
   const attention = input.attention?.directive ?? null
   const personalityCue = input.personality?.presenceCue ?? null
@@ -151,7 +151,7 @@ export function buildPresenceFrame(input: PresenceInput): PresenceFrame {
     schemaVersion: PRESENCE_SCHEMA_VERSION,
     state,
     animation: PRESENCE_STATE_ANIMATION[state],
-    stateSince: Date.now(),
+    stateSince,
     detail: presenceDetail(state, input),
     voiceCapture: {
       active: input.voice?.capturing ?? false,

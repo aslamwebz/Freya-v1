@@ -38,6 +38,14 @@
 
 import type { AttentionDirectiveView } from '../protocol/attention'
 import type { PersonalityCueView } from '../protocol/personality'
+import {
+  isAttentionCueCode,
+  isAttentionEventKind,
+  isAttentionSource,
+  isImportanceLevel,
+  isUrgencyLevel,
+} from '../attention/types'
+import { isCueKind } from '../personality/types'
 
 /* ----------------------------------------------------------------- states */
 
@@ -225,6 +233,41 @@ export interface PresenceFrame {
 /** The presence protocol schema version. */
 export const PRESENCE_SCHEMA_VERSION = 1
 
+const FRAME_KEYS = ['schemaVersion', 'state', 'animation', 'stateSince', 'detail', 'voiceCapture', 'voiceSynthesis', 'attention', 'personalityCue', 'work', 'sequence'] as const
+const VOICE_CAPTURE_KEYS = ['active', 'available', 'sessionId'] as const
+const VOICE_SYNTHESIS_KEYS = ['active', 'available', 'label'] as const
+const ATTENTION_KEYS = ['eventId', 'source', 'kind', 'outcome', 'cueCode', 'importance', 'urgency', 'decidedAt'] as const
+const PERSONALITY_CUE_KEYS = ['cueId', 'kind', 'mode'] as const
+const WORK_KEYS = ['running', 'waiting', 'awaitingApproval', 'label'] as const
+const WORK_LABELS: readonly string[] = ['a run is executing', 'a run is waiting', 'a run is waiting for your decision']
+const PRESENCE_ID = /^[A-Za-z0-9._:-]{1,256}$/
+
+function exactRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const actual = Object.keys(value)
+  return actual.length === keys.length && keys.every((key) => actual.includes(key))
+}
+
+function boundedId(value: unknown): value is string {
+  return typeof value === 'string' && PRESENCE_ID.test(value)
+}
+
+function boundedLabel(value: unknown, max = 128): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > max) return false
+  return ![...value].some((char) => {
+    const code = char.charCodeAt(0)
+    return code <= 31 || code === 127
+  })
+}
+
+function instant(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 64 && Number.isFinite(Date.parse(value))
+}
+
+function nonNegativeInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
 /* ------------------------------------------------------ protocol validation */
 
 /**
@@ -237,8 +280,9 @@ export const PRESENCE_SCHEMA_VERSION = 1
  * Returns the frame when valid, or a reason string when not.
  */
 export function validatePresenceFrame(value: unknown): PresenceFrame | string {
-  if (typeof value !== 'object' || value === null) return 'presence frame is not an object'
-  const record = value as Record<string, unknown>
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return 'presence frame is not an object'
+  if (!exactRecord(value, FRAME_KEYS)) return 'presence frame has invalid keys'
+  const record = value
 
   const schemaVersion = record.schemaVersion
   if (schemaVersion !== PRESENCE_SCHEMA_VERSION) {
@@ -247,6 +291,9 @@ export function validatePresenceFrame(value: unknown): PresenceFrame | string {
 
   if (!isPresenceProtocolState(record.state)) return 'presence state is invalid'
   if (!isPresenceAnimation(record.animation)) return 'presence animation is invalid'
+  if (record.animation !== PRESENCE_STATE_ANIMATION[record.state]) {
+    return 'presence animation does not match state'
+  }
 
   const stateSince = record.stateSince
   if (typeof stateSince !== 'number' || !Number.isFinite(stateSince) || stateSince < 0) {
@@ -264,20 +311,14 @@ export function validatePresenceFrame(value: unknown): PresenceFrame | string {
   const voiceSynthesis = validateVoiceSynthesis(record.voiceSynthesis)
   if (typeof voiceSynthesis === 'string') return voiceSynthesis
 
-  const attention = record.attention
-  if (attention !== null && typeof attention !== 'object') {
-    return 'presence attention is invalid'
-  }
+  const attention = validateAttention(record.attention)
+  if (typeof attention === 'string') return attention
 
-  const personalityCue = record.personalityCue
-  if (personalityCue !== null && typeof personalityCue !== 'object') {
-    return 'presence personalityCue is invalid'
-  }
+  const personalityCue = validatePersonalityCue(record.personalityCue)
+  if (typeof personalityCue === 'string') return personalityCue
 
-  const work = record.work
-  if (work !== null && typeof work !== 'object') {
-    return 'presence work is invalid'
-  }
+  const work = validateWork(record.work)
+  if (typeof work === 'string') return work
 
   const sequence = record.sequence
   if (typeof sequence !== 'number' || !Number.isInteger(sequence) || sequence < 0) {
@@ -292,19 +333,19 @@ export function validatePresenceFrame(value: unknown): PresenceFrame | string {
     detail,
     voiceCapture,
     voiceSynthesis,
-    attention: attention as PresenceFrame['attention'],
-    personalityCue: personalityCue as PresenceFrame['personalityCue'],
-    work: work as PresenceFrame['work'],
+    attention,
+    personalityCue,
+    work,
     sequence,
   }
 }
 
 function validateVoiceCapture(value: unknown): PresenceVoiceCapture | string {
-  if (typeof value !== 'object' || value === null) return 'voiceCapture is not an object'
-  const record = value as Record<string, unknown>
+  if (!exactRecord(value, VOICE_CAPTURE_KEYS)) return 'voiceCapture has invalid keys'
+  const record = value
   if (typeof record.active !== 'boolean') return 'voiceCapture.active is invalid'
   if (typeof record.available !== 'boolean') return 'voiceCapture.available is invalid'
-  if (record.sessionId !== null && typeof record.sessionId !== 'string') {
+  if (record.sessionId !== null && !boundedId(record.sessionId)) {
     return 'voiceCapture.sessionId is invalid'
   }
   return {
@@ -315,16 +356,54 @@ function validateVoiceCapture(value: unknown): PresenceVoiceCapture | string {
 }
 
 function validateVoiceSynthesis(value: unknown): PresenceVoiceSynthesis | string {
-  if (typeof value !== 'object' || value === null) return 'voiceSynthesis is not an object'
-  const record = value as Record<string, unknown>
+  if (!exactRecord(value, VOICE_SYNTHESIS_KEYS)) return 'voiceSynthesis has invalid keys'
+  const record = value
   if (typeof record.active !== 'boolean') return 'voiceSynthesis.active is invalid'
   if (typeof record.available !== 'boolean') return 'voiceSynthesis.available is invalid'
-  if (record.label !== null && typeof record.label !== 'string') {
+  if (record.label !== null && !boundedLabel(record.label)) {
     return 'voiceSynthesis.label is invalid'
   }
   return {
     active: record.active,
     available: record.available,
     label: record.label as string | null,
+  }
+}
+
+function validateAttention(value: unknown): AttentionDirectiveView | null | string {
+  if (value === null) return null
+  if (!exactRecord(value, ATTENTION_KEYS)) return 'presence attention has invalid keys'
+  if (!boundedId(value.eventId)) return 'presence attention.eventId is invalid'
+  if (!isAttentionSource(value.source)) return 'presence attention.source is invalid'
+  if (!isAttentionEventKind(value.kind)) return 'presence attention.kind is invalid'
+  if (!['subtle-cue', 'speak', 'interrupt'].includes(String(value.outcome))) return 'presence attention.outcome is invalid'
+  if (value.cueCode !== null && !isAttentionCueCode(value.cueCode)) return 'presence attention.cueCode is invalid'
+  if (!isImportanceLevel(value.importance)) return 'presence attention.importance is invalid'
+  if (!isUrgencyLevel(value.urgency)) return 'presence attention.urgency is invalid'
+  if (!instant(value.decidedAt)) return 'presence attention.decidedAt is invalid'
+  return value as unknown as AttentionDirectiveView
+}
+
+function validatePersonalityCue(value: unknown): PersonalityCueView | null | string {
+  if (value === null) return null
+  if (!exactRecord(value, PERSONALITY_CUE_KEYS)) return 'presence personalityCue has invalid keys'
+  if (!boundedId(value.cueId)) return 'presence personalityCue.cueId is invalid'
+  if (!isCueKind(value.kind)) return 'presence personalityCue.kind is invalid'
+  if (value.mode !== 'offer' && value.mode !== 'hold') return 'presence personalityCue.mode is invalid'
+  return value as unknown as PersonalityCueView
+}
+
+function validateWork(value: unknown): PresenceWorkSummary | null | string {
+  if (value === null) return null
+  if (!exactRecord(value, WORK_KEYS)) return 'presence work has invalid keys'
+  if (!nonNegativeInt(value.running)) return 'presence work.running is invalid'
+  if (!nonNegativeInt(value.waiting)) return 'presence work.waiting is invalid'
+  if (!nonNegativeInt(value.awaitingApproval)) return 'presence work.awaitingApproval is invalid'
+  if (value.label !== null && !WORK_LABELS.includes(String(value.label))) return 'presence work.label is invalid'
+  return {
+    running: value.running,
+    waiting: value.waiting,
+    awaitingApproval: value.awaitingApproval,
+    label: value.label as string | null,
   }
 }

@@ -26,12 +26,9 @@ function validFrame(): PresenceFrame {
 }
 
 describe('red-team: renderer forgery', () => {
-  it('refuses a frame with a forged state', () => {
+  it('refuses a state/animation pair that Core could not have emitted', () => {
     const result = validatePresenceFrame({ ...validFrame(), state: 'working' })
-    // 'working' is a valid state, but the point is that the renderer cannot
-    // choose it — the state machine decides. This test ensures the validation
-    // accepts valid states and the state machine is the only decider.
-    expect(typeof result).not.toBe('string')
+    expect(result).toBe('presence animation does not match state')
   })
 
   it('refuses a frame with an invalid state', () => {
@@ -54,13 +51,13 @@ describe('red-team: renderer forgery', () => {
     expect(result).toBe('presence detail is invalid')
   })
 
-  it('refuses a frame with a forged voice capture', () => {
+  it('accepts a structurally valid voice capture only as transport data', () => {
     const result = validatePresenceFrame({
       ...validFrame(),
       voiceCapture: { active: true, available: true, sessionId: 'forged' },
     })
-    // The frame is structurally valid, but the host only sets voiceCapture.active
-    // from a real capture signal. A renderer cannot forge a capture.
+    // Authenticity comes from the one-way host channel; this validator proves
+    // only that the transported object is within the closed protocol.
     expect(typeof result).not.toBe('string')
   })
 

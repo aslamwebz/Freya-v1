@@ -94,9 +94,13 @@ interface PresenceFrame {
 }
 ```
 
-Frames are validated with strict exact-key checking: a frame with an unknown
-key is refused, not ignored. A renderer that could ignore an unknown key would
-be a renderer that could be talked into rendering a field Core never sent.
+Frames are validated with strict exact-key checking at every layer: the frame
+itself, voice state, attention directive, personality cue and work summary. A
+frame with an unknown key, mismatched state/animation pair, invalid id, or a
+nested field outside the closed protocol is refused rather than ignored.
+`stateSince` is supplied by the host when the derived state actually changes,
+so identical Core state produces identical frames and repeated pushes can be
+deduplicated truthfully.
 
 ## The presence window
 
@@ -108,8 +112,10 @@ shows Freya's presence as a small character/avatar.
 The window is click-through by default: mouse events pass through it to
 whatever is beneath. When the user presses the interaction toggle (or drags
 the window), the window becomes interactive for a bounded period (8 seconds),
-then returns to click-through. A window that was always interactive would
-block the desktop; a window that was never interactive could not be moved.
+then returns to click-through. Only the Presence window's own `webContents`
+may send those interaction IPC events; another renderer cannot toggle the
+always-on-top window. A window that was always interactive would block the
+desktop; a window that was never interactive could not be moved.
 
 ### Monitor-aware placement
 
@@ -167,9 +173,13 @@ presence state for the presence window; the state machine does that for both.
 ## Restart and recovery
 
 The presence window is a presentation layer only. It holds no durable state.
-When the app restarts, the presence window is recreated and receives a fresh
-presence frame from the host. The presence state is derived from Core's
-durable state, so it survives a restart exactly as Core's state does.
+It is lifecycle-bound to the dashboard window: closing the dashboard disposes
+Presence and all display/IPC listeners, so Presence cannot keep the app alive
+by itself. On activation or restart, the dashboard is recreated first and the
+Presence host is recreated from it, then receives fresh Core projections. The
+presence state is derived from Core's durable state, so it survives a restart
+exactly as Core's state does. The Presence renderer also refuses child windows
+and unexpected navigation, so its preload cannot be carried onto remote content.
 
 ## Red-team
 

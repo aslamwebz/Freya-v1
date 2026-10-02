@@ -1,4 +1,4 @@
-import { BrowserWindow, screen, type Rectangle } from 'electron'
+import { BrowserWindow, screen, type Rectangle, type WebContents } from 'electron'
 import { join } from 'node:path'
 
 /**
@@ -99,10 +99,18 @@ export class PresenceWindow {
 
     const devServer = process.env.FREYA_DEV_SERVER
     if (devServer) {
-      void window.loadURL(devServer)
+      const presenceUrl = new URL('presence.html', devServer.endsWith('/') ? devServer : devServer + '/').toString()
+      void window.loadURL(presenceUrl)
     } else {
       void window.loadFile(join(__dirname, '..', 'dist', 'presence.html'))
     }
+
+    // Presence never navigates or opens a child window. In particular, its
+    // preload must never be exposed to remote content after an unexpected link.
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    window.webContents.on('will-navigate', (event, url) => {
+      if (url !== window.webContents.getURL()) event.preventDefault()
+    })
 
     // The presence window is a presentation layer only. It has no dev tools,
     // no menu, and no way to inspect the Core.
@@ -223,6 +231,11 @@ export class PresenceWindow {
 
   get isCreated(): boolean {
     return this.window !== null && !this.window.isDestroyed()
+  }
+
+  /** True only for the renderer owned by this Presence window. */
+  ownsWebContents(contents: WebContents): boolean {
+    return this.window !== null && !this.window.isDestroyed() && this.window.webContents.id === contents.id
   }
 
   get bounds(): Rectangle | null {

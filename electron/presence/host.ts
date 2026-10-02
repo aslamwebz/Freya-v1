@@ -1,6 +1,7 @@
 import { ipcMain, screen } from 'electron'
 import { PresenceWindow } from './window'
-import { buildPresenceFrame, type PresenceInput } from '../../core/presence/stateMachine'
+import { buildPresenceFrame, derivePresenceState, type PresenceInput } from '../../core/presence/stateMachine'
+import type { PresenceProtocolState } from '../../core/presence/protocol'
 import type { CoreStatus } from '../../core/protocol/core-protocol'
 import type { AttentionProjection } from '../../core/protocol/attention'
 import type { WorkProjection } from '../../core/work/projection'
@@ -34,6 +35,8 @@ export interface PresenceHostOptions {
   readonly displayNumber: number | null
   /** Whether the app is in development mode. */
   readonly dev: boolean
+  /** Injected clock for deterministic state-entry timestamps in tests. */
+  readonly now?: () => number
 }
 
 export class PresenceHost {
@@ -46,6 +49,24 @@ export class PresenceHost {
   private synthesisActive = false
   private sequence = 0
   private lastFrameJson: string | null = null
+  private lastState: PresenceProtocolState | null = null
+  private stateSince = 0
+  private mainWindow: Electron.BrowserWindow | null = null
+
+  private readonly handleMainMoved = () => {
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) return
+    this.window?.followMainWindow(this.mainWindow.getBounds())
+  }
+  private readonly handleMainClosed = () => this.stop()
+  private readonly handleDisplayChange = () => this.window?.handleDisplayChange()
+  private readonly handleToggleInteraction = (event: Electron.IpcMainEvent) => {
+    if (!this.window?.ownsWebContents(event.sender)) return
+    this.window.toggleInteraction()
+  }
+  private readonly handleForceClickThrough = (event: Electron.IpcMainEvent) => {
+    if (!this.window?.ownsWebContents(event.sender)) return
+    this.window.forceClickThrough()
+  }
 
   constructor(private readonly options: PresenceHostOptions) {}
 
@@ -62,25 +83,20 @@ export class PresenceHost {
       displayNumber: this.options.displayNumber,
       dev: this.options.dev,
     }).create()
+    this.mainWindow = mainWindow
 
-    // Follow the main window when it moves.
-    mainWindow.on('moved', () => {
-      const bounds = mainWindow.getBounds()
-      this.window?.followMainWindow(bounds)
-    })
+    // Presence follows the dashboard lifecycle as well as its display. It may
+    // never be the hidden window that keeps the application alive by itself.
+    mainWindow.on('moved', this.handleMainMoved)
+    mainWindow.once('closed', this.handleMainClosed)
 
-    // Handle display changes.
-    screen.on('display-added', () => this.window?.handleDisplayChange())
-    screen.on('display-removed', () => this.window?.handleDisplayChange())
-    screen.on('display-metrics-changed', () => this.window?.handleDisplayChange())
+    screen.on('display-added', this.handleDisplayChange)
+    screen.on('display-removed', this.handleDisplayChange)
+    screen.on('display-metrics-changed', this.handleDisplayChange)
 
-    // Handle click-through toggles from the renderer.
-    ipcMain.on('freya:presence:toggleInteraction', () => {
-      this.window?.toggleInteraction()
-    })
-    ipcMain.on('freya:presence:forceClickThrough', () => {
-      this.window?.forceClickThrough()
-    })
+    // Only the actual Presence renderer may change Presence window interaction.
+    ipcMain.on('freya:presence:toggleInteraction', this.handleToggleInteraction)
+    ipcMain.on('freya:presence:forceClickThrough', this.handleForceClickThrough)
 
     // Push the current frame immediately.
     this.pushFrame()
@@ -139,6 +155,15 @@ export class PresenceHost {
    * Stop the presence host and close the window.
    */
   stop(): void {
+    this.mainWindow?.removeListener('moved', this.handleMainMoved)
+    this.mainWindow?.removeListener('closed', this.handleMainClosed)
+    this.mainWindow = null
+    screen.removeListener('display-added', this.handleDisplayChange)
+    screen.removeListener('display-removed', this.handleDisplayChange)
+    screen.removeListener('display-metrics-changed', this.handleDisplayChange)
+    ipcMain.removeListener('freya:presence:toggleInteraction', this.handleToggleInteraction)
+    ipcMain.removeListener('freya:presence:forceClickThrough', this.handleForceClickThrough)
+
     if (this.window) {
       this.window.dispose()
       this.window = null
@@ -151,6 +176,8 @@ export class PresenceHost {
     this.synthesisActive = false
     this.sequence = 0
     this.lastFrameJson = null
+    this.lastState = null
+    this.stateSince = 0
   }
 
   private pushFrame(): void {
@@ -166,7 +193,13 @@ export class PresenceHost {
       sequence: this.sequence,
     }
 
-    const frame = buildPresenceFrame(input)
+    const state = derivePresenceState(input)
+    if (state !== this.lastState) {
+      this.lastState = state
+      this.stateSince = this.options.now?.() ?? Date.now()
+    }
+
+    const frame = buildPresenceFrame(input, this.stateSince)
     const json = JSON.stringify(frame)
 
     // Only push when the frame actually changed. A busy Core should not

@@ -470,6 +470,29 @@ function createWindow(): BrowserWindow {
   return window
 }
 
+/** Start a Presence companion for this dashboard window and prime it from Core. */
+function startPresenceFor(window: BrowserWindow): void {
+  window.once('ready-to-show', () => {
+    if (window.isDestroyed()) return
+    presenceHost?.stop()
+    const next = new PresenceHost({
+      displayNumber: requestedDisplayNumber(),
+      dev: Boolean(DEV_SERVER),
+    })
+    presenceHost = next
+    next.start(window)
+
+    const host = coreHost
+    if (host !== null) {
+      next.updateCore(host.status())
+      next.updateAttention(host.attention())
+      next.updateWork(host.work())
+      next.updatePersonality(host.personality())
+      next.updateVoice(host.voice())
+    }
+  })
+}
+
 /* ------------------------------------------------------------------ *
  * IPC — a deliberately small, named surface
  * ------------------------------------------------------------------ */
@@ -632,17 +655,7 @@ app.whenReady().then(() => {
     )
     registerIpc()
     mainWindow = createWindow()
-
-    // The presence host starts after the main window is ready, so the main
-    // window is the first window (which the e2e test expects) and the
-    // presence window can be placed on the same display.
-    mainWindow.once('ready-to-show', () => {
-      presenceHost = new PresenceHost({
-        displayNumber: requestedDisplayNumber(),
-        dev: Boolean(DEV_SERVER),
-      })
-      presenceHost.start(mainWindow!)
-    })
+    startPresenceFor(mainWindow)
 
     // Wire the presence host to Core projections. The presence host receives
     // the same projections as the main window, but it only forwards them to
@@ -670,7 +683,10 @@ app.whenReady().then(() => {
   })
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()
+    if (mainWindow === null || mainWindow.isDestroyed()) {
+      mainWindow = createWindow()
+      startPresenceFor(mainWindow)
+    }
   })
 })
 

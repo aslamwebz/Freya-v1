@@ -26,6 +26,15 @@ let mainWindow: BrowserWindow | null = null
 let workspace: WorkspaceFile | null = null
 /** One Core per process. Survives renderer reloads; dies only with the app. */
 let coreHost: ElectronCoreHost | null = null
+/**
+ * The bounded attention wake.
+ *
+ * Attention's scheduled events need a clock, and this process is the only one
+ * allowed to drive it: there is no `attention.tick` command, so a window cannot
+ * cause a schedule to fire. The interval is deliberately coarse and does no model
+ * call, no provider contact and no network access.
+ */
+let attentionTimer: ReturnType<typeof setInterval> | null = null
 /** Resolves when the renderer has answered the closing-time request. */
 let pendingCollect: (() => void) | null = null
 let quitting = false
@@ -231,6 +240,10 @@ function collectWorkspaceAndThen(finish: () => void): void {
  * app from quitting — a user who asked to quit gets to quit.
  */
 function shutdownCoreAndThen(finish: () => void): void {
+  if (attentionTimer !== null) {
+    clearInterval(attentionTimer)
+    attentionTimer = null
+  }
   collectWorkspaceAndThen(() => {
     void (coreHost?.stop('app quitting') ?? Promise.resolve())
       .catch((error: unknown) => {
@@ -406,6 +419,15 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:personality', projection)
   })
 
+  // Attention is a tenth channel: counts, the focus reading Core derived, the last
+  // decision as metadata and at most one cue. The event's text does not cross —
+  // only its measured length — and nothing here decides anything. Core's bounded
+  // scheduler is ticked by this process, not by a window, so a renderer cannot
+  // drive the clock.
+  const detachAttention = coreHost?.onAttention((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:attention', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -416,6 +438,7 @@ function createWindow(): BrowserWindow {
     detachWorkforce?.()
     detachContext?.()
     detachPersonality?.()
+    detachAttention?.()
   })
 
   if (DEV_SERVER) {
@@ -508,6 +531,11 @@ function registerIpc(): void {
   // cannot file a preference, record a habit or declare an inside joke, because
   // relationship truth is Core's to hold and this bridge lends none of it.
   ipcMain.handle('freya:core:personality', () => requireCore().personality())
+  // The Attention projection, same bargain as every other channel: a read of what
+  // Core reports. There is deliberately no `freya:core:attention:write` and no
+  // `attention.tick` command — a window cannot decide, spend a budget, bypass a
+  // cooldown or drive the scheduler.
+  ipcMain.handle('freya:core:attention', () => requireCore().attention())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)
@@ -632,6 +660,15 @@ app.whenReady().then(() => {
     void coreHost.start().catch((error: unknown) => {
       console.error('[freya] core failed to start', error)
     })
+    // The bounded attention wake. Coarse on purpose, and the only timer that
+    // exists for attention; it makes no model call and reaches no provider.
+    if (attentionTimer === null) {
+      attentionTimer = setInterval(() => {
+        void coreHost?.attentionTick().catch((error: unknown) => {
+          console.error('[freya] attention tick failed', error)
+        })
+      }, 30_000)
+    }
   })
 
   app.on('activate', () => {

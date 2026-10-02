@@ -20,6 +20,19 @@ import {
   isSlug,
 } from '../personality/types'
 import { SOURCE_TRUST_RANK } from '../brain/types'
+import {
+  isAttentionCondition,
+  isAttentionCueCode,
+  isAttentionEventKind,
+  isAttentionOutcome,
+  isAttentionReason,
+  isAttentionScheduleCancelReason,
+  isAttentionSource,
+  isFocusState,
+  isImportanceLevel,
+  isSeverityHint,
+  isUrgencyLevel,
+} from '../attention/types'
 
 /**
  * The closed vocabularies the Personality event payloads are checked against.
@@ -155,6 +168,16 @@ function isNullable<T>(value: unknown, check: (v: unknown) => v is T): value is 
 
 function isNullableString(value: unknown): value is string | null {
   return isNullable(value, isNonEmptyString)
+}
+
+/** A bounded opaque string that is not required to be a bare id (a dedupe key). */
+function isBoundedText(value: unknown, max: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= max
+}
+
+/** A goal reference: null, or an id. */
+function isNullableRef(value: unknown): value is string | null {
+  return value === null || isEventId(value)
 }
 
 function isNullablePositiveInt(value: unknown): value is number | null {
@@ -1125,6 +1148,73 @@ const PAYLOAD_RULES: {
       isEventId(p.workerId) &&
       isNonNegativeInt(p.calls) &&
       (p.outputTokens === null || isPositiveInt(p.outputTokens)),
+  ),
+
+  /* ------------------------------------------------------------- attention */
+
+  // Metadata only, and the rule is Work's: an undeclared key is refused rather
+  // than ignored, because the whole safety argument for keeping attention in this
+  // file is that there is no slot the event's text could occupy.
+  'attention.event.ingested': workRule(
+    ['eventId', 'dedupeKey', 'source', 'kind', 'goalRef', 'textLength', 'severityHint', 'occurredAt', 'dueAt'],
+    (p) =>
+      isEventId(p.eventId) &&
+      isBoundedText(p.dedupeKey, 384) &&
+      isAttentionSource(p.source) &&
+      isAttentionEventKind(p.kind) &&
+      isNullableRef(p.goalRef) &&
+      isNonNegativeInt(p.textLength) &&
+      isSeverityHint(p.severityHint) &&
+      isInstant(p.occurredAt) &&
+      (p.dueAt === null || isInstant(p.dueAt)),
+  ),
+
+  'attention.decision.made': workRule(
+    ['decisionId', 'eventId', 'source', 'kind', 'goalRef', 'outcome', 'importance', 'urgency', 'reason', 'cueCode', 'focus'],
+    (p) =>
+      isEventId(p.decisionId) &&
+      isEventId(p.eventId) &&
+      isAttentionSource(p.source) &&
+      isAttentionEventKind(p.kind) &&
+      isNullableRef(p.goalRef) &&
+      isAttentionOutcome(p.outcome) &&
+      isImportanceLevel(p.importance) &&
+      isUrgencyLevel(p.urgency) &&
+      isAttentionReason(p.reason) &&
+      (p.cueCode === null || isAttentionCueCode(p.cueCode)) &&
+      isFocusState(p.focus),
+  ),
+
+  'attention.budget.exceeded': workRule(
+    ['source', 'goalRef', 'limit', 'observed'],
+    (p) =>
+      isAttentionSource(p.source) &&
+      isNullableRef(p.goalRef) &&
+      isNonEmptyString(p.limit) &&
+      isNonNegativeInt(p.observed),
+  ),
+
+  'attention.schedule.registered': workRule(
+    ['scheduleId', 'kind', 'goalRef', 'severityHint', 'dueAt', 'intervalMs', 'maxRepeats', 'condition'],
+    (p) =>
+      isEventId(p.scheduleId) &&
+      isAttentionEventKind(p.kind) &&
+      isNullableRef(p.goalRef) &&
+      isSeverityHint(p.severityHint) &&
+      isInstant(p.dueAt) &&
+      (p.intervalMs === null || isPositiveInt(p.intervalMs)) &&
+      isNonNegativeInt(p.maxRepeats) &&
+      isAttentionCondition(p.condition),
+  ),
+
+  'attention.schedule.fired': workRule(
+    ['scheduleId', 'eventId', 'repeats'],
+    (p) => isEventId(p.scheduleId) && isEventId(p.eventId) && isNonNegativeInt(p.repeats),
+  ),
+
+  'attention.schedule.cancelled': workRule(
+    ['scheduleId', 'reason'],
+    (p) => isEventId(p.scheduleId) && isAttentionScheduleCancelReason(p.reason),
   ),
 }
 

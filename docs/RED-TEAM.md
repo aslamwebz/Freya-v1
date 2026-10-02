@@ -150,6 +150,31 @@ Mutate role labels, Unicode/encoding, object shapes, nested tool payloads,
 multilingual wording, multi-turn setups and combined attacks. Find classes of
 failure, not one magic jailbreak string.
 
+## Attention attacks (Phase 12)
+
+Attention is where an untrusted event meets a decision to interrupt somebody, so its
+attacks are its own family. Each has a permanent regression in
+`tests/red-team/attention/`:
+
+```
+forged urgency        a payload supplies its own source, importance, urgency or outcome
+notification storm    a flood of urgent events trying to become a flood of interrupts
+cooldown bypass       an "urgent" event immediately after an interruption
+event poisoning       instructions, control characters or an enormous text payload
+replay/restart        re-delivering an event, or replaying the journal, to decide twice
+scheduler abuse       a millisecond interval, thousands of schedules, an unbounded horizon
+attention loops       an attention decision becoming an attention event
+renderer forgery      a window naming attention.tick, attention.decide or a source
+privacy leakage       an event's text reaching the journal, a projection or the feed
+model amplification   attention evaluation spending cognition
+STOP ALL              deciding, speaking or interrupting while Freya is stopped
+```
+
+The rule they enforce is one sentence: **an untrusted event can be delivered, and it
+can never acquire authority.** Its text is data, its source is Core's to assign, its
+score is a closed table capped by source class, and its outcome is demoted by STOP
+ALL, a rate limit, focus, a cooldown and a budget before it is ever raised.
+
 ## Regression rule
 
 Every successful attack becomes a minimized reproduction, named fixture, root-cause

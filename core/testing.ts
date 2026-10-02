@@ -2,6 +2,8 @@ import type { Core } from './index'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
 import type { PrincipalId } from './protocol/core-protocol'
 import type { SubordinateWorkerScope, WorkforceOwnerScope } from './workforce/authority'
+import type { AttentionSourceScope } from './attention/engine'
+import type { AttentionSource } from './attention/types'
 
 /**
  * TEST SEAMS. NOT PART OF THE PRODUCTION CAPABILITY SURFACE.
@@ -21,6 +23,7 @@ interface AuthorityIssuer {
   issueWorkerAuthority(principalId: PrincipalId): WorkerAuthority
   issueWorkforceOwnerScope(): WorkforceOwnerScope
   issueSubordinateScope(workerId: string): SubordinateWorkerScope
+  issueAttentionSourceScope(source: AttentionSource): AttentionSourceScope
 }
 
 /** The owner's authority. Grant governance is only on this interface. */
@@ -58,4 +61,15 @@ export function workforceOwnerScope(core: Core): WorkforceOwnerScope {
  */
 export function subordinateScope(core: Core, workerId: string): SubordinateWorkerScope {
   return (core as unknown as AuthorityIssuer).issueSubordinateScope(workerId)
+}
+
+/**
+ * One authorized attention source's narrow ingest scope.
+ *
+ * Holding it is the authority to speak as that source, and it is issued by Core
+ * rather than acquired by naming a capability. The scope can ingest and nothing
+ * else: it has no method to decide, schedule, spend a budget or reach a model.
+ */
+export function attentionSource(core: Core, source: AttentionSource): AttentionSourceScope {
+  return (core as unknown as AuthorityIssuer).issueAttentionSourceScope(source)
 }

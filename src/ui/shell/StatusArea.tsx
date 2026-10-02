@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { PRESENCE_TONE } from '../../core/presence'
 import { usePersonality } from '../../core/usePersonality'
-import { projectionCueLine } from '../../presence/expressionCue'
+import { useAttention } from '../../core/useAttention'
+import { projectionAttentionCueLine, projectionCueLine } from '../../presence/expressionCue'
 import { useShell } from '../store'
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
@@ -16,6 +17,11 @@ export function StatusArea() {
   // an absent domain both answer null, so this line never invents a gesture —
   // and its words come from a closed table this file does not write.
   const cue = projectionCueLine(personality)
+  const attention = useAttention()
+  // The one attention gesture Core decided to draw, or nothing. The label and
+  // outcome are Core's own; the event text never crosses, so this cannot show
+  // what happened — only that Core chose to draw attention to it.
+  const attentionCue = projectionAttentionCueLine(attention)
   const tone = PRESENCE_TONE[presence]
 
   useEffect(() => {
@@ -38,6 +44,12 @@ export function StatusArea() {
       {cue === null ? null : (
         <span className="status-cue" title="Expression cue offered by Core">
           {cue}
+        </span>
+      )}
+
+      {attentionCue === null ? null : (
+        <span className="status-cue" data-kind="attention" title="Attention cue decided by Core">
+          {attentionCue}
         </span>
       )}
 

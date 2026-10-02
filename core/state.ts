@@ -2,6 +2,7 @@ import type { AnyCoreEvent } from './events/envelope'
 import { emptyGrantUsage, type CognitionGrant, type CognitionGrantUsage } from './cognition/grants'
 import { accumulateAttempt, accumulateReported, accumulateUsage, emptyUsage, withdrawAttempt } from './model/usage'
 import type { ModelUsage, PrincipalId } from './protocol/core-protocol'
+import { initialAttentionState, reduceAttention, type AttentionState } from './attention/state'
 
 /**
  * Everything Core knows, derived from durable events.
@@ -60,6 +61,12 @@ export interface CoreState {
    * instant before a stop arrived.
    */
   pendingRequests: string[]
+  /**
+   * Attention's folded state: dedupe keys, recent decisions, ingest instants and
+   * schedules. Derived from `attention.*` events like everything else, so budgets,
+   * cooldowns and dedupe survive a restart without a second store.
+   */
+  attention: AttentionState
 }
 
 /** A `core.integrity_fault` as recovered from the journal. */
@@ -82,6 +89,7 @@ export function initialCoreState(): CoreState {
     faults: [],
     integrityFault: null,
     pendingRequests: [],
+    attention: initialAttentionState(),
   }
 }
 
@@ -303,6 +311,13 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
     }
 
     default:
+      // Attention owns its own slice and its own reducer. Delegating here keeps
+      // `reduceCoreState` from growing a case per attention event while leaving a
+      // single fold that replay and live operation both run.
+      if (event.type.startsWith('attention.')) {
+        const attention = reduceAttention(state.attention, event)
+        return attention === state.attention ? state : { ...state, attention }
+      }
       return state
   }
 }

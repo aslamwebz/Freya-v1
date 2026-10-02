@@ -7,6 +7,7 @@ import type { WorkProjection } from '../core/work/projection'
 import type { MissionProjection } from '../core/missions/types'
 import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
+import type { AttentionProjection } from '../core/protocol/attention'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
 import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
 import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
@@ -325,6 +326,24 @@ export interface CoreHost {
    */
   onPersonality(send: (projection: PersonalityProjection) => void): () => void
   personality(): PersonalityProjection | null
+  /**
+   * Attach to the Attention projection. Returns a disposer.
+   *
+   * Its own channel like every subsystem's, and the note that matters is what is
+   * *not* here: the host cannot decide, escalate, spend a budget, bypass a cooldown,
+   * schedule anything or read an event's text. It reads a projection and forwards
+   * it. What a window receives is Core's report — counts, the focus reading, closed
+   * labels and at most one cue — and this host is a forwarding box, not a second
+   * author of any of it.
+   */
+  onAttention(send: (projection: AttentionProjection) => void): () => void
+  attention(): AttentionProjection | null
+  /**
+   * Evaluate due attention schedules. The bounded wake, driven by the composition
+   * root. Performs no model call and no provider contact; it only fires schedules
+   * already due whose condition holds against state Core already has.
+   */
+  attentionTick(): Promise<number>
   stop(reason?: string): Promise<void>
 }
 
@@ -421,6 +440,14 @@ export interface CoreHostOptions {
    * what comes back.
    */
   personalitySource?: PersonalitySource
+  /**
+   * Whether Core wires its own subsystems into attention as event sources.
+   *
+   * On by default in the production host, so a finished Run or Mission becomes an
+   * attention event. Tests of other subsystems construct Core directly and leave
+   * this off, so their journals are not perturbed.
+   */
+  attentionObserveSources?: boolean
 }
 
 export class ElectronCoreHost implements CoreHost {
@@ -435,6 +462,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly missionWindows = new Set<(projection: MissionProjection) => void>()
   private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
   private readonly personalityWindows = new Set<(projection: PersonalityProjection) => void>()
+  private readonly attentionWindows = new Set<(projection: AttentionProjection) => void>()
   /**
    * The Context transport box. Binds structurally to a reporting Core, holds a
    * window set, and can write nothing — see `ContextChannel`. Deliberately not
@@ -488,6 +516,10 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.personalitySource
           ? { personalitySource: this.options.personalitySource }
           : {}),
+        // Attention's internal sources are composition, not authority: the engine
+        // still decides, and a delivered event cannot mint a capability or reach a
+        // model. On in production so a finished Run or Mission becomes attention.
+        attentionObserveSources: this.options.attentionObserveSources ?? true,
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),
@@ -510,6 +542,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onMission((projection) => this.broadcastMission(projection))
       core.onWorkforce((projection) => this.broadcastWorkforce(projection))
       core.onPersonality((projection) => this.broadcastPersonality(projection))
+      core.onAttention((projection) => this.broadcastAttention(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -712,6 +745,7 @@ export class ElectronCoreHost implements CoreHost {
     this.workWindows.clear()
     this.workforceWindows.clear()
     this.personalityWindows.clear()
+    this.attentionWindows.clear()
     this.contextChannel.close()
     await core?.stop(reason)
   }
@@ -791,6 +825,47 @@ export class ElectronCoreHost implements CoreHost {
 
   personality(): PersonalityProjection | null {
     return this.core?.personality() ?? null
+  }
+
+  /**
+   * Attach to the Attention projection, pushed immediately.
+   *
+   * Null before the Core has started, so a host with nothing to report says nothing
+   * rather than manufacturing "nothing needs attention" — the same rule every other
+   * attach here follows, for the same reason.
+   */
+  onAttention(send: (projection: AttentionProjection) => void): () => void {
+    this.attentionWindows.add(send)
+    const projection = this.attention()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Attention push threw', error)
+      }
+    }
+    return () => {
+      this.attentionWindows.delete(send)
+    }
+  }
+
+  attention(): AttentionProjection | null {
+    return this.core?.attention() ?? null
+  }
+
+  async attentionTick(): Promise<number> {
+    return (await this.core?.attentionTick()) ?? 0
+  }
+
+  private broadcastAttention(projection: AttentionProjection): void {
+    for (const send of [...this.attentionWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Attention push threw', error)
+        this.attentionWindows.delete(send)
+      }
+    }
   }
 
   /**

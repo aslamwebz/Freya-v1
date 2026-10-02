@@ -96,6 +96,15 @@ import {
 import { STANDING_RELEVANCE_TAGS } from './personality/directives'
 import { PersonalityPersistenceRuntime } from './personalityPersistence'
 import type { InteractionFactKind } from './personality/types'
+import {
+  ABSENT_ATTENTION_PROJECTION,
+  ATTENTION_NO_PAYLOAD,
+  NO_ATTENTION_DOMAIN_REASON,
+  type AttentionDecisionView,
+  type AttentionProjection,
+} from './protocol/attention'
+import { AttentionEngine, type AttentionSourceScope } from './attention/engine'
+import type { AttentionDecision, AttentionSource, FocusState } from './attention/types'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
 import type { CognitionGrantSpec } from './cognition/grants'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
@@ -379,6 +388,17 @@ export interface CoreOptions {
    * renderer, which has no function that names it.
    */
   personalitySource?: PersonalitySource
+  /**
+   * Whether Core wires its own subsystems into attention as event sources.
+   *
+   * Composition, like `research` and `workforceSource`: the production host turns
+   * this on, and a test that does not care about attention leaves it off so a
+   * completed Run does not silently add `attention.*` lines to a journal it is
+   * asserting on. When on, a terminal Run/Mission/Research event is delivered to
+   * the Attention engine through its narrow internal source scope — the engine
+   * still decides, and the delivery cannot mint authority or reach a model.
+   */
+  attentionObserveSources?: boolean
 }
 
 /**
@@ -535,6 +555,28 @@ export interface Core {
   /** Subscribe to the Personality projection. Same mirror semantics as the others. */
   onPersonality(listener: (projection: PersonalityProjection) => void): () => void
   /**
+   * Core's account of events and attention: counts, the focus reading Core
+   * derived, the last decision as metadata, at most one directive for Presence, and
+   * the schedules Core holds.
+   *
+   * Read-only, and the shape of the read is the whole policy: the event **text**
+   * is not a field of the projection, so no caller of this accessor can receive
+   * what arrived — only its measured length. There is no method here that decides,
+   * escalates, spends a budget or bypasses a cooldown, in either direction.
+   */
+  attention(): AttentionProjection
+  /** Subscribe to the Attention projection. Same mirror semantics as the others. */
+  onAttention(listener: (projection: AttentionProjection) => void): () => void
+  /**
+   * Evaluate due schedules. The bounded wake mechanism, driven by the host.
+   *
+   * Main-process composition only — there is deliberately no `attention.tick`
+   * command, so a renderer cannot drive the clock. It performs no model call, no
+   * provider contact and no network access; it fires only schedules already due
+   * whose condition holds against state Core already has.
+   */
+  attentionTick(now?: Date): Promise<number>
+  /**
    * Core's account of context: what is held, in which scope, and what state.
    *
    * Metadata only, and that is not a rendering choice — the projection carries no
@@ -650,6 +692,15 @@ class FreyaCore implements Core {
   private personalityPersistence: PersonalityPersistenceRuntime | undefined
   /** Health already reported to the journal, so degradation is announced once. */
   private personalityDegradedReported = false
+  private readonly attentionListeners = new Set<(projection: AttentionProjection) => void>()
+  /**
+   * The Phase 12 Attention engine, or undefined before `start()`.
+   *
+   * Built by Core and owned by Core. It holds no authority, no gateway and no
+   * provider: the only thing it can do is append `attention.*` metadata and read
+   * already-authorized state for the focus reading.
+   */
+  private attentionEngine: AttentionEngine | undefined
   /** Display-ready activity, rebuilt from the log on every start. */
   private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
@@ -768,6 +819,19 @@ class FreyaCore implements Core {
    */
   issueSubordinateScope(workerId: string): SubordinateWorkerScope {
     return this.requireWorkforce().ownerScope().scopeFor(workerId)
+  }
+
+  /**
+   * A narrow ingest scope for one authorized attention source.
+   *
+   * Not on the `Core` interface, for the same reason the workforce scopes are not:
+   * holding the object is the authority to speak as that source, and it is issued
+   * only from inside Core (and from `core/testing.ts`) rather than acquired by
+   * naming a capability. A source can ingest, and it can do nothing else — it has
+   * no method to decide, to set a budget, to schedule, or to reach a model.
+   */
+  issueAttentionSourceScope(source: AttentionSource): AttentionSourceScope {
+    return this.requireAttention().sourceScope(source)
   }
 
   async start(): Promise<CoreStatus> {
@@ -909,6 +973,7 @@ class FreyaCore implements Core {
     this.disposeState = this.fabric.subscribe((event) => {
       this.state = reduceCoreState(this.state, event)
       this.recordActivity(event)
+      this.observeAttentionSource(event)
       this.notify()
     })
 
@@ -1168,6 +1233,29 @@ class FreyaCore implements Core {
     // simply read again the next time a window attaches.
     this.disposePersonalitySource =
       this.personalitySource?.subscribe?.(() => this.publishPersonality()) ?? (() => {})
+
+    /**
+     * Attention, built after every subsystem it reads for its focus signal.
+     *
+     * The engine holds the journal, the clock and the id factory, and nothing
+     * else: no gateway, no authority, no provider. Its `focus` and `goalOpen`
+     * callbacks read Core's already-authorized state, so attention introduces no
+     * new surveillance primitive. `reconcile()` cancels any schedule recovered
+     * from a previous process whose text did not survive, which is the same honesty
+     * Work applies to an interrupted run.
+     */
+    this.attentionEngine = new AttentionEngine({
+      fabric: this.fabric,
+      now: this.options.now,
+      newId: this.options.newId,
+      onChange: () => this.publishAttention(),
+      focus: () => this.attentionFocus(),
+      stopAll: () => this.state.stopAll.active,
+      getState: () => this.state.attention,
+      goalOpen: (goalRef) => this.attentionGoalOpen(goalRef),
+    })
+    await this.attentionEngine.reconcile()
+
 
     const recoveredSequence = this.fabric.lastSequence
     this.startedAt = (this.options.now ?? (() => new Date()))().toISOString()
@@ -1737,6 +1825,165 @@ class FreyaCore implements Core {
   }
 
   /**
+   * The Attention projection, and its mirror.
+   *
+   * A Core that has not started reports `unavailable` with
+   * `NO_ATTENTION_DOMAIN_REASON`, which is different from `ready` with zero
+   * counts: "nothing needs attention" and "nothing is watching" must not look the
+   * same. Once started, the engine is the source of truth and this accessor reads
+   * it; there is no argument here through which a caller could instruct it.
+   */
+  attention(): AttentionProjection {
+    if (this.attentionEngine === undefined) {
+      return { ...ABSENT_ATTENTION_PROJECTION, reason: NO_ATTENTION_DOMAIN_REASON }
+    }
+    try {
+      return this.attentionEngine.projection()
+    } catch (error) {
+      return {
+        ...ABSENT_ATTENTION_PROJECTION,
+        reason: `the Attention domain could not be read: ${describe(error)}`,
+      }
+    }
+  }
+
+  onAttention(listener: (projection: AttentionProjection) => void): () => void {
+    this.attentionListeners.add(listener)
+    // Delivered immediately, like every subscription here, so a window that
+    // attaches late agrees with one that never left.
+    try {
+      listener(this.attention())
+    } catch (error) {
+      console.error('[freya.core] Attention subscriber threw', error)
+    }
+    return () => {
+      this.attentionListeners.delete(listener)
+    }
+  }
+
+  private publishAttention(): void {
+    if (this.attentionListeners.size === 0) return
+    const projection = this.attention()
+    for (const listener of [...this.attentionListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Attention listener threw', error)
+        this.attentionListeners.delete(listener)
+      }
+    }
+  }
+
+  async attentionTick(now?: Date): Promise<number> {
+    if (this.attentionEngine === undefined) return 0
+    return await this.attentionEngine.tick(now)
+  }
+
+  private requireAttention(): AttentionEngine {
+    if (this.attentionEngine === undefined) {
+      throw new Error('the Attention engine is not available')
+    }
+    return this.attentionEngine
+  }
+
+  /**
+   * The focus reading, from state Core already holds.
+   *
+   * There is no new sensor here. `focused` means Freya is spending on the owner's
+   * behalf right now (a provider call is in flight) or a Run is executing; nothing
+   * else is claimed. A booting Core says `unknown` rather than guessing `available`.
+   */
+  private attentionFocus(): FocusState {
+    if (this.currentLifecycle === 'booting' || this.gateway === undefined) return 'unknown'
+    if (this.gateway.activeCallCount() > 0) return 'focused'
+    const snapshot = this.workEngine?.snapshot()
+    if (snapshot !== undefined) {
+      for (const run of snapshot.runs.values()) {
+        if (run.status === 'running') return 'focused'
+      }
+    }
+    return 'available'
+  }
+
+  /**
+   * Whether a referenced goal is still open, from Core's own Mission/Work state.
+   *
+   * A schedule's `goal-open` condition reads only this. It does not consult the
+   * event's text, a model or anything outside Core, so a schedule cannot wait on a
+   * condition it invented.
+   */
+  private attentionGoalOpen(goalRef: string): boolean {
+    if (this.missionEngine?.exists(goalRef) === true) return true
+    const snapshot = this.workEngine?.snapshot()
+    if (snapshot !== undefined) {
+      const run = snapshot.runs.get(goalRef)
+      if (run !== undefined && !isTerminalRunStatus(run.status)) return true
+    }
+    return false
+  }
+
+  /**
+   * Deliver a Core-owned subsystem's terminal event to attention, when composed on.
+   *
+   * The delivery is fire-and-forget: the subscriber must not `await` an append, for
+   * the fabric's ordering rule. The source is a closed id passed here, never read
+   * from the event, and the text is a fixed sentence generated by this code — never
+   * anything a capability returned. Dedupe keys on the run/mission/operation id, so
+   * a recovered or re-delivered event produces no second decision.
+   */
+  private observeAttentionSource(event: AnyCoreEvent): void {
+    if (this.attentionEngine === undefined || this.options.attentionObserveSources !== true) return
+    switch (event.type) {
+      case 'work.run.completed':
+        void this.attentionEngine.ingestInternal('work', {
+          kind: 'work-finished',
+          text: 'A run finished.',
+          sourceRef: event.payload.runId,
+        })
+        break
+      case 'work.run.failed':
+        void this.attentionEngine.ingestInternal('work', {
+          kind: 'work-failed',
+          text: 'A run failed.',
+          sourceRef: event.payload.runId,
+        })
+        break
+      case 'mission.completed':
+        void this.attentionEngine.ingestInternal('mission', {
+          kind: 'mission-finished',
+          text: 'A mission was completed.',
+          goalRef: event.payload.missionId,
+          sourceRef: event.payload.missionId,
+        })
+        break
+      case 'mission.failed':
+        void this.attentionEngine.ingestInternal('mission', {
+          kind: 'mission-failed',
+          text: 'A mission was not achieved.',
+          goalRef: event.payload.missionId,
+          sourceRef: event.payload.missionId,
+        })
+        break
+      case 'research.completed':
+        void this.attentionEngine.ingestInternal('research', {
+          kind: 'research-finished',
+          text: 'Research completed.',
+          sourceRef: event.payload.operationId,
+        })
+        break
+      case 'research.failed':
+        void this.attentionEngine.ingestInternal('research', {
+          kind: 'research-finished',
+          text: 'Research did not complete.',
+          sourceRef: event.payload.operationId,
+        })
+        break
+      default:
+        break
+    }
+  }
+
+  /**
    * The Work projection.
    *
    * A mirror like the others. A window holds what Core last built and cannot write
@@ -2170,7 +2417,9 @@ class FreyaCore implements Core {
       command !== 'workforce.status.read' &&
       command !== 'mission.status.read' &&
       command !== 'context.status.read' &&
-      command !== 'context.reference.read'
+      command !== 'context.reference.read' &&
+      command !== 'attention.status.read' &&
+      command !== 'attention.inbox.read'
     ) {
       return reject(envelope, `core is ${this.lifecycle} and cannot accept mutating commands`)
     }
@@ -2587,6 +2836,132 @@ class FreyaCore implements Core {
             ok: true,
             status: this.status(),
             model: { operation: 'selected', selected: model },
+          }
+        }
+
+        /* -------------------------------------------------------- attention */
+
+        case 'attention.status.read': {
+          // A payloadless read, exactly like `workforce.status.read`. Anything
+          // attached to it is refused rather than dropped, so a window cannot
+          // smuggle a source, an importance, an urgency or an outcome into a read.
+          if (carriesFields(envelope.payload)) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: ATTENTION_NO_PAYLOAD },
+              attention: { operation: 'refused', ok: false, reason: ATTENTION_NO_PAYLOAD },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            attention: { operation: 'status', ok: true },
+          }
+        }
+
+        case 'attention.event.ingest': {
+          const guardDecision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!guardDecision.allowed) {
+            await this.recordGuard(guardDecision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: guardDecision.reason } }
+          }
+          // The source is fixed here to `owner`. A `source` in the payload is not
+          // read at all, so a window cannot claim `system` or a Core subsystem.
+          const result = await this.requireAttention().ingestFromPayload(envelope.payload, 'owner')
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              attention: { operation: 'refused', ok: false, reason: result.reason },
+            }
+          }
+          this.publishAttention()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            attention: {
+              operation: 'ingested',
+              ok: true,
+              decision: attentionDecisionView(result.decision),
+            },
+          }
+        }
+
+        case 'attention.schedule.register': {
+          const guardDecision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!guardDecision.allowed) {
+            await this.recordGuard(guardDecision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: guardDecision.reason } }
+          }
+          const result = await this.requireAttention().registerSchedule(envelope.payload)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              attention: { operation: 'refused', ok: false, reason: result.reason },
+            }
+          }
+          this.publishAttention()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            attention: { operation: 'scheduled', ok: true },
+          }
+        }
+
+        case 'attention.schedule.cancel': {
+          const scheduleId = readString(envelope.payload, 'scheduleId')
+          if (scheduleId === null) {
+            return { requestId, ok: false, refusal: { reason: 'scheduleId is missing' } }
+          }
+          const cancelled = await this.requireAttention().cancelSchedule(scheduleId)
+          if (!cancelled) {
+            const refusal = 'no pending schedule with that id'
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: refusal },
+              attention: { operation: 'refused', ok: false, reason: refusal },
+            }
+          }
+          this.publishAttention()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            attention: { operation: 'cancelled', ok: true },
+          }
+        }
+
+        case 'attention.inbox.read': {
+          // The owner's explicit read of one retained event's text. There is no
+          // command that lists every text: a standing feed of what arrived would be
+          // the log this domain deliberately does not keep.
+          const eventId = readString(envelope.payload, 'eventId')
+          if (eventId === null) {
+            return { requestId, ok: false, refusal: { reason: 'eventId is missing' } }
+          }
+          const detail = this.requireAttention().detail(eventId)
+          if (detail === null) {
+            const refusal = 'no retained event with that id'
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: refusal },
+              attention: { operation: 'refused', ok: false, reason: refusal },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            attention: { operation: 'detail', ok: true, detail },
           }
         }
 
@@ -4195,6 +4570,23 @@ function readAudioBytes(payload: unknown): Uint8Array | undefined {
     }
   }
   return undefined
+}
+
+/** The renderer-safe shape of an attention decision. Metadata only. */
+function attentionDecisionView(decision: AttentionDecision): AttentionDecisionView {
+  return {
+    decisionId: decision.decisionId,
+    eventId: decision.eventId,
+    source: decision.source,
+    kind: decision.kind,
+    outcome: decision.outcome,
+    importance: decision.importance,
+    urgency: decision.urgency,
+    reason: decision.reason,
+    cueCode: decision.cueCode,
+    focus: decision.focus,
+    decidedAt: decision.decidedAt,
+  }
 }
 
 /** The renderer-safe shape of a Mind turn result. */

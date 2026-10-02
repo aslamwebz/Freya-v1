@@ -11,6 +11,7 @@ import type { MissionProjection } from '../../core/missions/types'
 import type { WorkforceProjection } from '../../core/protocol/workforce'
 import type { ContextProjection } from '../../core/protocol/context'
 import type { PersonalityProjection } from '../../core/protocol/personality'
+import type { AttentionProjection } from '../../core/protocol/attention'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -164,6 +165,20 @@ export interface FreyaHostBridge {
    */
   corePersonality(): Promise<PersonalityProjection | null>
   onCorePersonality(handler: (projection: PersonalityProjection) => void): () => void
+
+  /**
+   * The Attention projection, exactly as Core last reported it — or `null` when no
+   * Core is reporting.
+   *
+   * Two functions, same as Context and Personality. What crosses is Core's report:
+   * counts, the focus reading, closed labels and at most one cue. The event's
+   * **text** does not cross — only its measured length — and there is no function
+   * here that names a source, sets an importance, decides an outcome, spends a
+   * budget or bypasses a cooldown. Ingestion is a command with a narrow payload
+   * contract, and this read lends no authority in either direction.
+   */
+  coreAttention(): Promise<AttentionProjection | null>
+  onCoreAttention(handler: (projection: AttentionProjection) => void): () => void
 }
 
 declare global {

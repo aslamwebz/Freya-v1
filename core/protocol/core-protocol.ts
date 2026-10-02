@@ -12,6 +12,7 @@
 import type { ConversationCommandOutcome, VoiceCommandOutcome } from './conversation'
 import type { ContextCommandOutcome } from './context'
 import type { WorkforceCommandOutcome } from './workforce'
+import type { AttentionCommandOutcome } from './attention'
 
 /* ------------------------------------------------------------ identity */
 
@@ -457,6 +458,26 @@ export type CoreCommandName =
   | 'model.catalog.read'
   | 'model.select'
 
+  /* ------------------------------------------------------------- attention */
+  /**
+   * Phase 12. Events and attention.
+   *
+   * A window may submit an authorized event, register a bounded schedule, cancel
+   * one, read the projection and read back the text of one retained event. It may
+   * **not** name its own source (Core fixes it to `owner`), choose an importance,
+   * assert an urgency, decide an outcome, spend an interruption budget, bypass a
+   * cooldown or reach a model. `attention.status.read` carries no payload at all.
+   *
+   * There is deliberately no `attention.decide`, no `attention.escalate` and no
+   * `attention.budget.set`: deciding is Core's, and a window that could set a budget
+   * could remove one.
+   */
+  | 'attention.status.read'
+  | 'attention.event.ingest'
+  | 'attention.schedule.register'
+  | 'attention.schedule.cancel'
+  | 'attention.inbox.read'
+
 export interface CoreCommandEnvelope {
   command: CoreCommandName
   /** Correlates the acknowledgement with the request that caused it. */
@@ -583,6 +604,18 @@ export interface CoreCommandResult {
    * understood and declined" must never render as success.
    */
   model?: ModelCommandOutcome
+
+  /**
+   * The Attention view of an attention command's result.
+   *
+   * Its own slot for the same reason every other subsystem's exists: whether Core
+   * accepted an event, registered a schedule or refused a read is a fact about
+   * attention and must never have to be dug out of a security projection. The
+   * projection itself arrives on its own channel — see `attention.status.read` and
+   * the Attention mirror — so this slot carries the *outcome* of one command rather
+   * than a second copy of the state.
+   */
+  attention?: AttentionCommandOutcome
 }
 
 /**

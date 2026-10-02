@@ -19,6 +19,9 @@ import { WORKFORCE_NO_PAYLOAD } from '../core/protocol/workforce'
 import type { WorkforceProjection } from '../core/protocol/workforce'
 import type { ContextProjection } from '../core/protocol/context'
 import type { PersonalityProjection } from '../core/protocol/personality'
+import type { AttentionProjection } from '../core/protocol/attention'
+import { ATTENTION_NO_PAYLOAD } from '../core/protocol/attention'
+import { ATTENTION_LIMITS } from '../core/attention/types'
 
 export interface RuntimeInfo {
   version: string
@@ -294,6 +297,28 @@ const api = {
   },
 
   /**
+   * The Attention projection: counts, the focus reading Core derived, the last
+   * decision as metadata and at most one cue.
+   *
+   * The note that matters is what does **not** cross: the event's `text` never
+   * appears in a projection — only its measured length — and there is no field a
+   * window could use to name a source, set an importance, assert an urgency, decide
+   * an outcome, spend an interruption budget or bypass a cooldown. Ingestion is a
+   * command with a narrow payload contract, not a widening of this read.
+   */
+  coreAttention: (): Promise<AttentionProjection | null> =>
+    ipcRenderer.invoke('freya:core:attention'),
+
+  onCoreAttention: (handler: (projection: AttentionProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: AttentionProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:attention', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:attention', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -430,6 +455,18 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   // caller would most want to supply here is relationship truth — "the owner
   // prefers this", "we have an inside joke about that" — and a door that takes
   // no payload cannot be talked into taking one.
+
+  // Attention. A window may submit an event, register and cancel a schedule, read
+  // the projection and read back one retained event. Note what none of these
+  // reaches: no source (Core fixes it to `owner`), no importance, no urgency, no
+  // outcome, no interruption budget and no cooldown. There is deliberately no
+  // `attention.decide`, no `attention.budget.set` and no `attention.tick` here —
+  // deciding, budgeting and waking are Core's.
+  'attention.status.read',
+  'attention.event.ingest',
+  'attention.schedule.register',
+  'attention.schedule.cancel',
+  'attention.inbox.read',
 ])
 
 /**
@@ -658,6 +695,102 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       const model = string('model', MAX_MODEL_ID_CHARS, false)
       if (model === null) return { ok: false, reason: 'model id is invalid' }
       return { ok: true, payload: model === undefined ? {} : { model } }
+    }
+
+    case 'attention.status.read': {
+      // A payloadless read. Anything attached is refused rather than dropped, so a
+      // window cannot smuggle a source, an importance, an urgency or an outcome
+      // into the question of what Core decided.
+      if (!carriesNothing(payload)) return { ok: false, reason: ATTENTION_NO_PAYLOAD }
+      return { ok: true }
+    }
+
+    case 'attention.event.ingest': {
+      // The named fields, and nothing else. Rebuilding the payload from known
+      // fields means a `source`, an `importance`, an `urgency` or an `outcome`
+      // supplied by a window never reaches the main process at all — Core would
+      // ignore them, but this bridge does not even forward them.
+      const kind = string('kind', 40)
+      const text = string('text', ATTENTION_LIMITS.maxEventTextChars, false)
+      if (kind === null || kind === undefined) return { ok: false, reason: 'attention kind is invalid' }
+      if (text === null) return { ok: false, reason: 'attention text is too large or invalid' }
+      const goalRef = string('goalRef', ATTENTION_LIMITS.maxRefChars, false)
+      const sourceRef = string('sourceRef', ATTENTION_LIMITS.maxRefChars, false)
+      const severityHint = string('severityHint', 16, false)
+      const dueAt = string('dueAt', 64, false)
+      if (goalRef === null) return { ok: false, reason: 'attention goal reference is invalid' }
+      if (sourceRef === null) return { ok: false, reason: 'attention source reference is invalid' }
+      if (severityHint === null) return { ok: false, reason: 'attention severity hint is invalid' }
+      if (dueAt === null) return { ok: false, reason: 'attention due time is invalid' }
+      return {
+        ok: true,
+        payload: {
+          kind,
+          text: text ?? '',
+          ...(goalRef === undefined ? {} : { goalRef }),
+          ...(sourceRef === undefined ? {} : { sourceRef }),
+          ...(severityHint === undefined ? {} : { severityHint }),
+          ...(dueAt === undefined ? {} : { dueAt }),
+        },
+      }
+    }
+
+    case 'attention.schedule.register': {
+      const kind = string('kind', 40)
+      const text = string('text', ATTENTION_LIMITS.maxEventTextChars, false)
+      const dueAt = string('dueAt', 64)
+      if (kind === null || kind === undefined) return { ok: false, reason: 'schedule kind is invalid' }
+      if (text === null) return { ok: false, reason: 'schedule text is too large or invalid' }
+      if (dueAt === null || dueAt === undefined) return { ok: false, reason: 'schedule due time is required' }
+      const goalRef = string('goalRef', ATTENTION_LIMITS.maxRefChars, false)
+      const severityHint = string('severityHint', 16, false)
+      const condition = string('condition', 24, false)
+      if (goalRef === null) return { ok: false, reason: 'schedule goal reference is invalid' }
+      if (severityHint === null) return { ok: false, reason: 'schedule severity hint is invalid' }
+      if (condition === null) return { ok: false, reason: 'schedule condition is invalid' }
+      const intervalMs = record?.intervalMs
+      const maxRepeats = record?.maxRepeats
+      if (intervalMs !== undefined && (typeof intervalMs !== 'number' || !Number.isInteger(intervalMs))) {
+        return { ok: false, reason: 'schedule interval is invalid' }
+      }
+      if (maxRepeats !== undefined && (typeof maxRepeats !== 'number' || !Number.isInteger(maxRepeats))) {
+        return { ok: false, reason: 'schedule repeat count is invalid' }
+      }
+      return {
+        ok: true,
+        payload: {
+          kind,
+          text: text ?? '',
+          dueAt,
+          ...(goalRef === undefined ? {} : { goalRef }),
+          ...(severityHint === undefined ? {} : { severityHint }),
+          ...(condition === undefined ? {} : { condition }),
+          ...(intervalMs === undefined ? {} : { intervalMs }),
+          ...(maxRepeats === undefined ? {} : { maxRepeats }),
+        },
+      }
+    }
+
+    case 'attention.schedule.cancel': {
+      const scheduleId = string('scheduleId', MAX_ID_CHARS)
+      if (scheduleId === null || scheduleId === undefined) {
+        return { ok: false, reason: 'schedule id is invalid' }
+      }
+      if (
+        record !== null &&
+        Object.keys(record).some((key) => key !== 'scheduleId')
+      ) {
+        return { ok: false, reason: 'schedule cancellation accepts only scheduleId' }
+      }
+      return { ok: true, payload: { scheduleId } }
+    }
+
+    case 'attention.inbox.read': {
+      const eventId = string('eventId', MAX_ID_CHARS)
+      if (eventId === null || eventId === undefined) {
+        return { ok: false, reason: 'attention event id is invalid' }
+      }
+      return { ok: true, payload: { eventId } }
     }
 
     case 'voice.capture.end': {

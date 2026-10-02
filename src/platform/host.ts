@@ -10,6 +10,7 @@ import type { WorkProjection } from '../../core/work/projection'
 import type { MissionProjection } from '../../core/missions/types'
 import type { WorkforceProjection } from '../../core/protocol/workforce'
 import type { ContextProjection } from '../../core/protocol/context'
+import type { PersonalityProjection } from '../../core/protocol/personality'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -148,6 +149,21 @@ export interface FreyaHostBridge {
    */
   coreContext(): Promise<ContextProjection | null>
   onCoreContext(handler: (projection: ContextProjection) => void): () => void
+
+  /**
+   * The Personality projection, exactly as Core last reported it — or `null`
+   * when no Core is reporting, which is the truth about every build in this
+   * repository, because the relationship domain has no persistence yet.
+   *
+   * These two functions are the *whole* of the window's Personality privilege,
+   * and the absence of a third is the security property rather than an
+   * oversight: nothing on this bridge records a preference, marks a habit,
+   * files an inside joke, asserts a confidence, names a provenance or chooses a
+   * cue. What arrives is Core's report — metadata, closed labels, counts — and
+   * there is no payload-carrying direction in which a window could add to it.
+   */
+  corePersonality(): Promise<PersonalityProjection | null>
+  onCorePersonality(handler: (projection: PersonalityProjection) => void): () => void
 }
 
 declare global {

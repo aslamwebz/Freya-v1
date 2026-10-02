@@ -87,7 +87,7 @@ export const KEYRING_VERSION = 1
  * Closed, and the union is the point: adding a domain that quietly reused an
  * existing key would be a much worse mistake than not having the domain.
  */
-export const KEY_DOMAINS = ['conversation', 'brain', 'mission', 'context'] as const
+export const KEY_DOMAINS = ['conversation', 'brain', 'mission', 'context', 'personality'] as const
 
 export type KeyDomain = (typeof KEY_DOMAINS)[number]
 
@@ -119,6 +119,19 @@ export interface Keyring {
   brain: DomainKeyResult
   mission: DomainKeyResult
   context: DomainKeyResult
+  /**
+   * A **fifth** independent secret.
+   *
+   * What Freya has recorded about a person is the most intimate thing this system
+   * holds — preferences, habits, the shorthands they share — so it is the last
+   * thing that should be one key-compromise away from the conversation log, and the
+   * first that should not be readable by anything holding another domain's key. It
+   * is also the only domain whose *absence* changes behaviour rather than only
+   * durability: with no Personality key the anti-repetition ledger is refused rather
+   * than trusted, so Freya stops offering gestures instead of quietly forgetting
+   * which ones she already used.
+   */
+  personality: DomainKeyResult
 }
 
 /**
@@ -143,6 +156,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       brain: { key: null, reason },
       mission: { key: null, reason },
       context: { key: null, reason },
+      personality: { key: null, reason },
     }
   }
 
@@ -161,6 +175,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       ['brain', randomBytes(KEY_BYTES)],
       ['mission', randomBytes(KEY_BYTES)],
       ['context', randomBytes(KEY_BYTES)],
+      ['personality', randomBytes(KEY_BYTES)],
     ])
     await writeKeyring(keyringPath, generated)
 
@@ -170,6 +185,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       brain: resultFor(generated.get('brain')!),
       mission: resultFor(generated.get('mission')!),
       context: resultFor(generated.get('context')!),
+      personality: resultFor(generated.get('personality')!),
     }
   } catch (error) {
     const reason = error instanceof KeyringFormatError
@@ -181,6 +197,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       brain: { key: null, reason },
       mission: { key: null, reason },
       context: { key: null, reason },
+      personality: { key: null, reason },
     }
   }
 }
@@ -201,7 +218,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
  */
 function keyringResult(path: string, read: (domain: KeyDomain) => DomainKeyResult): Keyring {
   return { keyringPath: path, conversation: read('conversation'), brain: read('brain'),
-    mission: read('mission'), context: read('context') }
+    mission: read('mission'), context: read('context'), personality: read('personality') }
 }
 
 async function withMissingDomains(path: string, file: KeyringFile): Promise<Keyring> {
@@ -378,5 +395,6 @@ function describeDomain(domain: KeyDomain): string {
   if (domain === 'brain') return 'the Brain'
   if (domain === 'mission') return 'Missions'
   if (domain === 'context') return 'Context'
+  if (domain === 'personality') return 'what Freya has recorded about you'
   return 'conversation history'
 }

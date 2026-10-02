@@ -12,7 +12,7 @@ import { emptyUsage } from './model/usage'
 import type { ModelProvider } from './model/provider'
 import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
 import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
-import { MindService, type TurnExperience } from './mind/mind'
+import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
 import type { ReferenceKnowledge } from './mind/context-compiler'
 import { Brain, buildIdentityRoot, buildSelfDefinition, type BrainProjection } from './brain/brain'
 import { ResearchIntegration } from './research/coreIntegration'
@@ -83,6 +83,19 @@ import {
 } from './protocol/workforce'
 import { describeActivity, mergeActivity } from './protocol/activity'
 import type { CoreActivityEvent } from './protocol/activity'
+import {
+  ABSENT_PERSONALITY_PROJECTION,
+  NO_PERSONALITY_DOMAIN_REASON,
+  type PersonalityProjection,
+  type PersonalitySource,
+} from './protocol/personality'
+import {
+  PersonalityIntegration,
+  type PersonalityLifecycleEvent,
+} from './personality/integration'
+import { STANDING_RELEVANCE_TAGS } from './personality/directives'
+import { PersonalityPersistenceRuntime } from './personalityPersistence'
+import type { InteractionFactKind } from './personality/types'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
 import type { CognitionGrantSpec } from './cognition/grants'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
@@ -103,6 +116,62 @@ const HEALTHY_JOURNAL: JournalFault = {
   line: null,
   eventsRead: 0,
   bytesDiscarded: 0,
+}
+
+/**
+ * The closed greeting vocabulary.
+ *
+ * Twelve entries, matched against the *opening* of the owner's message after
+ * salutation noise is stripped. It is a closed table on purpose: "a greeting was
+ * received" is an interaction fact, and a fact this domain states has to be a fact
+ * it can point at rather than one it inferred from tone.
+ *
+ * A message that is not on this list produces no greeting fact, and it is still
+ * fully available to the directive table — the two readings are independent and
+ * neither suppresses the other.
+ */
+const GREETING_OPENERS: readonly string[] = Object.freeze([
+  'hi',
+  'hey',
+  'hello',
+  'yo',
+  'good morning',
+  'good afternoon',
+  'good evening',
+  'morning',
+  'afternoon',
+  'evening',
+  'howdy',
+  'greetings',
+])
+
+/** Punctuation and salutation noise, stripped before an opener is compared. */
+const GREETING_NOISE = /^[\s"'`*~_([{<>*#\-—–.!?,;:'`]+/
+
+/**
+ * Which interaction facts one owner turn produced.
+ *
+ * Pure, closed, and optimistic only where the gateway was. `exchange` is recorded
+ * solely for a turn that reached a provider: a cancelled turn that never left the
+ * process is not contact, and counting it would be exactly the optimistic
+ * accounting C6 exists to forbid.
+ */
+function factsForOwnerMessage(message: OwnerMessageEvent): readonly {
+  kind: InteractionFactKind
+  tags: readonly string[]
+}[] {
+  const facts: { kind: InteractionFactKind; tags: readonly string[] }[] = []
+  const trimmed = message.text.trim().replace(GREETING_NOISE, '')
+  const words = trimmed.toLowerCase().split(/[\s,!?.]+/).filter((word) => word.length > 0)
+  const opener = words[0] ?? ''
+  const firstTwo = words.slice(0, 2).join(' ')
+  if (GREETING_OPENERS.includes(opener) || GREETING_OPENERS.includes(firstTwo)) {
+    facts.push({ kind: 'greeting-received', tags: Object.freeze(['greeting']) })
+  }
+  if (message.providerContacted) {
+    facts.push({ kind: 'exchange', tags: Object.freeze(['exchange']) })
+  }
+  return Object.freeze(facts)
 }
 
 /**
@@ -225,6 +294,21 @@ export interface CoreOptions {
   missionKey?: Uint8Array
   /** Context's independent secure key; absent means explicit process-only Context. */
   contextKey?: Uint8Array | null
+  /**
+   * Personality's own independent secure key, from the keyring.
+   *
+   * A **fourth** independent secret, for the same reason as the other three: what
+   * Freya has recorded about a person is about as intimate as this system holds,
+   * and recovering the conversation key must never yield it. Null means the
+   * relationship falls back to process-only storage, reports `durable: false` in
+   * the projection, and — because anti-repetition depends on remembering what was
+   * offered — serves **no expression guidance at all** rather than resetting its
+   * memory. See `electron/keyring.ts` for why one key per domain is worth the
+   * bookkeeping.
+   */
+  personalityKey?: Uint8Array | null
+  /** Narrows the retained relationship bound. Can only lower the code ceiling. */
+  personalityLimits?: { maxRelationshipItems?: number }
   /** Overrides the Mission content store wholesale. For tests. */
   missionStore?: MissionStore
   /**
@@ -279,6 +363,22 @@ export interface CoreOptions {
    * from a renderer.
    */
   workforceSource?: WorkforceSource
+  /**
+   * The Phase 11 Personality & Relationship seam.
+   *
+   * The *entire* integration surface this lane assumes: Core may be handed
+   * something it can read a `PersonalityProjection` from, and optionally follow.
+   * Unset — the state of every build in this repository — Core reports
+   * `NO_PERSONALITY_DOMAIN_REASON` and an `unavailable` projection, which is the
+   * honest reading rather than an empty relationship.
+   *
+   * A source carries no authority by virtue of being one, and here the reason is
+   * sharper than elsewhere: what it reports is *relationship truth* — records,
+   * confidences, provenance classes, cue eligibility. It can be read; it cannot
+   * be instructed through this option; and nothing in it is reachable from a
+   * renderer, which has no function that names it.
+   */
+  personalitySource?: PersonalitySource
 }
 
 /**
@@ -417,6 +517,24 @@ export interface Core {
   /** Subscribe to the Workforce mirror. Same mirror semantics as the others. */
   onWorkforce(listener: (projection: WorkforceMirror) => void): () => void
   /**
+   * Core's account of personality: temperament, the relationship record as
+   * *metadata*, deterministic interpretation, and at most one cue for Presence.
+   *
+   * Read-only, and the shape of the read is the whole policy: `text`, `tags` and
+   * `admissionReason` are not fields of the projection, so no caller of this
+   * accessor can receive what was recorded about the person — only that it
+   * exists, what kind it is, and how much Core trusts it. A source that reports
+   * is served and never instructed; there is no method here that admits,
+   * supersedes or interprets anything, in either direction.
+   *
+   * A Core with no `personalitySource` answers `NO_PERSONALITY_DOMAIN_REASON`
+   * rather than an empty record, because "nothing has been recorded" and "this
+   * build records nothing" are different facts to a person reading them.
+   */
+  personality(): PersonalityProjection
+  /** Subscribe to the Personality projection. Same mirror semantics as the others. */
+  onPersonality(listener: (projection: PersonalityProjection) => void): () => void
+  /**
    * Core's account of context: what is held, in which scope, and what state.
    *
    * Metadata only, and that is not a rendering choice — the projection carries no
@@ -501,6 +619,37 @@ class FreyaCore implements Core {
   private workforceSource: WorkforceSource | null
   /** Detaches Core from the source's change channel. Set once, at start. */
   private disposeWorkforceSource: () => void = () => {}
+  private readonly personalityListeners = new Set<(projection: PersonalityProjection) => void>()
+  /**
+   * The Phase 11 Personality seam, or null when nothing has filled it.
+   *
+   * Read-only in the strongest sense available: `projection()` answers and
+   * `subscribe?` follows. There is no admission method, no ledger writer and no
+   * interpretation hook on the other side of this field, so the seam cannot be
+   * used to *record* anything about the person, only to report what Core already
+   * holds.
+   *
+   * A filled seam takes precedence over Core's own integration when a window asks,
+   * and the integration stays the authoring half either way: the Mind reads from
+   * the integration, and a relationship the interpreter cannot see is one that
+   * cannot shape a single reply.
+   */
+  private personalitySource: PersonalitySource | null
+  /** Detaches Core from the Personality source's change channel. Set once, at start. */
+  private disposePersonalitySource: () => void = () => {}
+  /**
+   * Core's own Personality & Relationship integration, built at `start()`.
+   *
+   * This is the authoring half: it holds the records, applies the lifecycle,
+   * owns the anti-repetition ledger and produces the projection. The seam above is
+   * the *mirror* half, and when both exist the seam is served — but the records
+   * live here either way, because the Mind reads from here and a relationship the
+   * interpreter cannot see is a relationship that cannot shape a single reply.
+   */
+  private personalityDomain: PersonalityIntegration | undefined
+  private personalityPersistence: PersonalityPersistenceRuntime | undefined
+  /** Health already reported to the journal, so degradation is announced once. */
+  private personalityDegradedReported = false
   /** Display-ready activity, rebuilt from the log on every start. */
   private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
@@ -555,6 +704,7 @@ class FreyaCore implements Core {
   constructor(private readonly options: CoreOptions) {
     this.newId = options.newId ?? (() => randomUUID())
     this.workforceSource = options.workforceSource ?? null
+    this.personalitySource = options.personalitySource ?? null
     // Only the clock and the id factory, both already Core's own. The Context
     // integration is deliberately not a `CoreOptions` seam: every argument that
     // could widen it — a scope, a channel, a source, an agent source — is a claim
@@ -813,6 +963,18 @@ class FreyaCore implements Core {
         { actor: 'system' },
       )
     }
+    // Personality is recovered *before* the Mind is built, because the Mind's
+    // expression seam is exactly this: a ledger the Mind reads before planning and
+    // writes after a turn that actually reached a provider. Building it afterwards
+    // would mean the first turn of a process planned against an empty ledger no
+    // matter what had been recovered — which is the "empty looks like fresh" bug
+    // this whole lane is fail-closed about.
+    //
+    // No provider call, no network, no window: opening the store is a file read and
+    // a key check, so a Core that cannot persist personality still starts, still
+    // answers, and still says so.
+    await this.buildPersonality()
+
     this.mind = new MindService({
       fabric: this.fabric,
       store: this.conversationStore,
@@ -848,6 +1010,25 @@ class FreyaCore implements Core {
       // Metadata only. The question and the answer are referenced by id and stay in
       // the encrypted conversation store.
       onTurnExperience: (experience) => this.recordTurnExperience(experience),
+      // The Phase 11 expression seam, in three narrow reads plus one narrow write.
+      //
+      // The Mind holds no ledger, no relationship store and no admission policy: it
+      // asks Core what is retained and Core decides what is. A missing or untrusted
+      // ledger makes `readLedger()` answer null, which the Mind treats as *no
+      // expression at all* — never as an empty ledger, which would re-offer the same
+      // gestures forever. Admitted records reach the interpreter through the second
+      // read, and never their text.
+      expressionMemory: this.personalityDomain ?? undefined,
+      interactionFacts: () => this.personalityDomain?.interactionFacts() ?? [],
+      relationshipItems: () => this.personalityDomain?.admittedItems() ?? [],
+      // Relevance tokens come from the domain's own closed table, not from a
+      // matcher over the owner's words. A standing instruction about register
+      // applies to every turn; a topic-scoped one will carry a tag outside this
+      // list and match only when something can honestly supply it.
+      preferenceTokens: () => STANDING_RELEVANCE_TAGS,
+      // The owner's own words, handed over once and forgotten. Core decides what
+      // they mean; the Mind never does.
+      onOwnerMessage: (message) => this.observeOwnerMessage(message),
     })
     this.conversations = new ConversationService({
       fabric: this.fabric,
@@ -981,6 +1162,13 @@ class FreyaCore implements Core {
     this.disposeWorkforceSource =
       this.workforceSource?.subscribe?.(() => this.publishWorkforce()) ?? (() => {})
 
+    // The Personality seam, on the same terms and for the same reason: subscribed
+    // after boot has somewhere to publish to, disposed in `stop()` so a source
+    // cannot outlive the Core reading it, and a source without `subscribe` is
+    // simply read again the next time a window attaches.
+    this.disposePersonalitySource =
+      this.personalitySource?.subscribe?.(() => this.publishPersonality()) ?? (() => {})
+
     const recoveredSequence = this.fabric.lastSequence
     this.startedAt = (this.options.now ?? (() => new Date()))().toISOString()
 
@@ -1096,6 +1284,8 @@ class FreyaCore implements Core {
       this.disposeState()
       this.disposeWorkforceSource()
       this.disposeWorkforceSource = () => {}
+      this.disposePersonalitySource()
+      this.disposePersonalitySource = () => {}
       this.service?.dispose()
       this.currentLifecycle = 'stopped'
       // Research is drained *before* the fabric closes, and on a bound: a browser
@@ -1122,6 +1312,13 @@ class FreyaCore implements Core {
       // journal that is already closed, producing a failure *for having failed to
       // record* the shutdown.
       await this.workforceEngine?.close()
+      // Personality closes before the conversation store, on the same terms as
+      // every other encrypted store here: flush what was committed, then release.
+      // A relationship record that exists in Core and not on disk is the exact
+      // durability lie this phase refuses to tell, and the projection would have
+      // already claimed `durable: true`.
+      await this.personalityPersistence?.close()
+      this.personalityDomain = undefined
       await this.contextPersistence?.close()
       await this.conversationStore?.close()
       await this.fabric?.close()
@@ -1459,6 +1656,84 @@ class FreyaCore implements Core {
       throw new Error('the Workforce engine is not available')
     }
     return this.workforceEngine
+  }
+
+  /**
+   * The Personality projection, and its honest readings.
+   *
+   * In priority order:
+   *
+   *   - the `personalitySource` seam, when something filled it. A source is read,
+   *     never instructed, and this accessor has no argument for it to be
+   *     instructed *with* — so being served verbatim costs the relationship
+   *     nothing in authority. This is the Workforce arrangement exactly, and it is
+   *     first so that a host that supplies a mirror is not silently overruled.
+   *   - Core's **own integration**, once `start()` has built it. This is the
+   *     normal production case now: the relationship is Core's, the
+   *     anti-repetition ledger is Core's, and the projection is reduced from
+   *     exactly those records by the same `projectPersonality` the domain's own
+   *     tests exercise.
+   *   - neither, which is a Core that has not started: `NO_PERSONALITY_DOMAIN_REASON`
+   *     and an `unavailable` projection — "no relationship record exists, and none
+   *     is simulated" rather than a warm, empty relationship.
+   *   - a source or an integration that threw, so an `unavailable` reading that
+   *     says the read failed instead of a stale one that says everything is fine.
+   *
+   * The one thing this never does is report a relationship it cannot back up. When
+   * the store is ephemeral or damaged the projection is still served — with
+   * `persistence.durable: false` and the reason in words — because hiding a
+   * working-but-transient relationship would be a different lie, and a bigger one.
+   */
+  personality(): PersonalityProjection {
+    if (this.personalitySource !== null) {
+      try {
+        return this.personalitySource.projection()
+      } catch (error) {
+        return {
+          ...ABSENT_PERSONALITY_PROJECTION,
+          reason: `the Personality domain could not be read: ${describe(error)}`,
+        }
+      }
+    }
+    if (this.personalityDomain !== undefined) {
+      try {
+        return this.personalityDomain.projection()
+      } catch (error) {
+        return {
+          ...ABSENT_PERSONALITY_PROJECTION,
+          reason: `the Personality domain could not be read: ${describe(error)}`,
+        }
+      }
+    }
+    return { ...ABSENT_PERSONALITY_PROJECTION, reason: NO_PERSONALITY_DOMAIN_REASON }
+  }
+
+  onPersonality(listener: (projection: PersonalityProjection) => void): () => void {
+    this.personalityListeners.add(listener)
+    // Delivered immediately, like every subscription here, so a window that
+    // attaches late agrees with one that never left — including on the honest
+    // sentence a build with no Personality domain reports.
+    try {
+      listener(this.personality())
+    } catch (error) {
+      console.error('[freya.core] Personality subscriber threw', error)
+    }
+    return () => {
+      this.personalityListeners.delete(listener)
+    }
+  }
+
+  private publishPersonality(): void {
+    if (this.personalityListeners.size === 0) return
+    const projection = this.personality()
+    for (const listener of [...this.personalityListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Personality listener threw', error)
+        this.personalityListeners.delete(listener)
+      }
+    }
   }
 
   /**
@@ -3239,6 +3514,160 @@ class FreyaCore implements Core {
         'no secure Brain key is available on this machine, so what Freya learns is being kept ' +
         'in memory only and will not survive a restart',
     })
+  }
+
+  /**
+   * Open Personality persistence and build Core's own Personality integration.
+   *
+   * Ordered deliberately ahead of the Mind, and the reason is the fail-closed
+   * contract rather than tidiness: the Mind's expression seam reads the
+   * anti-repetition ledger *before* it plans a turn, so a ledger that arrived after
+   * the Mind was constructed would be invisible to the first turn of the process —
+   * and "invisible" here means "reads as empty", which is the exact failure this
+   * lane refuses to have.
+   *
+   * Three things happen here and none of them is a provider call:
+   *
+   *   1. the encrypted store is opened, or an ephemeral one is substituted and
+   *      labelled, so a machine with no keyring still gets a working relationship
+   *      that honestly says it will not survive a restart;
+   *   2. the retained snapshot is recovered and re-validated before anything reads
+   *      it, with retired records re-tombstoned and the file rewritten *before*
+   *      first use;
+   *   3. the integration is constructed over that state, which is also when the
+   *      session-start interaction fact is observed — a local instant comparison,
+   *      not a schedule.
+   */
+  private async buildPersonality(): Promise<void> {
+    const recovered = await PersonalityPersistenceRuntime.open({
+      path: `${this.options.dataPath}.personality.enc`,
+      key: this.options.personalityKey ?? null,
+      now: (this.options.now ?? (() => new Date()))(),
+      onHealthChange: () => {
+        this.publishPersonality()
+        void this.reportPersonalityDegraded()
+      },
+    })
+    this.personalityPersistence = recovered.runtime
+    // The seam is bound to the *runtime*, never to the integration: the
+    // integration asks the runtime for durability, so a seam that answered by
+    // asking the integration again would be a loop rather than a report. The
+    // integration supplies the `retained` count on top, because only the domain
+    // knows how many records it is holding.
+    const runtime = recovered.runtime
+    this.personalityDomain = new PersonalityIntegration({
+      now: this.options.now ?? (() => new Date()),
+      newId: this.newId,
+      initialItems: recovered.items,
+      initialLedger: recovered.ledger,
+      maxItems: this.options.personalityLimits?.maxRelationshipItems,
+      persistence: {
+        commit: (items, ledger) => this.personalityPersistence?.commit(items, ledger),
+        health: () => runtime.health(),
+      },
+      onChange: () => this.publishPersonality(),
+      onLifecycle: (event) => this.recordPersonalityLifecycle(event),
+    })
+    // A store that could not be believed says so once, in its own stream, and the
+    // reason is a fixed sentence: a decoder or filesystem error must never reflect
+    // a private record back into the journal.
+    await this.reportPersonalityDegraded()
+    await this.personalityPersistence.flush()
+  }
+
+  /**
+   * Announce a *damaged* Personality store, exactly once per process.
+   *
+   * A fault and a deliberate configuration are different things, and only the
+   * first of them belongs in the journal. "This machine has no secure Personality
+   * key" is the same ordinary situation as having no Context key: the projection
+   * already reports `durable: false` with the reason in words, and putting it here
+   * as well would make every keyring-less machine look faulty and would train a
+   * reader to ignore the list. A store that *had* a key and could not be believed is
+   * different — something was expected to work and did not — so that is what gets
+   * written, once, with a fixed reason that cannot reflect a private record.
+   *
+   * Emphatically not a security event: it cannot grant cognition, clear a stop, or
+   * lock anything out. See `SECURITY_EVENT_TYPES`.
+   */
+  private async reportPersonalityDegraded(): Promise<void> {
+    const health = this.personalityDomain?.health() ?? this.personalityPersistence?.health() ?? null
+    if (health === null) return
+    if (health.faultReason === null) {
+      this.personalityDegradedReported = false
+      return
+    }
+    if (this.personalityDegradedReported) return
+    this.personalityDegradedReported = true
+    this.state = {
+      ...this.state,
+      faults: [...this.state.faults, `the Personality store could not be read: ${health.faultReason}`],
+    }
+    await this.fabric.append(
+      'personality.degraded',
+      { reason: health.faultReason, mode: health.mode, durable: false },
+      { actor: 'system' },
+    )
+  }
+
+  /**
+   * Record a lifecycle transition in the journal. Metadata only, by construction.
+   *
+   * `PersonalityLifecycleEvent` has no field that could carry a record's text, the
+   * owner's clause, or a sentence — an id, a code-owned slug, closed kind labels,
+   * the trust class and a closed reason. That is what makes "no private
+   * relationship text in the journal" a property of the type rather than of a
+   * reviewer's attention, and it is the reason these events exist at all: C6 and
+   * C12 both need the ability to see what was recorded and what ended, and neither
+   * is satisfiable from a store only the owner can read.
+   */
+  private recordPersonalityLifecycle(event: PersonalityLifecycleEvent): void {
+    void this.fabric.append(
+      'personality.record_changed',
+      {
+        operation: event.operation,
+        itemId: event.itemId,
+        kind: event.kind,
+        key: event.key,
+        sourceType: event.sourceType,
+        confidence: event.confidence,
+        lifecycleReason: event.lifecycleReason,
+        admitted: event.admitted,
+        retained: event.retained,
+      },
+      { actor: 'system' },
+    )
+  }
+
+  /**
+   * Read the owner's message: record what it explicitly said, and nothing else.
+   *
+   * Two jobs, both about observation rather than interpretation, and both
+   * synchronous — this runs after a turn has already been answered and stored, so
+   * nothing here can delay or fail one.
+   *
+   *  1. **Interaction facts.** A greeting, and an exchange that actually reached a
+   *     provider. These are events Core observed, so the closed `InteractionFact`
+   *     shape is the whole vocabulary: there is no free text and no way for the
+   *     owner's words to become a description of themselves.
+   *  2. **Standing instructions.** The closed directive table either recognises an
+   *     explicit instruction about how Freya should talk, or returns nothing. It is
+   *     not a classifier and not a guesser; a phrase it was not given produces no
+   *     record at all, which is the correct behaviour and is tested as such.
+   *
+   * The order matters and is the honest one: the fact is observed from what
+   * actually happened, and *then* the record is written. A relationship can
+   * therefore never precede the exchange that produced it.
+   */
+  private observeOwnerMessage(message: OwnerMessageEvent): void {
+    const personality = this.personalityDomain
+    if (personality === undefined) return
+    const at = message.endedAt
+
+    for (const fact of factsForOwnerMessage(message)) {
+      personality.observe(fact.kind, at, message.turnId, fact.tags)
+    }
+    personality.readOwnerMessage(message.text, { turnId: message.turnId })
   }
 
   /**

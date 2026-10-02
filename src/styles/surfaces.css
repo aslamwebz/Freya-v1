@@ -2723,3 +2723,135 @@
 .context-ttl {
   color: var(--ink-3);
 }
+
+/* ------------------------------------------------------- Personality view */
+
+/* The third mirror with no controls in it, and the strictest about content:
+   this window renders relationship *metadata* and cannot show the record's
+   text even if it wanted to, because the text never crosses the bridge. No
+   button style appears below for the same reason Context has none — it renders
+   what Core reported and can put nothing back. Status words are printed as
+   Core printed them and are never recoloured by attribute, because a palette
+   that interprets `superseded` would be this lane quietly editing a vocabulary
+   it does not own. */
+.personality-surface {
+  padding: 18px 20px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  height: 100%;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.personality-absent,
+.personality-none,
+.personality-note,
+.personality-durability,
+.personality-cue {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  max-width: 68ch;
+}
+
+/* Durability sits directly under the posture strip, above every record. A
+   relationship that looks durable and is not is the worst thing this window
+   could imply, so the sentence is read before the rows rather than after. */
+.personality-durability[data-durable='false'] {
+  color: var(--gold-hi);
+}
+
+.personality-cue {
+  color: var(--gold-hi);
+}
+
+.personality-read-notice {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--gold-hi);
+}
+
+/* Posture above every section, like Workforce's and Context's: whether a
+   Personality domain exists at all is read before any record is, and "no
+   relationship record" and "an empty relationship" must not look alike. */
+.personality-posture {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+}
+
+.personality-posture[data-ready='false'] {
+  border-color: rgba(198, 150, 88, 0.34);
+}
+
+.personality-posture b {
+  font: 500 14px/1 var(--font-display);
+  letter-spacing: 0.2em;
+  color: var(--gold-hi);
+}
+
+.personality-posture span {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.personality-section h2 {
+  margin: 0 0 8px;
+  font: 400 10px/1 var(--font-display);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.personality-temperament {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.personality-dimension {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.personality-subordination,
+.personality-interpretation,
+.personality-expression {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.personality-records {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.personality-record {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}

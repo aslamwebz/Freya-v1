@@ -82,6 +82,11 @@ function installCoreBridge(over: {
       }
     }) as never,
     coreVoice: (over.coreVoice ?? (async () => VOICE)) as never,
+    // Personality, for the expression cue in the status bar. The bridge
+    // exposes the pull and the subscription and nothing that writes, so the
+    // shell exercises both rather than discovering they are missing.
+    corePersonality: (async () => null) as never,
+    onCorePersonality: (() => () => {}) as never,
   } as never
 }
 

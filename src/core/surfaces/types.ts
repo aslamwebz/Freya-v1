@@ -19,6 +19,7 @@ export const SURFACE_TYPES = [
   'relay',
   'team',
   'context',
+  'personality',
   'office',
   'security',
   'settings',
@@ -241,6 +242,23 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     title: 'Context',
     summary:
       'What Core says is around the current question: each item with the provenance, scope and expiry Core assigned it, shown as Core reported it — current, expired, revoked, or left open as a reference it did not resolve. Nothing is captured by this window and nothing is simulated.',
+    width: 640,
+    height: 540,
+    minWidth: 400,
+    minHeight: 320,
+    instance: 'singleton',
+    status: 'working',
+  },
+  personality: {
+    type: 'personality',
+    // The Phase 11 read-only surface. Core owns a real Personality domain, so this
+    // window has real records to render — metadata only, with the durability of
+    // the store stated above them. Still nothing simulated and still nothing
+    // writable: the bridge carries no `personality.*` command, so a window cannot
+    // file a preference, record a habit or declare an inside joke.
+    title: 'Personality',
+    summary:
+      'Who Freya is as a temperament, and what she has actually recorded about you: whether the records are encrypted at rest, every record as metadata with the source class and confidence Core assigned it, and never the recorded text. Nothing on this surface is simulated and nothing here can be written.',
     width: 640,
     height: 540,
     minWidth: 400,

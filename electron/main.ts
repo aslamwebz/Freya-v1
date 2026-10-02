@@ -59,15 +59,30 @@ function e2eKey(variable: string): Uint8Array | null {
  * conversation survives and the Brain does not — or the reverse — and the failure
  * would look like a Brain bug rather than a harness that only half injected.
  */
-function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array; mission: Uint8Array; context: Uint8Array } | null {
+function e2eKeys(): {
+  conversation: Uint8Array
+  brain: Uint8Array
+  mission: Uint8Array
+  context: Uint8Array
+  personality: Uint8Array
+} | null {
   const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
   const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
   const mission = e2eKey('FREYA_E2E_MISSION_KEY')
   const context = e2eKey('FREYA_E2E_CONTEXT_KEY')
-  // All four or none, so a partial fixture cannot quietly run with a real keyring for
+  const personality = e2eKey('FREYA_E2E_PERSONALITY_KEY')
+  // All five or none, so a partial fixture cannot quietly run with a real keyring for
   // the domain it forgot.
-  if (conversation === null || brain === null || mission === null || context === null) return null
-  return { conversation, brain, mission, context }
+  if (
+    conversation === null ||
+    brain === null ||
+    mission === null ||
+    context === null ||
+    personality === null
+  ) {
+    return null
+  }
+  return { conversation, brain, mission, context, personality }
 }
 
 /**
@@ -380,6 +395,17 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:context', projection)
   })
 
+  // Personality is a ninth channel, and the smallest of them: temperament,
+  // relationship *metadata* and one optional cue for Presence to draw. What
+  // does not cross is the point of it — no recorded text, no tags, no admission
+  // reason, no guidance line, no key and no path — so a window can show what
+  // Core knows about the relationship without holding what the relationship
+  // says. Nothing here writes: the channel has no counterpart that carries a
+  // payload toward Core.
+  const detachPersonality = coreHost?.onPersonality((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:personality', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -389,6 +415,7 @@ function createWindow(): BrowserWindow {
     detachMission?.()
     detachWorkforce?.()
     detachContext?.()
+    detachPersonality?.()
   })
 
   if (DEV_SERVER) {
@@ -474,6 +501,13 @@ function registerIpc(): void {
   // context command — a window cannot put context *in*, because Context
   // authority is Core's to hold inside itself, not this bridge's to lend.
   ipcMain.handle('freya:core:context', () => requireCore().context())
+  // The Personality projection, same bargain, tighter still: a read of what
+  // Core reported, `null` until a Core has started, and no handle to a source,
+  // a record or a cue behind it. There is deliberately no
+  // `freya:core:personality:write` and no `personality.*` command — a window
+  // cannot file a preference, record a habit or declare an inside joke, because
+  // relationship truth is Core's to hold and this bridge lends none of it.
+  ipcMain.handle('freya:core:personality', () => requireCore().personality())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)
@@ -513,6 +547,7 @@ app.whenReady().then(() => {
         brain: { key: testKeys.brain, reason: null as string | null },
         mission: { key: testKeys.mission, reason: null as string | null },
         context: { key: testKeys.context, reason: null as string | null },
+        personality: { key: testKeys.personality, reason: null as string | null },
       })
     : loadKeyring(dataPath)
   void keyResult.then((result) => {
@@ -533,6 +568,15 @@ app.whenReady().then(() => {
       // Same shape as the Brain's: Missions still work for this session, and the
       // surface reports `durable: false` rather than implying persistence it lacks.
       console.warn(`[freya] Missions are not being saved — ${result.mission.reason}`)
+    }
+    if (result.personality.key === null) {
+      // The one domain whose absence changes behaviour and not only durability.
+      // Without a durable store the cue ledger cannot be trusted, so Core refuses
+      // anti-repetition memory outright and offers no expression guidance at all —
+      // which is correct: an empty ledger would re-offer the same gesture forever.
+      console.warn(
+        `[freya] what Freya records about you will not survive a restart, and she will not reuse gestures — ${result.personality.reason}`,
+      )
     }
     const fixtureProvider = e2eResearchFixtureProvider(process.env)
     coreHost = new ElectronCoreHost(
@@ -558,6 +602,7 @@ app.whenReady().then(() => {
         brainKey: result.brain.key,
         missionKey: result.mission.key,
         contextKey: result.context.key,
+        personalityKey: result.personality.key,
         // Explicit host setting; own-app sees only Freya. System is honestly unsupported.
         ...(['own-app', 'system'].includes(process.env.FREYA_CONTEXT_WINDOW_OBSERVATION ?? '') ? {
           windowObservation: {

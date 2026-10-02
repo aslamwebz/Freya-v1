@@ -173,9 +173,16 @@ describe('WorkspaceFile — the debounced path', () => {
       file.schedule({ schema: 1, nav: `nav-${i}`, filler: 'y'.repeat(2000) })
       await new Promise((resolve) => setTimeout(resolve, 3))
     }
-    // Give the chain time to drain, then confirm the file is valid JSON.
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    // Wait for the *last* scheduled payload to land rather than for a fixed
+    // number of milliseconds. A fixed settle is the same assertion only while the
+    // disk is fast, and this file is doing twelve chained real writes — under load
+    // the sleep expires before the chain has drained and the test fails for having
+    // measured time instead of behaviour. `waitForFile` already retries, so this
+    // still fails on a genuine hang, just without failing on a slow machine.
+    await waitForFile(path, 10_000)
     const raw = await readFile(path, 'utf8')
+    // The point of the test: whatever landed is a whole document, never two
+    // writes spliced together on the shared staging file.
     expect(() => JSON.parse(raw)).not.toThrow()
     expect(JSON.parse(raw).nav).toBe('nav-11')
   })

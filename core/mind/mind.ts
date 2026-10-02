@@ -22,6 +22,13 @@ import {
   type ConversationTurn,
   type TerminalTurnOutcome,
 } from '../conversation/types'
+import {
+  buildExpressionForTurn,
+  withExpressionBlock,
+  type ExpressionMemory,
+  type ExpressionTurnResult,
+} from './expression'
+import type { CueKind, CueUsageLedger, InteractionFact, RelationshipItem } from '../personality/types'
 
 /**
  * The Mind.
@@ -249,6 +256,86 @@ export interface MindServiceOptions {
    * existed.
    */
   onTurnStateChange?: () => void
+  /**
+   * The expression-memory seam for anti-repetition.
+   *
+   * Injected by the Core, which owns the cue ledger. The Mind reads the ledger
+   * before planning and records cue use after a turn that actually reached a
+   * provider — it has no store, no persistence, and no write path of its own.
+   *
+   * An absent seam, a seam that throws, and a seam whose `readLedger()` returns
+   * `null` all mean **no expression block is produced and no cue reads or writes
+   * occur**, exactly as a Brain that cannot recall produces no reference block. A
+   * missing or unreadable ledger must never be mistaken for an empty one — an
+   * empty ledger would re-offer the same cues forever. A wired memory represents
+   * the ordinary first turn with `emptyCueLedger()`, not `null`. See
+   * `expressionForTurn`.
+   */
+  expressionMemory?: ExpressionMemory
+  /**
+   * Interaction facts observed by trusted code, for social interpretation.
+   *
+   * Called once per turn, before the provider request. The facts are produced by
+   * trusted pathways that observed something (a greeting arrived, a session
+   * started) — never by model text. An empty list is the normal state.
+   */
+  interactionFacts?: () => readonly InteractionFact[]
+  /**
+   * Admitted relationship items, for social interpretation and expression planning.
+   *
+   * Called once per turn, before the provider request. Only admitted items are
+   * meaningful; the interpretation filters to admitted status internally. An empty
+   * list is the normal first-turn state.
+   */
+  relationshipItems?: () => readonly RelationshipItem[]
+  /**
+   * Code-owned tokens for preference matching, supplied by Core.
+   *
+   * `interpretSocialContext` decides whether an admitted preference is *relevant*
+   * by intersecting its tags against these, so they are the whole of "what is this
+   * turn about". They must be slugs from a closed vocabulary that trusted code
+   * chose — not words extracted from the owner's message, because a matcher
+   * guessing at relevance is how an unrelated preference starts steering a reply.
+   *
+   * Absent means no preference is ever judged relevant, which is the conservative
+   * reading: the record is still held, still visible, and still withdrawable, it
+   * simply does not appear in guidance.
+   */
+  preferenceTokens?: () => readonly string[]
+  /**
+   * The owner's own message, once per turn, after the terminal event is written.
+   *
+   * This is the Phase 11 production admission path, and it lives in the Mind
+   * because the Mind is the only component that knows what the owner actually
+   * said. It reports the text and decides nothing: Core reads it with a closed
+   * directive table and either records an explicit standing instruction or records
+   * nothing at all.
+   *
+   * Deliberately narrow. The Mind does not interpret, does not classify, and does
+   * not keep the text anywhere. It fires *after* the turn's terminal event so a
+   * relationship record can never precede the record of the exchange that produced
+   * it, and a callback that throws is logged and swallowed — losing a preference
+   * note is much smaller than failing a turn that already has a stored answer.
+   */
+  onOwnerMessage?: (message: OwnerMessageEvent) => void
+}
+
+/**
+ * One owner turn, as the relationship domain may hear about it.
+ *
+ * `text` is the owner's own words, in the owner's own conversation, and it is
+ * handed over once and forgotten: nothing in Core stores this field, and the only
+ * thing that may survive a turn is a bounded clause the closed directive table
+ * recognised.
+ */
+export interface OwnerMessageEvent {
+  readonly turnId: string
+  readonly conversationId: string
+  readonly text: string
+  readonly startedAt: string
+  readonly endedAt: string
+  /** The gateway's own account of contact. Never inferred from the outcome. */
+  readonly providerContacted: boolean
 }
 
 export class MindService {
@@ -266,6 +353,11 @@ export class MindService {
   private readonly turnContext: TurnContextReader | null
   private readonly onTurnStateChange: () => void
   private readonly onTurnExperience: ((experience: TurnExperience) => Promise<void>) | null
+  private readonly expressionMemory: ExpressionMemory | null
+  private readonly interactionFacts: () => readonly InteractionFact[]
+  private readonly relationshipItems: () => readonly RelationshipItem[]
+  private readonly preferenceTokens: () => readonly string[]
+  private readonly onOwnerMessage: ((message: OwnerMessageEvent) => void) | null
 
   /**
    * Experience measurements are keyed by turn, not stored in singleton fields.
@@ -308,6 +400,28 @@ export class MindService {
     this.turnContext = options.turnContext ?? null
     this.onTurnStateChange = options.onTurnStateChange ?? (() => {})
     this.onTurnExperience = options.onTurnExperience ?? null
+    this.expressionMemory = options.expressionMemory ?? null
+    this.interactionFacts = options.interactionFacts ?? (() => [])
+    this.relationshipItems = options.relationshipItems ?? (() => [])
+    this.preferenceTokens = options.preferenceTokens ?? (() => [])
+    this.onOwnerMessage = options.onOwnerMessage ?? null
+  }
+
+  /**
+   * Report the owner's own message to the relationship lane.
+   *
+   * Best effort by construction, like the experience hook: this is enrichment of a
+   * turn that already has its answer, and a personality lane that throws must not
+   * be able to fail a conversation. It fires after the terminal event, so the
+   * journal already says the turn happened before anything is recorded about it.
+   */
+  private reportOwnerMessage(message: OwnerMessageEvent): void {
+    if (this.onOwnerMessage === null) return
+    try {
+      this.onOwnerMessage(message)
+    } catch (error) {
+      console.error('[freya.mind] the owner message could not be reported', error)
+    }
   }
 
   /**
@@ -353,6 +467,70 @@ export class MindService {
       // enrichment. The fault belongs to the Context domain's own health reporting.
       console.error('[freya.mind] turn context compile failed; continuing without it', error)
       return null
+    }
+  }
+
+  /**
+   * Plan this turn's expression, or null when there is no usable ledger.
+   *
+   * Personality expression enters the Mind through the injected
+   * `ExpressionMemory`, and nowhere else. The contract is fail-closed: **no
+   * readable ledger means no expression block and no cue reads or writes**.
+   *
+   *  - **No seam** — the Core has not wired personality expression, so the Mind
+   *    emits exactly the packet it produced before this feature existed.
+   *  - **A seam that throws** — an unreadable ledger is never treated as an empty
+   *    one.
+   *  - **A seam that reports `null`** — the ledger is unavailable, which is the
+   *    same claim as throwing for this purpose. An empty ledger would re-offer
+   *    the same cues on every turn forever, and the Mind cannot distinguish
+   *    "nothing was used" from "I cannot tell what was used" once the answer is
+   *    `null`.
+   *
+   * A wired memory therefore represents the ordinary first turn with
+   * `emptyCueLedger()`, not `null`. Never throws; a turn is never lost to its
+   * style enrichment.
+   */
+  private expressionForTurn(at: string): ExpressionTurnResult | null {
+    if (this.expressionMemory === null) return null
+    let ledger: CueUsageLedger | null
+    try {
+      ledger = this.expressionMemory.readLedger()
+    } catch (error) {
+      console.error(
+        '[freya.mind] expression memory read failed; continuing without expression guidance',
+        error,
+      )
+      return null
+    }
+    if (ledger === null) return null
+    try {
+      return buildExpressionForTurn({
+        now: at,
+        facts: this.interactionFacts(),
+        relationship: this.relationshipItems(),
+        contextTokens: this.preferenceTokens(),
+        ledger,
+      })
+    } catch (error) {
+      console.error('[freya.mind] expression planning failed; continuing without it', error)
+      return null
+    }
+  }
+
+  /**
+   * Record cue use after a turn, once a provider was actually reached.
+   *
+   * Never throws. A memory that cannot record is logged and swallowed — a failed
+   * anti-repetition record must not fail a turn that already has a stored answer.
+   * The caller decides *whether* a cue was spent; this only performs the write.
+   */
+  private recordCueUse(cueId: string, kind: CueKind, at: string): void {
+    if (this.expressionMemory === null) return
+    try {
+      this.expressionMemory.recordCueUse(cueId, kind, at)
+    } catch (error) {
+      console.error('[freya.mind] expression memory write failed; continuing', error)
     }
   }
 
@@ -486,6 +664,7 @@ export class MindService {
       } catch (error) {
         return await this.finishTurn(input, turn, 'denied', {
           reason: `the turn could not be authorised: ${describe(error)}`,
+          ownerText: text,
         })
       }
 
@@ -507,7 +686,7 @@ export class MindService {
         )
       } catch (error) {
         if (error instanceof ContextBudgetExceeded) {
-          return await this.finishTurn(input, turn, 'failed', { reason: error.message })
+          return await this.finishTurn(input, turn, 'failed', { reason: error.message, ownerText: text })
         }
         throw error
       }
@@ -516,7 +695,20 @@ export class MindService {
       // so the Context Compiler's input stays the closed set of five explicit
       // fields the Phase 9 red-team suite asserts, and this block arrives as a
       // separate `user`-role message the compiler was never asked to trust.
-      const messages = withTurnContext(compiled.messages, this.sharedContextFor(text, input.conversationId))
+      const withContext = withTurnContext(compiled.messages, this.sharedContextFor(text, input.conversationId))
+
+      // --- 4b. expression planning, into the SAME provider call --------------
+      //
+      // Deterministic social interpretation and bounded expression planning,
+      // spliced into the packet the Mind was already going to send. No second
+      // provider call, no persistence, no clock read. The block is style guidance
+      // only — it cannot grant capability, bypass Guard, or weaken STOP ALL.
+      //
+      // Without a usable expression-memory seam there is no block at all: the
+      // personality layer enters through that seam and nowhere else. See
+      // `expressionForTurn`.
+      const expression = this.expressionForTurn(startedAt)
+      const messages = withExpressionBlock(withContext, expression?.block ?? null)
 
       // Record what context was actually assembled before the provider is asked.
       // This remains true for failure/cancellation outcomes too; a turn does not
@@ -544,20 +736,37 @@ export class MindService {
         goalId: null,
       })
 
+      // Record cue use only when a provider was actually reached. A Governor
+      // denial never dispatches, and a cancellation that arrived before contact
+      // never dispatched either — no cue was spent, and recording one would
+      // suppress a gesture the owner never saw. `allowed` means the provider
+      // answered; `failed` and `cancelled` carry the gateway's own account of
+      // whether a provider was contacted.
+      const dispatched =
+        outcome.status === 'allowed' ||
+        ((outcome.status === 'failed' || outcome.status === 'cancelled') && outcome.providerContacted)
+      if (expression !== null && dispatched) {
+        for (const cue of expression.offeredCueIds) {
+          this.recordCueUse(cue.cueId, cue.kind, startedAt)
+        }
+      }
+
       if (outcome.status === 'denied') {
         // The Governor refused. Nobody was asked, and the turn says so.
-        return await this.finishTurn(input, turn, 'denied', { reason: outcome.reason })
+        return await this.finishTurn(input, turn, 'denied', { reason: outcome.reason, ownerText: text })
       }
       if (outcome.status === 'cancelled') {
         return await this.finishTurn(input, turn, 'cancelled', {
           reason: outcome.reason,
           providerContacted: outcome.providerContacted,
+          ownerText: text,
         })
       }
       if (outcome.status === 'failed') {
         return await this.finishTurn(input, turn, 'failed', {
           reason: outcome.reason,
           providerContacted: outcome.providerContacted,
+          ownerText: text,
         })
       }
 
@@ -581,6 +790,7 @@ export class MindService {
           reason: `the answer could not be stored: ${conversationFault(error)}`,
           providerId: outcome.providerId,
           model: outcome.model,
+          ownerText: text,
         })
       }
 
@@ -593,6 +803,7 @@ export class MindService {
           assistantMessageId: assistantMessage.messageId,
           providerId: outcome.providerId,
           model: outcome.model,
+          ownerText: text,
         },
         assistantMessage,
       )
@@ -692,6 +903,14 @@ private async finishTurn(
        * and a Mind that guessed would report a paid call as free.
        */
       providerContacted?: boolean
+      /**
+       * The owner's own words for this turn, handed to the relationship lane only.
+       *
+       * Passed explicitly rather than looked up, so the text cannot outlive the
+       * turn in a map and be reported to a *later* one. `finishTurn` never stores
+       * it and never puts it in the terminal event.
+       */
+      ownerText?: string
     },
     assistantMessage: ConversationMessage | null = null,
   ): Promise<MindTurnResult> {
@@ -756,6 +975,21 @@ private async finishTurn(
       referenceItemCount: experience?.referenceItemCount ?? 0,
       answerPersisted: assistantMessage !== null,
     })
+
+    // The relationship lane hears about the owner's message last, after the
+    // journal and the Brain already describe the turn truthfully. Nothing here can
+    // change the turn's outcome, and nothing here can make the record exist before
+    // the exchange that produced it.
+    if (detail.ownerText !== undefined) {
+      this.reportOwnerMessage({
+        turnId: turn.turnId,
+        conversationId: input.conversationId,
+        text: detail.ownerText,
+        startedAt: detail.startedAt ?? experience?.startedAt ?? turn.startedAt,
+        endedAt,
+        providerContacted,
+      })
+    }
 
     return {
       turnId: turn.turnId,

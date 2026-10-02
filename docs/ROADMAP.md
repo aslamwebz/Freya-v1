@@ -89,6 +89,26 @@ relationship habits/inside jokes and model-independent personality evaluation.
 
 The Constitution remains above personality.
 
+Phase 11 implementation and final acceptance gates are complete. Production
+assembly owns the relationship lifecycle end to end: a closed directive table
+reads the owner's own message and is the only admission path, records are
+encrypted at rest under a fifth independent key, withdrawal destroys the text and
+leaves a tombstone that says why and when, and bounded retention is deterministic
+and reported rather than silent. Recovered records and the anti-repetition ledger
+feed the Mind's single existing provider call; a degraded store serves *no*
+expression guidance rather than guidance with a reset memory. The read-only
+surface states durability above the records it shows. On 2026-10-02 the full
+verification gate passed: 2,779 tests, typecheck, lint, build and 201 desktop
+checks, of which 15 drive a real relationship through the real UI across a real
+application relaunch.
+See [PHASE-11.md](PHASE-11.md) for ownership, provenance, the cannot-weaken
+ordering and verification details.
+
+One boundary is named rather than buried: the admission table is narrow, so a
+preference that does not fit one of its shapes produces an empty relationship
+rather than a wrong one. Widening it honestly needs an owner-facing command, which
+needs a door this phase deliberately does not have — see PHASE-11.md.
+
 ## Phase 12 — Events and Attention
 
 Authorized event ingestion, importance/urgency, interruption budgets, cooldown,

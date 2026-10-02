@@ -14,6 +14,38 @@ import {
   normaliseContextRef,
   normaliseWorkforceName,
 } from '../workforce/types'
+import {
+  RELATIONSHIP_ITEM_KINDS,
+  RELATIONSHIP_LIFECYCLE_REASONS,
+  isSlug,
+} from '../personality/types'
+import { SOURCE_TRUST_RANK } from '../brain/types'
+
+/**
+ * The closed vocabularies the Personality event payloads are checked against.
+ *
+ * Derived from the domain's own tables rather than restated, so a vocabulary that
+ * grows cannot leave the journal validator accepting something the domain would
+ * refuse. `SOURCE_TRUST_RANK` is used for the source classes because it is keyed
+ * by exactly that closed union.
+ */
+const PERSONALITY_OPERATION_SET: ReadonlySet<string> = new Set([
+  'admitted',
+  'rejected',
+  'withdrawn',
+  'retired',
+  'superseded',
+])
+const PERSONALITY_KIND_SET: ReadonlySet<string> = new Set(RELATIONSHIP_ITEM_KINDS)
+const PERSONALITY_LIFECYCLE_SET: ReadonlySet<string> = new Set(RELATIONSHIP_LIFECYCLE_REASONS)
+const PERSONALITY_SOURCE_SET: ReadonlySet<string> = new Set(Object.keys(SOURCE_TRUST_RANK))
+/** `verified` is excluded: no relationship record may ever claim it. */
+const PERSONALITY_CONFIDENCE_SET: ReadonlySet<string> = new Set([
+  'unknown',
+  'low',
+  'medium',
+  'high',
+])
 
 /**
  * Durable event validation.
@@ -533,6 +565,41 @@ const PAYLOAD_RULES: {
     (p.turnId === null || isEventId(p.turnId)),
 
   'brain.degraded': (p) => isNonEmptyString(p.reason),
+
+  /* --------------------------------------------------- personality (P11) */
+
+  // Metadata only, and the exact-key check is load-bearing here for the same
+  // reason it is for the research stages: an extra field is retained and simply
+  // ignored without it, and an ignored field in a journal is a field somebody will
+  // eventually trust. These two payloads have no slot for a recorded text, an
+  // owner's clause or a sentence, so none can reach this file even by hand.
+  'personality.record_changed': (p) =>
+    exactKeys(p, [
+      'operation',
+      'itemId',
+      'kind',
+      'key',
+      'sourceType',
+      'confidence',
+      'lifecycleReason',
+      'admitted',
+      'retained',
+    ]) &&
+    PERSONALITY_OPERATION_SET.has(p.operation as string) &&
+    isEventId(p.itemId) &&
+    PERSONALITY_KIND_SET.has(p.kind as string) &&
+    isSlug(p.key) &&
+    PERSONALITY_SOURCE_SET.has(p.sourceType as string) &&
+    PERSONALITY_CONFIDENCE_SET.has(p.confidence as string) &&
+    (p.lifecycleReason === null || PERSONALITY_LIFECYCLE_SET.has(p.lifecycleReason as string)) &&
+    isNonNegativeInt(p.admitted) &&
+    isNonNegativeInt(p.retained),
+
+  'personality.degraded': (p) =>
+    exactKeys(p, ['reason', 'mode', 'durable']) &&
+    isNonEmptyString(p.reason) &&
+    (p.mode === 'encrypted' || p.mode === 'ephemeral') &&
+    p.durable === false,
 
   /* ------------------------------------------------------------- research */
 

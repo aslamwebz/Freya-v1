@@ -20,7 +20,10 @@
     "test:e2e": "node --experimental-strip-types tests/e2e/desktop.e2e.ts",
     "test:redteam": "vitest run tests/red-team",
     "core:model-probe": "node scripts/core-model-probe.mjs",
-    "verify": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:e2e"
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:e2e",
+    "release:check": "node scripts/release-check.mjs",
+    "gauntlet": "npm run test:redteam",
+    "release:gate": "npm run verify && npm run gauntlet && npm run release:check"
   },
   "dependencies": {
     "react": "^19.1.0",
@@ -47,5 +50,6 @@
     "typescript-eslint": "^8.71.0",
     "vite": "^8.3.1",
     "vitest": "^5.0.2"
-  }
+  },
+  "packageManager": "npm@11.5.1"
 }

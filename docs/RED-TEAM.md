@@ -19,6 +19,8 @@ approval bypass, malicious tool output and affected cancellation/race cases.
 
 ### Major phases/releases
 
+Run the complete local candidate gate with `npm run release:gate`.
+
 ```
 headless verify
   ↓

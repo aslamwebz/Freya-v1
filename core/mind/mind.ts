@@ -263,11 +263,13 @@ export interface MindServiceOptions {
    * before planning and records cue use after a turn that actually reached a
    * provider — it has no store, no persistence, and no write path of its own.
    *
-   * A null or absent seam means **no expression block is produced and no cue
-   * reads or writes occur**, exactly as a Brain that cannot recall produces no
-   * reference block. A seam that cannot be read degrades the same way, because an
-   * unreadable ledger must never be mistaken for an empty one — an empty ledger
-   * would re-offer the same cues forever. See `expressionForTurn`.
+   * An absent seam, a seam that throws, and a seam whose `readLedger()` returns
+   * `null` all mean **no expression block is produced and no cue reads or writes
+   * occur**, exactly as a Brain that cannot recall produces no reference block. A
+   * missing or unreadable ledger must never be mistaken for an empty one — an
+   * empty ledger would re-offer the same cues forever. A wired memory represents
+   * the ordinary first turn with `emptyCueLedger()`, not `null`. See
+   * `expressionForTurn`.
    */
   expressionMemory?: ExpressionMemory
   /**
@@ -400,23 +402,25 @@ export class MindService {
   }
 
   /**
-   * Plan this turn's expression, or null when there is no usable memory seam.
+   * Plan this turn's expression, or null when there is no usable ledger.
    *
    * Personality expression enters the Mind through the injected
-   * `ExpressionMemory`, and nowhere else. The contract is fail-safe in both
-   * directions:
+   * `ExpressionMemory`, and nowhere else. The contract is fail-closed: **no
+   * readable ledger means no expression block and no cue reads or writes**.
    *
-   *  - **No seam** means no expression block and no cue reads or writes. The Core
-   *    has not wired personality expression, so the Mind emits exactly the packet
-   *    it produced before this feature existed.
-   *  - **A seam that cannot be read** degrades the same way. This is deliberate: an
-   *    unreadable ledger must never be mistaken for an empty one, because an empty
-   *    ledger would re-offer the same cues on every turn forever. "I cannot tell
-   *    what was used" and "nothing was used" are not the same claim.
+   *  - **No seam** — the Core has not wired personality expression, so the Mind
+   *    emits exactly the packet it produced before this feature existed.
+   *  - **A seam that throws** — an unreadable ledger is never treated as an empty
+   *    one.
+   *  - **A seam that reports `null`** — the ledger is unavailable, which is the
+   *    same claim as throwing for this purpose. An empty ledger would re-offer
+   *    the same cues on every turn forever, and the Mind cannot distinguish
+   *    "nothing was used" from "I cannot tell what was used" once the answer is
+   *    `null`.
    *
-   * A working seam that reports `null` is different: that is the ordinary
-   * first-turn state ("no cues have been used yet"), and planning proceeds with an
-   * empty ledger. Never throws; a turn is never lost to its style enrichment.
+   * A wired memory therefore represents the ordinary first turn with
+   * `emptyCueLedger()`, not `null`. Never throws; a turn is never lost to its
+   * style enrichment.
    */
   private expressionForTurn(at: string): ExpressionTurnResult | null {
     if (this.expressionMemory === null) return null
@@ -430,6 +434,7 @@ export class MindService {
       )
       return null
     }
+    if (ledger === null) return null
     try {
       return buildExpressionForTurn({
         now: at,

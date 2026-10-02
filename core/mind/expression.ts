@@ -1,7 +1,7 @@
 import type { CueKind, CueUsageLedger, ExpressionPlan, InteractionFact, RelationshipItem } from '../personality/types'
 import { buildExpressionPlan, expressionBlock, type ExpressionPlanInput } from '../personality/expression'
 import { interpretSocialContext } from '../personality/interpretation'
-import { cueHash, emptyCueLedger } from '../personality/repetition'
+import { cueHash } from '../personality/repetition'
 import type { ModelMessage } from '../model/provider'
 
 /**
@@ -20,6 +20,12 @@ import type { ModelMessage } from '../model/provider'
  * interface the Core supplies — so the Mind can read the ledger before planning and
  * record cue use after the turn. The Mind has no store, no persistence, and no write
  * path of its own; it asks, and the Core's implementation answers.
+ *
+ * An absent seam, a seam that throws, and a seam that reports `null` all degrade
+ * the same way: **no expression block, and no cue reads or writes**. A ledger is
+ * either supplied and bounded, or there is no personality expression at all. There
+ * is no path here by which a missing ledger becomes an empty one, because an empty
+ * ledger would re-offer the same cues on every turn forever.
  *
  * ## What cannot get in
  *
@@ -47,10 +53,17 @@ import type { ModelMessage } from '../model/provider'
  */
 export interface ExpressionMemory {
   /**
-   * Read the current cue-usage ledger, or null when none exists yet.
+   * Read the current cue-usage ledger.
    *
-   * Called once per turn, before planning. A null return is the normal first-turn
-   * state and means "no cues have been used yet".
+   * Called once per turn, before planning. A wired memory returns a ledger —
+   * `emptyCueLedger()` for the ordinary first turn, when nothing has been used
+   * yet — so the Mind can always bound what it offers.
+   *
+   * Returning `null` means the ledger is **unavailable**. The Mind then emits no
+   * expression block at all: a missing or unreadable ledger must never be
+   * mistaken for an empty one, because an empty ledger would re-offer the same
+   * cues on every turn forever. "I cannot tell what was used" and "nothing was
+   * used" are not the same claim.
    */
   readLedger(): CueUsageLedger | null
   /**
@@ -65,22 +78,24 @@ export interface ExpressionMemory {
 /**
  * The inputs the Mind assembles for one turn's expression planning.
  *
- * All fields are optional because the Mind must degrade gracefully: a Core that
- * supplies no facts, no relationship items, or no temperament still gets a turn
- * answered. The expression block is an enrichment, never a precondition.
+ * `ledger` is required; the rest are optional because the Mind must degrade
+ * gracefully: a Core that supplies no facts, no relationship items, or no
+ * temperament still gets a turn answered. The expression block is an enrichment,
+ * never a precondition.
  */
 export interface ExpressionTurnInput {
   /** The instant this turn is running at. */
   readonly now: string
   /**
-   * The cue ledger, or null for the ordinary first-turn state.
+   * The cue ledger to plan against.
    *
-   * Required rather than optional so a caller cannot silently plan against an
-   * implicit empty ledger. `null` is a *usable* answer from a working seam
-   * meaning "nothing has been used yet"; it is not the same as having no seam at
-   * all. The Mind only reaches this function once it has a readable seam.
+   * Required and non-null: the caller must have a readable ledger. The ordinary
+   * first-turn state is an **empty** ledger (`emptyCueLedger()`), not `null`. A
+   * `null` ledger never reaches this function — the Mind treats it as
+   * unavailable and emits no block — so there is no implicit empty-ledger
+   * fallback here that could re-offer cues forever.
    */
-  readonly ledger: CueUsageLedger | null
+  readonly ledger: CueUsageLedger
   /** Interaction facts observed by trusted code. Empty when none. */
   readonly facts?: readonly InteractionFact[]
   /** Admitted relationship items. Empty when none. */
@@ -130,7 +145,7 @@ export function buildExpressionForTurn(input: ExpressionTurnInput): ExpressionTu
   const plan = buildExpressionPlan({
     interpretation,
     at: input.now,
-    ledger: input.ledger ?? emptyCueLedger(),
+    ledger: input.ledger,
     temperament: input.temperament,
     policy: input.policy,
   })

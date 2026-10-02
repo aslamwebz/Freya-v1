@@ -13,6 +13,7 @@ import { MindService } from '../../core/mind/mind'
 import type { ExpressionMemory } from '../../core/mind/expression'
 import type { CueUsageLedger, InteractionFact, RelationshipItem } from '../../core/personality/types'
 import { admitRelationshipItem, createRelationshipCandidate } from '../../core/personality/relationship'
+import { emptyCueLedger } from '../../core/personality/repetition'
 import type { CognitionIntent, OwnerAuthority } from '../../core/authority'
 import type { CognitionOutcome } from '../../core/cognition/service'
 import type { CognitionGrant, CognitionGrantSpec } from '../../core/cognition/grants'
@@ -79,8 +80,13 @@ interface CountingMemory extends ExpressionMemory {
   readonly cueWrites: readonly { cueId: string; kind: string; at: string }[]
 }
 
-/** A working seam that counts its reads and writes. */
-function countingMemory(ledger: CueUsageLedger | null = null): CountingMemory {
+/**
+ * A working seam that counts its reads and writes.
+ *
+ * A ledger is always supplied. The ordinary first turn is `emptyCueLedger()`;
+ * `null` is reserved for the unavailable case and is exercised explicitly.
+ */
+function countingMemory(ledger: CueUsageLedger | null): CountingMemory {
   let ledgerReads = 0
   const cueWrites: { cueId: string; kind: string; at: string }[] = []
   return {
@@ -127,7 +133,7 @@ async function buildMind(options: {
     gateway: new ModelGateway({ providers: [provider], recorder: silentRecorder, now: () => new Date(now) }),
     now: () => new Date(now),
     newId: (() => { let n = 0; return () => `id-${(n += 1).toString().padStart(4, '0')}` })(),
-    ...(options.memory === null ? {} : { expressionMemory: options.memory ?? countingMemory() }),
+    ...(options.memory === null ? {} : { expressionMemory: options.memory ?? countingMemory(emptyCueLedger()) }),
     interactionFacts: () => options.facts ?? [],
     relationshipItems: () => options.relationship ?? [],
   })
@@ -146,7 +152,9 @@ async function harness(options?: {
   outcome?: OutcomeFor
 }): Promise<Harness> {
   const { ledger, ...rest } = options ?? {}
-  const expressionMemory = countingMemory(ledger ?? null)
+  // Undefined means the ordinary first-turn ledger; `null` is an explicit
+  // request for the unavailable seam.
+  const expressionMemory = countingMemory(ledger === undefined ? emptyCueLedger() : ledger)
   const fixture = await buildMind({ ...rest, memory: expressionMemory })
   return { ...fixture, expressionMemory }
 }
@@ -331,6 +339,23 @@ describe('no usable expression memory means no personality expression', () => {
     const messages = authority.recorded[0]?.messages ?? []
     expect(messages).toHaveLength(2)
     expect(expressionBlockOf(messages)).toBeUndefined()
+  })
+
+  it('emits no block and records no cue use when the seam reports an unavailable ledger', async () => {
+    const item = admittedItem({ kind: 'inside-joke', key: 'shared-joke', cueKind: 'inside-joke' })
+    const memory = countingMemory(null)
+    const { mind, authority } = await buildMind({ memory, facts: [GREETING_FACT], relationship: [item] })
+
+    const turn = await mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 't1', text: 'hello' })
+    expect(turn.outcome).toBe('completed')
+
+    // A null ledger is not an empty one: the Mind cannot bound repetition, so it
+    // emits no personality expression at all rather than re-offering cues forever.
+    const messages = authority.recorded[0]?.messages ?? []
+    expect(messages).toHaveLength(2)
+    expect(expressionBlockOf(messages)).toBeUndefined()
+    expect(memory.ledgerReads).toBe(1)
+    expect(memory.cueWrites).toHaveLength(0)
   })
 })
 

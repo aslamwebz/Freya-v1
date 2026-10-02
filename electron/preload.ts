@@ -18,6 +18,11 @@ import type { MissionProjection } from '../core/missions/types'
 import { WORKFORCE_NO_PAYLOAD } from '../core/protocol/workforce'
 import type { WorkforceProjection } from '../core/protocol/workforce'
 import type { ContextProjection } from '../core/protocol/context'
+import type { PersonalityProjection } from '../core/protocol/personality'
+import type { AttentionProjection } from '../core/protocol/attention'
+import { ATTENTION_NO_PAYLOAD } from '../core/protocol/attention'
+import { ATTENTION_LIMITS } from '../core/attention/types'
+import type { OfficeProjection } from '../core/office/projection'
 
 export interface RuntimeInfo {
   version: string
@@ -264,6 +269,83 @@ const api = {
   },
 
   /**
+   * The Personality projection: temperament, the relationship record as
+   * metadata, and one optional cue for Presence to draw.
+   *
+   * Two functions and no command, same as Context and tighter in reason. What
+   * crosses is ids, code-owned keys, closed labels, counts and instants — what
+   * does **not** cross is what the record *says*: no `text`, no `tags`, no
+   * admission reason, no provenance sentence and no expression guidance, so a
+   * window cannot hold the private half of a relationship by simply being open.
+   *
+   * And there is no function here that files one. A compromised renderer gets
+   * from this bridge exactly two argument-free reads; it cannot record a
+   * preference, mark a habit, name an inside joke, assert a confidence or pick
+   * a cue, because no field of any request can reach Core through this lane at
+   * all. Relationship truth, provenance, trust and authority stay in Core, and
+   * this bridge lends none of them in either direction.
+   */
+  corePersonality: (): Promise<PersonalityProjection | null> =>
+    ipcRenderer.invoke('freya:core:personality'),
+
+  onCorePersonality: (handler: (projection: PersonalityProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: PersonalityProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:personality', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:personality', listener)
+    }
+  },
+
+  /**
+   * The Attention projection: counts, the focus reading Core derived, the last
+   * decision as metadata and at most one cue.
+   *
+   * The note that matters is what does **not** cross: the event's `text` never
+   * appears in a projection — only its measured length — and there is no field a
+   * window could use to name a source, set an importance, assert an urgency, decide
+   * an outcome, spend an interruption budget or bypass a cooldown. Ingestion is a
+   * command with a narrow payload contract, not a widening of this read.
+   */
+  coreAttention: (): Promise<AttentionProjection | null> =>
+    ipcRenderer.invoke('freya:core:attention'),
+
+  onCoreAttention: (handler: (projection: AttentionProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: AttentionProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:attention', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:attention', listener)
+    }
+  },
+
+  /**
+   * The Office projection: Freya's station, live run stations, worker stations,
+   * approval stations and the history timeline.
+   *
+   * What crosses is exactly what Core derived from real Work/Workforce/Core
+   * state — ids, statuses, counts, measured lengths, closed labels and
+   * deterministic positions. What does **not** cross is the substance: no step
+   * input, no observation content, no message body, no task title, no mission
+   * text, no authority, no capability instance. A window can see what is
+   * happening and where; it cannot reach what a capability was given or what it
+   * returned, and it cannot invent either.
+   *
+   * There is no function here that invents a station, inflates a count or
+   * fabricates a percentage. The Office is a pure function of Core state, and
+   * this bridge is a forwarding box on the way to it.
+   */
+  coreOffice: (): Promise<OfficeProjection | null> => ipcRenderer.invoke('freya:core:office'),
+
+  onCoreOffice: (handler: (projection: OfficeProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: OfficeProjection): void => handler(projection)
+    ipcRenderer.on('freya:core:office', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:office', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -389,6 +471,39 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   // privilege is the two projection reads on the api object above: a pull and
   // a subscription. There is no write verb to be tempted by because there is
   // no write verb.
+
+  // Personality, and the entry is nothing — deliberately, and for a sharper
+  // reason than Context's.
+  //
+  // Not one `personality.*` name is whitelisted, so a window naming one is
+  // refused as an unknown command before this list is even consulted. The
+  // window's entire Personality privilege is the pull and the subscription on
+  // the api object above, and that asymmetry is the whole defence: the thing a
+  // caller would most want to supply here is relationship truth — "the owner
+  // prefers this", "we have an inside joke about that" — and a door that takes
+  // no payload cannot be talked into taking one.
+
+  // Attention. A window may submit an event, register and cancel a schedule, read
+  // the projection and read back one retained event. Note what none of these
+  // reaches: no source (Core fixes it to `owner`), no importance, no urgency, no
+  // outcome, no interruption budget and no cooldown. There is deliberately no
+  // `attention.decide`, no `attention.budget.set` and no `attention.tick` here —
+  // deciding, budgeting and waking are Core's.
+  'attention.status.read',
+  'attention.event.ingest',
+  'attention.schedule.register',
+  'attention.schedule.cancel',
+  'attention.inbox.read',
+
+  // Office. A window may read the Office projection and ask for an agent to
+  // join the desktop Presence. Note what it may *not* do: it cannot invent a
+  // station, inflate a count, fabricate a percentage, name a principal, assert
+  // an authority, grant a capability or reach a model. The presence request
+  // takes a workerId and nothing else — Core validates the worker exists and
+  // journals the request, and whether the agent actually appears is a Presence
+  // concern (Phase 13), not the Office's.
+  'office.status.read',
+  'office.presence.request',
 ])
 
 /**
@@ -617,6 +732,134 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       const model = string('model', MAX_MODEL_ID_CHARS, false)
       if (model === null) return { ok: false, reason: 'model id is invalid' }
       return { ok: true, payload: model === undefined ? {} : { model } }
+    }
+
+    case 'attention.status.read': {
+      // A payloadless read. Anything attached is refused rather than dropped, so a
+      // window cannot smuggle a source, an importance, an urgency or an outcome
+      // into the question of what Core decided.
+      if (!carriesNothing(payload)) return { ok: false, reason: ATTENTION_NO_PAYLOAD }
+      return { ok: true }
+    }
+
+    case 'attention.event.ingest': {
+      // The named fields, and nothing else. Rebuilding the payload from known
+      // fields means a `source`, an `importance`, an `urgency` or an `outcome`
+      // supplied by a window never reaches the main process at all — Core would
+      // ignore them, but this bridge does not even forward them.
+      const kind = string('kind', 40)
+      const text = string('text', ATTENTION_LIMITS.maxEventTextChars, false)
+      if (kind === null || kind === undefined) return { ok: false, reason: 'attention kind is invalid' }
+      if (text === null) return { ok: false, reason: 'attention text is too large or invalid' }
+      const goalRef = string('goalRef', ATTENTION_LIMITS.maxRefChars, false)
+      const sourceRef = string('sourceRef', ATTENTION_LIMITS.maxRefChars, false)
+      const severityHint = string('severityHint', 16, false)
+      const dueAt = string('dueAt', 64, false)
+      if (goalRef === null) return { ok: false, reason: 'attention goal reference is invalid' }
+      if (sourceRef === null) return { ok: false, reason: 'attention source reference is invalid' }
+      if (severityHint === null) return { ok: false, reason: 'attention severity hint is invalid' }
+      if (dueAt === null) return { ok: false, reason: 'attention due time is invalid' }
+      return {
+        ok: true,
+        payload: {
+          kind,
+          text: text ?? '',
+          ...(goalRef === undefined ? {} : { goalRef }),
+          ...(sourceRef === undefined ? {} : { sourceRef }),
+          ...(severityHint === undefined ? {} : { severityHint }),
+          ...(dueAt === undefined ? {} : { dueAt }),
+        },
+      }
+    }
+
+    case 'attention.schedule.register': {
+      const kind = string('kind', 40)
+      const text = string('text', ATTENTION_LIMITS.maxEventTextChars, false)
+      const dueAt = string('dueAt', 64)
+      if (kind === null || kind === undefined) return { ok: false, reason: 'schedule kind is invalid' }
+      if (text === null) return { ok: false, reason: 'schedule text is too large or invalid' }
+      if (dueAt === null || dueAt === undefined) return { ok: false, reason: 'schedule due time is required' }
+      const goalRef = string('goalRef', ATTENTION_LIMITS.maxRefChars, false)
+      const severityHint = string('severityHint', 16, false)
+      const condition = string('condition', 24, false)
+      if (goalRef === null) return { ok: false, reason: 'schedule goal reference is invalid' }
+      if (severityHint === null) return { ok: false, reason: 'schedule severity hint is invalid' }
+      if (condition === null) return { ok: false, reason: 'schedule condition is invalid' }
+      const intervalMs = record?.intervalMs
+      const maxRepeats = record?.maxRepeats
+      if (intervalMs !== undefined && (typeof intervalMs !== 'number' || !Number.isInteger(intervalMs))) {
+        return { ok: false, reason: 'schedule interval is invalid' }
+      }
+      if (maxRepeats !== undefined && (typeof maxRepeats !== 'number' || !Number.isInteger(maxRepeats))) {
+        return { ok: false, reason: 'schedule repeat count is invalid' }
+      }
+      return {
+        ok: true,
+        payload: {
+          kind,
+          text: text ?? '',
+          dueAt,
+          ...(goalRef === undefined ? {} : { goalRef }),
+          ...(severityHint === undefined ? {} : { severityHint }),
+          ...(condition === undefined ? {} : { condition }),
+          ...(intervalMs === undefined ? {} : { intervalMs }),
+          ...(maxRepeats === undefined ? {} : { maxRepeats }),
+        },
+      }
+    }
+
+    case 'attention.schedule.cancel': {
+      const scheduleId = string('scheduleId', MAX_ID_CHARS)
+      if (scheduleId === null || scheduleId === undefined) {
+        return { ok: false, reason: 'schedule id is invalid' }
+      }
+      if (
+        record !== null &&
+        Object.keys(record).some((key) => key !== 'scheduleId')
+      ) {
+        return { ok: false, reason: 'schedule cancellation accepts only scheduleId' }
+      }
+      return { ok: true, payload: { scheduleId } }
+    }
+
+    case 'attention.inbox.read': {
+      const eventId = string('eventId', MAX_ID_CHARS)
+      if (eventId === null || eventId === undefined) {
+        return { ok: false, reason: 'attention event id is invalid' }
+      }
+      return { ok: true, payload: { eventId } }
+    }
+
+    case 'office.status.read': {
+      // A payloadless read, exactly like `work.status.read` and
+      // `workforce.status.read`. Anything attached is refused rather than
+      // dropped, so a window cannot smuggle an instruction into a question.
+      if (!carriesNothing(payload)) {
+        return { ok: false, reason: 'the Office read carries no payload' }
+      }
+      return { ok: true }
+    }
+
+    case 'office.presence.request': {
+      // One bounded field, and nothing else crosses.
+      //
+      // What is deliberately absent is the interesting part. There is no
+      // `principal`, no `authority`, no `capability`, no `expression`, no
+      // `position` and no `style` — so a window cannot assert who is asking,
+      // grant the agent anything, or choose how it appears. The request is a
+      // question to Presence (Phase 13), not an instruction, and the bridge
+      // forwards the workerId and refuses the rest.
+      const workerId = string('workerId', 128)
+      if (workerId === null || workerId === undefined) {
+        return { ok: false, reason: 'a workerId is required' }
+      }
+      if (record === null || Object.keys(record).some((key) => key !== 'workerId')) {
+        return { ok: false, reason: 'presence request accepts only workerId' }
+      }
+      if (!/^[A-Za-z0-9._:-]+$/.test(workerId)) {
+        return { ok: false, reason: 'workerId is invalid' }
+      }
+      return { ok: true, payload: { workerId } }
     }
 
     case 'voice.capture.end': {

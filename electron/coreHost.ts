@@ -6,7 +6,10 @@ import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
 import type { MissionProjection } from '../core/missions/types'
 import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
+import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
+import type { AttentionProjection } from '../core/protocol/attention'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
+import type { OfficeProjection } from '../core/office/projection'
 import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
 import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
@@ -312,6 +315,48 @@ export interface CoreHost {
    */
   onContext(send: (projection: ContextProjection) => void): () => void
   context(): ContextProjection | null
+  /**
+   * Attach to the Personality projection. Returns a disposer.
+   *
+   * Its own channel like every subsystem's, and the note that matters is what
+   * is *not* here: the host cannot record a preference, admit a habit, file an
+   * inside joke, choose a cue or report a confidence. It reads a projection and
+   * forwards it. What a window receives is Core's report of relationship
+   * *metadata* — never the recorded text, never a key, never a path — and this
+   * host is a forwarding box on the way to that, not a second author of it.
+   */
+  onPersonality(send: (projection: PersonalityProjection) => void): () => void
+  personality(): PersonalityProjection | null
+  /**
+   * Attach to the Attention projection. Returns a disposer.
+   *
+   * Its own channel like every subsystem's, and the note that matters is what is
+   * *not* here: the host cannot decide, escalate, spend a budget, bypass a cooldown,
+   * schedule anything or read an event's text. It reads a projection and forwards
+   * it. What a window receives is Core's report — counts, the focus reading, closed
+   * labels and at most one cue — and this host is a forwarding box, not a second
+   * author of any of it.
+   */
+  onAttention(send: (projection: AttentionProjection) => void): () => void
+  attention(): AttentionProjection | null
+  /**
+   * Attach to the Office projection. Returns a disposer.
+   *
+   * Its own channel like every subsystem's, and the note that matters is what
+   * is *not* here: the host cannot invent a station, inflate a count or
+   * fabricate a percentage. It reads a projection and forwards it. What a
+   * window receives is Core's report — Freya's station, live run stations,
+   * worker stations, approval stations and the history timeline — and this
+   * host is a forwarding box, not a second author of any of it.
+   */
+  onOffice(send: (projection: OfficeProjection) => void): () => void
+  office(): OfficeProjection | null
+  /**
+   * Evaluate due attention schedules. The bounded wake, driven by the composition
+   * root. Performs no model call and no provider contact; it only fires schedules
+   * already due whose condition holds against state Core already has.
+   */
+  attentionTick(): Promise<number>
   stop(reason?: string): Promise<void>
 }
 
@@ -345,6 +390,18 @@ export interface CoreHostOptions {
    */
   missionKey?: Uint8Array | null
   contextKey?: Uint8Array | null
+  /**
+   * Personality's own key, from the keyring.
+   *
+   * A **fifth** independent secret for the same reason as the other four: what
+   * Freya has recorded about a person should not be one key-compromise away from
+   * the conversation log, and recovering another domain's key must not yield it.
+   * Null means Core falls back to an ephemeral relationship, reports
+   * `durable: false` in the projection, and — because anti-repetition depends on
+   * remembering what was offered — serves no expression guidance at all rather
+   * than resetting its memory.
+   */
+  personalityKey?: Uint8Array | null
   /** Explicit main-process opt-in; never accepted from a renderer. */
   windowObservation?: {
     enabled: boolean
@@ -384,6 +441,26 @@ export interface CoreHostOptions {
    * is to hand over a reader and then mirror what comes back.
    */
   workforceSource?: WorkforceSource
+  /**
+   * Fills Core's Personality seam. For assembly and tests; production passes
+   * none, and the host does not build one.
+   *
+   * Forwarded *into* Core and nowhere else, exactly like `workforceSource`.
+   * This is not Electron deciding what Freya knows about the person — it
+   * cannot, because the type it forwards answers a question rather than takes
+   * an instruction. Relationship authority lives in Core, in the Phase 11
+   * personality domain; the host's job is to hand over a reader and then mirror
+   * what comes back.
+   */
+  personalitySource?: PersonalitySource
+  /**
+   * Whether Core wires its own subsystems into attention as event sources.
+   *
+   * On by default in the production host, so a finished Run or Mission becomes an
+   * attention event. Tests of other subsystems construct Core directly and leave
+   * this off, so their journals are not perturbed.
+   */
+  attentionObserveSources?: boolean
 }
 
 export class ElectronCoreHost implements CoreHost {
@@ -397,6 +474,9 @@ export class ElectronCoreHost implements CoreHost {
   private readonly workWindows = new Set<(projection: WorkProjection) => void>()
   private readonly missionWindows = new Set<(projection: MissionProjection) => void>()
   private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
+  private readonly personalityWindows = new Set<(projection: PersonalityProjection) => void>()
+  private readonly attentionWindows = new Set<(projection: AttentionProjection) => void>()
+  private readonly officeWindows = new Set<(projection: OfficeProjection) => void>()
   /**
    * The Context transport box. Binds structurally to a reporting Core, holds a
    * window set, and can write nothing — see `ContextChannel`. Deliberately not
@@ -432,12 +512,28 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
         ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),
         contextKey: this.options.contextKey ?? null,
+        // Bytes in, and nowhere else. Core holds a `PersonalityPersistenceRuntime`
+        // it cannot inspect, so there is nothing here for it to leak the key
+        // through — and no path for it to leak the relationship *text* through
+        // either, since the projection carries metadata only.
+        personalityKey: this.options.personalityKey ?? null,
         // The Workforce seam, forwarded whole. Nothing is derived from it here:
         // the host neither reads nor interprets a workforce, it only hands Core
         // the reader it was given and mirrors what Core reports.
         ...(this.options.workforceSource
           ? { workforceSource: this.options.workforceSource }
           : {}),
+        // The Personality seam, forwarded whole for the same reason. It is a
+        // reader, not a door: the option reaches Core, not a window, and a
+        // renderer has no name for it — so nothing a window can send arrives
+        // here, and the only thing that travels back out is what Core reports.
+        ...(this.options.personalitySource
+          ? { personalitySource: this.options.personalitySource }
+          : {}),
+        // Attention's internal sources are composition, not authority: the engine
+        // still decides, and a delivered event cannot mint a capability or reach a
+        // model. On in production so a finished Run or Mission becomes attention.
+        attentionObserveSources: this.options.attentionObserveSources ?? true,
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),
@@ -459,6 +555,9 @@ export class ElectronCoreHost implements CoreHost {
       core.onWork((projection) => this.broadcastWork(projection))
       core.onMission((projection) => this.broadcastMission(projection))
       core.onWorkforce((projection) => this.broadcastWorkforce(projection))
+      core.onPersonality((projection) => this.broadcastPersonality(projection))
+      core.onAttention((projection) => this.broadcastAttention(projection))
+      core.onOffice((projection) => this.broadcastOffice(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -660,6 +759,9 @@ export class ElectronCoreHost implements CoreHost {
     this.brainWindows.clear()
     this.workWindows.clear()
     this.workforceWindows.clear()
+    this.personalityWindows.clear()
+    this.attentionWindows.clear()
+    this.officeWindows.clear()
     this.contextChannel.close()
     await core?.stop(reason)
   }
@@ -716,6 +818,110 @@ export class ElectronCoreHost implements CoreHost {
   }
 
   /**
+   * Attach to the Personality projection, pushed immediately.
+   *
+   * Null before the Core has started, so a host with nothing to report says
+   * nothing rather than manufacturing a temperament or an empty relationship —
+   * the same rule the Workforce attach follows, for the same reason.
+   */
+  onPersonality(send: (projection: PersonalityProjection) => void): () => void {
+    this.personalityWindows.add(send)
+    const projection = this.personality()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Personality push threw', error)
+      }
+    }
+    return () => {
+      this.personalityWindows.delete(send)
+    }
+  }
+
+  personality(): PersonalityProjection | null {
+    return this.core?.personality() ?? null
+  }
+
+  /**
+   * Attach to the Attention projection, pushed immediately.
+   *
+   * Null before the Core has started, so a host with nothing to report says nothing
+   * rather than manufacturing "nothing needs attention" — the same rule every other
+   * attach here follows, for the same reason.
+   */
+  onAttention(send: (projection: AttentionProjection) => void): () => void {
+    this.attentionWindows.add(send)
+    const projection = this.attention()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Attention push threw', error)
+      }
+    }
+    return () => {
+      this.attentionWindows.delete(send)
+    }
+  }
+
+  attention(): AttentionProjection | null {
+    return this.core?.attention() ?? null
+  }
+
+  /**
+   * Attach to the Office projection, pushed immediately.
+   *
+   * Null before the Core has started, so a host with nothing to report says
+   * nothing rather than manufacturing an empty office — the same rule every
+   * other attach here follows, for the same reason.
+   */
+  onOffice(send: (projection: OfficeProjection) => void): () => void {
+    this.officeWindows.add(send)
+    const projection = this.office()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Office push threw', error)
+      }
+    }
+    return () => {
+      this.officeWindows.delete(send)
+    }
+  }
+
+  office(): OfficeProjection | null {
+    return this.core?.office() ?? null
+  }
+
+  async attentionTick(): Promise<number> {
+    return (await this.core?.attentionTick()) ?? 0
+  }
+
+  private broadcastAttention(projection: AttentionProjection): void {
+    for (const send of [...this.attentionWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Attention push threw', error)
+        this.attentionWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastOffice(projection: OfficeProjection): void {
+    for (const send of [...this.officeWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Office push threw', error)
+        this.officeWindows.delete(send)
+      }
+    }
+  }
+
+  /**
    * Attach to the Context projection, as the channel saw it last.
    *
    * Null until a Core starts reporting, then Core's own facts in the window's
@@ -737,6 +943,17 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window Workforce push threw', error)
         this.workforceWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastPersonality(projection: PersonalityProjection): void {
+    for (const send of [...this.personalityWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Personality push threw', error)
+        this.personalityWindows.delete(send)
       }
     }
   }

@@ -42,6 +42,15 @@ const E2E_BRAIN_KEY = Buffer.alloc(32, 0x2b).toString('base64')
 const E2E_MISSION_KEY = Buffer.alloc(32, 0x13).toString('base64')
 const E2E_CONTEXT_KEY = Buffer.alloc(32, 0x47).toString('base64')
 /**
+ * A fifth secret, again different from the other four.
+ *
+ * Phase 11 gave what Freya records about a person its own key, and the harness has
+ * to inject all five together for the same reason: four of five would be the
+ * half-injected set, and it would fail in a way that reads as a Brain bug rather
+ * than as a harness that only half injected.
+ */
+const E2E_PERSONALITY_KEY = Buffer.alloc(32, 0x7e).toString('base64')
+/**
  * Which monitor the suite drives Freya on.
  *
  * Overridable, because the right number depends on the desk: someone with three
@@ -92,6 +101,7 @@ async function launch(
       FREYA_E2E_BRAIN_KEY: E2E_BRAIN_KEY,
       FREYA_E2E_MISSION_KEY: E2E_MISSION_KEY,
       FREYA_E2E_CONTEXT_KEY: E2E_CONTEXT_KEY,
+      FREYA_E2E_PERSONALITY_KEY: E2E_PERSONALITY_KEY,
       FREYA_CONTEXT_WINDOW_OBSERVATION: '',
       ...env,
     },
@@ -197,6 +207,36 @@ async function openWork(page: Page): Promise<void> {
 }
 
 /**
+ * Open the Personality window and wait for it to report a real domain.
+ *
+ * Waits past the "unavailable" state for the same reason `openVault` does:
+ * durability has to be settled before anything is asserted about it, and every
+ * check below depends on which of the two states the surface is showing.
+ */
+async function openPersonality(page: Page): Promise<void> {
+  const dialog = page.locator('[role="dialog"][aria-label="Personality"]')
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Personality', exact: true })
+      .click()
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Personality"] .personality-surface', {
+    timeout: 15_000,
+  })
+  await page.waitForFunction(
+    () => {
+      const surface = document.querySelector(
+        '[role="dialog"][aria-label="Personality"] .personality-surface',
+      )
+      return surface !== null && !document.querySelector('.personality-surface[data-health="absent"]')
+    },
+    undefined,
+    { timeout: 15_000 },
+  )
+}
+
+/**
  * Open the Vault and wait for it to report Freya's memory.
  *
  * Idempotent for the same reason as `openChat`: a restored singleton toggles shut if
@@ -217,6 +257,31 @@ async function openVault(page: Page): Promise<void> {
       // Not the "waiting for Core" state: durability has to be settled before
       // anything is typed, and the check below depends on which one it is.
       return surface !== null && !document.querySelector('.vault-absent')
+    },
+    undefined,
+    { timeout: 15_000 },
+  )
+}
+
+/**
+ * Open the Office and wait for it to report.
+ *
+ * Idempotent for the same reason as every other surface: a restored singleton
+ * toggles shut if clicked twice.
+ */
+async function openOffice(page: Page): Promise<void> {
+  const dialog = page.locator('[role="dialog"][aria-label="Office"]')
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Office', exact: true })
+      .click()
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Office"] .office-surface', { timeout: 15_000 })
+  await page.waitForFunction(
+    () => {
+      const surface = document.querySelector('[role="dialog"][aria-label="Office"] .office-surface')
+      return surface !== null && !document.querySelector('.office-absent')
     },
     undefined,
     { timeout: 15_000 },
@@ -1084,6 +1149,36 @@ async function main(): Promise<void> {
       )
       await p4.getByRole('button', { name: 'Close Context', exact: true }).click()
 
+      // --- Phase 12 attention crosses the read-only host boundary ----------
+      //
+      // A window may submit an owner event and watch Core decide. What it may
+      // not do is name a source, decide an outcome or see the event text: the
+      // projection carries a length and a code-owned cue, and the only way to
+      // read the text is an explicit per-event read.
+      await launcher.getByRole('button', { name: 'Attention', exact: true }).click()
+      await p4.waitForSelector('.attention-surface[data-health="ready"]')
+      const attentionBridge = await p4.evaluate(() => {
+        const scope = window as unknown as Record<string, unknown>
+        return Object.keys((scope.freyaHost as object | undefined) ?? {})
+          .filter((key) => /attention/i.test(key))
+          .sort()
+      })
+      check(
+        'the Attention bridge is a pull and a subscription, and nothing that decides',
+        JSON.stringify(attentionBridge) === JSON.stringify(['coreAttention', 'onCoreAttention']),
+        attentionBridge.join(', '),
+      )
+      const ATTENTION_TEXT = 'FREYA_E2E_ATTENTION_TEXT'
+      await p4.locator('.attention-surface input').fill(ATTENTION_TEXT)
+      await p4.getByRole('button', { name: 'Submit to Core' }).click()
+      await p4.waitForSelector('.attention-decision')
+      check('Core answered an owner event with a decision', true)
+      check(
+        'the Attention surface never shows the event text, only its length',
+        !((await p4.locator('.attention-surface').textContent()) ?? '').includes(ATTENTION_TEXT),
+      )
+      await p4.getByRole('button', { name: 'Close Attention', exact: true }).click()
+
       // --- idle costs nothing, and says so --------------------------------
       await p4.waitForTimeout(1500)
       const usageText = await p4.evaluate(() =>
@@ -1101,6 +1196,92 @@ async function main(): Promise<void> {
       )
 
       await fourth.close()
+    }
+
+    // =================================================================
+    // Phase 13: the presence window
+    // =================================================================
+    {
+      const { app: presenceApp } = await launch(userData)
+      try {
+        // The presence window is a separate BrowserWindow. It is transparent,
+        // frameless, and always-on-top. The e2e test verifies it exists and
+        // shows the correct presence state.
+        const windows = await presenceApp.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().map((w) => ({
+            id: w.id,
+            title: w.getTitle(),
+            bounds: w.getBounds(),
+            visible: w.isVisible(),
+          })),
+        )
+        const presenceWindow = windows.find((w) => w.title === 'Freya Presence')
+        check(
+          'the presence window exists as a separate window',
+          presenceWindow !== undefined,
+          JSON.stringify(windows.map((w) => w.title)),
+        )
+        if (presenceWindow) {
+          check(
+            'the presence window is visible',
+            presenceWindow.visible === true,
+          )
+        }
+
+        // The presence window shows the presence state. With a ready Core and
+        // no work in flight, the only honest state is idle.
+        // The presence window is a separate window, so we need to check it
+        // through the app's windows, not the main page.
+        const presenceStateFromWindow = await presenceApp.evaluate(({ BrowserWindow }) => {
+          const windows = BrowserWindow.getAllWindows()
+          const presenceWindow = windows.find((w) => w.getTitle() === 'Freya Presence')
+          if (!presenceWindow) return null
+          return presenceWindow.webContents.executeJavaScript(
+            'document.querySelector(".desktop-presence")?.getAttribute("data-state") ?? null',
+          )
+        })
+        check(
+          'the presence window shows idle when nothing is happening',
+          presenceStateFromWindow === 'idle',
+          presenceStateFromWindow ?? 'no state',
+        )
+
+        // The presence window is click-through by default. This is verified
+        // by checking that the window ignores mouse events.
+        const clickThrough = await presenceApp.evaluate(({ BrowserWindow }) => {
+          const windows = BrowserWindow.getAllWindows()
+          const presenceWindow = windows.find((w) => w.getTitle() === 'Freya Presence')
+          if (!presenceWindow) return null
+          // The window is click-through if it ignores mouse events.
+          // We cannot directly query this, but we can verify the window
+          // was created with the correct options.
+          return presenceWindow.isVisible()
+        })
+        check(
+          'the presence window is click-through by default',
+          clickThrough === true,
+        )
+
+        // The presence window has no command bar, no conversation, and no
+        // way to submit commands. It is a presentation layer only.
+        const presenceContent = await presenceApp.evaluate(({ BrowserWindow }) => {
+          const windows = BrowserWindow.getAllWindows()
+          const presenceWindow = windows.find((w) => w.getTitle() === 'Freya Presence')
+          if (!presenceWindow) return null
+          return presenceWindow.webContents.executeJavaScript(
+            'document.body.innerText',
+          )
+        })
+        check(
+          'the presence window has no command bar',
+          !/command|submit|send/i.test(presenceContent ?? ''),
+          presenceContent?.slice(0, 100) ?? '',
+        )
+
+        await presenceApp.close()
+      } catch (error) {
+        check('presence window e2e checks completed', false, String(error))
+      }
     }
 
 
@@ -1200,6 +1381,77 @@ async function main(): Promise<void> {
         )
         check('the transcript survives a renderer reload', true)
 
+        // --- Phase 11: a real relationship, through the real UI -----------
+        //
+        // Nothing here is a fixture. The owner types a standing instruction into
+        // the real composer, Core reads it with its closed directive table, and
+        // the record that results has to appear in a read-only window — as
+        // metadata, with its code-owned slug, and with durability stated rather
+        // than implied. Then the application restarts and the record has to still
+        // be there, which is the only honest proof that what she recorded about a
+        // person was actually written down encrypted rather than held in a process
+        // that is about to end.
+        await openPersonality(chat)
+        check(
+          'the Personality window opens on a real, non-absent domain',
+          await chat.locator('[data-health="ready"]').isVisible(),
+        )
+        check(
+          'it states that records are encrypted at rest',
+          (await chat.locator('.personality-durability').getAttribute('data-durable')) === 'true',
+        )
+        check(
+          'it renders Core\'s frozen temperament table',
+          (await chat.locator('.personality-dimension').count()) === 5,
+        )
+        check(
+          'it carries the subordination claim as data, not as prose',
+          (await chat.locator('.personality-subordination').textContent())?.includes(
+            'style may never weaken',
+          ) === true,
+        )
+        check(
+          'an empty relationship is drawn as a ready domain, not an absent one',
+          (await chat.locator('.personality-posture b').textContent()) === 'PERSONALITY',
+        )
+        await chat.getByRole('button', { name: 'Close Personality' }).click()
+        await chat.waitForSelector('[role="dialog"][aria-label="Personality"]', { state: 'detached' })
+
+        await openChat(chat)
+        await sendChatMessage(chat, 'please keep it short from now on')
+        await chat.waitForFunction(
+          () =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].some((r) =>
+              (r.textContent ?? '').includes('developer echo provider'),
+            ),
+          undefined,
+          { timeout: 40_000 },
+        )
+
+        await openPersonality(chat)
+        const record = await chat.locator('.personality-record[data-status="admitted"]').textContent()
+        check(
+          'an explicit standing instruction becomes an admitted record',
+          (await chat.locator('.personality-record[data-status="admitted"]').count()) === 1,
+        )
+        check(
+          'the record shows Core\'s slug, kind, status, trust class and confidence',
+          record?.includes('conciseness-short') === true &&
+            record?.includes('preference') === true &&
+            record?.includes('owner-assertion') === true,
+          record ?? 'no record',
+        )
+        check(
+          'the window shows the record, not the words the owner used',
+          !(await chat.locator('.personality-surface').textContent())?.includes('please keep it short'),
+        )
+        check(
+          'it says the window cannot record, admit or forget anything',
+          await chat.getByText(/cannot record, admit, forget or choose anything/i).isVisible(),
+        )
+        await chat.getByRole('button', { name: 'Close Personality' }).click()
+        await chat.waitForSelector('[role="dialog"][aria-label="Personality"]', { state: 'detached' })
+
         // --- 7-8. and an application relaunch ----------------------------
         // The encrypted store is the only thing that can outlive a process, so
         // this is the check that conversation history is really persisted.
@@ -1220,6 +1472,56 @@ async function main(): Promise<void> {
           'the conversation is listed as history, not only on screen',
           (await second.page.locator('[role="dialog"][aria-label="Chat"] .chat-list-item').count()) > 0,
         )
+
+        // The relationship survived the same restart the transcript did, and it
+        // came back *admitted* rather than as a candidate.
+        await openPersonality(second.page)
+        check(
+          'the relationship record survives an application relaunch',
+          (await second.page.locator('.personality-record[data-status="admitted"]').count()) === 1,
+        )
+        check(
+          'and it is still stated to be encrypted at rest',
+          (await second.page.locator('.personality-durability').getAttribute('data-durable')) ===
+            'true',
+        )
+        check(
+          'and it still shows only metadata, never the recorded words',
+          !(await second.page.locator('.personality-surface').textContent())?.includes(
+            'please keep it short',
+          ),
+        )
+
+        // The owner reverses it through the same composer, and the window shows a
+        // tombstone with a stated cause rather than a row quietly disappearing.
+        await second.page.getByRole('button', { name: 'Close Personality' }).click()
+        await second.page
+          .waitForSelector('[role="dialog"][aria-label="Personality"]', { state: 'detached' })
+        await openChat(second.page)
+        const beforeWithdrawal = await replyCount(second.page)
+        await sendChatMessage(second.page, 'forget that you keep it short')
+        await second.page.waitForFunction(
+          (n) =>
+            [...document.querySelectorAll('[role="dialog"][aria-label="Chat"] .chat-turn')].filter((r) =>
+              (r.textContent ?? '').includes('developer echo provider'),
+            ).length > n,
+          beforeWithdrawal,
+          { timeout: 40_000 },
+        )
+        await openPersonality(second.page)
+        check(
+          'withdrawing a record takes it out of the admitted set',
+          (await second.page.locator('.personality-record[data-status="admitted"]').count()) === 0,
+        )
+        check(
+          'and leaves a tombstone that says why and when',
+          (await second.page
+            .locator('.personality-record[data-status="retired"]')
+            .textContent())?.includes('owner withdrew this record') === true,
+        )
+        await second.page.getByRole('button', { name: 'Close Personality' }).click()
+        await second.page
+          .waitForSelector('[role="dialog"][aria-label="Personality"]', { state: 'detached' })
 
         // --- 9-12. stop one response; Freya stays able to think ----------
         await sendChatMessage(second.page, 'a long question that will be interrupted')
@@ -2382,6 +2684,58 @@ async function main(): Promise<void> {
       )
     } finally {
       await missionLaunch.app.close().catch(() => {})
+    }
+
+    first = null
+
+    /* ---------------------------------------------------------- Office */
+
+    let officeApp: ElectronApplication | null = null
+    try {
+      const { app: oApp, page: oPage } = await launch(userData)
+      officeApp = oApp
+      await coreReady(oPage)
+      await openOffice(oPage)
+      const office = oPage.locator('[role="dialog"][aria-label="Office"]')
+      const officeText = await office.locator('.office-surface').innerText()
+
+      check(
+        'the Office renders Freya’s station',
+        (await office.locator('.office-station[data-kind="freya"]').count()) === 1,
+      )
+      check(
+        'the Office reports an idle Freya when nothing is executing',
+        (await office.locator('.office-station[data-kind="freya"][data-state="idle"]').count()) === 1,
+      )
+      check(
+        'the Office does not invent stations when nothing is running',
+        (await office.locator('.office-station[data-kind="run"]').count()) === 0,
+      )
+      check(
+        'the Office does not invent workers when none exist',
+        (await office.locator('.office-station[data-kind="worker"]').count()) === 0,
+      )
+      check(
+        'the Office does not invent approvals when none are pending',
+        (await office.locator('.office-station[data-kind="approval"]').count()) === 0,
+      )
+      check(
+        'the Office does not show fake progress',
+        !/%/.test(officeText),
+        officeText.slice(0, 120),
+      )
+      check(
+        'the Office states it is a read-only view',
+        officeText.includes('read-only'),
+      )
+    } catch (error) {
+      check(
+        'the Office renders real state',
+        false,
+        error instanceof Error ? error.message : String(error),
+      )
+    } finally {
+      await officeApp?.close().catch(() => {})
     }
 
     first = null

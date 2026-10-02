@@ -2723,3 +2723,620 @@
 .context-ttl {
   color: var(--ink-3);
 }
+
+/* ------------------------------------------------------- Personality view */
+
+/* The third mirror with no controls in it, and the strictest about content:
+   this window renders relationship *metadata* and cannot show the record's
+   text even if it wanted to, because the text never crosses the bridge. No
+   button style appears below for the same reason Context has none — it renders
+   what Core reported and can put nothing back. Status words are printed as
+   Core printed them and are never recoloured by attribute, because a palette
+   that interprets `superseded` would be this lane quietly editing a vocabulary
+   it does not own. */
+.personality-surface {
+  padding: 18px 20px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  height: 100%;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.personality-absent,
+.personality-none,
+.personality-note,
+.personality-durability,
+.personality-cue {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  max-width: 68ch;
+}
+
+/* Durability sits directly under the posture strip, above every record. A
+   relationship that looks durable and is not is the worst thing this window
+   could imply, so the sentence is read before the rows rather than after. */
+.personality-durability[data-durable='false'] {
+  color: var(--gold-hi);
+}
+
+.personality-cue {
+  color: var(--gold-hi);
+}
+
+.personality-read-notice {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--gold-hi);
+}
+
+/* Posture above every section, like Workforce's and Context's: whether a
+   Personality domain exists at all is read before any record is, and "no
+   relationship record" and "an empty relationship" must not look alike. */
+.personality-posture {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+}
+
+.personality-posture[data-ready='false'] {
+  border-color: rgba(198, 150, 88, 0.34);
+}
+
+.personality-posture b {
+  font: 500 14px/1 var(--font-display);
+  letter-spacing: 0.2em;
+  color: var(--gold-hi);
+}
+
+.personality-posture span {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.personality-section h2 {
+  margin: 0 0 8px;
+  font: 400 10px/1 var(--font-display);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.personality-temperament {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.personality-dimension {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.personality-subordination,
+.personality-interpretation,
+.personality-expression {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.personality-records {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.personality-record {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------- attention */
+
+.attention-surface {
+  padding: 18px 20px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  height: 100%;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.attention-absent,
+.attention-none,
+.attention-note,
+.attention-limits {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  max-width: 68ch;
+}
+
+.attention-notice {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--gold-hi);
+}
+
+.attention-posture {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+}
+
+.attention-posture[data-ready='false'] {
+  border-color: rgba(198, 150, 88, 0.34);
+}
+
+.attention-posture b {
+  font: 500 14px/1 var(--font-display);
+  letter-spacing: 0.2em;
+  color: var(--gold-hi);
+}
+
+.attention-posture span {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.attention-section h2 {
+  margin: 0 0 8px;
+  font: 400 10px/1 var(--font-display);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.attention-section label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.attention-section input,
+.attention-section select {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  color: var(--ink-1);
+  font-size: 12px;
+}
+
+.attention-section button {
+  margin: 0 8px 8px 0;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+  color: var(--gold-hi);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.attention-decision,
+.attention-directive {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.attention-directive[data-outcome='interrupt'] {
+  color: var(--gold-hi);
+}
+
+.attention-schedules,
+.attention-inbox {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attention-schedules li,
+.attention-inbox li {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.attention-detail {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-1);
+  overflow-wrap: anywhere;
+}
+
+/* ==================================================================
+   Office
+   ================================================================== */
+
+.office-surface {
+  padding: 16px;
+  overflow-y: auto;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.office-absent,
+.office-none,
+.office-note {
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.office-posture {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+}
+
+.office-posture b {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--ink-1);
+}
+
+.office-posture span {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.office-limits {
+  color: var(--ink-3);
+}
+
+.office-floor {
+  position: relative;
+  flex-shrink: 0;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(ellipse at 50% 40%, rgba(120, 110, 90, 0.04), transparent 70%),
+    var(--glass);
+  overflow: hidden;
+}
+
+.office-station {
+  position: absolute;
+  width: 120px;
+  height: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.office-station:hover {
+  border-color: var(--ink-4);
+}
+
+.office-station[data-selected='true'] {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px var(--gold);
+}
+
+.office-station-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-1);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.office-station-state {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+
+.office-station-progress {
+  font-size: 10px;
+  color: var(--ink-2);
+}
+
+.office-station[data-state='working'] {
+  border-color: var(--green-line, #3a5a3a);
+}
+
+.office-station[data-state='working'] .office-station-state {
+  color: var(--green, #6a9a6a);
+}
+
+.office-station[data-state='locked'],
+.office-station[data-state='error'] {
+  border-color: var(--red-line, #5a3a3a);
+}
+
+.office-station[data-state='locked'] .office-station-state,
+.office-station[data-state='error'] .office-station-state {
+  color: var(--red, #9a6a6a);
+}
+
+.office-station[data-state='waiting'] {
+  border-color: var(--gold-line);
+}
+
+.office-station[data-state='waiting'] .office-station-state {
+  color: var(--gold);
+}
+
+.office-station[data-kind='freya'] {
+  border-color: var(--gold-line);
+  background: linear-gradient(135deg, rgba(180, 160, 120, 0.08), var(--glass));
+}
+
+.office-detail {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.office-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.office-detail-head b {
+  font-size: 13px;
+  color: var(--ink-1);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.office-detail-status {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+
+.office-detail-close {
+  background: none;
+  border: none;
+  color: var(--ink-3);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.office-detail-close:hover {
+  color: var(--ink-1);
+}
+
+.office-detail-reason,
+.office-detail-detail {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.office-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.office-detail-section h4 {
+  margin: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+
+.office-detail-counts {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+.office-detail-counts code {
+  font-size: 10.5px;
+  color: var(--ink-1);
+}
+
+.office-detail-active {
+  margin: 0;
+  font-size: 11px;
+  color: var(--green, #6a9a6a);
+}
+
+.office-detail-presence {
+  margin: 0;
+  font-size: 11px;
+  color: var(--gold);
+}
+
+.office-detail-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.office-button {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  color: var(--ink-1);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color 120ms ease;
+}
+
+.office-button:hover:not(:disabled) {
+  border-color: var(--ink-4);
+}
+
+.office-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.office-button-primary {
+  border-color: var(--gold-line);
+  color: var(--gold);
+}
+
+.office-button-small {
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+.office-reply {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.office-reply[data-tone='ok'] {
+  border: 1px solid var(--green-line, #3a5a3a);
+  color: var(--green, #6a9a6a);
+}
+
+.office-reply[data-tone='refused'] {
+  border: 1px solid var(--red-line, #5a3a3a);
+  color: var(--red, #9a6a6a);
+}
+
+.office-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.office-section h3 {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+}
+
+.office-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.office-history li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  font-size: 11px;
+}
+
+.office-history-kind {
+  color: var(--ink-2);
+  font-weight: 600;
+  min-width: 80px;
+}
+
+.office-history-status {
+  color: var(--ink-3);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  min-width: 70px;
+}
+
+.office-history-progress {
+  color: var(--ink-2);
+}
+
+.office-history li[data-status='failed'] .office-history-status {
+  color: var(--red, #9a6a6a);
+}
+
+.office-history li[data-status='cancelled'] .office-history-status {
+  color: var(--ink-3);
+}

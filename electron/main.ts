@@ -6,6 +6,7 @@ import { loadKeyring } from './keyring'
 import { loadLocalEnv } from './localEnv'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
+import { PresenceHost } from './presence/host'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ModelProvider } from '../core/model/provider'
 
@@ -26,6 +27,17 @@ let mainWindow: BrowserWindow | null = null
 let workspace: WorkspaceFile | null = null
 /** One Core per process. Survives renderer reloads; dies only with the app. */
 let coreHost: ElectronCoreHost | null = null
+/** The presence host. Owns the presence window and pushes frames to it. */
+let presenceHost: PresenceHost | null = null
+/**
+ * The bounded attention wake.
+ *
+ * Attention's scheduled events need a clock, and this process is the only one
+ * allowed to drive it: there is no `attention.tick` command, so a window cannot
+ * cause a schedule to fire. The interval is deliberately coarse and does no model
+ * call, no provider contact and no network access.
+ */
+let attentionTimer: ReturnType<typeof setInterval> | null = null
 /** Resolves when the renderer has answered the closing-time request. */
 let pendingCollect: (() => void) | null = null
 let quitting = false
@@ -59,15 +71,30 @@ function e2eKey(variable: string): Uint8Array | null {
  * conversation survives and the Brain does not — or the reverse — and the failure
  * would look like a Brain bug rather than a harness that only half injected.
  */
-function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array; mission: Uint8Array; context: Uint8Array } | null {
+function e2eKeys(): {
+  conversation: Uint8Array
+  brain: Uint8Array
+  mission: Uint8Array
+  context: Uint8Array
+  personality: Uint8Array
+} | null {
   const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
   const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
   const mission = e2eKey('FREYA_E2E_MISSION_KEY')
   const context = e2eKey('FREYA_E2E_CONTEXT_KEY')
-  // All four or none, so a partial fixture cannot quietly run with a real keyring for
+  const personality = e2eKey('FREYA_E2E_PERSONALITY_KEY')
+  // All five or none, so a partial fixture cannot quietly run with a real keyring for
   // the domain it forgot.
-  if (conversation === null || brain === null || mission === null || context === null) return null
-  return { conversation, brain, mission, context }
+  if (
+    conversation === null ||
+    brain === null ||
+    mission === null ||
+    context === null ||
+    personality === null
+  ) {
+    return null
+  }
+  return { conversation, brain, mission, context, personality }
 }
 
 /**
@@ -216,6 +243,12 @@ function collectWorkspaceAndThen(finish: () => void): void {
  * app from quitting — a user who asked to quit gets to quit.
  */
 function shutdownCoreAndThen(finish: () => void): void {
+  if (attentionTimer !== null) {
+    clearInterval(attentionTimer)
+    attentionTimer = null
+  }
+  presenceHost?.stop()
+  presenceHost = null
   collectWorkspaceAndThen(() => {
     void (coreHost?.stop('app quitting') ?? Promise.resolve())
       .catch((error: unknown) => {
@@ -380,6 +413,37 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:context', projection)
   })
 
+  // Personality is a ninth channel, and the smallest of them: temperament,
+  // relationship *metadata* and one optional cue for Presence to draw. What
+  // does not cross is the point of it — no recorded text, no tags, no admission
+  // reason, no guidance line, no key and no path — so a window can show what
+  // Core knows about the relationship without holding what the relationship
+  // says. Nothing here writes: the channel has no counterpart that carries a
+  // payload toward Core.
+  const detachPersonality = coreHost?.onPersonality((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:personality', projection)
+  })
+
+  // Attention is a tenth channel: counts, the focus reading Core derived, the last
+  // decision as metadata and at most one cue. The event's text does not cross —
+  // only its measured length — and nothing here decides anything. Core's bounded
+  // scheduler is ticked by this process, not by a window, so a renderer cannot
+  // drive the clock.
+  const detachAttention = coreHost?.onAttention((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:attention', projection)
+  })
+
+  // The Office is an eleventh channel, and the one whose whole content is
+  // derived: Freya's station, live run stations, worker stations, approval
+  // stations and the history timeline. What does not cross is the point of it —
+  // no step input, no observation content, no message body, no task title, no
+  // mission text, no authority, no capability instance. A window can see what
+  // is happening and where; it cannot reach the substance of the work or the
+  // agents, and it cannot invent either.
+  const detachOffice = coreHost?.onOffice((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:office', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -389,6 +453,9 @@ function createWindow(): BrowserWindow {
     detachMission?.()
     detachWorkforce?.()
     detachContext?.()
+    detachPersonality?.()
+    detachAttention?.()
+    detachOffice?.()
   })
 
   if (DEV_SERVER) {
@@ -428,6 +495,29 @@ function createWindow(): BrowserWindow {
   })
 
   return window
+}
+
+/** Start a Presence companion for this dashboard window and prime it from Core. */
+function startPresenceFor(window: BrowserWindow): void {
+  window.once('ready-to-show', () => {
+    if (window.isDestroyed()) return
+    presenceHost?.stop()
+    const next = new PresenceHost({
+      displayNumber: requestedDisplayNumber(),
+      dev: Boolean(DEV_SERVER),
+    })
+    presenceHost = next
+    next.start(window)
+
+    const host = coreHost
+    if (host !== null) {
+      next.updateCore(host.status())
+      next.updateAttention(host.attention())
+      next.updateWork(host.work())
+      next.updatePersonality(host.personality())
+      next.updateVoice(host.voice())
+    }
+  })
 }
 
 /* ------------------------------------------------------------------ *
@@ -474,6 +564,27 @@ function registerIpc(): void {
   // context command — a window cannot put context *in*, because Context
   // authority is Core's to hold inside itself, not this bridge's to lend.
   ipcMain.handle('freya:core:context', () => requireCore().context())
+  // The Personality projection, same bargain, tighter still: a read of what
+  // Core reported, `null` until a Core has started, and no handle to a source,
+  // a record or a cue behind it. There is deliberately no
+  // `freya:core:personality:write` and no `personality.*` command — a window
+  // cannot file a preference, record a habit or declare an inside joke, because
+  // relationship truth is Core's to hold and this bridge lends none of it.
+  ipcMain.handle('freya:core:personality', () => requireCore().personality())
+  // The Attention projection, same bargain as every other channel: a read of what
+  // Core reports. There is deliberately no `freya:core:attention:write` and no
+  // `attention.tick` command — a window cannot decide, spend a budget, bypass a
+  // cooldown or drive the scheduler.
+  ipcMain.handle('freya:core:attention', () => requireCore().attention())
+  // The Office projection, same bargain as every other channel: a read of what
+  // Core reports. The Office is a pure function of real Work/Workforce/Core
+  // state, so what crosses is exactly what Core derived — stations, counts,
+  // history and pending presence requests. There is deliberately no
+  // `freya:core:office:write` and no office command that invents a station,
+  // inflates a count or fabricates a percentage. The one Office command that
+  // writes, `office.presence.request`, goes through `freya:core:submit` like
+  // every other command — it is validated and journalled in Core, not here.
+  ipcMain.handle('freya:core:office', () => requireCore().office())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)
@@ -513,6 +624,7 @@ app.whenReady().then(() => {
         brain: { key: testKeys.brain, reason: null as string | null },
         mission: { key: testKeys.mission, reason: null as string | null },
         context: { key: testKeys.context, reason: null as string | null },
+        personality: { key: testKeys.personality, reason: null as string | null },
       })
     : loadKeyring(dataPath)
   void keyResult.then((result) => {
@@ -533,6 +645,15 @@ app.whenReady().then(() => {
       // Same shape as the Brain's: Missions still work for this session, and the
       // surface reports `durable: false` rather than implying persistence it lacks.
       console.warn(`[freya] Missions are not being saved — ${result.mission.reason}`)
+    }
+    if (result.personality.key === null) {
+      // The one domain whose absence changes behaviour and not only durability.
+      // Without a durable store the cue ledger cannot be trusted, so Core refuses
+      // anti-repetition memory outright and offers no expression guidance at all —
+      // which is correct: an empty ledger would re-offer the same gesture forever.
+      console.warn(
+        `[freya] what Freya records about you will not survive a restart, and she will not reuse gestures — ${result.personality.reason}`,
+      )
     }
     const fixtureProvider = e2eResearchFixtureProvider(process.env)
     coreHost = new ElectronCoreHost(
@@ -558,6 +679,7 @@ app.whenReady().then(() => {
         brainKey: result.brain.key,
         missionKey: result.mission.key,
         contextKey: result.context.key,
+        personalityKey: result.personality.key,
         // Explicit host setting; own-app sees only Freya. System is honestly unsupported.
         ...(['own-app', 'system'].includes(process.env.FREYA_CONTEXT_WINDOW_OBSERVATION ?? '') ? {
           windowObservation: {
@@ -580,6 +702,15 @@ app.whenReady().then(() => {
     )
     registerIpc()
     mainWindow = createWindow()
+    startPresenceFor(mainWindow)
+
+    // Wire the presence host to Core projections. The presence host receives
+    // the same projections as the main window, but it only forwards them to
+    // the presence window — it never interprets them.
+    coreHost?.attach((status) => presenceHost?.updateCore(status))
+    coreHost?.onAttention((projection) => presenceHost?.updateAttention(projection))
+    coreHost?.onWork((projection) => presenceHost?.updateWork(projection))
+    coreHost?.onPersonality((projection) => presenceHost?.updatePersonality(projection))
 
     // Deliberately not awaited before the window opens: a slow or unwritable log
     // should degrade Core, not hold the app off the screen. A window created
@@ -587,10 +718,22 @@ app.whenReady().then(() => {
     void coreHost.start().catch((error: unknown) => {
       console.error('[freya] core failed to start', error)
     })
+    // The bounded attention wake. Coarse on purpose, and the only timer that
+    // exists for attention; it makes no model call and reaches no provider.
+    if (attentionTimer === null) {
+      attentionTimer = setInterval(() => {
+        void coreHost?.attentionTick().catch((error: unknown) => {
+          console.error('[freya] attention tick failed', error)
+        })
+      }, 30_000)
+    }
   })
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()
+    if (mainWindow === null || mainWindow.isDestroyed()) {
+      mainWindow = createWindow()
+      startPresenceFor(mainWindow)
+    }
   })
 })
 
@@ -649,9 +792,11 @@ let voiceCaptureOpen = false
 function trackVoiceCapture(envelope: CoreCommandEnvelope, result: { ok: boolean }): void {
   if (envelope.command === 'voice.capture.start') {
     voiceCaptureOpen = result.ok
+    presenceHost?.updateVoice(requireCore().voice())
     return
   }
   if (envelope.command === 'voice.capture.end' || envelope.command === 'voice.capture.cancel') {
     voiceCaptureOpen = false
+    presenceHost?.updateVoice(requireCore().voice())
   }
 }

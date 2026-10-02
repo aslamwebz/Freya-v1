@@ -1,4 +1,16 @@
 import type { CognitionCause, CognitionOrigin, PrincipalId } from '../protocol/core-protocol'
+import type {
+  AttentionCondition,
+  AttentionCueCode,
+  AttentionEventKind,
+  AttentionOutcome,
+  AttentionReason,
+  AttentionSource,
+  FocusState,
+  ImportanceLevel,
+  SeverityHint,
+  UrgencyLevel,
+} from '../attention/types'
 
 /**
  * The durable Core event envelope.
@@ -92,6 +104,23 @@ export const CORE_EVENT_TYPES = [
   'brain.world.observed',
   'brain.experience.recorded',
   'brain.degraded',
+
+  // Personality & Relationship — metadata only, on the Brain's terms.
+  //
+  // Relationship records are the most personal thing Freya holds: facts about a
+  // person, their preferences, their habits, the shorthands they share. The
+  // journal is the place least able to keep a secret — it is read, copied, exported
+  // into backups and forwarded to whoever is debugging — so these carry an id, a
+  // code-owned slug, closed kind and status labels, the trust class Core assigned,
+  // counters, and a *closed* lifecycle reason.
+  //
+  // There is deliberately no payload field for the recorded text, for the owner's
+  // clause that matched, or for a free-text reason of any kind. That is a property
+  // of the payload type rather than of anyone's care: an audit reader can see that
+  // a record was admitted, superseded, withdrawn or retired, and can see the trust
+  // class it carries, without this file ever holding a word the person said.
+  'personality.record_changed',
+  'personality.degraded',
 
   // Research (Phase 5) — metadata only.
   //
@@ -248,6 +277,36 @@ export const CORE_EVENT_TYPES = [
   /** A worker was authorised to think, and this is what it reserved. */
   'workforce.cognition.recorded',
   'workforce.limit.exceeded',
+
+  // Attention (Phase 12) — metadata only, and the family where "do nothing" is a
+  // first-class outcome rather than an absence.
+  //
+  // An attention event describes *that an authorized source delivered something*
+  // and *what Core decided about it*. There is no slot for the event's text: the
+  // text is process-local data, never written here, and comes back only from an
+  // explicit owner detail read. Every field is an id, a closed label, an instant or
+  // a measured length.
+  //
+  // None of these is a security event. A decision cannot grant cognition, clear a
+  // stop or widen a permission, and a budget that ran out says nothing about the
+  // authority to run anything — the same argument that keeps `work.*` and
+  // `brain.degraded` out of `SECURITY_EVENT_TYPES`.
+  'attention.event.ingested',
+  'attention.decision.made',
+  'attention.budget.exceeded',
+  'attention.schedule.registered',
+  'attention.schedule.fired',
+  'attention.schedule.cancelled',
+
+  // Office (Phase 14) — the bounded record of a presence request.
+  //
+  // A request is not a command to Presence. It carries a workerId and nothing
+  // else: no principal, no authority, no capability, no expression. Whether
+  // and how the agent appears on the desktop is a Presence concern (Phase 13),
+  // and these events have no field that could influence it. The Office can
+  // ask, and it can show that it asked, and it can do nothing else.
+  'office.presence.requested',
+  'office.presence.fulfilled',
 ] as const
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number]
@@ -615,6 +674,40 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
    * in the security stream would let a disk error masquerade as a safety posture.
    */
   'brain.degraded': { reason: string }
+
+  // Personality & Relationship. Metadata only, and the exact-key check in
+  // `validate.ts` is what keeps it that way: a hand-edited line cannot smuggle a
+  // recorded text, an owner's clause or a sentence into a payload whose schema has
+  // no slot for one.
+  'personality.record_changed': {
+    operation: 'admitted' | 'rejected' | 'withdrawn' | 'retired' | 'superseded'
+    itemId: string
+    kind: 'fact' | 'preference' | 'habit' | 'catchphrase' | 'inside-joke'
+    /** A code-owned slug. Never a sentence — `isSlug` is checked on recovery. */
+    key: string
+    sourceType:
+      | 'owner-assertion'
+      | 'system-observation'
+      | 'experience-outcome'
+      | 'freya-inference'
+      | 'model-inference'
+      | 'external-untrusted'
+      | 'imported-document'
+    confidence: 'unknown' | 'low' | 'medium' | 'high'
+    lifecycleReason:
+      | 'owner-withdrew-this-record'
+      | 'owner-rejected-this-record'
+      | 'superseded-by-a-newer-record'
+      | 'retention-bound-reached'
+      | null
+    admitted: number
+    retained: number
+  }
+  'personality.degraded': {
+    reason: string
+    mode: 'encrypted' | 'ephemeral'
+    durable: false
+  }
 
   /* ------------------------------------------------------------- research */
 
@@ -1088,6 +1181,95 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
   'workforce.limit.exceeded': {
     workerId: string
     limit: string
+  }
+
+  /* ------------------------------------------------------------- attention */
+
+  /**
+   * An authorized source delivered an event.
+   *
+   * `dedupeKey` is the stable key replay uses: derived from the source's own
+   * `sourceRef` when it has one, so a re-delivered event is recognised across a
+   * restart. `textLength` is a measurement — the text is not here and never will
+   * be. `source` is assigned by Core and is not a value a payload can supply.
+   */
+  'attention.event.ingested': {
+    eventId: string
+    dedupeKey: string
+    source: AttentionSource
+    kind: AttentionEventKind
+    goalRef: string | null
+    textLength: number
+    severityHint: SeverityHint
+    occurredAt: string
+    dueAt: string | null
+  }
+
+  /**
+   * Core reached a decision about one event.
+   *
+   * Every field is a closed label. `do-nothing` is written here like any other
+   * outcome, because a decision not to act is a decision and a journal that only
+   * recorded the loud ones would misrepresent how often Freya stays quiet.
+   */
+  'attention.decision.made': {
+    decisionId: string
+    eventId: string
+    source: AttentionSource
+    kind: AttentionEventKind
+    goalRef: string | null
+    outcome: AttentionOutcome
+    importance: ImportanceLevel
+    urgency: UrgencyLevel
+    reason: AttentionReason
+    cueCode: AttentionCueCode | null
+    focus: FocusState
+  }
+
+  /** A code-owned ceiling demoted an outcome. Recorded so a restart cannot hide it. */
+  'attention.budget.exceeded': {
+    source: AttentionSource
+    goalRef: string | null
+    limit: string
+    observed: number
+  }
+
+  /**
+   * A schedule was registered.
+   *
+   * Metadata only, like everything else here. The schedule's text is process-local;
+   * a schedule recovered from the journal after a restart therefore cannot fire and
+   * is cancelled with a stated reason instead.
+   */
+  'attention.schedule.registered': {
+    scheduleId: string
+    kind: AttentionEventKind
+    goalRef: string | null
+    severityHint: SeverityHint
+    dueAt: string
+    intervalMs: number | null
+    maxRepeats: number
+    condition: AttentionCondition
+  }
+
+  /** A due schedule fired. One event, one fact; the resulting ingest follows. */
+  'attention.schedule.fired': {
+    scheduleId: string
+    eventId: string
+    repeats: number
+  }
+
+  'attention.schedule.cancelled': {
+    scheduleId: string
+    reason: string
+  }
+
+  'office.presence.requested': {
+    workerId: string
+  }
+
+  'office.presence.fulfilled': {
+    workerId: string
   }
 }
 

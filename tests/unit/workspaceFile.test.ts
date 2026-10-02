@@ -173,10 +173,19 @@ describe('WorkspaceFile — the debounced path', () => {
       file.schedule({ schema: 1, nav: `nav-${i}`, filler: 'y'.repeat(2000) })
       await new Promise((resolve) => setTimeout(resolve, 3))
     }
-    // Give the chain time to drain, then confirm the file is valid JSON.
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    const raw = await readFile(path, 'utf8')
-    expect(() => JSON.parse(raw)).not.toThrow()
+    // Observe every published document until the final scheduled payload lands.
+    // The file may legitimately contain nav-0, nav-1, ... while the serial queue
+    // drains; what must never happen is a malformed/interleaved document, and the
+    // queue must eventually publish the newest value.
+    const deadline = Date.now() + 10_000
+    let raw = await waitForFile(path, 10_000)
+    for (;;) {
+      expect(() => JSON.parse(raw)).not.toThrow()
+      if (JSON.parse(raw).nav === 'nav-11') break
+      if (Date.now() > deadline) throw new Error('timed out waiting for final workspace write')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      raw = await readFile(path, 'utf8')
+    }
     expect(JSON.parse(raw).nav).toBe('nav-11')
   })
 

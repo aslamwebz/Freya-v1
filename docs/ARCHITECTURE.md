@@ -382,7 +382,7 @@ Rules:
 **Not persisted:** dashboard demo fixtures, the presence canvas, transient
 animation values. They are derived, not stored.
 
-### 4.2 Three encrypted stores, three secrets
+### 4.2 Five encrypted stores, five secrets
 
 Everything a person tells Freya is written to disk encrypted, in **separate
 stores**, each with its own 256-bit secret and each wrapped separately by the OS
@@ -391,27 +391,40 @@ secure storage:
 ```
   conversation  256-bit random  ─┐
   brain         256-bit random  │     each wrapped separately
-  mission       256-bit random  ─┘     (DPAPI / Keychain / libsecret)
+  mission       256-bit random  │     (DPAPI / Keychain / libsecret)
+  context       256-bit random  │
+  personality   256-bit random  ─┘
 ```
 
 Phase 7 added `mission` for a Mission's title, intent and success criteria — what
 somebody asked Freya to accomplish, in their words. That is as private as a
-conversation, so it gets the same isolation rather than sharing a secret.
+conversation, so it gets the same isolation rather than sharing a secret. Phase 9
+added `context` for what a person deliberately shared, and Phase 11 added
+`personality` for what Freya has recorded *about* them: their preferences, their
+habits, the shorthands they share. That last one is the most intimate thing this
+system holds, which makes it the last that should be one key-compromise away from
+the conversation log.
 
-A keyring written before Phase 7 has two domains and is **upgraded**, not rejected:
-the third secret is generated and the file rewritten with all three, preserving the
-existing two byte-for-byte. That rewrite is only attempted when every secret already
+A keyring written before a domain existed is **upgraded**, not rejected: the new
+secret is generated and the file rewritten with the complete set, preserving the
+existing ones byte-for-byte. That rewrite is only attempted when every secret already
 in the file has been unwrapped — a keyring this process cannot open is left exactly
-as found, and Missions report memory-only instead. Those two keys hold people's
-conversations and their own long-term memory, and there is no second copy, so a
-rewrite that failed halfway would be unrecoverable rather than inconvenient. The
-write is temp-file plus rename for the same reason.
+as found, and the new domain reports memory-only instead. Those keys hold people's
+conversations, their own long-term memory and their relationship history, and there
+is no second copy, so a rewrite that failed halfway would be unrecoverable rather
+than inconvenient. The write is temp-file plus rename for the same reason.
+
+`personality` is also the one domain whose **absence changes behaviour** rather than
+only durability. Without it, the anti-repetition ledger cannot be trusted across a
+restart, so Core refuses it outright and offers no expression guidance at all —
+rather than offering guidance from a memory that would re-offer the same gesture
+forever. See [PHASE-11.md](PHASE-11.md).
 
 Independent secrets rather than one root with derived subkeys, and that is a
 deliberate trade. Deriving is tidier to manage, but recovering a root yields
 *every* domain at once — so "the conversation key leaked" stops being a bounded
-problem and becomes "Freya's entire memory leaked". Three secrets cost a migration
-and buy back a blast radius of one. The Brain is the longest-lived, most valuable
+problem and becomes "Freya's entire memory leaked". Five secrets cost four
+migrations and buy back a blast radius of one. The Brain is the longest-lived, most valuable
 state in the system, so it is the last thing that should be one key-compromise
 away from the conversation log.
 
@@ -533,7 +546,8 @@ The intended shape, stated so the seams can be checked against it:
 | Work (runs, tasks, approvals) | **built in Phase 6** — a `work.*` event family, a `WorkEngine`, and a `work` surface | a store, a persistence path, or the journal knowing what a step is |
 | Searcher | a `searcher.*` event family + a surface registry entry | a second window implementation |
 | Missions | **built in Phase 7** — a `mission.*` event family, a `MissionEngine`, an encrypted content store with its own key, and a `mission` surface | a store for Work, or the journal knowing what a Mission is |
-| Workforce | **Core landed in Phase 8** — a `workforce.*` event family, a `WorkforceEngine`, and two authority objects; the `workforce` surface and its protocol commands are the integration lane | agents running in the renderer, or a worker reaching a grant |
+| Context (what was shared, what "here" means) | **built in Phase 9** — Core-owned integration, an encrypted store with its own key, and a read-only `context` surface | OS-wide screen capture, or a context command a window can name |
+| Personality (temperament, relationship, expression) | **built in Phase 11** — a `personality.*` event family, a Core-owned `PersonalityIntegration`, an encrypted store with its own key, and a read-only `personality` surface | a `personality.*` command a window can name, or a way for a record to grant anything |
 | Workforce | **built in Phase 8** — a `workforce.*` event family, a `WorkforceEngine`, and two authority objects that keep the subordinate relationship a type rather than a convention | agents running in the renderer |
 | Harness | surfaces that request a PTY from the main process | the renderer owning process handles |
 | Vault (files, Obsidian-compatible import) | **the `vault` surface is now the Brain**; a file-backed vault is a *future* capability-scoped access path | direct fs from the renderer |
@@ -997,6 +1011,55 @@ provider in `core/workforce/`. An assignment's deadline is a *wall*, discovered 
 reconciliation rather than watched, exactly as a Mission's lifetime is.
 
 Full detail is in [PHASE-8.md](PHASE-8.md).
+
+### 6.7 Attention: code decides, and "do nothing" is a decision
+
+Phase 12 added events and attention. The rule it is written around is the one a
+"smart notifications" feature is most tempted to break:
+
+> **The score, the budget, the cooldown and the outcome are code. An event's text
+> is data the policy never reads.**
+
+```
+  authorized source (owner · mission · work · research · context · system)
+        │  source is assigned by Core, never read from a payload
+        ▼
+  AttentionEngine.ingest
+        │  sanitize → bound → dedupe → append attention.event.ingested
+        ▼
+  decideAttention            closed tables: kind → importance/urgency,
+        │                    capped by source class; a hint raises at most one level
+        │  demote only: STOP ALL > rate limit > focus > cooldown > budget
+        ▼
+  do-nothing · remember · subtle-cue · speak · interrupt
+        │
+        ├── attention.decision.made  (always, including do-nothing)
+        └── one directive, a code-owned cue label, for Presence
+```
+
+Four properties, each a test rather than a comment:
+
+- **An untrusted payload cannot forge urgency.** The source is a parameter, not a
+  field; the score is a closed table capped by source class; only `system` can reach
+  `critical`; and `interrupt` requires a genuinely urgent due time or kind. A
+  `severityHint` raises importance by at most one level and cannot interrupt alone.
+- **A storm cannot become a stream of interruptions.** A per-source ingest rate and
+  a code-owned interruption budget (across all sources, per source and per goal)
+  demote every outcome past the ceiling; a cooldown after an interrupt is absolute,
+  so a forged urgency cannot jump it.
+- **Attention spends nothing and mints nothing.** `core/attention/` imports no
+  gateway, provider, authority or cognition module. A red-team test reads the domain
+  source and refuses such an import, and the fake provider's call count stays zero
+  through any amount of traffic.
+- **Replay does not repeat a decision.** Decisions live in the journal, so replay
+  folds them; a re-delivered event is recognised by a dedupe key derived from the
+  source's own reference and appends nothing.
+
+The bounded wake is the one timer attention has, and it is driven by the
+composition root — there is no `attention.tick` command, so a renderer cannot make
+a schedule fire. The focus reading uses only state Core already held (a provider
+call in flight, a Run executing); no screen, keystroke, accessibility tree or model
+is read. Full detail is in [PHASE-12.md](PHASE-12.md).
 
 ---
 

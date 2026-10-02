@@ -2,6 +2,8 @@ import type { AnyCoreEvent } from './events/envelope'
 import { emptyGrantUsage, type CognitionGrant, type CognitionGrantUsage } from './cognition/grants'
 import { accumulateAttempt, accumulateReported, accumulateUsage, emptyUsage, withdrawAttempt } from './model/usage'
 import type { ModelUsage, PrincipalId } from './protocol/core-protocol'
+import { initialAttentionState, reduceAttention, type AttentionState } from './attention/state'
+import { initialOfficeState, reduceOfficeState, type OfficeState } from './office/state'
 
 /**
  * Everything Core knows, derived from durable events.
@@ -60,6 +62,21 @@ export interface CoreState {
    * instant before a stop arrived.
    */
   pendingRequests: string[]
+  /**
+   * Attention's folded state: dedupe keys, recent decisions, ingest instants and
+   * schedules. Derived from `attention.*` events like everything else, so budgets,
+   * cooldowns and dedupe survive a restart without a second store.
+   */
+  attention: AttentionState
+  /**
+   * The Office's folded state: the bounded set of pending presence requests.
+   *
+   * The Office owns almost nothing — its stations, history and layout are pure
+   * functions of the Work, Workforce and status projections. The one thing it
+   * owns is the set of requests the owner made for an agent to join the desktop
+   * Presence, journalled as `office.presence.requested` and replayed here.
+   */
+  office: OfficeState
 }
 
 /** A `core.integrity_fault` as recovered from the journal. */
@@ -82,6 +99,8 @@ export function initialCoreState(): CoreState {
     faults: [],
     integrityFault: null,
     pendingRequests: [],
+    attention: initialAttentionState(),
+    office: initialOfficeState(),
   }
 }
 
@@ -303,6 +322,19 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
     }
 
     default:
+      // Attention owns its own slice and its own reducer. Delegating here keeps
+      // `reduceCoreState` from growing a case per attention event while leaving a
+      // single fold that replay and live operation both run.
+      if (event.type.startsWith('attention.')) {
+        const attention = reduceAttention(state.attention, event)
+        return attention === state.attention ? state : { ...state, attention }
+      }
+      // The Office owns its slice for the same reason: one fold, one reducer per
+      // subsystem, and no case per office event here.
+      if (event.type.startsWith('office.')) {
+        const office = reduceOfficeState(state.office, event)
+        return office === state.office ? state : { ...state, office }
+      }
       return state
   }
 }

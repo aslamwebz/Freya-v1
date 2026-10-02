@@ -89,28 +89,74 @@ relationship habits/inside jokes and model-independent personality evaluation.
 
 The Constitution remains above personality.
 
-## Phase 12 — Events and Attention
+Phase 11 implementation and final acceptance gates are complete. Production
+assembly owns the relationship lifecycle end to end: a closed directive table
+reads the owner's own message and is the only admission path, records are
+encrypted at rest under a fifth independent key, withdrawal destroys the text and
+leaves a tombstone that says why and when, and bounded retention is deterministic
+and reported rather than silent. Recovered records and the anti-repetition ledger
+feed the Mind's single existing provider call; a degraded store serves *no*
+expression guidance rather than guidance with a reset memory. The read-only
+surface states durability above the records it shows. On 2026-10-02 the full
+verification gate passed: 2,779 tests, typecheck, lint, build and 201 desktop
+checks, of which 15 drive a real relationship through the real UI across a real
+application relaunch.
+See [PHASE-11.md](PHASE-11.md) for ownership, provenance, the cannot-weaken
+ordering and verification details.
 
-Authorized event ingestion, importance/urgency, interruption budgets, cooldown,
-focus awareness, scheduled/conditional attention and outcomes: remember, subtle
-cue, speak or interrupt. "Do nothing" is a valid outcome.
+One boundary is named rather than buried: the admission table is narrow, so a
+preference that does not fit one of its shapes produces an empty relationship
+rather than a wrong one. Widening it honestly needs an owner-facing command, which
+needs a door this phase deliberately does not have — see PHASE-11.md.
 
-## Phase 13 — Desktop Presence
+## Phase 12 — Events and Attention (Core landed)
 
-Prototype with Electron/Three.js first: transparent frameless character window,
-dragging, click-through, animations, voice, contextual cards, monitor placement
-and dashboard transitions.
+Authorized event ingestion, code-owned importance/urgency, interruption budgets,
+cooldown, focus awareness, scheduled/conditional attention and outcomes: remember,
+subtle cue, speak or interrupt. "Do nothing" is a valid, well-tested outcome.
 
-Presence consumes a platform-neutral protocol so a future native/Godot renderer can
-replace it without moving Core.
+The score, the budget, the cooldown and the outcome are closed Core tables; an
+event's text is data the policy never reads. Ingestion is only through authorized
+sources, and a renderer cannot name its own source, set an importance, decide an
+outcome, spend an interruption budget or drive the scheduler. No attention decision
+can mint a capability, clear STOP ALL or reach a model.
 
-## Phase 14 — Office
+What was built, and what was left out on purpose, is recorded in
+[PHASE-12.md](PHASE-12.md). The short version: this phase built the attention
+decision, not a notification centre with opinions. A native/connector event source
+is Phase 16's Relay boundary; OS-wide focus sensing remains unsupported; and voice
+delivery of `speak`/`interrupt` is a Presence concern, not this phase's.
+
+
+## Phase 13 — Desktop Presence (done)
+
+Transparent frameless presence window with click-through, bounded animations,
+voice seam, contextual cards and monitor-aware placement. Presence consumes a
+platform-neutral protocol so a future native/Godot renderer can replace it
+without moving Core.
+
+What was built, and what was left out on purpose, is recorded in
+[PHASE-13.md](PHASE-13.md). The short version: this phase built the presence
+presentation layer, not a synthetic character with feelings. A real synthesis
+engine and a real transcription engine are future phases; thinking as a
+distinct state is a future phase; a native/Godot renderer is a future phase.
+
+## Phase 14 — Office (Core landed)
 
 A truthful spatial view of real Work/Workforce state. Freya and agents work only
 when actual Runs/Steps exist. The user can inspect, redirect and cancel. Agents may
 join desktop Presence on request.
 
-No decorative fake work.
+Every station corresponds to one real thing Core owns. No idle animation, no fake
+progress, no phantom workers and no decorative activity. Redirect and cancel go
+through the existing authorized Core commands; the only Office-specific command is
+the bounded presence request.
+
+What was built, and what was left out on purpose, is recorded in
+[PHASE-14.md](PHASE-14.md). The short version: the Office is a read-only spatial
+projection, not a simulation. It owns no action authority, makes no model calls and
+invents nothing. Presence consumption (Phase 13) reads the journaled request; the
+Office does not assume any Phase 13 implementation detail.
 
 ## Phase 15 — Foundry
 

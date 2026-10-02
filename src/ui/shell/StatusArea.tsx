@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 import { PRESENCE_TONE } from '../../core/presence'
+import { usePersonality } from '../../core/usePersonality'
+import { useAttention } from '../../core/useAttention'
+import { projectionAttentionCueLine, projectionCueLine } from '../../presence/expressionCue'
 import { useShell } from '../store'
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
@@ -9,6 +12,16 @@ export function StatusArea() {
   const [now, setNow] = useState(() => new Date())
   const presence = useShell((s) => s.presence.state)
   const runtime = useShell((s) => s.runtime)
+  const personality = usePersonality()
+  // The one expression cue Core offered this turn, or nothing. A held cue and
+  // an absent domain both answer null, so this line never invents a gesture —
+  // and its words come from a closed table this file does not write.
+  const cue = projectionCueLine(personality)
+  const attention = useAttention()
+  // The one attention gesture Core decided to draw, or nothing. The label and
+  // outcome are Core's own; the event text never crosses, so this cannot show
+  // what happened — only that Core chose to draw attention to it.
+  const attentionCue = projectionAttentionCueLine(attention)
   const tone = PRESENCE_TONE[presence]
 
   useEffect(() => {
@@ -27,6 +40,18 @@ export function StatusArea() {
         <span className="status-dot" style={{ background: tone.accent, color: tone.accent }} />
         {tone.label}
       </div>
+
+      {cue === null ? null : (
+        <span className="status-cue" title="Expression cue offered by Core">
+          {cue}
+        </span>
+      )}
+
+      {attentionCue === null ? null : (
+        <span className="status-cue" data-kind="attention" title="Attention cue decided by Core">
+          {attentionCue}
+        </span>
+      )}
 
       <span className="sr-only">
         Freya {runtime.version}, {runtime.platform}

@@ -287,13 +287,19 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   office: {
     type: 'office',
     title: 'Office',
-    summary: 'A spatial view of live state. Not implemented yet.',
+    // No longer a placeholder. The window renders the Office projection Core
+    // actually reports — Freya's station, live run stations, worker stations,
+    // approval stations and the history timeline. A placeholder here would
+    // understate the build; a populated frame with invented stations would be
+    // worse than either, because nothing here may be simulated.
+    summary:
+      'A truthful spatial view of real Work and Workforce state: Freya’s station, live runs, workers, pending approvals and history. Every station is a real thing Core owns — nothing is invented, animated or decorative.',
     width: 820,
     height: 580,
     minWidth: 480,
     minHeight: 360,
     instance: 'singleton',
-    status: 'placeholder',
+    status: 'working',
   },
   security: {
     type: 'security',

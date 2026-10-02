@@ -477,6 +477,25 @@ export type CoreCommandName =
   | 'attention.schedule.register'
   | 'attention.schedule.cancel'
   | 'attention.inbox.read'
+  /* --------------------------------------------------------------- office */
+  /**
+   * Phase 14. The Office: a truthful spatial view of real Work/Workforce state.
+   *
+   * `office.status.read` is a payloadless read of the Office projection —
+   * Freya's station, live run stations, worker stations, approval stations and
+   * the history timeline. It carries no payload, and it is ungated like
+   * `work.status.read`: knowing what is happening in the office is the owner's
+   * own business.
+   *
+   * `office.presence.request` asks that an agent join the desktop Presence.
+   * It takes a `workerId` and nothing else — no principal, no authority, no
+   * capability, no expression. Core validates the worker exists, journals the
+   * request as metadata, and the Office reports it as pending. Whether and how
+   * the agent appears is a Presence concern (Phase 13); the Office can ask and
+   * show that it asked, and it can do nothing else.
+   */
+  | 'office.status.read'
+  | 'office.presence.request'
 
 export interface CoreCommandEnvelope {
   command: CoreCommandName
@@ -616,6 +635,35 @@ export interface CoreCommandResult {
    * than a second copy of the state.
    */
   attention?: AttentionCommandOutcome
+
+  /**
+   * The Office view of an office command's result.
+   *
+   * Its own slot for the same reason every other subsystem's exists: whether
+   * Core answered an office read, or accepted or refused a presence request,
+   * is a fact about the Office and must never have to be dug out of a security
+   * projection. The projection itself arrives on its own channel — see
+   * `office.status.read` and the Office mirror — so this slot carries the
+   * *outcome* of one command rather than a second copy of the office.
+   */
+  office?: OfficeCommandOutcome
+}
+
+/**
+ * What an Office command produced.
+ *
+ * `status` is the payloadless read. `presence-requested` means Core validated
+ * the worker exists and journalled the request. `refused` covers every way the
+ * request can be declined: no such worker, a malformed id, a full request set.
+ */
+export interface OfficeCommandOutcome {
+  operation: 'status' | 'presence-requested' | 'refused'
+  ok: boolean
+  reason?: string
+  /** The worker whose presence was requested, when the command was understood. */
+  workerId?: string
+  /** The durable sequence of the journalled request, when one was written. */
+  durableSequence?: number
 }
 
 /**

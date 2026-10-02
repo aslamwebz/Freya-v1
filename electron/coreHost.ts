@@ -9,6 +9,7 @@ import type { WorkforceProjection, WorkforceSource } from '../core/protocol/work
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
+import type { OfficeProjection } from '../core/office/projection'
 import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
 import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
@@ -339,6 +340,18 @@ export interface CoreHost {
   onAttention(send: (projection: AttentionProjection) => void): () => void
   attention(): AttentionProjection | null
   /**
+   * Attach to the Office projection. Returns a disposer.
+   *
+   * Its own channel like every subsystem's, and the note that matters is what
+   * is *not* here: the host cannot invent a station, inflate a count or
+   * fabricate a percentage. It reads a projection and forwards it. What a
+   * window receives is Core's report — Freya's station, live run stations,
+   * worker stations, approval stations and the history timeline — and this
+   * host is a forwarding box, not a second author of any of it.
+   */
+  onOffice(send: (projection: OfficeProjection) => void): () => void
+  office(): OfficeProjection | null
+  /**
    * Evaluate due attention schedules. The bounded wake, driven by the composition
    * root. Performs no model call and no provider contact; it only fires schedules
    * already due whose condition holds against state Core already has.
@@ -463,6 +476,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
   private readonly personalityWindows = new Set<(projection: PersonalityProjection) => void>()
   private readonly attentionWindows = new Set<(projection: AttentionProjection) => void>()
+  private readonly officeWindows = new Set<(projection: OfficeProjection) => void>()
   /**
    * The Context transport box. Binds structurally to a reporting Core, holds a
    * window set, and can write nothing — see `ContextChannel`. Deliberately not
@@ -543,6 +557,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onWorkforce((projection) => this.broadcastWorkforce(projection))
       core.onPersonality((projection) => this.broadcastPersonality(projection))
       core.onAttention((projection) => this.broadcastAttention(projection))
+      core.onOffice((projection) => this.broadcastOffice(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -746,6 +761,7 @@ export class ElectronCoreHost implements CoreHost {
     this.workforceWindows.clear()
     this.personalityWindows.clear()
     this.attentionWindows.clear()
+    this.officeWindows.clear()
     this.contextChannel.close()
     await core?.stop(reason)
   }
@@ -853,6 +869,32 @@ export class ElectronCoreHost implements CoreHost {
     return this.core?.attention() ?? null
   }
 
+  /**
+   * Attach to the Office projection, pushed immediately.
+   *
+   * Null before the Core has started, so a host with nothing to report says
+   * nothing rather than manufacturing an empty office — the same rule every
+   * other attach here follows, for the same reason.
+   */
+  onOffice(send: (projection: OfficeProjection) => void): () => void {
+    this.officeWindows.add(send)
+    const projection = this.office()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Office push threw', error)
+      }
+    }
+    return () => {
+      this.officeWindows.delete(send)
+    }
+  }
+
+  office(): OfficeProjection | null {
+    return this.core?.office() ?? null
+  }
+
   async attentionTick(): Promise<number> {
     return (await this.core?.attentionTick()) ?? 0
   }
@@ -864,6 +906,17 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window Attention push threw', error)
         this.attentionWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastOffice(projection: OfficeProjection): void {
+    for (const send of [...this.officeWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Office push threw', error)
+        this.officeWindows.delete(send)
       }
     }
   }

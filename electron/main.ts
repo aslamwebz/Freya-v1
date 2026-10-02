@@ -433,6 +433,17 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:attention', projection)
   })
 
+  // The Office is an eleventh channel, and the one whose whole content is
+  // derived: Freya's station, live run stations, worker stations, approval
+  // stations and the history timeline. What does not cross is the point of it —
+  // no step input, no observation content, no message body, no task title, no
+  // mission text, no authority, no capability instance. A window can see what
+  // is happening and where; it cannot reach the substance of the work or the
+  // agents, and it cannot invent either.
+  const detachOffice = coreHost?.onOffice((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:office', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -444,6 +455,7 @@ function createWindow(): BrowserWindow {
     detachContext?.()
     detachPersonality?.()
     detachAttention?.()
+    detachOffice?.()
   })
 
   if (DEV_SERVER) {
@@ -564,6 +576,15 @@ function registerIpc(): void {
   // `attention.tick` command — a window cannot decide, spend a budget, bypass a
   // cooldown or drive the scheduler.
   ipcMain.handle('freya:core:attention', () => requireCore().attention())
+  // The Office projection, same bargain as every other channel: a read of what
+  // Core reports. The Office is a pure function of real Work/Workforce/Core
+  // state, so what crosses is exactly what Core derived — stations, counts,
+  // history and pending presence requests. There is deliberately no
+  // `freya:core:office:write` and no office command that invents a station,
+  // inflates a count or fabricates a percentage. The one Office command that
+  // writes, `office.presence.request`, goes through `freya:core:submit` like
+  // every other command — it is validated and journalled in Core, not here.
+  ipcMain.handle('freya:core:office', () => requireCore().office())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

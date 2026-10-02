@@ -264,6 +264,31 @@ async function openVault(page: Page): Promise<void> {
 }
 
 /**
+ * Open the Office and wait for it to report.
+ *
+ * Idempotent for the same reason as every other surface: a restored singleton
+ * toggles shut if clicked twice.
+ */
+async function openOffice(page: Page): Promise<void> {
+  const dialog = page.locator('[role="dialog"][aria-label="Office"]')
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page
+      .getByRole('toolbar', { name: /work surfaces/i })
+      .getByRole('button', { name: 'Office', exact: true })
+      .click()
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Office"] .office-surface', { timeout: 15_000 })
+  await page.waitForFunction(
+    () => {
+      const surface = document.querySelector('[role="dialog"][aria-label="Office"] .office-surface')
+      return surface !== null && !document.querySelector('.office-absent')
+    },
+    undefined,
+    { timeout: 15_000 },
+  )
+}
+
+/**
  * Open the Search surface and wait for its query field.
  *
  * Idempotent, for the same reason as `openChat`.
@@ -2659,6 +2684,58 @@ async function main(): Promise<void> {
       )
     } finally {
       await missionLaunch.app.close().catch(() => {})
+    }
+
+    first = null
+
+    /* ---------------------------------------------------------- Office */
+
+    let officeApp: ElectronApplication | null = null
+    try {
+      const { app: oApp, page: oPage } = await launch(userData)
+      officeApp = oApp
+      await coreReady(oPage)
+      await openOffice(oPage)
+      const office = oPage.locator('[role="dialog"][aria-label="Office"]')
+      const officeText = await office.locator('.office-surface').innerText()
+
+      check(
+        'the Office renders Freya’s station',
+        (await office.locator('.office-station[data-kind="freya"]').count()) === 1,
+      )
+      check(
+        'the Office reports an idle Freya when nothing is executing',
+        (await office.locator('.office-station[data-kind="freya"][data-state="idle"]').count()) === 1,
+      )
+      check(
+        'the Office does not invent stations when nothing is running',
+        (await office.locator('.office-station[data-kind="run"]').count()) === 0,
+      )
+      check(
+        'the Office does not invent workers when none exist',
+        (await office.locator('.office-station[data-kind="worker"]').count()) === 0,
+      )
+      check(
+        'the Office does not invent approvals when none are pending',
+        (await office.locator('.office-station[data-kind="approval"]').count()) === 0,
+      )
+      check(
+        'the Office does not show fake progress',
+        !/%/.test(officeText),
+        officeText.slice(0, 120),
+      )
+      check(
+        'the Office states it is a read-only view',
+        officeText.includes('read-only'),
+      )
+    } catch (error) {
+      check(
+        'the Office renders real state',
+        false,
+        error instanceof Error ? error.message : String(error),
+      )
+    } finally {
+      await officeApp?.close().catch(() => {})
     }
 
     first = null

@@ -1216,6 +1216,16 @@ const PAYLOAD_RULES: {
     ['scheduleId', 'reason'],
     (p) => isEventId(p.scheduleId) && isAttentionScheduleCancelReason(p.reason),
   ),
+
+  'office.presence.requested': workRule(
+    ['workerId'],
+    (p) => isEventId(p.workerId),
+  ),
+
+  'office.presence.fulfilled': workRule(
+    ['workerId'],
+    (p) => isEventId(p.workerId),
+  ),
 }
 
 /** A bounded, control-character-free label. A name, never prose. */

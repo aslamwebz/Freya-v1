@@ -51,7 +51,7 @@ describe('Foundry red team', () => {
   }
 
   describe('forged verification', () => {
-    it('refuses a verifier that claims passed without evidence', () => {
+    it('refuses a verifier that claims passed without evidence', async () => {
       const { engine } = createEngine()
       const verifier: FoundryVerifier = {
         name: 'forged.pass',
@@ -59,7 +59,7 @@ describe('Foundry red team', () => {
       }
       engine.registerVerifier(verifier)
 
-      const createResult = engine.createArtifact({
+      const createResult = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -67,7 +67,7 @@ describe('Foundry red team', () => {
         content: { name: 'test-tool' },
       })
 
-      const verifyResult = engine.verifyArtifact({
+      const verifyResult = await engine.verifyArtifact({
         artifactHash: createResult.hash!,
         verifierName: 'forged.pass',
         requestedBy: 'owner',
@@ -77,7 +77,7 @@ describe('Foundry red team', () => {
       expect(verifyResult.verification?.verdict).toBe('inconclusive')
     })
 
-    it('refuses a verifier that claims passed with ambiguous evidence', () => {
+    it('refuses a verifier that claims passed with ambiguous evidence', async () => {
       const { engine } = createEngine()
       const verifier: FoundryVerifier = {
         name: 'forged.ambiguous',
@@ -85,7 +85,7 @@ describe('Foundry red team', () => {
       }
       engine.registerVerifier(verifier)
 
-      const createResult = engine.createArtifact({
+      const createResult = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -93,7 +93,7 @@ describe('Foundry red team', () => {
         content: { name: 'test-tool' },
       })
 
-      const verifyResult = engine.verifyArtifact({
+      const verifyResult = await engine.verifyArtifact({
         artifactHash: createResult.hash!,
         verifierName: 'forged.ambiguous',
         requestedBy: 'owner',
@@ -103,7 +103,7 @@ describe('Foundry red team', () => {
       expect(verifyResult.verification?.verdict).toBe('inconclusive')
     })
 
-    it('does not transition artifact to verified on inconclusive verdict', () => {
+    it('does not transition artifact to verified on inconclusive verdict', async () => {
       const { engine } = createEngine()
       const verifier: FoundryVerifier = {
         name: 'forged.inconclusive',
@@ -111,7 +111,7 @@ describe('Foundry red team', () => {
       }
       engine.registerVerifier(verifier)
 
-      const createResult = engine.createArtifact({
+      const createResult = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -119,13 +119,13 @@ describe('Foundry red team', () => {
         content: { name: 'test-tool' },
       })
 
-      engine.verifyArtifact({
+      await engine.verifyArtifact({
         artifactHash: createResult.hash!,
         verifierName: 'forged.inconclusive',
         requestedBy: 'owner',
       })
 
-      const promoteResult = engine.promoteArtifact({
+      const promoteResult = await engine.promoteArtifact({
         artifactHash: createResult.hash!,
         toStatus: 'promoted',
         promotedBy: 'owner',
@@ -138,9 +138,9 @@ describe('Foundry red team', () => {
   })
 
   describe('path escape', () => {
-    it('refuses content with constructor key', () => {
+    it('refuses content with constructor key', async () => {
       const { engine } = createEngine()
-      const result = engine.createArtifact({
+      const result = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -151,9 +151,9 @@ describe('Foundry red team', () => {
       expect(result.ok).toBe(false)
     })
 
-    it('refuses content with constructor key', () => {
+    it('refuses content with constructor key', async () => {
       const { engine } = createEngine()
-      const result = engine.createArtifact({
+      const result = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -164,9 +164,9 @@ describe('Foundry red team', () => {
       expect(result.ok).toBe(false)
     })
 
-    it('refuses content with nested objects', () => {
+    it('refuses content with nested objects', async () => {
       const { engine } = createEngine()
-      const result = engine.createArtifact({
+      const result = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -177,9 +177,9 @@ describe('Foundry red team', () => {
       expect(result.ok).toBe(false)
     })
 
-    it('refuses content with arrays', () => {
+    it('refuses content with arrays', async () => {
       const { engine } = createEngine()
-      const result = engine.createArtifact({
+      const result = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -190,9 +190,9 @@ describe('Foundry red team', () => {
       expect(result.ok).toBe(false)
     })
 
-    it('refuses content with functions', () => {
+    it('refuses content with functions', async () => {
       const { engine } = createEngine()
-      const result = engine.createArtifact({
+      const result = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -205,22 +205,23 @@ describe('Foundry red team', () => {
   })
 
   describe('capability laundering', () => {
-    it('refuses tool registration with a capability the owner does not hold', () => {
+    it('refuses tool registration with a capability outside the closed vocabulary', async () => {
       const { engine } = createEngine()
-      const result = engine.registerTool({
+      const result = await engine.registerTool({
         hash: 'abc123',
         name: 'test-tool',
-        capability: 'security.stop',
+        capability: 'root.shell' as never,
         createdBy: 'owner',
         artifactHash: 'art_123',
       })
 
-      expect(result.ok).toBe(true)
+      expect(result.ok).toBe(false)
+      expect(result.reason).toBe('the requested capability is not in the closed capability vocabulary')
     })
 
-    it('refuses tool registration by a non-owner principal', () => {
+    it('refuses tool registration by a non-owner principal', async () => {
       const { engine } = createEngine()
-      const result = engine.registerTool({
+      const result = await engine.registerTool({
         hash: 'abc123',
         name: 'test-tool',
         capability: 'work.execute',
@@ -234,9 +235,9 @@ describe('Foundry red team', () => {
   })
 
   describe('fake progress', () => {
-    it('refuses promotion without verification evidence', () => {
+    it('refuses promotion without verification evidence', async () => {
       const { engine } = createEngine()
-      const createResult = engine.createArtifact({
+      const createResult = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -244,7 +245,7 @@ describe('Foundry red team', () => {
         content: { name: 'test-tool' },
       })
 
-      const promoteResult = engine.promoteArtifact({
+      const promoteResult = await engine.promoteArtifact({
         artifactHash: createResult.hash!,
         toStatus: 'promoted',
         promotedBy: 'owner',
@@ -255,7 +256,7 @@ describe('Foundry red team', () => {
       expect(promoteResult.reason).toBe('the artifact has not been verified and cannot be promoted')
     })
 
-    it('refuses activation without promotion', () => {
+    it('refuses activation without promotion', async () => {
       const { engine } = createEngine()
       const verifier: FoundryVerifier = {
         name: 'test.pass',
@@ -263,7 +264,7 @@ describe('Foundry red team', () => {
       }
       engine.registerVerifier(verifier)
 
-      const createResult = engine.createArtifact({
+      const createResult = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -271,13 +272,13 @@ describe('Foundry red team', () => {
         content: { name: 'test-tool' },
       })
 
-      engine.verifyArtifact({
+      await engine.verifyArtifact({
         artifactHash: createResult.hash!,
         verifierName: 'test.pass',
         requestedBy: 'owner',
       })
 
-      const activateResult = engine.activateArtifact({
+      const activateResult = await engine.activateArtifact({
         artifactHash: createResult.hash!,
         toStatus: 'active',
         activatedBy: 'owner',
@@ -290,7 +291,7 @@ describe('Foundry red team', () => {
   })
 
   describe('stale evidence', () => {
-    it('refuses promotion when artifact content has changed', () => {
+    it('refuses promotion when artifact content has changed', async () => {
       const { engine } = createEngine()
       const verifier: FoundryVerifier = {
         name: 'test.pass',
@@ -298,7 +299,7 @@ describe('Foundry red team', () => {
       }
       engine.registerVerifier(verifier)
 
-      const createResult = engine.createArtifact({
+      const createResult = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -306,13 +307,13 @@ describe('Foundry red team', () => {
         content: { name: 'test-tool', version: '1.0.0' },
       })
 
-      engine.verifyArtifact({
+      await engine.verifyArtifact({
         artifactHash: createResult.hash!,
         verifierName: 'test.pass',
         requestedBy: 'owner',
       })
 
-      const createResult2 = engine.createArtifact({
+      const createResult2 = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -320,7 +321,7 @@ describe('Foundry red team', () => {
         content: { name: 'test-tool', version: '2.0.0' },
       })
 
-      const promoteResult = engine.promoteArtifact({
+      const promoteResult = await engine.promoteArtifact({
         artifactHash: createResult2.hash!,
         toStatus: 'promoted',
         promotedBy: 'owner',
@@ -332,7 +333,7 @@ describe('Foundry red team', () => {
   })
 
   describe('activation bypass', () => {
-    it('refuses activation by a non-owner principal', () => {
+    it('refuses activation by a non-owner principal', async () => {
       const { engine } = createEngine()
       const verifier: FoundryVerifier = {
         name: 'test.pass',
@@ -340,7 +341,7 @@ describe('Foundry red team', () => {
       }
       engine.registerVerifier(verifier)
 
-      const createResult = engine.createArtifact({
+      const createResult = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -348,20 +349,20 @@ describe('Foundry red team', () => {
         content: { name: 'test-tool' },
       })
 
-      engine.verifyArtifact({
+      await engine.verifyArtifact({
         artifactHash: createResult.hash!,
         verifierName: 'test.pass',
         requestedBy: 'owner',
       })
 
-      engine.promoteArtifact({
+      await engine.promoteArtifact({
         artifactHash: createResult.hash!,
         toStatus: 'promoted',
         promotedBy: 'owner',
         reason: 'verified',
       })
 
-      const activateResult = engine.activateArtifact({
+      const activateResult = await engine.activateArtifact({
         artifactHash: createResult.hash!,
         toStatus: 'active',
         activatedBy: 'system',
@@ -372,7 +373,7 @@ describe('Foundry red team', () => {
       expect(activateResult.reason).toBe('the caller is not authorized to perform this operation')
     })
 
-    it('refuses activation of an already active artifact', () => {
+    it('refuses activation of an already active artifact', async () => {
       const { engine } = createEngine()
       const verifier: FoundryVerifier = {
         name: 'test.pass',
@@ -380,7 +381,7 @@ describe('Foundry red team', () => {
       }
       engine.registerVerifier(verifier)
 
-      const createResult = engine.createArtifact({
+      const createResult = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -388,27 +389,27 @@ describe('Foundry red team', () => {
         content: { name: 'test-tool' },
       })
 
-      engine.verifyArtifact({
+      await engine.verifyArtifact({
         artifactHash: createResult.hash!,
         verifierName: 'test.pass',
         requestedBy: 'owner',
       })
 
-      engine.promoteArtifact({
+      await engine.promoteArtifact({
         artifactHash: createResult.hash!,
         toStatus: 'promoted',
         promotedBy: 'owner',
         reason: 'verified',
       })
 
-      engine.activateArtifact({
+      await engine.activateArtifact({
         artifactHash: createResult.hash!,
         toStatus: 'active',
         activatedBy: 'owner',
         reason: 'first activation',
       })
 
-      const secondActivation = engine.activateArtifact({
+      const secondActivation = await engine.activateArtifact({
         artifactHash: createResult.hash!,
         toStatus: 'active',
         activatedBy: 'owner',
@@ -420,9 +421,9 @@ describe('Foundry red team', () => {
   })
 
   describe('private leakage', () => {
-    it('does not leak artifact content into the journal', () => {
+    it('does not leak artifact content into the journal', async () => {
       const { engine, events } = createEngine()
-      engine.createArtifact({
+      await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -436,15 +437,16 @@ describe('Foundry red team', () => {
       expect(JSON.stringify(contentEvent)).not.toContain('password123')
     })
 
-    it('does not leak full verification evidence into the journal', () => {
+    it('does not leak verification evidence into the journal', async () => {
       const { engine, events } = createEngine()
+      const secretEvidence = 'PASS: secret-verifier-output-that-must-not-be-journalled'
       const verifier: FoundryVerifier = {
         name: 'test.pass',
-        verify: () => 'PASS: '.repeat(100),
+        verify: () => secretEvidence,
       }
       engine.registerVerifier(verifier)
 
-      const createResult = engine.createArtifact({
+      const createResult = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -452,7 +454,7 @@ describe('Foundry red team', () => {
         content: { name: 'test-tool' },
       })
 
-      engine.verifyArtifact({
+      await engine.verifyArtifact({
         artifactHash: createResult.hash!,
         verifierName: 'test.pass',
         requestedBy: 'owner',
@@ -460,13 +462,16 @@ describe('Foundry red team', () => {
 
       const verificationEvent = events.find((e) => e.type === 'foundry.verification.recorded')
       expect(verificationEvent).toBeDefined()
-      const evidence = (verificationEvent as { payload: { evidence: string } }).payload.evidence
-      expect(evidence.length).toBeLessThanOrEqual(FOUNDRY_LIMITS.maxSummaryChars)
+      expect(JSON.stringify(verificationEvent)).not.toContain(secretEvidence)
+      const payload = verificationEvent!.payload
+      expect('evidence' in payload).toBe(false)
+      expect(payload.evidenceHash).toHaveLength(64)
+      expect(payload.evidenceLength).toBe(secretEvidence.length)
     })
   })
 
   describe('model-call amplification', () => {
-    it('enforces the verification-per-artifact ceiling', () => {
+    it('enforces the verification-per-artifact ceiling', async () => {
       const { engine } = createEngine()
       const verifier: FoundryVerifier = {
         name: 'test.pass',
@@ -474,7 +479,7 @@ describe('Foundry red team', () => {
       }
       engine.registerVerifier(verifier)
 
-      const createResult = engine.createArtifact({
+      const createResult = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -483,7 +488,7 @@ describe('Foundry red team', () => {
       })
 
       for (let i = 0; i < FOUNDRY_LIMITS.maxVerificationsPerArtifact; i++) {
-        const result = engine.verifyArtifact({
+        const result = await engine.verifyArtifact({
           artifactHash: createResult.hash!,
           verifierName: 'test.pass',
           requestedBy: 'owner',
@@ -491,7 +496,7 @@ describe('Foundry red team', () => {
         expect(result.ok).toBe(true)
       }
 
-      const overflow = engine.verifyArtifact({
+      const overflow = await engine.verifyArtifact({
         artifactHash: createResult.hash!,
         verifierName: 'test.pass',
         requestedBy: 'owner',
@@ -501,7 +506,7 @@ describe('Foundry red team', () => {
       expect(overflow.reason).toBe('the artifact reached its verification ceiling')
     })
 
-    it('enforces the promotion-per-artifact ceiling', () => {
+    it('enforces the promotion-per-artifact ceiling', async () => {
       const { engine } = createEngine()
       const verifier: FoundryVerifier = {
         name: 'test.pass',
@@ -509,7 +514,7 @@ describe('Foundry red team', () => {
       }
       engine.registerVerifier(verifier)
 
-      const createResult = engine.createArtifact({
+      const createResult = await engine.createArtifact({
         runId: 'run_123',
         stepId: 'step_456',
         createdBy: 'owner',
@@ -517,13 +522,13 @@ describe('Foundry red team', () => {
         content: { name: 'test-tool' },
       })
 
-      engine.verifyArtifact({
+      await engine.verifyArtifact({
         artifactHash: createResult.hash!,
         verifierName: 'test.pass',
         requestedBy: 'owner',
       })
 
-      const promoteResult = engine.promoteArtifact({
+      const promoteResult = await engine.promoteArtifact({
         artifactHash: createResult.hash!,
         toStatus: 'promoted',
         promotedBy: 'owner',
@@ -532,7 +537,7 @@ describe('Foundry red team', () => {
 
       expect(promoteResult.ok).toBe(true)
 
-      const overflow = engine.promoteArtifact({
+      const overflow = await engine.promoteArtifact({
         artifactHash: createResult.hash!,
         toStatus: 'promoted',
         promotedBy: 'owner',

@@ -8,6 +8,7 @@ import type { MissionProjection } from '../core/missions/types'
 import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
+import type { FoundryProjection } from '../core/protocol/foundry'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
 import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
 import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
@@ -338,6 +339,9 @@ export interface CoreHost {
    */
   onAttention(send: (projection: AttentionProjection) => void): () => void
   attention(): AttentionProjection | null
+  /** Attach to Core's content-free Foundry projection. */
+  onFoundry(send: (projection: FoundryProjection) => void): () => void
+  foundry(): FoundryProjection | null
   /**
    * Evaluate due attention schedules. The bounded wake, driven by the composition
    * root. Performs no model call and no provider contact; it only fires schedules
@@ -451,6 +455,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
   private readonly personalityWindows = new Set<(projection: PersonalityProjection) => void>()
   private readonly attentionWindows = new Set<(projection: AttentionProjection) => void>()
+  private readonly foundryWindows = new Set<(projection: FoundryProjection) => void>()
   /**
    * The Context transport box. Binds structurally to a reporting Core, holds a
    * window set, and can write nothing — see `ContextChannel`. Deliberately not
@@ -526,6 +531,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onWorkforce((projection) => this.broadcastWorkforce(projection))
       core.onPersonality((projection) => this.broadcastPersonality(projection))
       core.onAttention((projection) => this.broadcastAttention(projection))
+      core.onFoundry((projection) => this.broadcastFoundry(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -834,6 +840,36 @@ export class ElectronCoreHost implements CoreHost {
 
   attention(): AttentionProjection | null {
     return this.core?.attention() ?? null
+  }
+
+  onFoundry(send: (projection: FoundryProjection) => void): () => void {
+    this.foundryWindows.add(send)
+    const projection = this.foundry()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Foundry push threw', error)
+      }
+    }
+    return () => {
+      this.foundryWindows.delete(send)
+    }
+  }
+
+  foundry(): FoundryProjection | null {
+    return this.core?.foundry() ?? null
+  }
+
+  private broadcastFoundry(projection: FoundryProjection): void {
+    for (const send of [...this.foundryWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Foundry push threw', error)
+        this.foundryWindows.delete(send)
+      }
+    }
   }
 
   async attentionTick(): Promise<number> {

@@ -1259,16 +1259,17 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
   /**
    * A verification attempt was recorded.
    *
-   * `verdict` is derived from the evidence by the Foundry engine, not by the
-   * verifier itself. `evidence` is bounded and structured, never the full
-   * verifier output.
+   * `verdict` is derived from the verifier result by the Foundry engine. The
+   * evidence itself is deliberately not journalled: only its SHA-256 digest
+   * and measured length cross the durable boundary.
    */
   'foundry.verification.recorded': {
     verificationId: string
     artifactHash: string
     verifierName: string
     verdict: 'passed' | 'failed' | 'inconclusive'
-    evidence: string
+    evidenceHash: string
+    evidenceLength: number
     verifiedAt: string
     requestedBy: PrincipalId
   }

@@ -21,6 +21,8 @@ import type { ContextProjection } from '../core/protocol/context'
 import type { PersonalityProjection } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import { ATTENTION_NO_PAYLOAD } from '../core/protocol/attention'
+import type { FoundryProjection } from '../core/protocol/foundry'
+import { FOUNDRY_NO_PAYLOAD } from '../core/protocol/foundry'
 import { ATTENTION_LIMITS } from '../core/attention/types'
 
 export interface RuntimeInfo {
@@ -318,6 +320,17 @@ const api = {
     }
   },
 
+  coreFoundry: (): Promise<FoundryProjection | null> =>
+    ipcRenderer.invoke('freya:core:foundry'),
+
+  onCoreFoundry: (handler: (projection: FoundryProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: FoundryProjection): void => handler(projection)
+    ipcRenderer.on('freya:core:foundry', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:foundry', listener)
+    }
+  },
+
   /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
@@ -467,6 +480,9 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'attention.schedule.register',
   'attention.schedule.cancel',
   'attention.inbox.read',
+  // Foundry is read-only from a window. Creation/promotion/activation happen
+  // through Core-owned Work capabilities, never a renderer command.
+  'foundry.status.read',
 ])
 
 /**
@@ -695,6 +711,11 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       const model = string('model', MAX_MODEL_ID_CHARS, false)
       if (model === null) return { ok: false, reason: 'model id is invalid' }
       return { ok: true, payload: model === undefined ? {} : { model } }
+    }
+
+    case 'foundry.status.read': {
+      if (!carriesNothing(payload)) return { ok: false, reason: FOUNDRY_NO_PAYLOAD }
+      return { ok: true }
     }
 
     case 'attention.status.read': {

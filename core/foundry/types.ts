@@ -102,7 +102,8 @@ export const ARTIFACT_TRANSITIONS: Readonly<Record<ArtifactStatus, readonly Arti
   verified: ['promoted', 'archived'],
   failed: ['building', 'archived'],
   promoted: ['active', 'archived'],
-  active: ['archived'],
+  // Explicit deactivation returns an active artifact to its promoted, reusable state.
+  active: ['promoted', 'archived'],
   archived: [],
 })
 
@@ -525,6 +526,9 @@ export const FOUNDRY_REASONS = Object.freeze({
   moduleNotFound: 'the module does not exist',
   appNotFound: 'the app does not exist',
   invalidTransition: 'the requested lifecycle transition is not permitted',
+  invalidCapability: 'the requested capability is not in the closed capability vocabulary',
+  invalidReason: 'the reason must be non-empty and within the Foundry reason limit',
+  invalidExpiry: 'the activation expiry must be a valid future instant',
   notVerified: 'the artifact has not been verified and cannot be promoted',
   notPromoted: 'the artifact has not been promoted and cannot be activated',
   alreadyActive: 'the artifact is already active',

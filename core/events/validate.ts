@@ -4,7 +4,7 @@ import {
   type AnyCoreEvent,
   type CoreEventType,
 } from './envelope'
-import { isPrincipalId } from '../security/guard'
+import { isCapability, isPrincipalId } from '../security/guard'
 import { DEFAULT_MISSION_LIMITS } from '../missions/types'
 import {
   DEFAULT_WORKER_BUDGET,
@@ -26,6 +26,7 @@ import {
   isSeverityHint,
   isUrgencyLevel,
 } from '../attention/types'
+import { APP_STATUSES, ARTIFACT_KINDS, ARTIFACT_STATUSES, MODULE_STATUSES, TOOL_STATUSES } from '../foundry/types'
 
 /**
  * Durable event validation.
@@ -119,6 +120,16 @@ function isNonNegativeInt(value: unknown): value is number {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
+}
+
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/
+
+function isSha256Hex(value: unknown): value is string {
+  return typeof value === 'string' && SHA256_HEX_PATTERN.test(value)
+}
+
+function isClosedValue(value: unknown, values: readonly string[]): value is string {
+  return typeof value === 'string' && values.includes(value)
 }
 
 /** An ISO-8601 instant. Validated rather than trusted, because a grant
@@ -1155,42 +1166,43 @@ const PAYLOAD_RULES: {
     ['artifactId', 'hash', 'kind', 'runId', 'stepId', 'createdBy', 'parentHash', 'specHash', 'contentLength'],
     (p) =>
       isEventId(p.artifactId) &&
-      isNonEmptyString(p.hash) &&
-      isNonEmptyString(p.kind) &&
+      isSha256Hex(p.hash) &&
+      isClosedValue(p.kind, ARTIFACT_KINDS) &&
       isEventId(p.runId) &&
       isEventId(p.stepId) &&
-      isNonEmptyString(p.createdBy) &&
-      (p.parentHash === null || isNonEmptyString(p.parentHash)) &&
-      (p.specHash === null || isNonEmptyString(p.specHash)) &&
+      isPrincipalId(p.createdBy) &&
+      (p.parentHash === null || isSha256Hex(p.parentHash)) &&
+      (p.specHash === null || isSha256Hex(p.specHash)) &&
       isNonNegativeInt(p.contentLength),
   ),
 
   'foundry.artifact.transitioned': workRule(
     ['artifactId', 'toStatus'],
-    (p) => isEventId(p.artifactId) && isNonEmptyString(p.toStatus),
+    (p) => isEventId(p.artifactId) && isClosedValue(p.toStatus, ARTIFACT_STATUSES),
   ),
 
   'foundry.verification.recorded': workRule(
-    ['verificationId', 'artifactHash', 'verifierName', 'verdict', 'evidence', 'verifiedAt', 'requestedBy'],
+    ['verificationId', 'artifactHash', 'verifierName', 'verdict', 'evidenceHash', 'evidenceLength', 'verifiedAt', 'requestedBy'],
     (p) =>
       isEventId(p.verificationId) &&
-      isNonEmptyString(p.artifactHash) &&
+      isSha256Hex(p.artifactHash) &&
       isNonEmptyString(p.verifierName) &&
       (p.verdict === 'passed' || p.verdict === 'failed' || p.verdict === 'inconclusive') &&
-      isNonEmptyString(p.evidence) &&
-      isNonEmptyString(p.verifiedAt) &&
-      isNonEmptyString(p.requestedBy),
+      isSha256Hex(p.evidenceHash) &&
+      isNonNegativeInt(p.evidenceLength) &&
+      isInstant(p.verifiedAt) &&
+      isPrincipalId(p.requestedBy),
   ),
 
   'foundry.promotion.recorded': workRule(
     ['promotionId', 'artifactHash', 'fromStatus', 'toStatus', 'promotedBy', 'promotedAt', 'reason', 'verificationId'],
     (p) =>
       isEventId(p.promotionId) &&
-      isNonEmptyString(p.artifactHash) &&
-      isNonEmptyString(p.fromStatus) &&
-      isNonEmptyString(p.toStatus) &&
-      isNonEmptyString(p.promotedBy) &&
-      isNonEmptyString(p.promotedAt) &&
+      isSha256Hex(p.artifactHash) &&
+      isClosedValue(p.fromStatus, ARTIFACT_STATUSES) &&
+      p.toStatus === 'promoted' &&
+      isPrincipalId(p.promotedBy) &&
+      isInstant(p.promotedAt) &&
       isNonEmptyString(p.reason) &&
       isEventId(p.verificationId),
   ),
@@ -1199,13 +1211,13 @@ const PAYLOAD_RULES: {
     ['activationId', 'artifactHash', 'fromStatus', 'toStatus', 'activatedBy', 'activatedAt', 'reason', 'expiresAt'],
     (p) =>
       isEventId(p.activationId) &&
-      isNonEmptyString(p.artifactHash) &&
-      isNonEmptyString(p.fromStatus) &&
-      isNonEmptyString(p.toStatus) &&
-      isNonEmptyString(p.activatedBy) &&
-      isNonEmptyString(p.activatedAt) &&
+      isSha256Hex(p.artifactHash) &&
+      isClosedValue(p.fromStatus, ARTIFACT_STATUSES) &&
+      p.toStatus === 'active' &&
+      isPrincipalId(p.activatedBy) &&
+      isInstant(p.activatedAt) &&
       isNonEmptyString(p.reason) &&
-      (p.expiresAt === null || isNonEmptyString(p.expiresAt)),
+      (p.expiresAt === null || isInstant(p.expiresAt)),
   ),
 
   'foundry.tool.registered': workRule(
@@ -1214,14 +1226,14 @@ const PAYLOAD_RULES: {
       isEventId(p.toolId) &&
       isNonEmptyString(p.hash) &&
       isNonEmptyString(p.name) &&
-      isNonEmptyString(p.capability) &&
-      isNonEmptyString(p.createdBy) &&
+      isCapability(p.capability) &&
+      isPrincipalId(p.createdBy) &&
       isNonEmptyString(p.artifactHash),
   ),
 
   'foundry.tool.transitioned': workRule(
     ['toolId', 'toStatus'],
-    (p) => isEventId(p.toolId) && isNonEmptyString(p.toStatus),
+    (p) => isEventId(p.toolId) && isClosedValue(p.toStatus, TOOL_STATUSES),
   ),
 
   'foundry.module.registered': workRule(
@@ -1230,13 +1242,13 @@ const PAYLOAD_RULES: {
       isEventId(p.moduleId) &&
       isNonEmptyString(p.hash) &&
       isNonEmptyString(p.name) &&
-      isNonEmptyString(p.createdBy) &&
+      isPrincipalId(p.createdBy) &&
       isNonEmptyString(p.artifactHash),
   ),
 
   'foundry.module.transitioned': workRule(
     ['moduleId', 'toStatus'],
-    (p) => isEventId(p.moduleId) && isNonEmptyString(p.toStatus),
+    (p) => isEventId(p.moduleId) && isClosedValue(p.toStatus, MODULE_STATUSES),
   ),
 
   'foundry.app.registered': workRule(
@@ -1245,7 +1257,7 @@ const PAYLOAD_RULES: {
       isEventId(p.appId) &&
       isNonEmptyString(p.hash) &&
       isNonEmptyString(p.name) &&
-      isNonEmptyString(p.createdBy) &&
+      isPrincipalId(p.createdBy) &&
       isNonEmptyString(p.artifactHash) &&
       Array.isArray(p.moduleHashes) &&
       p.moduleHashes.every((h: unknown) => isNonEmptyString(h)),
@@ -1253,7 +1265,7 @@ const PAYLOAD_RULES: {
 
   'foundry.app.transitioned': workRule(
     ['appId', 'toStatus'],
-    (p) => isEventId(p.appId) && isNonEmptyString(p.toStatus),
+    (p) => isEventId(p.appId) && isClosedValue(p.toStatus, APP_STATUSES),
   ),
 
   'foundry.limit.exceeded': workRule(

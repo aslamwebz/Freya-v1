@@ -126,15 +126,17 @@ export interface FoundryAppView {
 /**
  * One verification record, as the renderer may see it.
  *
- * The evidence is bounded and structured, never the full verifier output.
+ * The evidence itself is private. The renderer may see only its digest and
+ * measured length, which are enough to correlate a verification without
+ * copying learned content across the bridge.
  */
 export interface FoundryVerificationView {
   readonly verificationId: string
   readonly artifactHash: string
   readonly verifierName: string
   readonly verdict: string
-  /** Bounded evidence. Never the full output. */
-  readonly evidence: string
+  readonly evidenceHash: string
+  readonly evidenceLength: number
   readonly verifiedAt: string
   readonly requestedBy: string
 }

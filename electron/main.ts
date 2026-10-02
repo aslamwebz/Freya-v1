@@ -413,6 +413,12 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:attention', projection)
   })
 
+  // Foundry is metadata only: identities, lifecycle states, provenance ids and
+  // counts. Artifact content, specs and verification evidence never cross.
+  const detachFoundry = coreHost?.onFoundry((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:foundry', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -424,6 +430,7 @@ function createWindow(): BrowserWindow {
     detachContext?.()
     detachPersonality?.()
     detachAttention?.()
+    detachFoundry?.()
   })
 
   if (DEV_SERVER) {
@@ -521,6 +528,7 @@ function registerIpc(): void {
   // `attention.tick` command — a window cannot decide, spend a budget, bypass a
   // cooldown or drive the scheduler.
   ipcMain.handle('freya:core:attention', () => requireCore().attention())
+  ipcMain.handle('freya:core:foundry', () => requireCore().foundry())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

@@ -1,16 +1,25 @@
+import { createHash } from 'node:crypto'
+
 import type { AnyCoreEvent } from '../events/envelope'
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { Capability, PrincipalId } from '../protocol/core-protocol'
+import type { FoundryProjection } from '../protocol/foundry'
+import { isCapability } from '../security/guard'
 import {
   FOUNDRY_LIMITS,
   FOUNDRY_REASONS,
+  canTransitionApp,
+  canTransitionArtifact,
+  canTransitionModule,
+  canTransitionTool,
   type ActivationRecord,
+  type AppRecord,
   type AppStatus,
   type ArtifactKind,
   type ArtifactRecord,
-  type ArtifactStatus,
   type ModuleRecord,
   type ModuleStatus,
   type PromotionRecord,
+  type ToolRecord,
   type ToolStatus,
   type VerificationRecord,
   type Verdict,
@@ -82,8 +91,8 @@ export interface VerifyArtifactRequest {
 export interface PromoteArtifactRequest {
   /** The artifact to promote. */
   readonly artifactHash: string
-  /** The target status. */
-  readonly toStatus: ArtifactStatus | ToolStatus | ModuleStatus | AppStatus
+  /** Promotion has exactly one legal target. */
+  readonly toStatus: 'promoted'
   /** The principal authorizing the promotion. Must be the owner. */
   readonly promotedBy: PrincipalId
   /** Why, in words a person can read. */
@@ -94,14 +103,38 @@ export interface PromoteArtifactRequest {
 export interface ActivateArtifactRequest {
   /** The artifact to activate. */
   readonly artifactHash: string
-  /** The target status. */
-  readonly toStatus: ArtifactStatus | ToolStatus | ModuleStatus | AppStatus
+  /** Activation has exactly one legal target. */
+  readonly toStatus: 'active'
   /** The principal authorizing the activation. Must be the owner. */
   readonly activatedBy: PrincipalId
   /** Why, in words a person can read. */
   readonly reason: string
-  /** When this activation expires, if bounded. */
+  /** Optional expiry metadata. Phase 15 does not schedule a timer from it. */
   readonly expiresAt?: string | null
+}
+
+export interface DeactivateArtifactRequest {
+  readonly artifactHash: string
+  readonly deactivatedBy: PrincipalId
+  readonly reason: string
+}
+
+export interface TransitionToolRequest {
+  readonly hash: string
+  readonly toStatus: ToolStatus
+  readonly changedBy: PrincipalId
+}
+
+export interface TransitionModuleRequest {
+  readonly hash: string
+  readonly toStatus: ModuleStatus
+  readonly changedBy: PrincipalId
+}
+
+export interface TransitionAppRequest {
+  readonly hash: string
+  readonly toStatus: AppStatus
+  readonly changedBy: PrincipalId
 }
 
 /** The result of a Foundry operation. */
@@ -129,11 +162,11 @@ export interface FoundryResult {
 export class FoundryEngine {
   private state: FoundryState
   private readonly verifiers = new Map<string, FoundryVerifier>()
-  private readonly append: (event: AnyCoreEvent) => void
+  private readonly append: (event: AnyCoreEvent) => AnyCoreEvent | void | Promise<AnyCoreEvent | void>
   private readonly now: () => Date
 
   constructor(
-    append: (event: AnyCoreEvent) => void,
+    append: (event: AnyCoreEvent) => AnyCoreEvent | void | Promise<AnyCoreEvent | void>,
     now: () => Date = () => new Date(),
   ) {
     this.state = initialFoundryState()
@@ -146,15 +179,51 @@ export class FoundryEngine {
     this.state = reduceFoundryState(this.state, event)
   }
 
-  /** Append an event to the journal and replay it into state. */
-  private commit(event: AnyCoreEvent): void {
-    this.append(event)
-    this.replay(event)
+  /** Persist an event first, then replay the exact durable event into state. */
+  private async commit(event: AnyCoreEvent): Promise<void> {
+    const persisted = await this.append(event)
+    this.replay(persisted ?? event)
   }
 
-  /** The current state, for projections. */
+  /** The current state, for Core-owned composition and tests. */
   getState(): FoundryState {
     return this.state
+  }
+
+  /** A read-only, content-free projection safe to cross the renderer seam. */
+  projection(): FoundryProjection {
+    const artifacts = [...this.state.artifacts.values()].map(({ artifactId: _artifactId, ...record }) => record)
+    const tools = [...this.state.tools.values()].map((record) => ({ ...record }))
+    const modules = [...this.state.modules.values()].map((record) => ({ ...record }))
+    const apps = [...this.state.apps.values()].map((record) => ({ ...record, moduleHashes: [...record.moduleHashes] }))
+    const verifications = [...this.state.verifications.values()].flat().map((record) => ({ ...record }))
+    const promotions = [...this.state.promotions.values()].flat().map((record) => ({ ...record }))
+    const activations = [...this.state.activations.values()].flat().map((record) => ({ ...record }))
+
+    return {
+      health: 'ready',
+      reason: null,
+      artifacts,
+      tools,
+      modules,
+      apps,
+      verifications,
+      promotions,
+      activations,
+      counts: {
+        artifacts: artifacts.length,
+        artifactsVerified: artifacts.filter((item) => item.status === 'verified').length,
+        artifactsPromoted: artifacts.filter((item) => item.status === 'promoted').length,
+        artifactsActive: artifacts.filter((item) => item.status === 'active').length,
+        tools: tools.length,
+        toolsActive: tools.filter((item) => item.status === 'active').length,
+        modules: modules.length,
+        modulesActive: modules.filter((item) => item.status === 'active').length,
+        apps: apps.length,
+        appsActive: apps.filter((item) => item.status === 'active').length,
+      },
+      sequence: this.state.sequence,
+    }
   }
 
   /* ------------------------------------------------------------ verifiers */
@@ -194,7 +263,7 @@ export class FoundryEngine {
    * from the sanitised content and the inputs, so that "what this is" is a
    * fact derived from its content rather than a label somebody attached.
    */
-  createArtifact(request: CreateArtifactRequest): FoundryResult {
+  async createArtifact(request: CreateArtifactRequest): Promise<FoundryResult> {
     const { runId, stepId, createdBy, kind, content, parentHash, specHash } = request
 
     if (createdBy !== 'owner') {
@@ -204,6 +273,13 @@ export class FoundryEngine {
     const sanitised = sanitiseContent(content)
     if (!sanitised.ok) {
       return { ok: false, reason: sanitised.reason }
+    }
+
+    if (parentHash && !findArtifactByHash(this.state, parentHash)) {
+      return { ok: false, reason: FOUNDRY_REASONS.parentNotFound }
+    }
+    if (specHash && !findArtifactByHash(this.state, specHash)) {
+      return { ok: false, reason: FOUNDRY_REASONS.specNotFound }
     }
 
     const hash = computeHash(sanitised.value, parentHash ?? null, specHash ?? null)
@@ -221,7 +297,7 @@ export class FoundryEngine {
     const artifactId = `art_${hash.slice(0, 16)}`
     const at = this.now().toISOString()
 
-    this.commit({
+    await this.commit({
       eventId: `evt_${artifactId}`,
       sequence: 0,
       type: 'foundry.artifact.created',
@@ -257,7 +333,7 @@ export class FoundryEngine {
    * by this engine, not by the verifier itself, so that a verifier cannot
    * mark its own work as passed.
    */
-  verifyArtifact(request: VerifyArtifactRequest): FoundryResult {
+  async verifyArtifact(request: VerifyArtifactRequest): Promise<FoundryResult> {
     const { artifactHash, verifierName, requestedBy } = request
 
     if (requestedBy !== 'owner') {
@@ -295,7 +371,7 @@ export class FoundryEngine {
       requestedBy,
     }
 
-    this.commit({
+    await this.commit({
       eventId: `evt_${verificationId}`,
       sequence: 0,
       type: 'foundry.verification.recorded',
@@ -310,14 +386,15 @@ export class FoundryEngine {
         artifactHash,
         verifierName,
         verdict,
-        evidence: record.evidence,
+        evidenceHash: createHash('sha256').update(evidence, 'utf8').digest('hex'),
+        evidenceLength: evidence.length,
         verifiedAt: at,
         requestedBy,
       },
     })
 
     if (verdict === 'passed') {
-      this.commit({
+      await this.commit({
         eventId: `evt_${verificationId}_transition`,
         sequence: 0,
         type: 'foundry.artifact.transitioned',
@@ -346,11 +423,17 @@ export class FoundryEngine {
    * "reusable". A thing that was verified is not thereby promoted; promotion
    * is a separate decision that requires the owner's explicit authorization.
    */
-  promoteArtifact(request: PromoteArtifactRequest): FoundryResult {
+  async promoteArtifact(request: PromoteArtifactRequest): Promise<FoundryResult> {
     const { artifactHash, toStatus, promotedBy, reason } = request
 
     if (promotedBy !== 'owner') {
       return { ok: false, reason: FOUNDRY_REASONS.notAuthorized }
+    }
+    if (toStatus !== 'promoted') {
+      return { ok: false, reason: FOUNDRY_REASONS.invalidTransition }
+    }
+    if (!isBoundedReason(reason)) {
+      return { ok: false, reason: FOUNDRY_REASONS.invalidReason }
     }
 
     const artifact = findArtifactByHash(this.state, artifactHash)
@@ -367,10 +450,14 @@ export class FoundryEngine {
       return { ok: false, reason: FOUNDRY_REASONS.limitPromotions }
     }
 
-    const verificationId = this.state.verifications.get(artifactHash)?.at(-1)?.verificationId
-    if (!verificationId) {
+    const latestVerification = this.state.verifications.get(artifactHash)?.at(-1)
+    if (!latestVerification) {
       return { ok: false, reason: FOUNDRY_REASONS.verificationRequired }
     }
+    if (latestVerification.verdict !== 'passed') {
+      return { ok: false, reason: FOUNDRY_REASONS.notVerified }
+    }
+    const verificationId = latestVerification.verificationId
 
     const promotionId = `pro_${artifactHash.slice(0, 12)}_${promotionCount}`
     const at = this.now().toISOString()
@@ -386,7 +473,7 @@ export class FoundryEngine {
       verificationId,
     }
 
-    this.commit({
+    await this.commit({
       eventId: `evt_${promotionId}`,
       sequence: 0,
       type: 'foundry.promotion.recorded',
@@ -408,7 +495,7 @@ export class FoundryEngine {
       },
     })
 
-    this.commit({
+    await this.commit({
       eventId: `evt_${promotionId}_transition`,
       sequence: 0,
       type: 'foundry.artifact.transitioned',
@@ -439,11 +526,23 @@ export class FoundryEngine {
    * Activation is bounded and reversible: an active thing can be deactivated,
    * and deactivation is explicit and recorded.
    */
-  activateArtifact(request: ActivateArtifactRequest): FoundryResult {
+  async activateArtifact(request: ActivateArtifactRequest): Promise<FoundryResult> {
     const { artifactHash, toStatus, activatedBy, reason, expiresAt } = request
 
     if (activatedBy !== 'owner') {
       return { ok: false, reason: FOUNDRY_REASONS.notAuthorized }
+    }
+    if (toStatus !== 'active') {
+      return { ok: false, reason: FOUNDRY_REASONS.invalidTransition }
+    }
+    if (!isBoundedReason(reason)) {
+      return { ok: false, reason: FOUNDRY_REASONS.invalidReason }
+    }
+    if (expiresAt !== undefined && expiresAt !== null) {
+      const parsedExpiry = Date.parse(expiresAt)
+      if (!Number.isFinite(parsedExpiry) || parsedExpiry <= this.now().getTime()) {
+        return { ok: false, reason: FOUNDRY_REASONS.invalidExpiry }
+      }
     }
 
     const artifact = findArtifactByHash(this.state, artifactHash)
@@ -474,7 +573,7 @@ export class FoundryEngine {
       expiresAt: expiresAt ?? null,
     }
 
-    this.commit({
+    await this.commit({
       eventId: `evt_${activationId}`,
       sequence: 0,
       type: 'foundry.activation.recorded',
@@ -496,7 +595,7 @@ export class FoundryEngine {
       },
     })
 
-    this.commit({
+    await this.commit({
       eventId: `evt_${activationId}_transition`,
       sequence: 0,
       type: 'foundry.artifact.transitioned',
@@ -515,6 +614,34 @@ export class FoundryEngine {
     return { ok: true, hash: artifactHash, activation: record }
   }
 
+  /** Explicitly deactivate an artifact, returning it to promoted/reusable state. */
+  async deactivateArtifact(request: DeactivateArtifactRequest): Promise<FoundryResult> {
+    const { artifactHash, deactivatedBy, reason } = request
+    if (deactivatedBy !== 'owner') return { ok: false, reason: FOUNDRY_REASONS.notAuthorized }
+    if (!isBoundedReason(reason)) return { ok: false, reason: FOUNDRY_REASONS.invalidReason }
+
+    const artifact = findArtifactByHash(this.state, artifactHash)
+    if (!artifact) return { ok: false, reason: FOUNDRY_REASONS.artifactNotFound }
+    if (!canTransitionArtifact(artifact.status, 'promoted')) {
+      return { ok: false, reason: FOUNDRY_REASONS.invalidTransition }
+    }
+
+    const at = this.now().toISOString()
+    await this.commit({
+      eventId: `evt_deact_${artifactHash.slice(0, 12)}_${this.state.sequence + 1}`,
+      sequence: 0,
+      type: 'foundry.artifact.transitioned',
+      schemaVersion: 1,
+      occurredAt: at,
+      source: 'core',
+      actor: deactivatedBy,
+      correlationId: artifact.runId,
+      causationId: null,
+      payload: { artifactId: artifact.artifactId, toStatus: 'promoted' },
+    })
+    return { ok: true, hash: artifactHash }
+  }
+
   /* --------------------------------------------------------------- tools */
 
   /**
@@ -525,11 +652,14 @@ export class FoundryEngine {
    * explicit owner decision, and then activated — which means it becomes
    * available for invocation.
    */
-  registerTool(request: RegisterToolRequest): FoundryResult {
+  async registerTool(request: RegisterToolRequest): Promise<FoundryResult> {
     const { hash, name, capability, createdBy, artifactHash } = request
 
     if (createdBy !== 'owner') {
       return { ok: false, reason: FOUNDRY_REASONS.notAuthorized }
+    }
+    if (!isCapability(capability)) {
+      return { ok: false, reason: FOUNDRY_REASONS.invalidCapability }
     }
 
     const toolCount = this.state.tools.size
@@ -540,7 +670,7 @@ export class FoundryEngine {
     const toolId = `tool_${hash.slice(0, 12)}`
     const at = this.now().toISOString()
 
-    this.commit({
+    await this.commit({
       eventId: `evt_${toolId}`,
       sequence: 0,
       type: 'foundry.tool.registered',
@@ -563,6 +693,23 @@ export class FoundryEngine {
     return { ok: true, hash }
   }
 
+  /** Move a registered Tool only along the closed lifecycle graph. */
+  async transitionTool(request: TransitionToolRequest): Promise<FoundryResult> {
+    const { hash, toStatus, changedBy } = request
+    if (changedBy !== 'owner') return { ok: false, reason: FOUNDRY_REASONS.notAuthorized }
+    const tool = findToolByHash(this.state, hash)
+    if (!tool) return { ok: false, reason: FOUNDRY_REASONS.toolNotFound }
+    if (!canTransitionTool(tool.status, toStatus)) {
+      return { ok: false, reason: FOUNDRY_REASONS.invalidTransition }
+    }
+    if (!entityTransitionBackedByArtifact(this.state, tool.artifactHash, toStatus)) {
+      return { ok: false, reason: FOUNDRY_REASONS.verificationRequired }
+    }
+
+    await this.commit(foundryTransitionEvent('foundry.tool.transitioned', tool.toolId, 'toolId', toStatus, changedBy, this.state.sequence, this.now()))
+    return { ok: true, hash }
+  }
+
   /* -------------------------------------------------------------- modules */
 
   /**
@@ -572,7 +719,7 @@ export class FoundryEngine {
    * the Work engine, verified against its spec, promoted, and then activated
    * — which means it can be composed into an app.
    */
-  registerModule(request: RegisterModuleRequest): FoundryResult {
+  async registerModule(request: RegisterModuleRequest): Promise<FoundryResult> {
     const { hash, name, createdBy, artifactHash } = request
 
     if (createdBy !== 'owner') {
@@ -587,7 +734,7 @@ export class FoundryEngine {
     const moduleId = `mod_${hash.slice(0, 12)}`
     const at = this.now().toISOString()
 
-    this.commit({
+    await this.commit({
       eventId: `evt_${moduleId}`,
       sequence: 0,
       type: 'foundry.module.registered',
@@ -609,6 +756,23 @@ export class FoundryEngine {
     return { ok: true, hash }
   }
 
+  /** Move a Module only along the closed lifecycle graph and backing artifact state. */
+  async transitionModule(request: TransitionModuleRequest): Promise<FoundryResult> {
+    const { hash, toStatus, changedBy } = request
+    if (changedBy !== 'owner') return { ok: false, reason: FOUNDRY_REASONS.notAuthorized }
+    const module = findModuleByHash(this.state, hash)
+    if (!module) return { ok: false, reason: FOUNDRY_REASONS.moduleNotFound }
+    if (!canTransitionModule(module.status, toStatus)) {
+      return { ok: false, reason: FOUNDRY_REASONS.invalidTransition }
+    }
+    if (!entityTransitionBackedByArtifact(this.state, module.artifactHash, toStatus)) {
+      return { ok: false, reason: FOUNDRY_REASONS.verificationRequired }
+    }
+
+    await this.commit(foundryTransitionEvent('foundry.module.transitioned', module.moduleId, 'moduleId', toStatus, changedBy, this.state.sequence, this.now()))
+    return { ok: true, hash }
+  }
+
   /* ----------------------------------------------------------------- apps */
 
   /**
@@ -619,7 +783,7 @@ export class FoundryEngine {
    * installed, and then activated. There is no silent auto-install or
    * auto-execute.
    */
-  registerApp(request: RegisterAppRequest): FoundryResult {
+  async registerApp(request: RegisterAppRequest): Promise<FoundryResult> {
     const { hash, name, createdBy, artifactHash, moduleHashes } = request
 
     if (createdBy !== 'owner') {
@@ -644,7 +808,7 @@ export class FoundryEngine {
     const appId = `app_${hash.slice(0, 12)}`
     const at = this.now().toISOString()
 
-    this.commit({
+    await this.commit({
       eventId: `evt_${appId}`,
       sequence: 0,
       type: 'foundry.app.registered',
@@ -666,6 +830,26 @@ export class FoundryEngine {
 
     return { ok: true, hash }
   }
+
+  /** Move an App only along the closed lifecycle graph; activation needs active modules. */
+  async transitionApp(request: TransitionAppRequest): Promise<FoundryResult> {
+    const { hash, toStatus, changedBy } = request
+    if (changedBy !== 'owner') return { ok: false, reason: FOUNDRY_REASONS.notAuthorized }
+    const app = findAppByHash(this.state, hash)
+    if (!app) return { ok: false, reason: FOUNDRY_REASONS.appNotFound }
+    if (!canTransitionApp(app.status, toStatus)) {
+      return { ok: false, reason: FOUNDRY_REASONS.invalidTransition }
+    }
+    if (!entityTransitionBackedByArtifact(this.state, app.artifactHash, toStatus)) {
+      return { ok: false, reason: FOUNDRY_REASONS.verificationRequired }
+    }
+    if ((toStatus === 'installed' || toStatus === 'active') && !appModulesAreActive(this.state, app)) {
+      return { ok: false, reason: FOUNDRY_REASONS.moduleNotActive }
+    }
+
+    await this.commit(foundryTransitionEvent('foundry.app.transitioned', app.appId, 'appId', toStatus, changedBy, this.state.sequence, this.now()))
+    return { ok: true, hash }
+  }
 }
 
 /* -------------------------------------------------------------- requests */
@@ -673,7 +857,7 @@ export class FoundryEngine {
 export interface RegisterToolRequest {
   readonly hash: string
   readonly name: string
-  readonly capability: string
+  readonly capability: Capability
   readonly createdBy: PrincipalId
   readonly artifactHash: string
 }
@@ -718,11 +902,66 @@ function findArtifactByHash(state: FoundryState, hash: string): ArtifactRecord |
   return undefined
 }
 
+function findToolByHash(state: FoundryState, hash: string): ToolRecord | undefined {
+  for (const tool of state.tools.values()) {
+    if (tool.hash === hash) return tool
+  }
+  return undefined
+}
+
 function findModuleByHash(state: FoundryState, hash: string): ModuleRecord | undefined {
   for (const module of state.modules.values()) {
     if (module.hash === hash) return module
   }
   return undefined
+}
+
+function findAppByHash(state: FoundryState, hash: string): AppRecord | undefined {
+  for (const app of state.apps.values()) {
+    if (app.hash === hash) return app
+  }
+  return undefined
+}
+
+function entityTransitionBackedByArtifact(
+  state: FoundryState,
+  artifactHash: string,
+  toStatus: ToolStatus | ModuleStatus | AppStatus,
+): boolean {
+  if (toStatus === 'registered' || toStatus === 'deprecated' || toStatus === 'revoked') return true
+  const artifact = findArtifactByHash(state, artifactHash)
+  if (!artifact) return false
+  if (toStatus === 'verified') return ['verified', 'promoted', 'active'].includes(artifact.status)
+  if (toStatus === 'promoted' || toStatus === 'installed') return ['promoted', 'active'].includes(artifact.status)
+  if (toStatus === 'active') return artifact.status === 'active'
+  return false
+}
+
+function appModulesAreActive(state: FoundryState, app: AppRecord): boolean {
+  return app.moduleHashes.every((hash) => findModuleByHash(state, hash)?.status === 'active')
+}
+
+function foundryTransitionEvent(
+  type: 'foundry.tool.transitioned' | 'foundry.module.transitioned' | 'foundry.app.transitioned',
+  entityId: string,
+  idKey: 'toolId' | 'moduleId' | 'appId',
+  toStatus: ToolStatus | ModuleStatus | AppStatus,
+  actor: PrincipalId,
+  sequence: number,
+  now: Date,
+): AnyCoreEvent {
+  return {
+    eventId: `evt_${entityId}_${toStatus}_${sequence + 1}`,
+    sequence: 0,
+    type,
+    schemaVersion: 1,
+    occurredAt: now.toISOString(),
+    source: 'core',
+    actor,
+    correlationId: entityId,
+    causationId: null,
+    payload: { [idKey]: entityId, toStatus },
+  } as AnyCoreEvent
 }
 
 function countArtifactsForRun(state: FoundryState, runId: string): number {
@@ -738,13 +977,17 @@ function computeHash(
   parentHash: string | null,
   specHash: string | null,
 ): string {
-  const input = JSON.stringify({ content, parentHash, specHash })
-  let hash = 0
-  for (let i = 0; i < input.length; i++) {
-    const char = input.charCodeAt(i)
-    hash = ((hash << 5) - hash + char) | 0
-  }
-  return Math.abs(hash).toString(16).padStart(16, '0')
+  // Canonicalise the flat data object before hashing so insertion order cannot
+  // create a second identity for the same artifact content.
+  const canonicalContent = Object.fromEntries(
+    Object.entries(content).sort(([left], [right]) => left.localeCompare(right)),
+  )
+  const input = JSON.stringify({ content: canonicalContent, parentHash, specHash })
+  return createHash('sha256').update(input, 'utf8').digest('hex')
+}
+
+function isBoundedReason(reason: string): boolean {
+  return reason.trim().length > 0 && reason.length <= FOUNDRY_LIMITS.maxReasonChars
 }
 
 function deriveVerdict(evidence: string): Verdict {

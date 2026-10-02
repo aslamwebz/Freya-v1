@@ -57,14 +57,16 @@ export interface FoundryState {
 /**
  * A verification record as the reducer stores it.
  *
- * The evidence is bounded and structured, never the full verifier output.
+ * The evidence itself stays out of the journal; replay retains only its digest
+ * and measured length.
  */
 export interface FoundryVerificationRecord {
   readonly verificationId: string
   readonly artifactHash: string
   readonly verifierName: string
   readonly verdict: Verdict
-  readonly evidence: string
+  readonly evidenceHash: string
+  readonly evidenceLength: number
   readonly verifiedAt: string
   readonly requestedBy: PrincipalId
 }
@@ -117,6 +119,12 @@ export function isFoundryEvent(type: CoreEventType): boolean {
 }
 
 export function reduceFoundryState(state: FoundryState, event: AnyCoreEvent): FoundryState {
+  // Production events carry positive durable sequences. Ignore a sequence the
+  // reducer has already folded so EventFabric publication and an awaited commit
+  // cannot double-apply the same verification/promotion record. Unit fixtures
+  // use sequence 0, so their deliberately synthetic events still exercise folds.
+  if (event.sequence > 0 && event.sequence <= state.sequence) return state
+
   if (!isFoundryEvent(event.type)) {
     return event.sequence > state.sequence ? { ...state, sequence: event.sequence } : state
   }
@@ -174,7 +182,8 @@ function apply(state: FoundryState, event: AnyCoreEvent): FoundryState {
         artifactHash: p.artifactHash,
         verifierName: p.verifierName,
         verdict: p.verdict as Verdict,
-        evidence: p.evidence ?? '',
+        evidenceHash: p.evidenceHash,
+        evidenceLength: p.evidenceLength ?? 0,
         verifiedAt: at,
         requestedBy: p.requestedBy as PrincipalId,
       }
@@ -221,7 +230,7 @@ function apply(state: FoundryState, event: AnyCoreEvent): FoundryState {
       tools.set(p.toolId, {
         toolId: p.toolId,
         hash: p.hash,
-        status: 'draft',
+        status: 'registered',
         name: p.name,
         capability: p.capability as ToolRecord['capability'],
         createdAt: at,
@@ -253,7 +262,7 @@ function apply(state: FoundryState, event: AnyCoreEvent): FoundryState {
       modules.set(p.moduleId, {
         moduleId: p.moduleId,
         hash: p.hash,
-        status: 'draft',
+        status: 'registered',
         name: p.name,
         createdAt: at,
         updatedAt: at,
@@ -284,7 +293,7 @@ function apply(state: FoundryState, event: AnyCoreEvent): FoundryState {
       apps.set(p.appId, {
         appId: p.appId,
         hash: p.hash,
-        status: 'draft',
+        status: 'registered',
         name: p.name,
         createdAt: at,
         updatedAt: at,
@@ -343,7 +352,8 @@ interface FoundryPayloads {
   artifactHash: string
   verifierName: string
   verdict: string
-  evidence: string
+  evidenceHash: string
+  evidenceLength: number
   verifiedAt: string
   requestedBy: string
   promotionId: string

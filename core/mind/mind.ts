@@ -26,6 +26,7 @@ import {
   buildExpressionForTurn,
   withExpressionBlock,
   type ExpressionMemory,
+  type ExpressionTurnResult,
 } from './expression'
 import type { CueKind, CueUsageLedger, InteractionFact, RelationshipItem } from '../personality/types'
 
@@ -259,10 +260,14 @@ export interface MindServiceOptions {
    * The expression-memory seam for anti-repetition.
    *
    * Injected by the Core, which owns the cue ledger. The Mind reads the ledger
-   * before planning and records cue use after the turn — it has no store, no
-   * persistence, and no write path of its own. A null or absent seam means no
-   * expression block is produced, exactly as a Brain that cannot recall produces
-   * no reference block.
+   * before planning and records cue use after a turn that actually reached a
+   * provider — it has no store, no persistence, and no write path of its own.
+   *
+   * A null or absent seam means **no expression block is produced and no cue
+   * reads or writes occur**, exactly as a Brain that cannot recall produces no
+   * reference block. A seam that cannot be read degrades the same way, because an
+   * unreadable ledger must never be mistaken for an empty one — an empty ledger
+   * would re-offer the same cues forever. See `expressionForTurn`.
    */
   expressionMemory?: ExpressionMemory
   /**
@@ -395,27 +400,55 @@ export class MindService {
   }
 
   /**
-   * Read the cue ledger from the injected expression memory.
+   * Plan this turn's expression, or null when there is no usable memory seam.
    *
-   * Never throws. A memory that is unavailable, empty, or unhappy returns null, and
-   * the turn proceeds with an empty ledger — the same degradation as a Brain that
-   * cannot recall. Forgetting is not a reason to refuse to answer.
+   * Personality expression enters the Mind through the injected
+   * `ExpressionMemory`, and nowhere else. The contract is fail-safe in both
+   * directions:
+   *
+   *  - **No seam** means no expression block and no cue reads or writes. The Core
+   *    has not wired personality expression, so the Mind emits exactly the packet
+   *    it produced before this feature existed.
+   *  - **A seam that cannot be read** degrades the same way. This is deliberate: an
+   *    unreadable ledger must never be mistaken for an empty one, because an empty
+   *    ledger would re-offer the same cues on every turn forever. "I cannot tell
+   *    what was used" and "nothing was used" are not the same claim.
+   *
+   * A working seam that reports `null` is different: that is the ordinary
+   * first-turn state ("no cues have been used yet"), and planning proceeds with an
+   * empty ledger. Never throws; a turn is never lost to its style enrichment.
    */
-  private ledgerFor(): CueUsageLedger | null {
+  private expressionForTurn(at: string): ExpressionTurnResult | null {
     if (this.expressionMemory === null) return null
+    let ledger: CueUsageLedger | null
     try {
-      return this.expressionMemory.readLedger()
+      ledger = this.expressionMemory.readLedger()
     } catch (error) {
-      console.error('[freya.mind] expression memory read failed; continuing without a ledger', error)
+      console.error(
+        '[freya.mind] expression memory read failed; continuing without expression guidance',
+        error,
+      )
+      return null
+    }
+    try {
+      return buildExpressionForTurn({
+        now: at,
+        facts: this.interactionFacts(),
+        relationship: this.relationshipItems(),
+        ledger,
+      })
+    } catch (error) {
+      console.error('[freya.mind] expression planning failed; continuing without it', error)
       return null
     }
   }
 
   /**
-   * Record cue use after a turn completes.
+   * Record cue use after a turn, once a provider was actually reached.
    *
    * Never throws. A memory that cannot record is logged and swallowed — a failed
    * anti-repetition record must not fail a turn that already has a stored answer.
+   * The caller decides *whether* a cue was spent; this only performs the write.
    */
   private recordCueUse(cueId: string, kind: CueKind, at: string): void {
     if (this.expressionMemory === null) return
@@ -594,13 +627,12 @@ export class MindService {
       // spliced into the packet the Mind was already going to send. No second
       // provider call, no persistence, no clock read. The block is style guidance
       // only — it cannot grant capability, bypass Guard, or weaken STOP ALL.
-      const expression = buildExpressionForTurn({
-        now: startedAt,
-        facts: this.interactionFacts(),
-        relationship: this.relationshipItems(),
-        ledger: this.ledgerFor(),
-      })
-      const messages = withExpressionBlock(withContext, expression.block)
+      //
+      // Without a usable expression-memory seam there is no block at all: the
+      // personality layer enters through that seam and nowhere else. See
+      // `expressionForTurn`.
+      const expression = this.expressionForTurn(startedAt)
+      const messages = withExpressionBlock(withContext, expression?.block ?? null)
 
       // Record what context was actually assembled before the provider is asked.
       // This remains true for failure/cancellation outcomes too; a turn does not
@@ -628,13 +660,19 @@ export class MindService {
         goalId: null,
       })
 
-      // Record cue use for the cues this turn offered, regardless of outcome.
-      // The plan was built and the cues were offered to the provider; whether the
-      // turn completed, was cancelled, or failed, the cues were spent. Recording
-      // here — after the provider returns, before the terminal bookkeeping — means
-      // the ledger reflects what was actually offered, not what was answered.
-      for (const cue of expression.offeredCueIds) {
-        this.recordCueUse(cue.cueId, cue.kind, startedAt)
+      // Record cue use only when a provider was actually reached. A Governor
+      // denial never dispatches, and a cancellation that arrived before contact
+      // never dispatched either — no cue was spent, and recording one would
+      // suppress a gesture the owner never saw. `allowed` means the provider
+      // answered; `failed` and `cancelled` carry the gateway's own account of
+      // whether a provider was contacted.
+      const dispatched =
+        outcome.status === 'allowed' ||
+        ((outcome.status === 'failed' || outcome.status === 'cancelled') && outcome.providerContacted)
+      if (expression !== null && dispatched) {
+        for (const cue of expression.offeredCueIds) {
+          this.recordCueUse(cue.cueId, cue.kind, startedAt)
+        }
       }
 
       if (outcome.status === 'denied') {

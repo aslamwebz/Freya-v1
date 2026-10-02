@@ -48,7 +48,18 @@ interface RecordingAuthority extends OwnerAuthority {
   readonly recorded: readonly Recorded[]
 }
 
-function recordingAuthority(): RecordingAuthority {
+/** What the authority answers for a turn. Lets a test choose the outcome. */
+type OutcomeFor = (intent: CognitionIntent) => CognitionOutcome
+
+const ALLOWED: OutcomeFor = (intent) => ({
+  status: 'allowed',
+  requestId: intent.cognitionRequestId ?? 'r-stub',
+  text: 'an answer',
+  providerId: 'stub',
+  model: 'stub',
+})
+
+function recordingAuthority(outcome: OutcomeFor = ALLOWED): RecordingAuthority {
   const recorded: Recorded[] = []
   return {
     principalId: 'owner',
@@ -57,38 +68,43 @@ function recordingAuthority(): RecordingAuthority {
     grants: () => [] as readonly CognitionGrant[],
     request: async (intent: CognitionIntent): Promise<CognitionOutcome> => {
       recorded.push({ prompt: intent.prompt, messages: intent.messages ?? [] })
-      return { status: 'allowed', requestId: intent.cognitionRequestId ?? 'r-stub', text: 'an answer', providerId: 'stub', model: 'stub' }
+      return outcome(intent)
     },
     recorded,
   }
 }
 
-interface Harness {
-  readonly mind: MindService
-  readonly authority: RecordingAuthority
-  readonly provider: FakeModelProvider
-  readonly expressionMemory: ExpressionMemory & {
-    readonly ledgerReads: number
-    readonly cueWrites: readonly { cueId: string; kind: string; at: string }[]
-  }
+interface CountingMemory extends ExpressionMemory {
+  readonly ledgerReads: number
+  readonly cueWrites: readonly { cueId: string; kind: string; at: string }[]
 }
 
-async function harness(options?: {
-  facts?: readonly InteractionFact[]
-  relationship?: readonly RelationshipItem[]
-  ledger?: CueUsageLedger | null
-}): Promise<Harness> {
-  const now = T0.getTime()
+/** A working seam that counts its reads and writes. */
+function countingMemory(ledger: CueUsageLedger | null = null): CountingMemory {
   let ledgerReads = 0
   const cueWrites: { cueId: string; kind: string; at: string }[] = []
-
-  const expressionMemory: Harness['expressionMemory'] = {
-    readLedger: () => { ledgerReads += 1; return options?.ledger ?? null },
+  return {
+    readLedger: () => { ledgerReads += 1; return ledger },
     recordCueUse: (cueId: string, kind: string, at: string) => { cueWrites.push({ cueId, kind, at }) },
     get ledgerReads() { return ledgerReads },
     get cueWrites() { return [...cueWrites] },
   }
+}
 
+interface Fixture {
+  readonly mind: MindService
+  readonly authority: RecordingAuthority
+  readonly provider: FakeModelProvider
+}
+
+async function buildMind(options: {
+  /** `null` means no seam is wired at all; otherwise the exact seam to inject. */
+  memory?: ExpressionMemory | null
+  facts?: readonly InteractionFact[]
+  relationship?: readonly RelationshipItem[]
+  outcome?: OutcomeFor
+} = {}): Promise<Fixture> {
+  const now = T0.getTime()
   const fabric = await EventFabric.open({
     store: memoryEventStore(),
     now: () => new Date(now),
@@ -102,7 +118,7 @@ async function harness(options?: {
     updatedAt: T0.toISOString(),
   })
 
-  const authority = recordingAuthority()
+  const authority = recordingAuthority(options.outcome)
   const provider = new FakeModelProvider()
   const mind = new MindService({
     fabric,
@@ -111,12 +127,28 @@ async function harness(options?: {
     gateway: new ModelGateway({ providers: [provider], recorder: silentRecorder, now: () => new Date(now) }),
     now: () => new Date(now),
     newId: (() => { let n = 0; return () => `id-${(n += 1).toString().padStart(4, '0')}` })(),
-    expressionMemory,
-    interactionFacts: () => options?.facts ?? [],
-    relationshipItems: () => options?.relationship ?? [],
+    ...(options.memory === null ? {} : { expressionMemory: options.memory ?? countingMemory() }),
+    interactionFacts: () => options.facts ?? [],
+    relationshipItems: () => options.relationship ?? [],
   })
 
-  return { mind, authority, provider, expressionMemory }
+  return { mind, authority, provider }
+}
+
+interface Harness extends Fixture {
+  readonly expressionMemory: CountingMemory
+}
+
+async function harness(options?: {
+  facts?: readonly InteractionFact[]
+  relationship?: readonly RelationshipItem[]
+  ledger?: CueUsageLedger | null
+  outcome?: OutcomeFor
+}): Promise<Harness> {
+  const { ledger, ...rest } = options ?? {}
+  const expressionMemory = countingMemory(ledger ?? null)
+  const fixture = await buildMind({ ...rest, memory: expressionMemory })
+  return { ...fixture, expressionMemory }
 }
 
 function systemText(messages: readonly ModelMessage[]): string {
@@ -259,45 +291,104 @@ describe('anti-repetition records cue use', () => {
   })
 })
 
-describe('a broken expression memory costs the owner nothing', () => {
-  it('answers the turn with no block when the memory throws', async () => {
-    const item = admittedItem()
-    const now = T0.getTime()
-    const fabric = await EventFabric.open({
-      store: memoryEventStore(),
-      now: () => new Date(now),
-      newId: (() => { let n = 0; return () => `evt-${(n += 1).toString().padStart(4, '0')}` })(),
-    })
-    const conversations = new MemoryConversationStore({ mode: 'memory' })
-    await conversations.putConversation({
-      conversationId: CONVERSATION_ID,
-      title: 'a conversation',
-      createdAt: T0.toISOString(),
-      updatedAt: T0.toISOString(),
-    })
+function brokenMemory(): ExpressionMemory & { readonly reads: number; readonly writes: number } {
+  let reads = 0
+  let writes = 0
+  return {
+    readLedger: () => { reads += 1; throw new Error('expression memory is on fire') },
+    recordCueUse: () => { writes += 1; throw new Error('expression memory is on fire') },
+    get reads() { return reads },
+    get writes() { return writes },
+  }
+}
 
-    const authority = recordingAuthority()
-    const provider = new FakeModelProvider()
-    const mind = new MindService({
-      fabric,
-      store: conversations,
-      authority,
-      gateway: new ModelGateway({ providers: [provider], recorder: silentRecorder, now: () => new Date(now) }),
-      now: () => new Date(now),
-      newId: (() => { let n = 0; return () => `id-${(n += 1).toString().padStart(4, '0')}` })(),
-      expressionMemory: {
-        readLedger: () => { throw new Error('expression memory is on fire') },
-        recordCueUse: () => { throw new Error('expression memory is on fire') },
-      },
-      interactionFacts: () => [GREETING_FACT],
-      relationshipItems: () => [item],
-    })
+describe('no usable expression memory means no personality expression', () => {
+  it('emits no block and records no cue use when the memory throws', async () => {
+    const item = admittedItem({ kind: 'inside-joke', key: 'shared-joke', cueKind: 'inside-joke' })
+    const memory = brokenMemory()
+    const { mind, authority } = await buildMind({ memory, facts: [GREETING_FACT], relationship: [item] })
 
     const turn = await mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 't1', text: 'hello' })
     expect(turn.outcome).toBe('completed')
-    // The expression block is still produced (facts + relationship items are passed),
-    // but the ledger read failed so no cue use is recorded. The turn is answered.
-    expect(authority.recorded[0]?.messages.length).toBeGreaterThanOrEqual(2)
+
+    const messages = authority.recorded[0]?.messages ?? []
+    // A seam that cannot be read is not treated as an empty ledger: there is no
+    // expression block at all, and the packet is exactly system + question.
+    expect(messages).toHaveLength(2)
+    expect(expressionBlockOf(messages)).toBeUndefined()
+    // It was probed once to discover the fault, and never written.
+    expect(memory.reads).toBe(1)
+    expect(memory.writes).toBe(0)
+  })
+
+  it('emits no block and performs no cue I/O when no seam is wired at all', async () => {
+    const item = admittedItem({ kind: 'inside-joke', key: 'shared-joke', cueKind: 'inside-joke' })
+    const { mind, authority } = await buildMind({ memory: null, facts: [GREETING_FACT], relationship: [item] })
+
+    const turn = await mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 't1', text: 'hello' })
+    expect(turn.outcome).toBe('completed')
+
+    const messages = authority.recorded[0]?.messages ?? []
+    expect(messages).toHaveLength(2)
+    expect(expressionBlockOf(messages)).toBeUndefined()
+  })
+})
+
+describe('cue use is gated on a provider actually being reached', () => {
+  it('does not record cue use when the Governor denies the request', async () => {
+    const item = admittedItem({ kind: 'inside-joke', key: 'shared-joke', cueKind: 'inside-joke' })
+    const { mind, expressionMemory, authority } = await harness({
+      relationship: [item],
+      facts: [GREETING_FACT],
+      outcome: (intent) => ({
+        status: 'denied',
+        requestId: intent.cognitionRequestId ?? 'r',
+        reason: 'the Governor refused',
+      }),
+    })
+
+    const turn = await mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 't1', text: 'hello' })
+    expect(turn.outcome).toBe('denied')
+    // The request reached the authority but never a provider, so no cue was spent.
+    expect(authority.recorded.length).toBe(1)
+    expect(expressionMemory.cueWrites).toHaveLength(0)
+  })
+
+  it('does not record cue use when the turn is cancelled before contact', async () => {
+    const item = admittedItem({ kind: 'inside-joke', key: 'shared-joke', cueKind: 'inside-joke' })
+    const { mind, expressionMemory } = await harness({
+      relationship: [item],
+      facts: [GREETING_FACT],
+      outcome: (intent) => ({
+        status: 'cancelled',
+        requestId: intent.cognitionRequestId ?? 'r',
+        reason: 'stopped before contact',
+        providerContacted: false,
+      }),
+    })
+
+    const turn = await mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 't1', text: 'hello' })
+    expect(turn.outcome).toBe('cancelled')
+    expect(expressionMemory.cueWrites).toHaveLength(0)
+  })
+
+  it('records cue use when a provider was contacted and then failed', async () => {
+    const item = admittedItem({ kind: 'inside-joke', key: 'shared-joke', cueKind: 'inside-joke' })
+    const { mind, expressionMemory } = await harness({
+      relationship: [item],
+      facts: [GREETING_FACT],
+      outcome: (intent) => ({
+        status: 'failed',
+        requestId: intent.cognitionRequestId ?? 'r',
+        reason: 'provider blew up',
+        providerContacted: true,
+      }),
+    })
+
+    const turn = await mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 't1', text: 'hello' })
+    expect(turn.outcome).toBe('failed')
+    // A provider had the request, so the gesture was spent even though it failed.
+    expect(expressionMemory.cueWrites.length).toBeGreaterThan(0)
   })
 })
 

@@ -72,14 +72,21 @@ export interface ExpressionMemory {
 export interface ExpressionTurnInput {
   /** The instant this turn is running at. */
   readonly now: string
+  /**
+   * The cue ledger, or null for the ordinary first-turn state.
+   *
+   * Required rather than optional so a caller cannot silently plan against an
+   * implicit empty ledger. `null` is a *usable* answer from a working seam
+   * meaning "nothing has been used yet"; it is not the same as having no seam at
+   * all. The Mind only reaches this function once it has a readable seam.
+   */
+  readonly ledger: CueUsageLedger | null
   /** Interaction facts observed by trusted code. Empty when none. */
   readonly facts?: readonly InteractionFact[]
   /** Admitted relationship items. Empty when none. */
   readonly relationship?: readonly RelationshipItem[]
   /** Caller-normalised context tokens for preference matching. */
   readonly contextTokens?: readonly string[]
-  /** The cue ledger, or null when none exists yet. */
-  readonly ledger?: CueUsageLedger | null
   /** The temperament to plan against. Defaults to the frozen core-owned table. */
   readonly temperament?: ExpressionPlanInput['temperament']
   /** Repetition policy overrides. Narrowed within bounds, never widened. */

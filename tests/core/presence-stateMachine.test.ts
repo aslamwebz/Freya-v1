@@ -102,6 +102,7 @@ function personalityProjection(overrides: Partial<PersonalityProjection> = {}): 
     schemaVersion: 1,
     sequence: 1,
     temperament: null,
+    persistence: { mode: 'encrypted', durable: true, reason: null, faultReason: null, retained: 0 },
     items: [],
     counts: {
       items: 0,
@@ -109,6 +110,7 @@ function personalityProjection(overrides: Partial<PersonalityProjection> = {}): 
       candidate: 0,
       rejected: 0,
       superseded: 0,
+      retired: 0,
       cuesAdmitted: 0,
       dropped: 0,
     },

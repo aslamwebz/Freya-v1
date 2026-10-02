@@ -1148,6 +1148,16 @@ const PAYLOAD_RULES: {
     ['scheduleId', 'reason'],
     (p) => isEventId(p.scheduleId) && isNonEmptyString(p.reason),
   ),
+
+  'office.presence.requested': workRule(
+    ['workerId'],
+    (p) => isNonEmptyString(p.workerId),
+  ),
+
+  'office.presence.fulfilled': workRule(
+    ['workerId'],
+    (p) => isNonEmptyString(p.workerId),
+  ),
 }
 
 /** A bounded, control-character-free label. A name, never prose. */

@@ -12,6 +12,7 @@ import type { WorkforceProjection } from '../../core/protocol/workforce'
 import type { ContextProjection } from '../../core/protocol/context'
 import type { PersonalityProjection } from '../../core/protocol/personality'
 import type { AttentionProjection } from '../../core/protocol/attention'
+import type { OfficeProjection } from '../../core/office/projection'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -179,6 +180,19 @@ export interface FreyaHostBridge {
    */
   coreAttention(): Promise<AttentionProjection | null>
   onCoreAttention(handler: (projection: AttentionProjection) => void): () => void
+
+  /**
+   * The Office projection: Freya's station, live run stations, worker stations,
+   * approval stations and the history timeline.
+   *
+   * Same bargain as every other channel. What crosses is Core's report —
+   * stations, counts, history and pending presence requests — and there is no
+   * function here that invents a station, inflates a count or fabricates a
+   * percentage. The Office is a pure function of real Work/Workforce/Core
+   * state, and this bridge is a forwarding box on the way to it.
+   */
+  coreOffice(): Promise<OfficeProjection | null>
+  onCoreOffice(handler: (projection: OfficeProjection) => void): () => void
 }
 
 declare global {

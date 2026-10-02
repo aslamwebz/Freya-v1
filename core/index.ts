@@ -98,6 +98,7 @@ import {
 } from './protocol/attention'
 import { AttentionEngine, type AttentionSourceScope } from './attention/engine'
 import type { AttentionDecision, AttentionSource, FocusState } from './attention/types'
+import { projectOffice, ABSENT_OFFICE_PROJECTION, type OfficeProjection } from './office/projection'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
 import type { CognitionGrantSpec } from './cognition/grants'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
@@ -490,6 +491,19 @@ export interface Core {
   /** Subscribe to the Attention projection. Same mirror semantics as the others. */
   onAttention(listener: (projection: AttentionProjection) => void): () => void
   /**
+   * Core's account of the Office: Freya's station, live run stations, worker
+   * stations, approval stations and the history timeline.
+   *
+   * Read-only, and derived entirely from Core's own Work, Workforce and status
+   * projections. A window holds what Core last built and cannot write a field
+   * of it. There is no method here that invents a station, inflates a count or
+   * fabricates a percentage: the Office is a pure function of real state, and
+   * the shape of the read is the whole policy.
+   */
+  office(): OfficeProjection
+  /** Subscribe to the Office projection. Same mirror semantics as the others. */
+  onOffice(listener: (projection: OfficeProjection) => void): () => void
+  /**
    * Evaluate due schedules. The bounded wake mechanism, driven by the host.
    *
    * Main-process composition only — there is deliberately no `attention.tick`
@@ -598,6 +612,7 @@ class FreyaCore implements Core {
   /** Detaches Core from the Personality source's change channel. Set once, at start. */
   private disposePersonalitySource: () => void = () => {}
   private readonly attentionListeners = new Set<(projection: AttentionProjection) => void>()
+  private readonly officeListeners = new Set<(projection: OfficeProjection) => void>()
   /**
    * The Phase 12 Attention engine, or undefined before `start()`.
    *
@@ -1718,6 +1733,59 @@ class FreyaCore implements Core {
     }
   }
 
+  /**
+   * The Office projection.
+   *
+   * A mirror like the others, and derived entirely from Core's own Work,
+   * Workforce and status projections. A window holds what Core last built and
+   * cannot write a field of it. There is no code path here that invents a
+   * station, inflates a count or fabricates a percentage: the Office is a pure
+   * function of real state, and the shape of the read is the whole policy.
+   *
+   * A Core that has not started reports `unavailable` with a stated reason
+   * rather than an empty office, because "the office is empty" and "Core is not
+   * up" are different facts and a surface must not have to guess which one it
+   * is looking at.
+   */
+  office(): OfficeProjection {
+    if (this.currentLifecycle === 'booting' || this.fabric === undefined) {
+      return { ...ABSENT_OFFICE_PROJECTION, reason: 'Core has not reported yet' }
+    }
+    return projectOffice({
+      work: this.work(),
+      workforce: this.workforce(),
+      core: this.status(),
+      presenceRequests: [...this.state.office.requests.values()],
+    })
+  }
+
+  onOffice(listener: (projection: OfficeProjection) => void): () => void {
+    this.officeListeners.add(listener)
+    // Delivered immediately, like every other subscription here, so a window
+    // that attaches late agrees with one that never left.
+    try {
+      listener(this.office())
+    } catch (error) {
+      console.error('[freya.core] Office subscriber threw', error)
+    }
+    return () => {
+      this.officeListeners.delete(listener)
+    }
+  }
+
+  private publishOffice(): void {
+    if (this.officeListeners.size === 0) return
+    const projection = this.office()
+    for (const listener of [...this.officeListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Office listener threw', error)
+        this.officeListeners.delete(listener)
+      }
+    }
+  }
+
   async attentionTick(now?: Date): Promise<number> {
     if (this.attentionEngine === undefined) return 0
     return await this.attentionEngine.tick(now)
@@ -2807,6 +2875,99 @@ class FreyaCore implements Core {
             ok: true,
             status: this.status(),
             attention: { operation: 'detail', ok: true, detail },
+          }
+        }
+
+        /* --------------------------------------------------------- office */
+
+        case 'office.status.read': {
+          // A payloadless read, exactly like `work.status.read` and
+          // `workforce.status.read`. Anything attached is refused rather than
+          // dropped, so a window cannot smuggle an instruction into a question.
+          if (carriesFields(envelope.payload)) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'the Office read carries no payload' },
+              office: { operation: 'refused', ok: false, reason: 'the Office read carries no payload' },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            office: { operation: 'status', ok: true },
+          }
+        }
+
+        case 'office.presence.request': {
+          // The one Office command that writes, and it writes one bounded fact:
+          // that the owner asked for an agent to join the desktop Presence.
+          //
+          // The payload carries a workerId and nothing else. There is no
+          // principal, no authority, no capability, no expression and no
+          // position — the request is a question to Presence (Phase 13), not an
+          // instruction, and the Office can ask and show that it asked and do
+          // nothing else.
+          const workerId = readString(envelope.payload, 'workerId')
+          if (workerId === null) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'a workerId is required' },
+              office: { operation: 'refused', ok: false, reason: 'a workerId is required' },
+            }
+          }
+          // STOP ALL is latched, so Freya is not acting and the office is not
+          // asking for agents to join a desktop that is not in use.
+          if (this.state.stopAll.active) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'Freya is stopped' },
+              office: { operation: 'refused', ok: false, reason: 'Freya is stopped', workerId },
+            }
+          }
+          // The worker must exist. A request for an agent Core does not have is
+          // a phantom, and the Office does not invent agents to put on the
+          // desktop.
+          const workforce = this.workforce()
+          if (!workforce.workers.some((worker) => worker.workerId === workerId)) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'no such worker' },
+              office: { operation: 'refused', ok: false, reason: 'no such worker', workerId },
+            }
+          }
+          // One pending request per worker. A repeated ask replaces the first
+          // rather than adding a duplicate, so a repeated click cannot grow the
+          // set without bound.
+          const existing = this.state.office.requests.get(workerId)
+          if (existing !== undefined && !existing.fulfilled) {
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              office: { operation: 'presence-requested', ok: true, workerId },
+            }
+          }
+          const event = await this.fabric.append(
+            'office.presence.requested',
+            { workerId },
+            { actor: 'owner' },
+          )
+          this.publishOffice()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            office: {
+              operation: 'presence-requested',
+              ok: true,
+              workerId,
+              durableSequence: event.sequence,
+            },
           }
         }
 
@@ -4039,6 +4200,11 @@ class FreyaCore implements Core {
       } catch (error) {
         console.error('[freya.core] status subscriber threw', error)
       }
+    }
+    try {
+      this.publishOffice()
+    } catch (error) {
+      console.error('[freya.core] Office notify threw', error)
     }
   }
 }

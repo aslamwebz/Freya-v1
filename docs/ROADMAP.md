@@ -117,13 +117,22 @@ and dashboard transitions.
 Presence consumes a platform-neutral protocol so a future native/Godot renderer can
 replace it without moving Core.
 
-## Phase 14 — Office
+## Phase 14 — Office (Core landed)
 
 A truthful spatial view of real Work/Workforce state. Freya and agents work only
 when actual Runs/Steps exist. The user can inspect, redirect and cancel. Agents may
 join desktop Presence on request.
 
-No decorative fake work.
+Every station corresponds to one real thing Core owns. No idle animation, no fake
+progress, no phantom workers and no decorative activity. Redirect and cancel go
+through the existing authorized Core commands; the only Office-specific command is
+the bounded presence request.
+
+What was built, and what was left out on purpose, is recorded in
+[PHASE-14.md](PHASE-14.md). The short version: the Office is a read-only spatial
+projection, not a simulation. It owns no action authority, makes no model calls and
+invents nothing. Presence consumption (Phase 13) reads the journaled request; the
+Office does not assume any Phase 13 implementation detail.
 
 ## Phase 15 — Foundry
 

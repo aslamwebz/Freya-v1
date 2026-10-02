@@ -22,6 +22,7 @@ import type { PersonalityProjection } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import { ATTENTION_NO_PAYLOAD } from '../core/protocol/attention'
 import { ATTENTION_LIMITS } from '../core/attention/types'
+import type { OfficeProjection } from '../core/office/projection'
 
 export interface RuntimeInfo {
   version: string
@@ -319,6 +320,32 @@ const api = {
   },
 
   /**
+   * The Office projection: Freya's station, live run stations, worker stations,
+   * approval stations and the history timeline.
+   *
+   * What crosses is exactly what Core derived from real Work/Workforce/Core
+   * state — ids, statuses, counts, measured lengths, closed labels and
+   * deterministic positions. What does **not** cross is the substance: no step
+   * input, no observation content, no message body, no task title, no mission
+   * text, no authority, no capability instance. A window can see what is
+   * happening and where; it cannot reach what a capability was given or what it
+   * returned, and it cannot invent either.
+   *
+   * There is no function here that invents a station, inflates a count or
+   * fabricates a percentage. The Office is a pure function of Core state, and
+   * this bridge is a forwarding box on the way to it.
+   */
+  coreOffice: (): Promise<OfficeProjection | null> => ipcRenderer.invoke('freya:core:office'),
+
+  onCoreOffice: (handler: (projection: OfficeProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: OfficeProjection): void => handler(projection)
+    ipcRenderer.on('freya:core:office', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:office', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -467,6 +494,16 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'attention.schedule.register',
   'attention.schedule.cancel',
   'attention.inbox.read',
+
+  // Office. A window may read the Office projection and ask for an agent to
+  // join the desktop Presence. Note what it may *not* do: it cannot invent a
+  // station, inflate a count, fabricate a percentage, name a principal, assert
+  // an authority, grant a capability or reach a model. The presence request
+  // takes a workerId and nothing else — Core validates the worker exists and
+  // journals the request, and whether the agent actually appears is a Presence
+  // concern (Phase 13), not the Office's.
+  'office.status.read',
+  'office.presence.request',
 ])
 
 /**
@@ -787,6 +824,32 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
         return { ok: false, reason: 'attention event id is invalid' }
       }
       return { ok: true, payload: { eventId } }
+    }
+
+    case 'office.status.read': {
+      // A payloadless read, exactly like `work.status.read` and
+      // `workforce.status.read`. Anything attached is refused rather than
+      // dropped, so a window cannot smuggle an instruction into a question.
+      if (!carriesNothing(payload)) {
+        return { ok: false, reason: 'the Office read carries no payload' }
+      }
+      return { ok: true }
+    }
+
+    case 'office.presence.request': {
+      // One bounded field, and nothing else crosses.
+      //
+      // What is deliberately absent is the interesting part. There is no
+      // `principal`, no `authority`, no `capability`, no `expression`, no
+      // `position` and no `style` — so a window cannot assert who is asking,
+      // grant the agent anything, or choose how it appears. The request is a
+      // question to Presence (Phase 13), not an instruction, and the bridge
+      // forwards the workerId and refuses the rest.
+      const workerId = string('workerId', MAX_ID_CHARS)
+      if (workerId === null || workerId === undefined) {
+        return { ok: false, reason: 'a workerId is required' }
+      }
+      return { ok: true, payload: { workerId } }
     }
 
     case 'voice.capture.end': {

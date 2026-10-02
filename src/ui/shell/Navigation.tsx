@@ -20,7 +20,8 @@ const MAIN: NavItem[] = [
   { id: 'harness', label: 'Harness', icon: 'harness', surface: 'harness' },
   { id: 'foundry', label: 'Foundry', icon: 'foundry', surface: 'foundry' },
   { id: 'relay', label: 'Relay', icon: 'relay', surface: 'relay' },
-  { id: 'team', label: 'Team', icon: 'team', surface: 'team' },
+  { id: 'team', label: 'Workforce', icon: 'team', surface: 'team' },
+  { id: 'context', label: 'Context', icon: 'context', surface: 'context' },
   { id: 'office', label: 'Office', icon: 'office', surface: 'office' },
 ]
 

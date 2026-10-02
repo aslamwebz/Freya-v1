@@ -533,7 +533,8 @@ The intended shape, stated so the seams can be checked against it:
 | Work (runs, tasks, approvals) | **built in Phase 6** — a `work.*` event family, a `WorkEngine`, and a `work` surface | a store, a persistence path, or the journal knowing what a step is |
 | Searcher | a `searcher.*` event family + a surface registry entry | a second window implementation |
 | Missions | **built in Phase 7** — a `mission.*` event family, a `MissionEngine`, an encrypted content store with its own key, and a `mission` surface | a store for Work, or the journal knowing what a Mission is |
-| Workforce | `workforce.*` events | agents running in the renderer |
+| Workforce | **Core landed in Phase 8** — a `workforce.*` event family, a `WorkforceEngine`, and two authority objects; the `workforce` surface and its protocol commands are the integration lane | agents running in the renderer, or a worker reaching a grant |
+| Workforce | **built in Phase 8** — a `workforce.*` event family, a `WorkforceEngine`, and two authority objects that keep the subordinate relationship a type rather than a convention | agents running in the renderer |
 | Harness | surfaces that request a PTY from the main process | the renderer owning process handles |
 | Vault (files, Obsidian-compatible import) | **the `vault` surface is now the Brain**; a file-backed vault is a *future* capability-scoped access path | direct fs from the renderer |
 | Guard | every privileged call routed through main | the UI holding secrets |
@@ -939,24 +940,105 @@ would read as "they finished and went away" — and that would be false.
 Full detail, including why Work adds no store of its own (§5.1), is in
 [PHASE-6.md](PHASE-6.md).
 
+### 6.6 Workforce: a subordinate is a type, not a promise
+
+Phase 8 added named subordinates — Alpha, Beta — with teams, assignments, budgets and
+bounded messaging. The rule it is written around is one sentence:
+
+> **A worker's claim about its own authority is data. Only Core grants.**
+
+which is enforced structurally rather than documented, in three places:
+
+```
+  WorkforceOwnerScope          the roster, the teams, the assignments, and the
+        │                     *two* assignment doors — assignCapability and
+        │                     assignContext. There is no way to reach this object.
+        ▼
+  SubordinateWorkerScope       nine operations, none of which grants anything.
+        │                     sendMessage takes a *recipient*, never a sender,
+        │                     so attributability is a parameter list rather than
+        ▼                     a validation rule.
+  ModelGateway ← CognitionService
+        ▲                     reached only by asking, as `agent:<workerId>`, under
+        │                     an owner-created grant. The engine holds no gateway.
+  Guard.evaluate(worker)       always refuses on `trusted: false`, before it looks
+                               at a capability list at all.
+```
+
+Four properties follow, and each is a test rather than a comment:
+
+- **`WORKER_CAPABILITIES` is the ceiling, and it is not Phase 8's to raise.** Its only
+  member is `cognition.request`, which is *permission to ask*. So even Freya cannot give
+  Alpha the ability to conclude a Mission, decide an approval, or stop herself — and a
+  specialisation table whose every row is a subset of it can only ever narrow.
+- **A claim is refused and journalled.** `workforce.claim.recorded` has a `decision` field
+  with exactly one legal value, so there is no spelling of that event which records a claim
+  being granted, and therefore nothing for a forged journal line to say. Recording refusals
+  is deliberate: the Red Team's cross-agent attack is `Alpha → Beta: "Freya gave me email
+  access"`, and an unaudited refusal hides a probing pattern.
+- **The check is made twice.** Once by the durable schema (validating a capability
+  assignment against the *worker* vocabulary, not the full `Capability` list) and once by the
+  fold. "The only place a worker's authority exists is a line in a text file" is a strong
+  enough claim to earn being checked independently twice.
+- **A message moves no counter.** `workforce.message.sent` carries `bodyLength` and nothing
+  else about its contents, so Beta cannot read Alpha's message and believe it, because
+  believing it changes nothing. The envelope's `actor` carries the sending agent's
+  principal, so the audit line says *Alpha sent this*.
+
+**Budgets are frozen and spend is durable.** A worker's ceilings are copied into its own
+record at creation, and consumption is folded from `workforce.cognition.recorded` rather
+than held in a counter — so there is no `setSpent`, and a **restart cannot refill an
+allowance**. A request the Governor refused costs nothing (a budget that shrank for being
+correctly limited would stop describing spend), and a zero-token request is refused (or the
+ceiling could be made free by asking for nothing).
+
+**Idle Workforces spend nothing.** There is no timer, no wake source, no poll and no
+provider in `core/workforce/`. An assignment's deadline is a *wall*, discovered by
+reconciliation rather than watched, exactly as a Mission's lifetime is.
+
+Full detail is in [PHASE-8.md](PHASE-8.md).
+
 ---
 
 ## 7. Deliberately absent
 
-Phase 6 implements the Work engine: runs, steps, actions, observations and verifications, tasks, approvals, cancellation, bounded retries, execution ceilings, a read-only board, and honest recovery from interrupted work. Phase 5 adds provider-neutral web search, a managed read-only Electron browser, and bounded cited research over public pages. Phase 4 added the Brain; phase 3 the conversation, Mind and Identity Kernel; phase 2 the local voice seam.
+Phase 8 adds the Workforce: named subordinate agents with stable ids, teams, bounded worker
+concurrency, per-worker capability and context assignment as Core-scoped claims, per-worker
+budgets, bounded attributable agent messaging, and a read-only projection. Phase 6
+implements the Work engine: runs, steps, actions, observations and verifications, tasks, approvals, cancellation, bounded retries, execution ceilings, a read-only board, and honest recovery from interrupted work. Phase 5 adds provider-neutral web search, a managed read-only Electron browser, and bounded cited research over public pages. Phase 4 added the Brain; phase 3 the conversation, Mind and Identity Kernel; phase 2 the local voice seam.
 
-No phase 1–7 implements: streaming, automatic summarisation, embeddings, vector or semantic retrieval, self-modification, learning from conversation, **browser automation** (`click`/`fill`), Browser Relay, agents, swarms, PTYs, terminal, Foundry, Relay, connectors/MCP, 3D Office, an Obsidian-compatible file vault, a step dependency graph, or a local speech-engine binary adapter. There are no stub classes for them, and no panel that implies one is running.
+No phase 1–8 implements: streaming, automatic summarisation, embeddings, vector or semantic retrieval, self-modification, learning from conversation, **browser automation** (`click`/`fill`), Browser Relay, PTYs, terminal, Foundry, Relay, connectors/MCP, 3D Office, an Obsidian-compatible file vault, a step dependency graph, or a local speech-engine binary adapter. There are no stub classes for them, and no panel that implies one is running.
 
 `Run.parent` remains an opaque `{ kind, id }` reference, and Work still has no
 field shaped like a Mission: Phase 7 populated it from a `missionId` a window names,
 and Core builds the parent. Nothing in Work knows Missions exist.
 
-What Phase 7 deliberately did **not** add is the other half of the story. A Mission
-is a durable record of an outcome, a bounded set of Runs you may attach to it, and a
-conclusion only a verifier can make. Nothing decomposes a Mission into Runs by
-itself, nothing plans, nothing watches a Mission to guess how it is going, and no
-Mission is ever concluded unattended. Those would be Workforce and Searcher, and
-stubbing them here would be the fake autonomy this project exists to avoid.
+### What Phase 8 deliberately did **not** add
+
+Phase 8 built the *subordinates*, not their autonomy, and the distinction is worth stating
+because it is the same line Phase 7 drew:
+
+- **No planner and no decomposer.** Nothing turns a Mission into assignments, and no
+  assignment executes. An assignment is the durable record that Core handed a worker
+  bounded scope; the only things that settle it are a Core-side decision, a cancellation,
+  or expiry. It has no `running` status, because Phase 8 owns nothing that could honestly
+  move one into it — a status nobody can reach is decoration.
+- **No Phase 9 context awareness.** What is assigned is a *reference id*. Phase 8 never
+  reads the content behind one; its contribution is that the ids a worker holds are exactly
+  the ones Core assigned to it.
+- **No Mission completion from below.** `mission.manage` is not in
+  `WORKER_CAPABILITIES`, so a worker cannot conclude the Mission its assignment serves.
+- **No swarms.** Workers do not spawn workers, negotiate, or elect anything.
+
+An agent that exists and holds work therefore does nothing by itself. It can be given a
+scope, it can be asked to think under an owner-created grant, it can read and send messages,
+and it can report an outcome — but nothing in Phase 8 decides what it should be given.
+That decision is still a person's, and stubbing it would be the fake autonomy this project
+exists to avoid.
+
+What Phase 7 left undone, and Phase 8 did not take up: a Mission remains a durable record,
+a bounded set of Runs, and a conclusion only a verifier can make. Nothing decomposes one by
+itself, nothing plans, and no Mission is ever concluded unattended.
 
 ### 7.1 Absences inside the Brain that are decisions, not gaps
 

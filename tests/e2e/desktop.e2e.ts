@@ -40,6 +40,7 @@ const E2E_BRAIN_KEY = Buffer.alloc(32, 0x2b).toString('base64')
  * set the comment above describes, one domain further along.
  */
 const E2E_MISSION_KEY = Buffer.alloc(32, 0x13).toString('base64')
+const E2E_CONTEXT_KEY = Buffer.alloc(32, 0x47).toString('base64')
 /**
  * Which monitor the suite drives Freya on.
  *
@@ -90,6 +91,8 @@ async function launch(
       FREYA_E2E_CONVERSATION_KEY: E2E_CONVERSATION_KEY,
       FREYA_E2E_BRAIN_KEY: E2E_BRAIN_KEY,
       FREYA_E2E_MISSION_KEY: E2E_MISSION_KEY,
+      FREYA_E2E_CONTEXT_KEY: E2E_CONTEXT_KEY,
+      FREYA_CONTEXT_WINDOW_OBSERVATION: '',
       ...env,
     },
   })
@@ -177,7 +180,7 @@ async function openWork(page: Page): Promise<void> {
   if (!(await dialog.isVisible().catch(() => false))) {
     await page
       .getByRole('toolbar', { name: /work surfaces/i })
-      .getByRole('button', { name: 'Work' })
+      .getByRole('button', { name: 'Work', exact: true })
       .click()
   }
   await page.waitForSelector('[role="dialog"][aria-label="Work"] .work-surface', { timeout: 15_000 })
@@ -1059,6 +1062,27 @@ async function main(): Promise<void> {
         (await p4.locator('.surface-layer [role="dialog"][aria-label="Security"]').count()) === 1,
       )
       await p4.getByRole('button', { name: 'Close Security' }).click()
+
+      // --- Phase 9 production Context crosses the read-only host boundary --
+      await launcher.getByRole('button', { name: 'Context', exact: true }).click()
+      await p4.waitForSelector('.context-surface[data-health="ready"]')
+      const contextStorage = await p4.evaluate(async () => {
+        const bridge = (window as unknown as {
+          freyaHost?: { coreContext: () => Promise<{ persistence?: { mode: string; durable: boolean } } | null> }
+        }).freyaHost
+        return (await bridge?.coreContext())?.persistence
+      })
+      check(
+        'production Context reports its independent encrypted storage through preload',
+        contextStorage?.mode === 'encrypted' && contextStorage.durable === true,
+        JSON.stringify(contextStorage),
+      )
+      check(
+        'the read-only Context surface shows Core storage health',
+        await p4.getByText('Context is encrypted and retained across restarts.').isVisible() &&
+          (await p4.locator('.context-surface button, .context-surface input').count()) === 0,
+      )
+      await p4.getByRole('button', { name: 'Close Context', exact: true }).click()
 
       // --- idle costs nothing, and says so --------------------------------
       await p4.waitForTimeout(1500)

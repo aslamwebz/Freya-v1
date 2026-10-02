@@ -15,6 +15,9 @@ import { BRAIN_LIMITS } from '../core/brain/types'
 import { WORK_LIMITS } from '../core/work/types'
 import { DEFAULT_MISSION_LIMITS as MISSION_LIMITS } from '../core/missions/types'
 import type { MissionProjection } from '../core/missions/types'
+import { WORKFORCE_NO_PAYLOAD } from '../core/protocol/workforce'
+import type { WorkforceProjection } from '../core/protocol/workforce'
+import type { ContextProjection } from '../core/protocol/context'
 
 export interface RuntimeInfo {
   version: string
@@ -211,6 +214,56 @@ const api = {
   },
 
   /**
+   * The Workforce projection: which workers and teams exist, and what Core says
+   * each is doing.
+   *
+   * What crosses is ids, names, states, counts and the labels Core assigned.
+   * What does **not** cross — and has no function here at all — is any way to
+   * name a worker, place one on a team, assign a capability, record a claim, or
+   * reach the source this projection came from. The window is a viewer. It has
+   * one Workforce command, `workforce.status.read`, and that command carries no
+   * payload, so a compromised renderer cannot put an owner, a principal, an
+   * authority, a trust level, a provenance or a capability into the Workforce
+   * lane even by accident: the field never gets past this file.
+   */
+  coreWorkforce: (): Promise<WorkforceProjection | null> =>
+    ipcRenderer.invoke('freya:core:workforce'),
+
+  onCoreWorkforce: (handler: (projection: WorkforceProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: WorkforceProjection): void => handler(projection)
+    ipcRenderer.on('freya:core:workforce', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:workforce', listener)
+    }
+  },
+
+  /**
+   * The Context projection: what Core says is around the current question.
+   *
+   * Two functions and no command. A window can pull what Core last reported
+   * and follow what it pushes, and there is nothing else — no item write, no
+   * revocation, no scope request, no reference resolution, and above all no
+   * way to attach a provenance, a trust class or an authority to anything.
+   * Context authority belongs to Core (issue #15); none of it is lent across
+   * this bridge, and `CORE_COMMANDS` below carries no `context.*` name. Core's
+   * own vocabulary does carry `context.status.read` and its siblings, and this
+   * lane still whitelists none of them: a command arm is a door, and the
+   * projection read above is the whole of the window's Context privilege —
+   * whatever Core answers, it answers as metadata, with no argument this
+   * bridge could fill.
+   */
+  coreContext: (): Promise<ContextProjection | null> =>
+    ipcRenderer.invoke('freya:core:context'),
+
+  onCoreContext: (handler: (projection: ContextProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: ContextProjection): void => handler(projection)
+    ipcRenderer.on('freya:core:context', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:context', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -307,6 +360,27 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'mission.cancel',
   'mission.fail',
   'mission.requestCompletion',
+
+  // Workforce, and the list is one line long on purpose.
+  //
+  // A window may *read* the workforce. It may not create a worker, name one,
+  // move one onto a team, assign it a capability, record a claim for it or
+  // change a budget — none of those commands exist in `CoreCommandName` at all,
+  // so they are refused here as unknown names before they can be serialised.
+  // Workforce authority is Core's (issue #10); the renderer's entire privilege
+  // in this lane is the ability to ask what is true.
+  'workforce.status.read',
+
+  // Context, and the entry is deliberately nothing.
+  //
+  // Core's vocabulary now carries `context.status.read` and four siblings, and
+  // none of them is whitelisted here: a window naming any `context.*` command
+  // is refused as an unknown command before this list is even consulted — the
+  // correct answer for every spelling of "let me tell Core what is around me".
+  // The window's entire Context
+  // privilege is the two projection reads on the api object above: a pull and
+  // a subscription. There is no write verb to be tempted by because there is
+  // no write verb.
 ])
 
 /**
@@ -336,6 +410,21 @@ function readString(
 type RendererPayloadResult =
   | { ok: true; payload?: unknown }
   | { ok: false; reason: string }
+
+/**
+ * Whether a payload is empty: `undefined`, `null`, or an object with no keys.
+ *
+ * The mirror image of Core's own check, deliberately — the two must agree or a
+ * window could pass the bridge and be refused by Core (or worse, the reverse).
+ * A string, an array and a populated object all carry something, and all fail
+ * here.
+ */
+function carriesNothing(payload: unknown): boolean {
+  if (payload === undefined || payload === null) return true
+  if (typeof payload !== 'object') return false
+  if (Array.isArray(payload)) return false
+  return Object.keys(payload as Record<string, unknown>).length === 0
+}
 
 const MAX_ID_CHARS = 256
 /** Matches the Searcher's own ceiling, so the bridge and Core agree on the limit. */
@@ -385,6 +474,24 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     case 'work.status.read':
     case 'mission.status.read':
       return { ok: true }
+
+    case 'workforce.status.read': {
+      // The only Workforce arm, and the only command in this file whose whole
+      // contract is "nothing".
+      //
+      // Anything at all attached to the read is refused rather than dropped —
+      // `undefined`, `null` and `{}` pass; a string, an array or an object with
+      // a key in it does not — so a window appending an owner, a principal, an
+      // authority, a trust level, a provenance, a capability or a claim is told
+      // the read carries no payload instead of being left believing the field
+      // went somewhere. The payload is never rebuilt from named fields because
+      // there are no named fields: this arm forwards zero bytes of what the
+      // renderer sent, and says so in words Core repeats.
+      if (!carriesNothing(payload)) {
+        return { ok: false, reason: WORKFORCE_NO_PAYLOAD }
+      }
+      return { ok: true }
+    }
 
     case 'mission.create': {
       // The three pieces of text a Mission is made of, and nothing else.

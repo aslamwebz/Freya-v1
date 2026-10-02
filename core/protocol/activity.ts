@@ -72,6 +72,14 @@ export type ActivityKind =
   | 'mission.verification.requested'
   | 'mission.verification.completed'
   | 'mission.limit.exceeded'
+  // Workforce. Only the facts a person would want to read as news are named: a claim
+  // that was refused and an agent that had to be reconciled are events; the sixteen that
+  // describe a team gaining a member are not.
+  | 'workforce.worker.retired'
+  | 'workforce.worker.stopped'
+  | 'workforce.worker.reconciled'
+  | 'workforce.claim.recorded'
+  | 'workforce.limit.exceeded'
   | 'other'
 
 export interface CoreActivityEvent {
@@ -637,6 +645,67 @@ export function describeActivity(event: {
         ...base,
         kind: 'mission.limit.exceeded',
         text: `Mission ceiling reached: ${text(event.payload.limit, 'unknown')}.`,
+        tone: 'warn',
+      }
+
+    /* ------------------------------------------------------------- workforce */
+
+    // Four rows, and every field read here is an id, a status or a closed code.
+    //
+    // No message body is available to leak, because none is journalled; no context
+    // content either. What these rows *do* say is that an agent asked for something and
+    // was refused, which is the one workforce fact worth putting in front of a person —
+    // a subordinate claiming authority it does not have is the attack this subsystem is
+    // built against, and it should be visible rather than silent.
+
+    // Two rows out of one event type, because two of the transitions are things a person
+    // would want to read as news and the rest are routine lifecycle noise that would drown
+    // the feed. `stopped` is the panic button's consequence on an agent; `retired` is the
+    // only transition that removes one for good.
+    case 'workforce.worker.transitioned':
+      if (event.payload.to === 'stopped') {
+        return {
+          ...base,
+          kind: 'workforce.worker.stopped',
+          text: `Worker stopped (${event.payload.workerId}).`,
+          tone: 'warn',
+        }
+      }
+      if (event.payload.to !== 'retired') {
+        return { ...base, kind: 'other', text: event.type, tone: 'neutral' }
+      }
+      return {
+        ...base,
+        kind: 'workforce.worker.retired',
+        text: `Worker retired (${event.payload.workerId}).`,
+        tone: 'neutral',
+      }
+
+    case 'workforce.worker.reconciled':
+      return {
+        ...base,
+        kind: 'workforce.worker.reconciled',
+        // Says what happened rather than what it looks like: the agent was executing when
+        // the process died, so nothing it was doing could be continued.
+        text: `Worker reconciled after restart (${event.payload.workerId}); it cannot continue.`,
+        tone: 'warn',
+      }
+
+    case 'workforce.claim.recorded':
+      return {
+        ...base,
+        kind: 'workforce.claim.recorded',
+        // "refused" is the only word this row can carry, and that is the point: there is
+        // no spelling of a claim that was granted.
+        text: `Worker claim refused: ${text(event.payload.subject, 'unknown')}.`,
+        tone: 'warn',
+      }
+
+    case 'workforce.limit.exceeded':
+      return {
+        ...base,
+        kind: 'workforce.limit.exceeded',
+        text: `Workforce ceiling reached: ${text(event.payload.limit, 'unknown')}.`,
         tone: 'warn',
       }
 

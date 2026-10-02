@@ -5,6 +5,10 @@ import type { ConversationProjection, VoiceProjection } from '../core/protocol/c
 import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
 import type { MissionProjection } from '../core/missions/types'
+import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
+import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
+import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
+import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 import { BraveSearchProvider } from '../core/research/providers/brave'
 import { ElectronBrowserTargetFactory } from './research/managedTarget'
@@ -40,6 +44,180 @@ export interface HostEnv extends NanoGptEnv {
    */
   FREYA_E2E?: string
   FREYA_E2E_RESEARCH?: string
+}
+
+/**
+ * The far side of the Context seam, as the *host* sees it.
+ *
+ * Core reports context in its own vocabulary — `context()` answers a
+ * `ContextProjectionView`, the audit-shaped projection the Context integration
+ * inside Core builds — and this host transports the *window's* vocabulary, the
+ * `ContextProjection` #24 declared. `ContextChannel` binds *structurally* to a
+ * candidate with both halves of the mirror contract, translates what arrives
+ * into the window's shape, and forwards it. A candidate that already speaks the
+ * window's shape (the seam #24 documented for a Core that grows its own mirror)
+ * is forwarded verbatim, because it is already the answer.
+ *
+ * `ContextChannel` cannot write into a Core, cannot substitute a projection,
+ * and has no branch that runs when nothing binds. Electron owns no Context
+ * authority here; it owns a forwarding box, a translation and a disposer.
+ */
+export interface ContextReportingCore {
+  context(): ContextProjection | ContextProjectionView
+  onContext(
+    listener: (projection: ContextProjection | ContextProjectionView) => void,
+  ): () => void
+}
+
+/** Whether a Core object actually is a context reporter, checked by shape. */
+export function isContextReportingCore(candidate: unknown): candidate is ContextReportingCore {
+  if (typeof candidate !== 'object' || candidate === null) return false
+  const record = candidate as Partial<ContextReportingCore>
+  return (
+    typeof record.context === 'function' &&
+    typeof record.onContext === 'function'
+  )
+}
+
+/**
+ * One projection of Core's Context truth, in the vocabulary a window reads.
+ *
+ * A Core reporting the window's own `ContextProjection` is already the answer
+ * and is returned as it came. A Core reporting `ContextProjectionView` — the
+ * shape this repository's Core actually answers — is translated field by field,
+ * and the translation is where every "Core does not say" is decided:
+ *
+ *  - **`label` is always null.** Core's audit row carries the *length* of a
+ *    label and never the label, because a file name is private in exactly the
+ *    way the content is. The surface falls back to `kind`, which is Core's own
+ *    word.
+ *  - **`ttlSeconds` is always null.** Core reports the instant an item stops
+ *    being valid; it does not report a granted lifetime, and arithmetic on two
+ *    instants would be this file inventing one.
+ *  - **`references` is always empty.** Core's projection holds no standing
+ *    references: `context.reference.read` resolves a term inside Core and is
+ *    consumed there, so "no open references" is the truth about the projection
+ *    rather than a gap in it.
+ *  - **scope and provenance are reported verbatim**, as ids and instants —
+ *    metadata, with nothing a sentence could hide in.
+ *
+ * Health follows the one fact a window cannot check for itself: a Core that has
+ * not built its Context integration reports zeroed limits, and one that has can
+ * only report positive ones (`contextLimits` clamps into `[1, ceiling]`), so an
+ * integration that is not there is `unavailable` in Core's own words rather
+ * than `ready` with an empty list.
+ */
+export function toContextProjection(
+  projection: ContextProjection | ContextProjectionView,
+): ContextProjection {
+  if ('health' in projection) return projection
+
+  const view = projection
+  const available = view.limits.maxItems > 0
+  return {
+    persistence: { ...view.persistence },
+    health: available ? 'ready' : 'unavailable',
+    reason: available ? null : (view.persistence.reason ?? 'Core has not reported a Context yet'),
+    items: view.items.map((row) => ({
+      itemId: row.contextId,
+      kind: row.kind,
+      label: null,
+      state: row.state,
+      provenance: {
+        sourceClass: row.source,
+        detail: row.originId,
+        admittedAt: row.admittedAt,
+      },
+      scope: { label: row.scopeKind, detail: row.scopeId },
+      expiresAt: row.expiresAt,
+      ttlSeconds: null,
+    })),
+    references: [],
+    counts: {
+      items: view.counts.retained,
+      current: view.counts.live,
+      expired: view.counts.expired,
+      revoked: view.counts.revoked,
+      references: 0,
+      unresolvedReferences: 0,
+    },
+    sequence: view.sequence,
+  }
+}
+
+/**
+ * The host's Context transport: a window set, one optional binding, and no
+ * authority.
+ *
+ * Every method is a read or a subscription. `bind` is called once per Core and
+ * only *follows* what that Core reports; `pull` repeats Core's last answer or
+ * says there is none. There is deliberately no `emit`, no `submit` and no way
+ * for a window — or this class — to introduce a context item, because an
+ * Electron-side route for context to get *in* would be Electron holding Context
+ * authority, which is exactly what issue #15's lane reserves for Core.
+ */
+export class ContextChannel {
+  private core: ContextReportingCore | null = null
+  private disposeCore: () => void = () => {}
+  private readonly windows = new Set<(projection: ContextProjection) => void>()
+
+  /**
+   * Follow a Core that reports context. Anything else — a Core built without
+   * the Context facade — binds to nothing and is not an error.
+   */
+  bind(candidate: unknown): void {
+    if (!isContextReportingCore(candidate)) return
+    this.core = candidate
+    this.disposeCore = candidate.onContext((projection) =>
+      this.broadcast(toContextProjection(projection)),
+    )
+  }
+
+  /** Core's last reported projection, or null when no Core is reporting. */
+  pull(): ContextProjection | null {
+    return this.core === null ? null : toContextProjection(this.core.context())
+  }
+
+  /**
+   * Attach a window. Returns a disposer. A window attaching to a reporting
+   * Core is pulled immediately, like every other channel; a window attaching
+   * to one that is not is told nothing, which is the honest silence.
+   */
+  on(send: (projection: ContextProjection) => void): () => void {
+    this.windows.add(send)
+    const projection = this.pull()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Context push threw', error)
+        this.windows.delete(send)
+      }
+    }
+    return () => {
+      this.windows.delete(send)
+    }
+  }
+
+  /** Detach everything and unbind. A stopped host has no Context to mirror. */
+  close(): void {
+    const dispose = this.disposeCore
+    this.disposeCore = () => {}
+    this.core = null
+    this.windows.clear()
+    dispose()
+  }
+
+  private broadcast(projection: ContextProjection): void {
+    for (const send of [...this.windows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Context push threw', error)
+        this.windows.delete(send)
+      }
+    }
+  }
 }
 
 /**
@@ -110,6 +288,30 @@ export interface CoreHost {
   work(): WorkProjection | null
   onMission(send: (projection: MissionProjection) => void): () => void
   mission(): MissionProjection | null
+  /**
+   * Attach to the Workforce projection. Returns a disposer.
+   *
+   * Its own channel, as every subsystem has, and the same bargain: what a
+   * window needs in order to render crosses, and nothing that protects or
+   * decides workforce state crosses at all. No source, no authority object, no
+   * rule, no worker credential — the host can read a projection and forward it,
+   * which is the entire of what it knows how to do with a workforce.
+   */
+  onWorkforce(send: (projection: WorkforceProjection) => void): () => void
+  workforce(): WorkforceProjection | null
+  /**
+   * Attach to the Context projection, as Core last reported it.
+   *
+   * Its own channel like every subsystem's, and the note that matters is about
+   * what is *not* here: the host has no way to write a context item, no source
+   * to hand to Core, and no projection of its own to substitute. A Core that
+   * reports no context leaves `context()` answering `null` and this channel a
+   * closed door with a disposer; a Core that does report one is followed, and
+   * what it says arrives translated into the window's vocabulary. Forwarding
+   * what Core says is the entire of what the host knows how to do with context.
+   */
+  onContext(send: (projection: ContextProjection) => void): () => void
+  context(): ContextProjection | null
   stop(reason?: string): Promise<void>
 }
 
@@ -142,6 +344,14 @@ export interface CoreHostOptions {
    * report `durable: false` rather than implying a persistence they do not have.
    */
   missionKey?: Uint8Array | null
+  contextKey?: Uint8Array | null
+  /** Explicit main-process opt-in; never accepted from a renderer. */
+  windowObservation?: {
+    enabled: boolean
+    provider: ActiveWindowProvider
+    scope: ContextScopeRef
+    timer?: WindowTimer | null
+  }
   /**
    * The developer echo provider, when one was explicitly asked for.
    *
@@ -163,17 +373,40 @@ export interface CoreHostOptions {
    * real Brave provider or the real Electron target while believing it is offline.
    */
   research?: { searchProvider: SearchProvider; browserFactory: BrowserTargetFactory }
+  /**
+   * Fills Core's Workforce seam. For assembly and tests; production passes
+   * none, and the host does not build one.
+   *
+   * Forwarded *into* Core and nowhere else. This is not Electron deciding who
+   * is on a team or what a worker may do — it cannot, because the type it
+   * forwards is something Core can read, not something that takes an
+   * instruction. Workforce authority lives in Core (issue #10); the host's job
+   * is to hand over a reader and then mirror what comes back.
+   */
+  workforceSource?: WorkforceSource
 }
 
 export class ElectronCoreHost implements CoreHost {
   private core: Core | null = null
   private starting: Promise<void> | null = null
+  private stopRequested = false
   private readonly windows = new Set<(status: CoreStatus) => void>()
   private readonly activityWindows = new Set<(activity: CoreActivityEvent[]) => void>()
   private readonly conversationWindows = new Set<(projection: ConversationProjection) => void>()
   private readonly brainWindows = new Set<(projection: BrainProjection) => void>()
   private readonly workWindows = new Set<(projection: WorkProjection) => void>()
   private readonly missionWindows = new Set<(projection: MissionProjection) => void>()
+  private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
+  /**
+   * The Context transport box. Binds structurally to a reporting Core, holds a
+   * window set, and can write nothing — see `ContextChannel`. Deliberately not
+   * a field on Core's construction arguments: Core builds its own Context
+   * integration and takes no context source from the host.
+   */
+  private readonly contextChannel = new ContextChannel()
+  private windowObservation: WindowObservationRuntime | null = null
+  private observedContextId: string | null = null
+  private windowLane: ReturnType<Core['contextWindowLane']> | null = null
 
   constructor(
     private readonly dataPath: string,
@@ -184,6 +417,7 @@ export class ElectronCoreHost implements CoreHost {
   async start(): Promise<void> {
     if (this.core) return
     if (this.starting) return this.starting
+    this.stopRequested = false
     this.starting = (async () => {
       const research = this.options.research ?? this.buildResearchStack()
       const core = createCore({
@@ -197,6 +431,13 @@ export class ElectronCoreHost implements CoreHost {
           : {}),
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
         ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),
+        contextKey: this.options.contextKey ?? null,
+        // The Workforce seam, forwarded whole. Nothing is derived from it here:
+        // the host neither reads nor interprets a workforce, it only hands Core
+        // the reader it was given and mirrors what Core reports.
+        ...(this.options.workforceSource
+          ? { workforceSource: this.options.workforceSource }
+          : {}),
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),
@@ -205,6 +446,10 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.providers ? { providers: this.options.providers } : {}),
       })
       await core.start()
+      if (this.stopRequested) {
+        await core.stop('host stopped during startup')
+        return
+      }
       this.core = core
       // Any window attached later still gets every subsequent change.
       core.subscribe((status) => this.broadcast(status))
@@ -213,6 +458,25 @@ export class ElectronCoreHost implements CoreHost {
       core.onBrain((projection) => this.broadcastBrain(projection))
       core.onWork((projection) => this.broadcastWork(projection))
       core.onMission((projection) => this.broadcastMission(projection))
+      core.onWorkforce((projection) => this.broadcastWorkforce(projection))
+      // The Context channel, bound by shape rather than by name: a Core that
+      // reports `context()`/`onContext()` is followed and translated into the
+      // window's vocabulary, with no edit here and no authority moved into
+      // Electron. A Core that reports nothing still binds to nothing.
+      this.contextChannel.bind(core)
+      const observation = this.options.windowObservation
+      if (observation?.enabled) {
+        this.windowLane = core.contextWindowLane(observation.scope)
+        this.windowObservation = createWindowObservationRuntime({
+          ...observation,
+          timer: observation.timer === undefined ? createIntervalTimer() : observation.timer,
+          lane: this.windowLane,
+          onAdmission: (outcome) => {
+            if ('contextId' in outcome && outcome.ok) this.observedContextId = outcome.contextId ?? null
+          },
+        })
+        this.windowObservation.start()
+      }
     })()
     try {
       await this.starting
@@ -376,7 +640,18 @@ export class ElectronCoreHost implements CoreHost {
     return this.core?.status() ?? NOT_READY
   }
 
+  windowObservationStatus(): WindowSourceStatus {
+    return this.windowObservation?.status() ?? 'disabled'
+  }
+
   async stop(reason = 'app shutdown'): Promise<void> {
+    this.stopRequested = true
+    try { await this.starting } catch { /* The start caller receives its own failure. */ }
+    this.windowObservation?.stop()
+    if (this.observedContextId) this.windowLane?.revoke(this.observedContextId, 'window observation stopped')
+    this.windowObservation = null
+    this.windowLane = null
+    this.observedContextId = null
     const core = this.core
     this.core = null
     this.windows.clear()
@@ -384,6 +659,8 @@ export class ElectronCoreHost implements CoreHost {
     this.conversationWindows.clear()
     this.brainWindows.clear()
     this.workWindows.clear()
+    this.workforceWindows.clear()
+    this.contextChannel.close()
     await core?.stop(reason)
   }
 
@@ -407,6 +684,59 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window Mission push threw', error)
         this.missionWindows.delete(send)
+      }
+    }
+  }
+
+  /**
+   * Attach to the Workforce projection, pushed immediately.
+   *
+   * A window that reloads re-attaches to the same Core and is told what the
+   * workforce is without asking — including, today, the honest sentence that no
+   * Workforce domain exists. Null before the Core has started, so a host with
+   * nothing to report says nothing rather than manufacturing an empty one.
+   */
+  onWorkforce(send: (projection: WorkforceProjection) => void): () => void {
+    this.workforceWindows.add(send)
+    const projection = this.workforce()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Workforce push threw', error)
+      }
+    }
+    return () => {
+      this.workforceWindows.delete(send)
+    }
+  }
+
+  workforce(): WorkforceProjection | null {
+    return this.core?.workforce() ?? null
+  }
+
+  /**
+   * Attach to the Context projection, as the channel saw it last.
+   *
+   * Null until a Core starts reporting, then Core's own facts in the window's
+   * vocabulary — a window attaching late is pushed the current one, like every
+   * other channel here. Nothing in this host decides what a projection means.
+   */
+  onContext(send: (projection: ContextProjection) => void): () => void {
+    return this.contextChannel.on(send)
+  }
+
+  context(): ContextProjection | null {
+    return this.contextChannel.pull()
+  }
+
+  private broadcastWorkforce(projection: WorkforceProjection): void {
+    for (const send of [...this.workforceWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Workforce push threw', error)
+        this.workforceWindows.delete(send)
       }
     }
   }

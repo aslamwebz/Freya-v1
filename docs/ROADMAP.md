@@ -36,11 +36,24 @@ nothing plans, and nothing is ever concluded unattended.
 
 No Workforce or computer control yet.
 
-## Phase 8 — Workforce
+## Phase 8 — Workforce (Core landed)
 
-Named subordinate agents such as Alpha/Beta, specialization, teams, bounded
-concurrency, per-worker capability/context assignment, budgets and agent messaging.
-Agent permission claims are not authority.
+Named subordinate agents such as Alpha/Beta with stable ids, specialization, teams, bounded
+worker concurrency, per-worker capability/context assignment as Core-scoped claims,
+per-worker budgets, bounded attributable agent messaging, and a deterministic read-only
+projection.
+
+**Agent permission claims are data, never authority** — enforced as a type rather than a
+convention: a worker's scope has no method that grants anything, the only capability any
+worker may hold is `cognition.request`, and a claim is refused and journalled with a
+`decision` field that has exactly one legal value.
+
+What was built, and what was left out on purpose, is recorded in
+[PHASE-8.md](PHASE-8.md). The short version: this phase built the subordinates, not their
+autonomy. Nothing decomposes a Mission into assignments, and no assignment executes. No
+renderer, no protocol commands, and no host bridge yet — those are the integration lane.
+
+No computer control yet.
 
 ## Phase 9 — Context Awareness
 
@@ -50,6 +63,17 @@ authorized project/file, shared tab/media, current Mission and active agent work
 Every context item has scope, TTL and revocation.
 
 No omniscient global screen privilege.
+
+Phase 9 implementation and final acceptance gates are complete. Production
+assembly connects encrypted Context restart recovery, actual conversation-scoped
+Mind input and opt-in own-app window observation. The read-only desktop mirror
+reports actual storage health. On 2026-10-02 the full verification gate passed:
+2,089 tests, typecheck, lint, build and 187 desktop checks. [Issue #47](https://github.com/aslamwebz/Freya/issues/47)
+tracks integration into `phase-7-missions`; `main` is preserved separately.
+See [PHASE-9.md](PHASE-9.md) for ownership, provenance and verification details.
+
+OS-wide native observation and `agent_work` remain explicit unsupported/deferred
+boundaries; no Phase 10 execution is included.
 
 ## Phase 10 — Harness and Computer Hands
 

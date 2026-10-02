@@ -87,7 +87,7 @@ export const KEYRING_VERSION = 1
  * Closed, and the union is the point: adding a domain that quietly reused an
  * existing key would be a much worse mistake than not having the domain.
  */
-export const KEY_DOMAINS = ['conversation', 'brain', 'mission'] as const
+export const KEY_DOMAINS = ['conversation', 'brain', 'mission', 'context'] as const
 
 export type KeyDomain = (typeof KEY_DOMAINS)[number]
 
@@ -118,6 +118,7 @@ export interface Keyring {
   conversation: DomainKeyResult
   brain: DomainKeyResult
   mission: DomainKeyResult
+  context: DomainKeyResult
 }
 
 /**
@@ -141,6 +142,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       conversation: { key: null, reason },
       brain: { key: null, reason },
       mission: { key: null, reason },
+      context: { key: null, reason },
     }
   }
 
@@ -158,6 +160,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       ['conversation', legacy ?? randomBytes(KEY_BYTES)],
       ['brain', randomBytes(KEY_BYTES)],
       ['mission', randomBytes(KEY_BYTES)],
+      ['context', randomBytes(KEY_BYTES)],
     ])
     await writeKeyring(keyringPath, generated)
 
@@ -166,6 +169,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       conversation: resultFor(generated.get('conversation')!),
       brain: resultFor(generated.get('brain')!),
       mission: resultFor(generated.get('mission')!),
+      context: resultFor(generated.get('context')!),
     }
   } catch (error) {
     const reason = error instanceof KeyringFormatError
@@ -176,6 +180,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       conversation: { key: null, reason },
       brain: { key: null, reason },
       mission: { key: null, reason },
+      context: { key: null, reason },
     }
   }
 }
@@ -194,64 +199,34 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
  * somebody's conversation history, which has no second copy and no way to be
  * regenerated.
  */
+function keyringResult(path: string, read: (domain: KeyDomain) => DomainKeyResult): Keyring {
+  return { keyringPath: path, conversation: read('conversation'), brain: read('brain'),
+    mission: read('mission'), context: read('context') }
+}
+
 async function withMissingDomains(path: string, file: KeyringFile): Promise<Keyring> {
   const missing = KEY_DOMAINS.filter((domain) => typeof file.keys[domain] !== 'string')
-  if (missing.length === 0) {
-    return {
-      keyringPath: path,
-      conversation: unwrapDomain(file, 'conversation'),
-      brain: unwrapDomain(file, 'brain'),
-      mission: unwrapDomain(file, 'mission'),
-    }
-  }
+  if (missing.length === 0) return keyringResult(path, (domain) => unwrapDomain(file, domain))
 
-  // Re-wrapping requires the plaintext, so a secret this process cannot open is a
-  // hard stop rather than something to work around.
   const readable = new Map<KeyDomain, Buffer>()
+  const degraded = (reason: string): Keyring => keyringResult(path, (domain) =>
+    missing.includes(domain) ? { key: null, reason } : unwrapDomain(file, domain))
   for (const domain of KEY_DOMAINS) {
     if (missing.includes(domain)) continue
     const unwrapped = unwrapDomain(file, domain)
     if (unwrapped.key === null) {
-      return {
-        keyringPath: path,
-        conversation: unwrapDomain(file, 'conversation'),
-        brain: unwrapDomain(file, 'brain'),
-        mission: {
-          key: null,
-          reason:
-            'this machine cannot read the secrets already in the keyring, so the keyring was left untouched and Missions will keep only what they can hold in memory this session',
-        },
-      }
+      return degraded('this machine cannot read the secrets already in the keyring, so it was left untouched; missing domains remain in memory only')
     }
     readable.set(domain, Buffer.from(unwrapped.key))
   }
-
   const upgraded = new Map<KeyDomain, Buffer>(readable)
-  for (const domain of missing) {
-    upgraded.set(domain, randomBytes(KEY_BYTES))
-  }
-
+  for (const domain of missing) upgraded.set(domain, randomBytes(KEY_BYTES))
   try {
     await writeKeyring(path, upgraded)
   } catch {
-    return {
-      keyringPath: path,
-      conversation: unwrapDomain(file, 'conversation'),
-      brain: unwrapDomain(file, 'brain'),
-      mission: {
-        key: null,
-        reason:
-          'a Mission key could not be written by OS secure storage, so Missions will keep only what they can hold in memory this session',
-      },
-    }
+    return degraded('the new domain keys could not be written by OS secure storage; existing keys remain available and missing domains stay in memory only')
   }
-
-  return {
-    keyringPath: path,
-    conversation: resultFor(upgraded.get('conversation')!),
-    brain: resultFor(upgraded.get('brain')!),
-    mission: resultFor(upgraded.get('mission')!),
-  }
+  return keyringResult(path, (domain) => resultFor(upgraded.get(domain)!))
 }
 
 function resultFor(bytes: Buffer): DomainKeyResult {
@@ -402,5 +377,6 @@ function describeProtection(): string {
 function describeDomain(domain: KeyDomain): string {
   if (domain === 'brain') return 'the Brain'
   if (domain === 'mission') return 'Missions'
+  if (domain === 'context') return 'Context'
   return 'conversation history'
 }

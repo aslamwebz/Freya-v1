@@ -8,6 +8,8 @@ import type { ConversationProjection, VoiceProjection } from '../../core/protoco
 import type { BrainProjection } from '../../core/brain/brain'
 import type { WorkProjection } from '../../core/work/projection'
 import type { MissionProjection } from '../../core/missions/types'
+import type { WorkforceProjection } from '../../core/protocol/workforce'
+import type { ContextProjection } from '../../core/protocol/context'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -117,6 +119,35 @@ export interface FreyaHostBridge {
    */
   coreMission(): Promise<MissionProjection | null>
   onCoreMission(handler: (projection: MissionProjection) => void): () => void
+
+  /**
+   * The Workforce projection: which workers and teams exist, and what Core says
+   * each is doing.
+   *
+   * Same bargain as every other channel, and here the note that matters is what
+   * has no function at all: there is nothing on this bridge that names a
+   * worker, places one on a team, assigns a capability, records a claim or
+   * reaches the source Core read. The list above *is* the privileged surface —
+   * a window can look at the workforce, and cannot touch it in any direction.
+   */
+  coreWorkforce(): Promise<WorkforceProjection | null>
+  onCoreWorkforce(handler: (projection: WorkforceProjection) => void): () => void
+
+  /**
+   * The Context projection, exactly as Core last reported it — or `null` when
+   * no Core is reporting context at all, which is the truth about every build
+   * in this repository until issue #15's domain lands in Core.
+   *
+   * The note that matters is the same shape as every other channel's, and here
+   * it is even simpler: these are the *only* two Context functions on the
+   * bridge. There is nothing that names an item, files a provenance, requests
+   * a scope, sets an expiry, revokes anything or resolves a reference, because
+   * Context authority belongs to Core and no part of it is a construction this
+   * window is allowed to supply. The absence is structural: no channel carries
+   * a payload *in* this direction at all.
+   */
+  coreContext(): Promise<ContextProjection | null>
+  onCoreContext(handler: (projection: ContextProjection) => void): () => void
 }
 
 declare global {

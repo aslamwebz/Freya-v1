@@ -6,6 +6,14 @@ import {
 } from './envelope'
 import { isPrincipalId } from '../security/guard'
 import { DEFAULT_MISSION_LIMITS } from '../missions/types'
+import {
+  DEFAULT_WORKER_BUDGET,
+  WORKFORCE_LIMITS,
+  isAssignableToWorker,
+  isWorkerSpecialisation,
+  normaliseContextRef,
+  normaliseWorkforceName,
+} from '../workforce/types'
 
 /**
  * Durable event validation.
@@ -878,7 +886,293 @@ const PAYLOAD_RULES: {
       isEventId(p.missionId) &&
       (p.limit === 'maxChildRuns' || p.limit === 'maxConcurrentChildRuns' || p.limit === 'lifetimeMs'),
   ),
+
+  /* ------------------------------------------------------------- workforce */
+
+  // The strictest family in the journal, and the one with the most to lose.
+  //
+  // A workforce event describes who Freya's subordinates are and what they were
+  // allowed to attempt. So every rule below reads named fields *and* checks the key
+  // set exactly, which means a hand-edited line cannot attach a message body, a
+  // context item, a grant, a trust flag or a `decision: 'granted'` — there is no
+  // spelling of these payloads that carries authority.
+  'workforce.worker.created': workRule(
+    ['workerId', 'name', 'specialisation', 'status', 'createdAt', 'budget'],
+    (p) =>
+      isEventId(p.workerId) &&
+      isBoundedName(p.name, WORKFORCE_LIMITS.maxNameChars) &&
+      isSpecialisation(p.specialisation) &&
+      p.status === 'idle' &&
+      isInstant(p.createdAt) &&
+      isWorkerBudgetPayload(p.budget),
+  ),
+
+  'workforce.worker.transitioned': workRule(
+    ['workerId', 'from', 'to', 'reason'],
+    (p) =>
+      isEventId(p.workerId) &&
+      WORKER_STATUS_SET.has(p.from as string) &&
+      WORKER_STATUS_SET.has(p.to as string) &&
+      (p.reason === null || WORKFORCE_REASON_CODES.has(p.reason as string)),
+  ),
+
+  'workforce.worker.reconciled': workRule(
+    ['workerId', 'previousStatus', 'reason'],
+    (p) =>
+      isEventId(p.workerId) &&
+      WORKER_STATUS_SET.has(p.previousStatus as string) &&
+      WORKFORCE_REASON_CODES.has(p.reason as string),
+  ),
+
+  // The load-bearing check in this file. `isAssignableToWorker` consults the *closed
+  // worker vocabulary* (`WORKER_CAPABILITIES`), which excludes every `work.*`,
+  // `mission.*`, `workforce.*`, `security.*` and `cognition.grant.manage` entry. A
+  // forged line naming one of those is refused here, before it can reach a fold, and
+  // refused again by `state.ts`. Two independent refusals, because "the only place a
+  // worker's authority exists is a durable line" is a strong enough claim to earn
+  // being checked twice.
+  'workforce.capability.assigned': workRule(
+    ['workerId', 'capability'],
+    (p) => isEventId(p.workerId) && isAssignableToWorker(p.capability),
+  ),
+
+  'workforce.context.assigned': workRule(
+    ['workerId', 'contextRef'],
+    // An id, and only an id. `normaliseContextRef` is the same predicate Phase 9's
+    // references will have to satisfy, so a context item's *content* cannot be smuggled
+    // into a field named after one.
+    (p) => isEventId(p.workerId) && normaliseContextRef(p.contextRef) !== null,
+  ),
+
+  'workforce.team.created': workRule(
+    ['teamId', 'name', 'specialisation', 'status', 'createdAt'],
+    (p) =>
+      isEventId(p.teamId) &&
+      isBoundedName(p.name, WORKFORCE_LIMITS.maxTeamNameChars) &&
+      (p.specialisation === null || isSpecialisation(p.specialisation)) &&
+      p.status === 'active' &&
+      isInstant(p.createdAt),
+  ),
+
+  'workforce.team.transitioned': workRule(
+    ['teamId', 'from', 'to', 'reason'],
+    (p) =>
+      isEventId(p.teamId) &&
+      p.from === 'active' &&
+      p.to === 'disbanded' &&
+      (p.reason === null || WORKFORCE_REASON_CODES.has(p.reason as string)),
+  ),
+
+  'workforce.team.member.changed': workRule(
+    ['teamId', 'workerId', 'present'],
+    (p) => isEventId(p.teamId) && isEventId(p.workerId) && typeof p.present === 'boolean',
+  ),
+
+  'workforce.assignment.created': workRule(
+    [
+      'assignmentId',
+      'workerId',
+      'status',
+      'createdAt',
+      'deadlineAt',
+      'budget',
+      'missionId',
+      'capabilities',
+      'contextRefs',
+    ],
+    (p) =>
+      isEventId(p.assignmentId) &&
+      isEventId(p.workerId) &&
+      p.status === 'open' &&
+      isInstant(p.createdAt) &&
+      isInstant(p.deadlineAt) &&
+      isWorkerBudgetPayload(p.budget) &&
+      (p.missionId === null || isEventId(p.missionId)) &&
+      // Every element assignable to a worker, and a bounded list of ids. Same reasoning
+      // as the capability rule: an assignment's scope is authority, so it is checked
+      // against the closed vocabulary rather than merely being an array of strings.
+      isAssignableCapabilityList(p.capabilities, WORKFORCE_LIMITS.maxContextRefsPerWorker) &&
+      isContextRefList(p.contextRefs),
+  ),
+
+  'workforce.assignment.settled': workRule(
+    ['assignmentId', 'from', 'to', 'reason'],
+    (p) =>
+      isEventId(p.assignmentId) &&
+      ASSIGNMENT_STATUS_SET.has(p.from as string) &&
+      p.from === 'open' &&
+      ASSIGNMENT_TERMINAL_SET.has(p.to as string) &&
+      (p.reason === null || WORKFORCE_REASON_CODES.has(p.reason as string)),
+  ),
+
+  // `decision` has one legal spelling. A line claiming a claim was granted cannot
+  // validate, which is the structural form of "claims are data, never authority".
+  'workforce.claim.recorded': workRule(
+    ['claimId', 'workerId', 'kind', 'subject', 'decision', 'refusal'],
+    (p) =>
+      isEventId(p.claimId) &&
+      isEventId(p.workerId) &&
+      WORKFORCE_CLAIM_KIND_SET.has(p.kind as string) &&
+      isNonEmptyString(p.subject) &&
+      p.subject.length <= 256 &&
+      p.decision === 'refused' &&
+      WORKFORCE_CLAIM_REFUSAL_SET.has(p.refusal as string),
+  ),
+
+  // The body is measured. `bodyLength` is the only trace of an agent message that
+  // leaves this process, and it exists so an operator can see a substantial message
+  // happened without the journal becoming a transcript of the workforce talking.
+  'workforce.message.sent': workRule(
+    ['messageId', 'fromWorkerId', 'toWorkerId', 'kind', 'bodyLength', 'sameTeam'],
+    (p) =>
+      isEventId(p.messageId) &&
+      // Both ends are *worker* ids rather than principal ids, and that is deliberate: the
+      // envelope's `actor` already carries the sending agent's principal (validated by
+      // `isPrincipalId` on every replay), so naming it again here would be a second,
+      // weaker copy of the same claim. These are the ids the fold keys its state on, and
+      // they must be event ids or the fold would hold unreferenceable records.
+      isEventId(p.fromWorkerId) &&
+      isEventId(p.toWorkerId) &&
+      // A message to oneself is not a message, and it would otherwise be the cheapest way
+      // to inflate a mailbox count.
+      p.fromWorkerId !== p.toWorkerId &&
+      WORKFORCE_MESSAGE_KIND_SET.has(p.kind as string) &&
+      isNonNegativeInt(p.bodyLength) &&
+      typeof p.sameTeam === 'boolean',
+  ),
+
+  'workforce.limit.exceeded': workRule(
+    ['workerId', 'limit'],
+    (p) => isEventId(p.workerId) && WORKFORCE_LIMIT_NAME_SET.has(p.limit as string),
+  ),
+
+  // Budget spend, and the reason it is durable at all.
+  //
+  // `calls` may be 0 and `outputTokens` may be null, because the honest statement is
+  // sometimes "a call happened and I do not know what it cost". A schema that demanded
+  // a positive count and a positive token figure would force one of the two to be
+  // invented, and an invented budget figure is worse than a missing one.
+  'workforce.cognition.recorded': workRule(
+    ['workerId', 'calls', 'outputTokens'],
+    (p) =>
+      isEventId(p.workerId) &&
+      isNonNegativeInt(p.calls) &&
+      (p.outputTokens === null || isPositiveInt(p.outputTokens)),
+  ),
 }
+
+/** A bounded, control-character-free label. A name, never prose. */
+function isBoundedName(value: unknown, max: number): boolean {
+  return typeof value === 'string' && normaliseWorkforceName(value, max) !== null
+}
+
+function isSpecialisation(value: unknown): boolean {
+  return isWorkerSpecialisation(value)
+}
+
+/**
+ * A list of capabilities, every element assignable to a worker.
+ *
+ * Refused wholesale rather than filtered, for the reason Brain admission refuses
+ * rather than repairs: an assignment whose scope silently lost one element looks like
+ * valid work that was simply scoped smaller, and the difference is invisible in review.
+ */
+function isAssignableCapabilityList(value: unknown, max: number): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= max &&
+    value.every((item) => isAssignableToWorker(item))
+  )
+}
+
+function isContextRefList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= WORKFORCE_LIMITS.maxContextRefsPerWorker &&
+    value.every((item) => normaliseContextRef(item) !== null)
+  )
+}
+
+/**
+ * A worker's durable budget, re-checked against the code-owned ceilings.
+ *
+ * Positive integers and no value above its ceiling: a budget that exists only on disk
+ * is not a budget.
+ */
+function isWorkerBudgetPayload(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const budget = value as Record<string, unknown>
+  if (!onlyNamedKeys(budget, Object.keys(DEFAULT_WORKER_BUDGET))) return false
+  if (!Object.values(budget).every(isPositiveInt)) return false
+  for (const [key, ceiling] of Object.entries(DEFAULT_WORKER_BUDGET)) {
+    if ((budget[key] as number) > ceiling) return false
+  }
+  return true
+}
+
+const WORKER_STATUS_SET: ReadonlySet<string> = new Set([
+  'idle',
+  'working',
+  'blocked',
+  'stopped',
+  'retired',
+])
+
+const ASSIGNMENT_STATUS_SET: ReadonlySet<string> = new Set(['open', 'completed', 'failed', 'cancelled'])
+
+const ASSIGNMENT_TERMINAL_SET: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled'])
+
+const WORKFORCE_MESSAGE_KIND_SET: ReadonlySet<string> = new Set(['request', 'finding', 'handoff', 'status'])
+
+const WORKFORCE_CLAIM_KIND_SET: ReadonlySet<string> = new Set(['capability', 'context'])
+
+const WORKFORCE_CLAIM_REFUSAL_SET: ReadonlySet<string> = new Set([
+  'claims_are_not_authority',
+  'capability_not_assignable',
+  'capability_already_held',
+  'context_not_assignable',
+  'context_already_assigned',
+  'no_such_worker',
+  'worker_retired',
+])
+
+/** Both the global ceilings and the per-worker budgets a limit event may name. */
+const WORKFORCE_LIMIT_NAME_SET: ReadonlySet<string> = new Set([
+  'maxWorkers',
+  'maxTeams',
+  'maxMembersPerTeam',
+  'maxTeamsPerWorker',
+  'maxContextRefsPerWorker',
+  'maxConcurrentAssignments',
+  'maxRetainedClaims',
+  'maxMailboxMessages',
+  'maxNameChars',
+  'maxTeamNameChars',
+  'maxMessageChars',
+  'maxAssignments',
+  'maxOpenAssignments',
+  'maxAssignmentMs',
+  'maxCognitionCalls',
+  'maxCognitionTokens',
+  'maxMessages',
+])
+
+/** Closed reason codes, mirroring `WORKFORCE_REASONS` in `core/workforce/types.ts`. */
+const WORKFORCE_REASON_CODES: ReadonlySet<string> = new Set([
+  'owner',
+  'assignment',
+  'assignment_completed',
+  'assignment_failed',
+  'assignment_cancelled',
+  'assignment_expired',
+  'owner_suspended',
+  'owner_resumed',
+  'stop_all',
+  'retirement',
+  'limit',
+  'recovery',
+  'shutdown',
+])
 
 function isIdList(value: unknown): boolean {
   return (

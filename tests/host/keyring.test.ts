@@ -185,7 +185,7 @@ describe('one secret per domain', () => {
     // The record is there so a keyring written on one platform is never read as
     // though it had been written the same way on another.
     expect(file.protection).toBe('gnome_libsecret')
-    expect(Object.keys(file.keys).sort()).toEqual(['brain', 'conversation', 'mission'])
+    expect(Object.keys(file.keys).sort()).toEqual(['brain', 'context', 'conversation', 'mission'])
     // Separate wrapped blobs: recovering one domain never unwraps another.
     expect(file.keys.brain).not.toBe(file.keys.conversation)
     expect(file.keys.mission).not.toBe(file.keys.conversation)
@@ -262,7 +262,7 @@ describe('the Mission domain, and the migration that introduces it', () => {
     const file = JSON.parse(await readFile(`${dataPath()}.keyring.json`, 'utf8')) as {
       keys: Record<string, string>
     }
-    expect(Object.keys(file.keys).sort()).toEqual(['brain', 'conversation', 'mission'])
+    expect(Object.keys(file.keys).sort()).toEqual(['brain', 'context', 'conversation', 'mission'])
   })
 
   it('gives the migrated Mission key a different secret from both existing ones', async () => {
@@ -475,6 +475,41 @@ describe('a keyring it cannot trust', () => {
 })
 
 describe('secrets never leak', () => {
+  it('upgrades a three-domain keyring with an independent, stable Context key', async () => {
+    const path = `${dataPath()}.keyring.json`
+    const keys = { conversation: randomBytes(32), brain: randomBytes(32), mission: randomBytes(32) }
+    await writeFile(path, JSON.stringify({ version: KEYRING_VERSION, protection: 'gnome_libsecret', keys: {
+      conversation: wrapField(keys.conversation.toString('base64')),
+      brain: wrapField(keys.brain.toString('base64')),
+      mission: wrapField(keys.mission.toString('base64')),
+    } }))
+    const first = await loadKeyring(dataPath())
+    expect(first.context?.key).toBeInstanceOf(Uint8Array)
+    for (const domain of ['conversation', 'brain', 'mission'] as const) {
+      expect(Buffer.from(first[domain].key!)).toEqual(keys[domain])
+      expect(Buffer.from(first.context.key!)).not.toEqual(keys[domain])
+    }
+    const second = await loadKeyring(dataPath())
+    expect(second.context.key).toEqual(first.context.key)
+    const raw = await readFile(path, 'utf8')
+    expect(raw).not.toContain(Buffer.from(first.context.key!).toString('base64'))
+  })
+
+  it('preserves an existing Mission key when the Context upgrade cannot be written', async () => {
+    const path = `${dataPath()}.keyring.json`
+    const mission = randomBytes(32)
+    await writeFile(path, JSON.stringify({ version: KEYRING_VERSION, protection: 'gnome_libsecret', keys: {
+      conversation: wrapField(randomBytes(32).toString('base64')),
+      brain: wrapField(randomBytes(32).toString('base64')),
+      mission: wrapField(mission.toString('base64')),
+    } }))
+    const before = await readFile(path, 'utf8')
+    secure.throwingEncrypt = true
+    const result = await loadKeyring(dataPath())
+    expect(result.context?.key).toBeNull()
+    expect(Buffer.from(result.mission.key!)).toEqual(mission)
+    expect(await readFile(path, 'utf8')).toBe(before)
+  })
   it('writes no secret in the clear', async () => {
     const keyring = await loadKeyring(dataPath())
     const raw = await readFile(`${dataPath()}.keyring.json`, 'utf8')

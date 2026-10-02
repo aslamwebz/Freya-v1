@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
 import { ElectronCoreHost } from './coreHost'
 import { loadKeyring } from './keyring'
+import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
+import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ModelProvider } from '../core/model/provider'
 
@@ -50,14 +52,15 @@ function e2eKey(variable: string): Uint8Array | null {
  * conversation survives and the Brain does not — or the reverse — and the failure
  * would look like a Brain bug rather than a harness that only half injected.
  */
-function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array; mission: Uint8Array } | null {
+function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array; mission: Uint8Array; context: Uint8Array } | null {
   const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
   const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
   const mission = e2eKey('FREYA_E2E_MISSION_KEY')
-  // All three or none, so a partial fixture cannot quietly run with a real keyring for
+  const context = e2eKey('FREYA_E2E_CONTEXT_KEY')
+  // All four or none, so a partial fixture cannot quietly run with a real keyring for
   // the domain it forgot.
-  if (conversation === null || brain === null || mission === null) return null
-  return { conversation, brain, mission }
+  if (conversation === null || brain === null || mission === null || context === null) return null
+  return { conversation, brain, mission, context }
 }
 
 /**
@@ -352,6 +355,24 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:mission', projection)
   })
 
+  // The Workforce projection is a seventh channel, and the note that matters is
+  // about what does *not* cross: no source, no authority, no rule, no worker
+  // credential. A window learns who exists and what Core says each is doing —
+  // which is everything a workforce view needs — and nothing that could decide
+  // anything.
+  const detachWorkforce = coreHost?.onWorkforce((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:workforce', projection)
+  })
+
+  // Context is an eighth channel, and the one whose source may report nothing
+  // forever: before a Core starts there is no Context to mirror, so a window
+  // attaches to a channel that honestly stays quiet rather than one
+  // synthesising items to fill the air. What crosses is exactly what Core
+  // reported — metadata only: no content, no resolver, no authority.
+  const detachContext = coreHost?.onContext((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:context', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -359,6 +380,8 @@ function createWindow(): BrowserWindow {
     detachBrain?.()
     detachWork?.()
     detachMission?.()
+    detachWorkforce?.()
+    detachContext?.()
   })
 
   if (DEV_SERVER) {
@@ -433,6 +456,17 @@ function registerIpc(): void {
   // deliberately no channel for a Mission's private text — that lives in the encrypted
   // store and reaches a window only through Core's own read, not as a standing feed.
   ipcMain.handle('freya:core:mission', () => requireCore().mission())
+  // The Workforce projection, same bargain as every other channel here: what a
+  // window needs to render crosses, and there is deliberately no handle to a
+  // source, a rule or a worker behind it. A read, from a window, of a
+  // projection Core built.
+  ipcMain.handle('freya:core:workforce', () => requireCore().workforce())
+  // The Context projection, same bargain as every other channel: a read of
+  // what Core reported, which answers `null` until a Core has started and
+  // reports one. There is deliberately no `freya:core:context:write` and no
+  // context command — a window cannot put context *in*, because Context
+  // authority is Core's to hold inside itself, not this bridge's to lend.
+  ipcMain.handle('freya:core:context', () => requireCore().context())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)
@@ -471,6 +505,7 @@ app.whenReady().then(() => {
         conversation: { key: testKeys.conversation, reason: null as string | null },
         brain: { key: testKeys.brain, reason: null as string | null },
         mission: { key: testKeys.mission, reason: null as string | null },
+        context: { key: testKeys.context, reason: null as string | null },
       })
     : loadKeyring(dataPath)
   void keyResult.then((result) => {
@@ -515,6 +550,17 @@ app.whenReady().then(() => {
         conversationKey: result.conversation.key,
         brainKey: result.brain.key,
         missionKey: result.mission.key,
+        contextKey: result.context.key,
+        // Explicit host setting; own-app sees only Freya. System is honestly unsupported.
+        ...(['own-app', 'system'].includes(process.env.FREYA_CONTEXT_WINDOW_OBSERVATION ?? '') ? {
+          windowObservation: {
+            enabled: true,
+            provider: process.env.FREYA_CONTEXT_WINDOW_OBSERVATION === 'own-app'
+              ? createOwnWindowProvider(createElectronOwnWindowSource())
+              : createSystemWindowProvider(),
+            scope: { scopeKind: 'surface' as const, scopeId: 'desktop-window' },
+          },
+        } : {}),
         // Opt-in, and named for what it is. Never inferred from a debug flag or
         // from a missing credential: a build that answers from a canned string
         // without saying so is the failure this guards against. The slow variant

@@ -129,6 +129,20 @@
   box-shadow: 0 0 8px currentColor;
 }
 
+/* The expression cue Core offered this turn. Rendered only when the projection
+   carries one — the label comes from a closed table in `presence/expressionCue`
+   and the cue's own text never crosses the bridge, so this chip can show that a
+   greeting was offered and never what the greeting said. */
+.status-cue {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+}
+
 .status-sep {
   width: 1px;
   height: 34px;

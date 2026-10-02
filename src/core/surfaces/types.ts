@@ -19,6 +19,7 @@ export const SURFACE_TYPES = [
   'relay',
   'team',
   'context',
+  'personality',
   'office',
   'security',
   'settings',
@@ -241,6 +242,23 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     title: 'Context',
     summary:
       'What Core says is around the current question: each item with the provenance, scope and expiry Core assigned it, shown as Core reported it — current, expired, revoked, or left open as a reference it did not resolve. Nothing is captured by this window and nothing is simulated.',
+    width: 640,
+    height: 540,
+    minWidth: 400,
+    minHeight: 320,
+    instance: 'singleton',
+    status: 'working',
+  },
+  personality: {
+    type: 'personality',
+    // The Phase 11 read-only surface. The window is real and renders exactly
+    // what Core reports — which today is the honest sentence that no Personality
+    // domain is reporting, because relationship persistence does not exist in
+    // this build. A placeholder would understate the transport; a populated
+    // frame would be worse than either, because nothing here may be simulated.
+    title: 'Personality',
+    summary:
+      'Who Freya is as a temperament, and what she has actually recorded about you: every record shown as metadata with the source class and confidence Core assigned it, and never the recorded text. Nothing on this surface is simulated and nothing here can be written.',
     width: 640,
     height: 540,
     minWidth: 400,

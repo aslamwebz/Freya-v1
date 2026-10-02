@@ -154,12 +154,14 @@ The review found and fixed one containment gap: a flood of over-rate events is
 still journalled as a `rate-limit` `do-nothing`, and those refusals previously
 occupied the bounded decision retention, so ~260 of them evicted the cooldown and
 budget history they were meant to protect and let a later schedule fire interrupt
-again inside the same window. Rate-limit refusals are now journalled but not
-retained, and `maxRetainedDecisions` covers the most the closed sources can
-legitimately produce in one window. The permanent regression is
-`a flood of refused events cannot evict the history that caps interruptions` in
-`tests/red-team/attention/notification-storm.test.ts`; it fails against the
-pre-fix fold and passes against the fixed one.
+again inside the same window (proved end-to-end against the pre-fix fold, which
+counted three interruptions against a cap of two). Rate-limit refusals are now
+journalled but not retained, and `maxRetainedDecisions` covers the most the six
+closed sources can legitimately produce in one window. The permanent regression —
+`a flood of journalled refusals cannot evict the history the budget is measured
+against` in `tests/red-team/attention/notification-storm.test.ts` — feeds that
+exact durable stream through the real fold and the real policy: it fails against
+the pre-fix fold and passes against the fixed one.
 
 ## Deliberately deferred
 

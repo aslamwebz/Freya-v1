@@ -4,10 +4,16 @@ import {
   ingest,
   startAttentionCore,
   stopAttentionCore,
-  submit,
   type AttentionFixture,
 } from './harness'
-import { ATTENTION_LIMITS } from '../../../core/attention'
+import {
+  ATTENTION_LIMITS,
+  decideAttention,
+  initialAttentionState,
+  recentDecisions,
+  reduceAttention,
+} from '../../../core/attention'
+import type { AnyCoreEvent } from '../../../core/events/envelope'
 
 /**
  * NOTIFICATION STORMS.
@@ -50,33 +56,123 @@ describe('a storm cannot become a stream of interruptions', () => {
     expect(lastReason).toBe('rate-limit')
   })
 
-  it('a flood of refused events cannot evict the history that caps interruptions', async () => {
-    const fixture = await startAttentionCore()
-    fixtures.push(fixture)
-    const t0 = fixture.clock.now.getTime()
-    await submit(fixture, 'attention.schedule.register', {
-      kind: 'reminder',
-      text: 'repeating',
-      dueAt: new Date(t0).toISOString(),
-      intervalMs: 60_000,
-      maxRepeats: 8,
-    })
-    expect(await fixture.core.attentionTick(fixture.clock.now)).toBe(1)
-    expect(fixture.core.attention().counts.interrupted).toBe(1)
-
-    // Past the per-source ingest rate every flood event still appends an
-    // `attention.decision.made`. If those refusals crowded the bounded decision
-    // fold, the first fire's cooldown and per-source budget history would be
-    // forgotten inside its own window and the next due fire would interrupt
-    // again — so one later tick after a flood larger than the fold must still
-    // produce no second interruption.
-    for (let i = 0; i < 260; i += 1) {
-      await ingest(fixture, { kind: 'reminder', text: `flood ${i}` })
+  it('a flood of journalled refusals cannot evict the history the budget is measured against', () => {
+    // The engine journals an `attention.decision.made` for every ingest, including
+    // the rate-limited `do-nothing`s a flood produces. This attack feeds that
+    // exact durable stream to the fold the real policy reads: if the refusals
+    // crowded out the one interrupt decision, the cooldown and per-source budget
+    // would be forgotten inside their own window and the next fire would
+    // interrupt again.
+    const NOW = new Date('2026-10-02T09:00:00.000Z')
+    const at = NOW.toISOString()
+    let seq = 0
+    const durable = (type: string, payload: Record<string, unknown>): AnyCoreEvent => {
+      seq += 1
+      return {
+        eventId: `rt-${seq}`,
+        sequence: seq,
+        type,
+        schemaVersion: 1,
+        occurredAt: at,
+        source: 'system',
+        actor: 'system',
+        correlationId: `rt-c${seq}`,
+        causationId: null,
+        payload,
+      } as unknown as AnyCoreEvent
     }
-    fixture.clock.now = new Date(t0 + 60_000)
-    expect(await fixture.core.attentionTick(fixture.clock.now)).toBe(1)
 
-    const counts = fixture.core.attention().counts
-    expect(counts.interrupted).toBeLessThanOrEqual(ATTENTION_LIMITS.maxInterruptsPerWindowPerSource)
-  }, 30_000)
+    let state = initialAttentionState()
+    state = reduceAttention(
+      state,
+      durable('attention.event.ingested', {
+        eventId: 'fire-1',
+        dedupeKey: 'sch-1:1',
+        source: 'system',
+        kind: 'reminder',
+        goalRef: null,
+        textLength: 6,
+        severityHint: 'none',
+        occurredAt: at,
+        dueAt: at,
+      }),
+    )
+    state = reduceAttention(
+      state,
+      durable('attention.decision.made', {
+        decisionId: 'd-1',
+        eventId: 'fire-1',
+        source: 'system',
+        kind: 'reminder',
+        goalRef: null,
+        outcome: 'interrupt',
+        importance: 'normal',
+        urgency: 'urgent',
+        reason: 'scheduled',
+        cueCode: 'gentle-nudge',
+        focus: 'available',
+      }),
+    )
+
+    for (let i = 0; i < 300; i += 1) {
+      state = reduceAttention(
+        state,
+        durable('attention.event.ingested', {
+          eventId: `f-${i}`,
+          dedupeKey: `f-${i}`,
+          source: 'owner',
+          kind: 'reminder',
+          goalRef: null,
+          textLength: 5,
+          severityHint: 'none',
+          occurredAt: at,
+          dueAt: null,
+        }),
+      )
+      state = reduceAttention(
+        state,
+        durable('attention.decision.made', {
+          decisionId: `fd-${i}`,
+          eventId: `f-${i}`,
+          source: 'owner',
+          kind: 'reminder',
+          goalRef: null,
+          outcome: 'do-nothing',
+          importance: 'normal',
+          urgency: 'normal',
+          reason: 'rate-limit',
+          cueCode: null,
+          focus: 'available',
+        }),
+      )
+    }
+
+    const result = decideAttention({
+      event: {
+        eventId: 'fire-2',
+        source: 'system',
+        kind: 'reminder',
+        goalRef: null,
+        sourceRef: 'sch-1:2',
+        text: 'again',
+        severityHint: 'none',
+        occurredAt: at,
+        observedAt: at,
+        dueAt: at,
+      },
+      now: NOW,
+      focus: 'available',
+      stopAll: false,
+      recentDecisions: recentDecisions(state).map((record) => ({
+        source: record.source,
+        goalRef: record.goalRef,
+        outcome: record.outcome,
+        at: record.decidedAt,
+      })),
+      recentIngests: state.ingests,
+      scheduled: true,
+    })
+    expect(result.outcome).toBe('remember')
+    expect(result.reason).toBe('cooldown')
+  })
 })

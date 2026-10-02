@@ -24,6 +24,9 @@ import { ATTENTION_NO_PAYLOAD } from '../core/protocol/attention'
 import type { FoundryProjection } from '../core/protocol/foundry'
 import { FOUNDRY_NO_PAYLOAD } from '../core/protocol/foundry'
 import { ATTENTION_LIMITS } from '../core/attention/types'
+import type { RelayProjection } from '../core/protocol/relay'
+import { RELAY_NO_PAYLOAD } from '../core/protocol/relay'
+import { RELAY_LIMITS } from '../core/relay/types'
 import type { OfficeProjection } from '../core/office/projection'
 
 export interface RuntimeInfo {
@@ -359,6 +362,27 @@ const api = {
   },
 
   /**
+   * The Relay projection: which connectors are registered, which actions are
+   * pending approval, and what recent actions settled.
+   *
+   * The note that matters is what does **not** cross: no credential or token
+   * (there is no field one could occupy), no message body, no event title, no
+   * issue text, no budget figure a window could raise and no capability name
+   * a window could use to widen itself. Submitting an action is a command
+   * with a narrow payload contract, not a widening of this read.
+   */
+  coreRelay: (): Promise<RelayProjection | null> => ipcRenderer.invoke('freya:core:relay'),
+
+  onCoreRelay: (handler: (projection: RelayProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: RelayProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:relay', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:relay', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -507,6 +531,19 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'attention.schedule.register',
   'attention.schedule.cancel',
   'attention.inbox.read',
+  'relay.status.read',
+  'relay.email.read',
+  'relay.email.draft.create',
+  'relay.email.send',
+  'relay.calendar.read',
+  'relay.calendar.create',
+  'relay.calendar.update',
+  'relay.calendar.cancel',
+  'relay.github.read',
+  'relay.github.issue.create',
+  'relay.github.pr.create',
+  'relay.external.invoke',
+  'relay.approval.decide',
   'foundry.status.read',
 
   // Office. A window may read the Office projection and ask for an agent to
@@ -879,6 +916,255 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
         return { ok: false, reason: 'workerId is invalid' }
       }
       return { ok: true, payload: { workerId } }
+    }
+
+    case 'relay.status.read': {
+      // A payloadless read. Anything attached is refused rather than dropped,
+      // so a window cannot smuggle a connector, an action or a capability
+      // into the question of what Core reports.
+      if (!carriesNothing(payload)) return { ok: false, reason: RELAY_NO_PAYLOAD }
+      return { ok: true }
+    }
+
+    case 'relay.email.read':
+    case 'relay.calendar.read':
+    case 'relay.github.read': {
+      // The named fields, and nothing else. A read carries a query, a limit
+      // and a cursor — never a capability, a budget or a connector name.
+      const query = string('query', 2_000, false)
+      if (query === null) return { ok: false, reason: 'relay query is invalid' }
+      const limit = record?.limit
+      if (limit !== undefined && (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1)) {
+        return { ok: false, reason: 'relay pagination limit is invalid' }
+      }
+      const cursor = string('cursor', RELAY_LIMITS.maxCursorChars, false)
+      if (cursor === null) return { ok: false, reason: 'relay cursor is invalid' }
+      if (command === 'relay.github.read') {
+        const repo = string('repo', RELAY_LIMITS.maxRepoRefChars)
+        if (repo === null || repo === undefined) return { ok: false, reason: 'a repo ref is required' }
+        return {
+          ok: true,
+          payload: {
+            repo,
+            ...(query === undefined ? {} : { query }),
+            ...(limit === undefined ? {} : { limit }),
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+        }
+      }
+      return {
+        ok: true,
+        payload: {
+          ...(query === undefined ? {} : { query }),
+          ...(limit === undefined ? {} : { limit }),
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+      }
+    }
+
+    case 'relay.email.draft.create':
+    case 'relay.email.send': {
+      // Recipients, subject, body and attachment metadata — separated, and
+      // nothing else. There is deliberately no `bcc` field: a hidden recipient
+      // is a recipient the approver cannot see, and the whole point of the
+      // approval is that the approver sees who will be affected.
+      const to = string('to', 4_096)
+      if (to === null || to === undefined) return { ok: false, reason: 'a recipient list is required' }
+      const cc = string('cc', 4_096, false)
+      if (cc === null) return { ok: false, reason: 'the cc list is invalid' }
+      const subject = string('subject', 998)
+      if (subject === null || subject === undefined) return { ok: false, reason: 'a subject is required' }
+      const body = string('body', 100_000)
+      if (body === null || body === undefined) return { ok: false, reason: 'a body is required' }
+      const rawAttachments = record?.attachments
+      if (rawAttachments !== undefined) {
+        if (!Array.isArray(rawAttachments)) return { ok: false, reason: 'attachments must be a list' }
+        if (rawAttachments.length > RELAY_LIMITS.maxAttachments) {
+          return { ok: false, reason: `at most ${RELAY_LIMITS.maxAttachments} attachments are allowed` }
+        }
+        for (const raw of rawAttachments) {
+          if (typeof raw !== 'object' || raw === null) return { ok: false, reason: 'an attachment must be an object' }
+          const attachment = raw as Record<string, unknown>
+          if (typeof attachment.filename !== 'string' || attachment.filename.length === 0) {
+            return { ok: false, reason: 'an attachment filename is required' }
+          }
+          if (typeof attachment.contentType !== 'string' || attachment.contentType.length === 0) {
+            return { ok: false, reason: 'an attachment content type is required' }
+          }
+          if (typeof attachment.sizeBytes !== 'number' || !Number.isInteger(attachment.sizeBytes) || attachment.sizeBytes < 0) {
+            return { ok: false, reason: 'an attachment size is invalid' }
+          }
+        }
+      }
+      if (command === 'relay.email.send') {
+        const key = string('idempotencyKey', RELAY_LIMITS.maxIdempotencyKeyChars)
+        if (key === null || key === undefined) {
+          return { ok: false, reason: 'an idempotency key is required to send' }
+        }
+        return {
+          ok: true,
+          payload: {
+            to: to.split(',').map((address) => address.trim()).filter((address) => address.length > 0),
+            ...(cc === undefined || cc === '' ? {} : { cc: cc.split(',').map((address) => address.trim()).filter((address) => address.length > 0) }),
+            subject,
+            body,
+            ...(rawAttachments === undefined ? {} : { attachments: rawAttachments }),
+            idempotencyKey: key,
+          },
+        }
+      }
+      return {
+        ok: true,
+        payload: {
+          to: to.split(',').map((address) => address.trim()).filter((address) => address.length > 0),
+          ...(cc === undefined || cc === '' ? {} : { cc: cc.split(',').map((address) => address.trim()).filter((address) => address.length > 0) }),
+          subject,
+          body,
+          ...(rawAttachments === undefined ? {} : { attachments: rawAttachments }),
+        },
+      }
+    }
+
+    case 'relay.calendar.create': {
+      const title = string('title', 2_000)
+      if (title === null || title === undefined) return { ok: false, reason: 'a title is required' }
+      const startsAt = string('startsAt', 64)
+      const endsAt = string('endsAt', 64)
+      if (startsAt === null || startsAt === undefined) return { ok: false, reason: 'a start time is required' }
+      if (endsAt === null || endsAt === undefined) return { ok: false, reason: 'an end time is required' }
+      const location = string('location', 1_000, false)
+      if (location === null) return { ok: false, reason: 'a location is invalid' }
+      const attendees = string('attendees', 8_192, false)
+      if (attendees === null) return { ok: false, reason: 'an attendee list is invalid' }
+      const key = string('idempotencyKey', RELAY_LIMITS.maxIdempotencyKeyChars)
+      if (key === null || key === undefined) {
+        return { ok: false, reason: 'an idempotency key is required' }
+      }
+      return {
+        ok: true,
+        payload: {
+          title,
+          startsAt,
+          endsAt,
+          ...(location === undefined || location === '' ? {} : { location }),
+          ...(attendees === undefined || attendees === ''
+            ? {}
+            : { attendees: attendees.split(',').map((address) => address.trim()).filter((address) => address.length > 0) }),
+          idempotencyKey: key,
+        },
+      }
+    }
+
+    case 'relay.calendar.update': {
+      const eventId = string('eventId', MAX_ID_CHARS)
+      if (eventId === null || eventId === undefined) return { ok: false, reason: 'an event id is required' }
+      const title = string('title', 2_000, false)
+      if (title === null) return { ok: false, reason: 'a title is invalid' }
+      const startsAt = string('startsAt', 64, false)
+      if (startsAt === null) return { ok: false, reason: 'a start time is invalid' }
+      const endsAt = string('endsAt', 64, false)
+      if (endsAt === null) return { ok: false, reason: 'an end time is invalid' }
+      const location = string('location', 1_000, false)
+      if (location === null) return { ok: false, reason: 'a location is invalid' }
+      const attendees = string('attendees', 8_192, false)
+      if (attendees === null) return { ok: false, reason: 'an attendee list is invalid' }
+      const key = string('idempotencyKey', RELAY_LIMITS.maxIdempotencyKeyChars)
+      if (key === null || key === undefined) {
+        return { ok: false, reason: 'an idempotency key is required' }
+      }
+      return {
+        ok: true,
+        payload: {
+          eventId,
+          ...(title === undefined || title === '' ? {} : { title }),
+          ...(startsAt === undefined || startsAt === '' ? {} : { startsAt }),
+          ...(endsAt === undefined || endsAt === '' ? {} : { endsAt }),
+          ...(location === undefined ? {} : { location: location === '' ? null : location }),
+          ...(attendees === undefined || attendees === ''
+            ? {}
+            : { attendees: attendees.split(',').map((address) => address.trim()).filter((address) => address.length > 0) }),
+          idempotencyKey: key,
+        },
+      }
+    }
+
+    case 'relay.calendar.cancel': {
+      const eventId = string('eventId', MAX_ID_CHARS)
+      if (eventId === null || eventId === undefined) return { ok: false, reason: 'an event id is required' }
+      const key = string('idempotencyKey', RELAY_LIMITS.maxIdempotencyKeyChars)
+      if (key === null || key === undefined) {
+        return { ok: false, reason: 'an idempotency key is required' }
+      }
+      return { ok: true, payload: { eventId, idempotencyKey: key } }
+    }
+
+    case 'relay.github.issue.create':
+    case 'relay.github.pr.create': {
+      const repo = string('repo', RELAY_LIMITS.maxRepoRefChars)
+      if (repo === null || repo === undefined) return { ok: false, reason: 'a repo ref is required' }
+      const title = string('title', 2_000)
+      if (title === null || title === undefined) return { ok: false, reason: 'a title is required' }
+      const body = string('body', 100_000)
+      if (body === null || body === undefined) return { ok: false, reason: 'a body is required' }
+      const key = string('idempotencyKey', RELAY_LIMITS.maxIdempotencyKeyChars)
+      if (key === null || key === undefined) {
+        return { ok: false, reason: 'an idempotency key is required' }
+      }
+      if (command === 'relay.github.pr.create') {
+        const head = string('head', 128)
+        const base = string('base', 128)
+        if (head === null || head === undefined) return { ok: false, reason: 'a head branch is required' }
+        if (base === null || base === undefined) return { ok: false, reason: 'a base branch is required' }
+        return { ok: true, payload: { repo, head, base, title, body, idempotencyKey: key } }
+      }
+      return { ok: true, payload: { repo, title, body, idempotencyKey: key } }
+    }
+
+    case 'relay.external.invoke': {
+      const connector = string('connector', RELAY_LIMITS.maxExternalConnectorChars)
+      if (connector === null || connector === undefined) {
+        return { ok: false, reason: 'an external connector name is required' }
+      }
+      const operation = string('operation', RELAY_LIMITS.maxExternalOperationChars)
+      if (operation === null || operation === undefined) {
+        return { ok: false, reason: 'an external operation is required' }
+      }
+      const rawParams = record?.params
+      if (rawParams !== undefined && !Array.isArray(rawParams)) {
+        return { ok: false, reason: 'external parameters must be a list' }
+      }
+      const key = string('idempotencyKey', RELAY_LIMITS.maxIdempotencyKeyChars)
+      if (key === null || key === undefined) {
+        return { ok: false, reason: 'an idempotency key is required' }
+      }
+      return {
+        ok: true,
+        payload: {
+          connector,
+          operation,
+          ...(rawParams === undefined ? {} : { params: rawParams }),
+          idempotencyKey: key,
+        },
+      }
+    }
+
+    case 'relay.approval.decide': {
+      // The decision and its subject, and nothing else. There is deliberately
+      // no `decidedBy` here to read: identity for a decision is assigned by
+      // Core from the principal that reached the command. A window that could
+      // name its own approver could approve its own request.
+      const approvalId = string('approvalId', MAX_ID_CHARS)
+      const decision = string('decision', 16)
+      if (approvalId === null || approvalId === undefined) {
+        return { ok: false, reason: 'approval id is invalid' }
+      }
+      if (decision === null || decision === undefined) {
+        return { ok: false, reason: 'approval decision is invalid' }
+      }
+      if (decision !== 'approved' && decision !== 'denied') {
+        return { ok: false, reason: 'an approval decision must be approved or denied' }
+      }
+      return { ok: true, payload: { approvalId, decision } }
     }
 
     case 'voice.capture.end': {

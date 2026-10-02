@@ -60,6 +60,12 @@ const PERSONALITY_CONFIDENCE_SET: ReadonlySet<string> = new Set([
   'medium',
   'high',
 ])
+import {
+  isRelayAction,
+  isRelayConnectorId,
+  isRelayFailureCode,
+  isRelayRiskClass,
+} from '../relay/types'
 
 /**
  * Durable event validation.
@@ -1349,6 +1355,88 @@ const PAYLOAD_RULES: {
   'foundry.limit.exceeded': workRule(
     ['limit', 'reason'],
     (p) => isNonEmptyString(p.limit) && isNonEmptyString(p.reason),
+  ),
+
+  /* ----------------------------------------------------------------- relay */
+
+  // Metadata only, and the rule is Work's: an undeclared key is refused rather
+  // than ignored. The `summary` field is the only human-readable value in the
+  // family, and it is bounded — a summary that could hold a paragraph would be
+  // a summary that could hold a message body.
+  'relay.action.requested': workRule(
+    ['actionId', 'connector', 'action', 'risk', 'idempotencyKey', 'summary'],
+    (p) =>
+      isEventId(p.actionId) &&
+      isRelayConnectorId(p.connector) &&
+      isRelayAction(p.action) &&
+      isRelayRiskClass(p.risk) &&
+      isBoundedText(p.idempotencyKey, 128) &&
+      isBoundedText(p.summary, 400),
+  ),
+
+  'relay.approval.requested': workRule(
+    ['approvalId', 'actionId', 'connector', 'action', 'risk', 'summary'],
+    (p) =>
+      isEventId(p.approvalId) &&
+      isEventId(p.actionId) &&
+      isRelayConnectorId(p.connector) &&
+      isRelayAction(p.action) &&
+      isRelayRiskClass(p.risk) &&
+      isBoundedText(p.summary, 400),
+  ),
+
+  'relay.approval.decided': workRule(
+    ['approvalId', 'actionId', 'decision', 'decidedBy'],
+    (p) =>
+      isEventId(p.approvalId) &&
+      isEventId(p.actionId) &&
+      (p.decision === 'approved' || p.decision === 'denied') &&
+      isPrincipalId(p.decidedBy),
+  ),
+
+  'relay.approval.expired': workRule(
+    ['approvalId', 'actionId'],
+    (p) => isEventId(p.approvalId) && isEventId(p.actionId),
+  ),
+
+  'relay.action.executed': workRule(
+    ['actionId', 'connector', 'action', 'outcome', 'resultKind', 'retries'],
+    (p) =>
+      isEventId(p.actionId) &&
+      isRelayConnectorId(p.connector) &&
+      isRelayAction(p.action) &&
+      (p.outcome === 'read' || p.outcome === 'write') &&
+      isBoundedText(p.resultKind, 64) &&
+      isNonNegativeInt(p.retries),
+  ),
+
+  'relay.action.failed': workRule(
+    ['actionId', 'connector', 'action', 'failureCode', 'retries'],
+    (p) =>
+      isEventId(p.actionId) &&
+      isRelayConnectorId(p.connector) &&
+      isRelayAction(p.action) &&
+      isRelayFailureCode(p.failureCode) &&
+      isNonNegativeInt(p.retries),
+  ),
+
+  'relay.action.cancelled': workRule(
+    ['actionId', 'failureCode'],
+    (p) => isEventId(p.actionId) && isRelayFailureCode(p.failureCode),
+  ),
+
+  'relay.connector.faulted': workRule(
+    ['connector', 'reason'],
+    (p) => isRelayConnectorId(p.connector) && isBoundedText(p.reason, 400),
+  ),
+
+  'relay.limits.exceeded': workRule(
+    ['connector', 'action', 'limit', 'observed'],
+    (p) =>
+      isRelayConnectorId(p.connector) &&
+      isRelayAction(p.action) &&
+      isNonEmptyString(p.limit) &&
+      isNonNegativeInt(p.observed),
   ),
 }
 

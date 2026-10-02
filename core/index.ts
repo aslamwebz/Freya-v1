@@ -114,6 +114,12 @@ import {
   type FoundryProjection,
 } from './protocol/foundry'
 import { projectOffice, ABSENT_OFFICE_PROJECTION, type OfficeProjection } from './office/projection'
+import { RelayEngine, type RelayReadResult } from './relay/engine'
+import type { RelayAdapterSet } from './relay/adapters'
+import { projectRelay } from './relay/projection'
+import type { RelayAction, RelayFailureCode } from './relay/types'
+import type { RelayCommandOutcome, RelayProjection } from './protocol/relay'
+import { ABSENT_RELAY_PROJECTION, RELAY_NO_PAYLOAD } from './protocol/relay'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
 import type { CognitionGrantSpec } from './cognition/grants'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
@@ -408,6 +414,35 @@ export interface CoreOptions {
    * still decides, and the delivery cannot mint authority or reach a model.
    */
   attentionObserveSources?: boolean
+  /**
+   * The Phase 16 Relay seam: the connector adapters, injected whole.
+   *
+   * The *entire* integration surface this lane assumes: Core may be handed a set
+   * of connector adapters, and with them it can route email, calendar, GitHub
+   * and external actions. Unset ??? the state of every build until this domain
+   * exists ??? Core reports every connector `unavailable` and refuses every
+   * action with a stated reason, which is the honest reading rather than a
+   * placeholder connector.
+   *
+   * An adapter is the only place a credential can exist. Core holds the object
+   * but cannot inspect it: the ports in `core/relay/adapters.ts` have no method
+   * that returns a token, and no payload field one could hide in. A renderer
+   * never sees an adapter, a projection never names one, and the journal never
+   * could.
+   *
+   * A source carries no authority by virtue of being one. It can be called,
+   * through the engine, after Guard, budget, approval and STOP ALL ??? and it
+   * cannot be reached any other way.
+   */
+  relay?: {
+    adapters: RelayAdapterSet
+    /**
+     * The GitHub repos writes may target. Code-owned and host-supplied; empty
+     * means no repo may be written to. Registering a GitHub adapter does not
+     * put any repo on this list.
+     */
+    allowlistedRepos?: readonly string[]
+  }
 }
 
 /**
@@ -593,6 +628,10 @@ export interface Core {
   office(): OfficeProjection
   /** Subscribe to the Office projection. Same mirror semantics as the others. */
   onOffice(listener: (projection: OfficeProjection) => void): () => void
+  /** Core's content-free Relay projection, derived from durable Relay events. */
+  relay(): RelayProjection
+  /** Subscribe to the Relay projection. No connector authority crosses this seam. */
+  onRelay(listener: (projection: RelayProjection) => void): () => void
   /**
    * Evaluate due schedules. The bounded wake mechanism, driven by the host.
    *
@@ -731,6 +770,9 @@ class FreyaCore implements Core {
   private readonly foundryListeners = new Set<(projection: FoundryProjection) => void>()
   /** The Phase 15 Foundry domain, owned by Core and replayed from the durable journal. */
   private foundryEngine: FoundryEngine | undefined
+  private readonly relayListeners = new Set<(projection: RelayProjection) => void>()
+  /** The Phase 16 Relay engine, built and owned by Core. */
+  private relayEngine: RelayEngine | undefined
   /** Display-ready activity, rebuilt from the log on every start. */
   private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
@@ -750,6 +792,16 @@ class FreyaCore implements Core {
    * without asking anything that could be slow.
    */
   private researchAdmissionOpen = false
+  /**
+   * Relay admission.
+   *
+   * Closed synchronously by STOP ALL, before that command's first `await`.
+   * A Relay action that checked admission and then awaited would be able to
+   * reach an external connector after the stop, which is the window STOP ALL
+   * exists to remove. Deliberately a boolean rather than derived state: it has
+   * to be readable without asking anything that could be slow.
+   */
+  private relayAdmissionOpen = false
   private mind!: MindService
   private conversations!: ConversationService
   private voiceService!: VoiceService
@@ -1324,6 +1376,34 @@ class FreyaCore implements Core {
     })
     await this.attentionEngine.reconcile()
 
+    /**
+     * Relay, built after every subsystem it reads for its gates.
+     *
+     * The engine holds the adapter set the host supplied and the two callbacks
+     * that keep it honest: `authorizer` asks Guard with the owner principal
+     * baked in here in Core, and `stopAll` reads the latch fresh at each
+     * decision. It holds no principal of its own and cannot build one, so a
+     * Relay action cannot be laundered through a forged identity.
+     *
+     * `reconcile()` expires any pending approval recovered from the journal
+     * whose content did not survive the restart ??? the same honesty attention
+     * applies to a schedule whose text is gone.
+     */
+    this.relayEngine = new RelayEngine({
+      fabric: this.fabric,
+      adapters: this.options.relay?.adapters ?? {},
+      authorizer: {
+        evaluate: (capability) => this.guard.evaluate(this.owner, capability),
+      },
+      stopAll: () => this.state.stopAll.active,
+      getState: () => this.state.relay,
+      allowlistedRepos: this.options.relay?.allowlistedRepos,
+      now: this.options.now,
+      newId: this.options.newId,
+    })
+    this.relayAdmissionOpen = true
+    await this.relayEngine.reconcile()
+
 
     const recoveredSequence = this.fabric.lastSequence
     this.startedAt = (this.options.now ?? (() => new Date()))().toISOString()
@@ -1424,6 +1504,10 @@ class FreyaCore implements Core {
       // ordering reason as STOP ALL: a half-finished research job reaching the
       // network during shutdown is still a request.
       this.closeResearch(`core stopping: ${reason}`)
+      // Relay closes in the same synchronous turn, for the same reason: a
+      // connector action is an external request, and one that had already
+      // passed Guard when the shutdown began must not reach an adapter after.
+      this.closeRelay(`core stopping: ${reason}`)
       if (this.fabric) {
         // A microphone must not outlive the Core that opened it.
         await this.voiceService?.abandon('the application is shutting down')
@@ -1503,6 +1587,37 @@ class FreyaCore implements Core {
     if (!this.researchAdmissionOpen || this.state.stopAll.active) {
       const reason = 'Freya is stopped. Every search, page read and research request is refused.'
       return { requestId, ok: false, refusal: { reason }, research: { operation: 'refused', reason } }
+    }
+    return null
+  }
+
+  /**
+   * Refuse a Relay command, or return null to allow it.
+   *
+   * Two refusals, and they are different in kind. "Not configured" means the
+   * host supplied no Relay stack, which is the normal state for a Core that
+   * was not built with connectors. "Stopped" means the owner stopped Freya,
+   * and saying so plainly matters more than a generic failure: the person
+   * pressed STOP ALL and then asked for an email to be read.
+   */
+  private refuseRelay(requestId: string): CoreCommandResult | null {
+    if (this.relayEngine === undefined) {
+      const reason = 'connectors are not configured in this build'
+      return {
+        requestId,
+        ok: false,
+        refusal: { reason },
+        relay: { operation: 'refused', ok: false, failureCode: 'connector_unavailable', reason },
+      }
+    }
+    if (!this.relayAdmissionOpen || this.state.stopAll.active) {
+      const reason = 'Freya is stopped. Every connector action is refused.'
+      return {
+        requestId,
+        ok: false,
+        refusal: { reason },
+        relay: { operation: 'refused', ok: false, failureCode: 'stop_all', reason },
+      }
     }
     return null
   }
@@ -1595,6 +1710,21 @@ class FreyaCore implements Core {
     // `cancelAll` aborts the coordinator's own controller; the integration also
     // closes managed browser sessions, whose windows must not outlive the process.
     this.researchIntegration?.closeAdmission(reason)
+  }
+
+  /**
+   * Close Relay admission. Synchronous.
+   *
+   * Called by STOP ALL before its first await and by shutdown before anything is
+   * awaited, for the same reason research's is: the property being defended is
+   * that no connector action can *begin* after a stop. The engine reads the
+   * latch fresh at each decision, so a stopped Core refuses every action anyway
+   * ??? this closes the door on the way in, so a decision that was already past
+   * Guard when the stop arrived cannot reach an adapter afterwards.
+   */
+  private closeRelay(reason: string): void {
+    this.relayAdmissionOpen = false
+    void reason
   }
 
   /** Wait for research to settle, on a bound. Never throws. */
@@ -2039,6 +2169,55 @@ class FreyaCore implements Core {
     return await this.attentionEngine.tick(now)
   }
 
+  /**
+   * Core's account of Relay.
+   *
+   * Never null and never throwing: a Core that has not started reports the
+   * frozen absent projection, because "Relay is not up yet" and "there are no
+   * connectors" are different facts and a surface must not have to guess which
+   * one it is looking at.
+   */
+  relay(): RelayProjection {
+    if (this.relayEngine === undefined || this.fabric === undefined) {
+      return ABSENT_RELAY_PROJECTION
+    }
+    return projectRelay(this.fabric.lastSequence, this.state.relay, (connector) =>
+      this.relayEngine?.connectorStatus(connector) ?? 'unavailable',
+    )
+  }
+
+  onRelay(listener: (projection: RelayProjection) => void): () => void {
+    this.relayListeners.add(listener)
+    try {
+      listener(this.relay())
+    } catch (error) {
+      console.error('[freya.core] Relay subscriber threw', error)
+    }
+    return () => {
+      this.relayListeners.delete(listener)
+    }
+  }
+
+  private publishRelay(): void {
+    if (this.relayListeners.size === 0) return
+    const projection = this.relay()
+    for (const listener of [...this.relayListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Relay listener threw', error)
+        this.relayListeners.delete(listener)
+      }
+    }
+  }
+
+  private requireRelay(): RelayEngine {
+    if (this.relayEngine === undefined) {
+      throw new Error('the Relay engine is not available')
+    }
+    return this.relayEngine
+  }
+
   private requireAttention(): AttentionEngine {
     if (this.attentionEngine === undefined) {
       throw new Error('the Attention engine is not available')
@@ -2087,6 +2266,48 @@ class FreyaCore implements Core {
       if (run !== undefined && !isTerminalRunStatus(run.status)) return true
     }
     return false
+  }
+
+  /**
+   * Deliver a connector's signal to attention through the authorized Phase 12
+   * seam.
+   *
+   * The text is a fixed sentence Core wrote ??? never anything a connector
+   * returned. The source is `system`, a Core-owned source, and the attention
+   * engine still decides what the signal is worth: this delivery cannot mint an
+   * importance, an urgency or an outcome. There is no new surveillance
+   * authority here; the only thing that crosses is *that* a connector reported
+   * something, and how many items were involved.
+   */
+  private observeRelaySignal(command: string, result: { readonly kind: 'read'; readonly result: RelayReadResult }): void {
+    if (this.attentionEngine === undefined || this.options.attentionObserveSources !== true) return
+    switch (result.result.kind) {
+      case 'email.messages': {
+        const count = result.result.messages.length
+        if (count === 0) return
+        void this.attentionEngine.ingestInternal('system', {
+          kind: 'message',
+          text: 'The email connector reported new mail.',
+          sourceRef: `relay-email-${count}`,
+          severityHint: 'none',
+        })
+        break
+      }
+      case 'calendar.events': {
+        const count = result.result.events.length
+        if (count === 0) return
+        void this.attentionEngine.ingestInternal('system', {
+          kind: 'calendar',
+          text: 'The calendar connector reported upcoming events.',
+          sourceRef: `relay-calendar-${count}`,
+          severityHint: 'none',
+        })
+        break
+      }
+      default:
+        break
+    }
+    void command
   }
 
   /**
@@ -2587,7 +2808,8 @@ class FreyaCore implements Core {
       command !== 'context.reference.read' &&
       command !== 'attention.status.read' &&
       command !== 'attention.inbox.read' &&
-      command !== 'foundry.status.read'
+      command !== 'foundry.status.read' &&
+      command !== 'relay.status.read'
     ) {
       return reject(envelope, `core is ${this.lifecycle} and cannot accept mutating commands`)
     }
@@ -2692,7 +2914,7 @@ class FreyaCore implements Core {
           // closing the gate costs nothing and can be undone, whereas a provider
           // call cannot be un-spent.
           this.gateway?.cancelAll(`STOP ALL: ${reason}`)
-// Research admission closes in the *same synchronous turn*, for the same
+          // Research admission closes in the *same synchronous turn*, for the same
           // reason. The gateway is what stops a model turn; research also reaches the
           // network and a browser, and neither is behind the gateway gate. A
           // research job cancelled only after an await would still be able to issue
@@ -2705,6 +2927,13 @@ class FreyaCore implements Core {
           // agent could still be handed an assignment after the panic button, which
           // would make the button a control over models only.
           this.workforceEngine?.stopAll(`STOP ALL: ${reason}`)
+          // Relay closes in the same synchronous turn, for the same reason: a
+          // pending approval decided only after an await would still be able to
+          // reach an external connector, and that connector call is the request
+          // the owner just asked to stop. The engine reads the latch fresh at
+          // each decision, so this is belt-and-braces ??? but the property being
+          // defended is that no external action can *begin* after a stop.
+          this.closeRelay(`STOP ALL: ${reason}`)
 
           try {
             const event = await this.fabric.append(
@@ -2767,6 +2996,10 @@ class FreyaCore implements Core {
           // returns nothing, so a worker stopped by a panic button stays stopped until
           // somebody resumes it deliberately.
           this.workforceEngine?.resume()
+          // And Relay, for the same reason: only this path reopens it. A connector
+          // action is an external request, and one refused at the door during a stop
+          // must not silently become allowed the instant the latch clears.
+          this.relayAdmissionOpen = true
           // As above: a resume has to reach the surfaces that report it, or Chat
           // stays visibly locked after Core has reopened.
           this.conversations?.publish()
@@ -3256,6 +3489,184 @@ class FreyaCore implements Core {
               workerId,
               durableSequence: event.sequence,
             },
+          }
+        }
+
+        /* ----------------------------------------------------------- relay */
+
+        case 'relay.status.read': {
+          // A payloadless read, exactly like `attention.status.read`. Anything
+          // attached is refused rather than dropped, so a window cannot smuggle
+          // a connector, an action or a capability into the question of what
+          // Core reports.
+          if (carriesFields(envelope.payload)) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: RELAY_NO_PAYLOAD },
+              relay: { operation: 'refused', ok: false, reason: RELAY_NO_PAYLOAD },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            relay: { operation: 'status', ok: true },
+          }
+        }
+
+        case 'relay.email.read':
+        case 'relay.calendar.read':
+        case 'relay.github.read': {
+          const admission = this.refuseRelay(requestId)
+          if (admission !== null) return admission
+          const result = await this.requireRelay().execute({
+            action: readActionFor(envelope.command),
+            payload: envelope.payload,
+          })
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              relay: relayRefusal(result),
+            }
+          }
+          if (result.kind === 'read') {
+            this.publishRelay()
+            this.observeRelaySignal(envelope.command, result)
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              relay: { operation: 'read', ok: true, result: result.result },
+            }
+          }
+          // A read never returns pending or replayed; treat anything else as a
+          // refusal rather than inventing an outcome.
+          return {
+            requestId,
+            ok: false,
+            refusal: { reason: 'the read could not be completed' },
+            relay: { operation: 'refused', ok: false, failureCode: 'adapter_error', reason: 'the read could not be completed' },
+          }
+        }
+
+        case 'relay.email.draft.create':
+        case 'relay.email.send':
+        case 'relay.calendar.create':
+        case 'relay.calendar.update':
+        case 'relay.calendar.cancel':
+        case 'relay.github.issue.create':
+        case 'relay.github.pr.create':
+        case 'relay.external.invoke': {
+          const admission = this.refuseRelay(requestId)
+          if (admission !== null) return admission
+          const result = await this.requireRelay().execute({
+            action: writeActionFor(envelope.command),
+            payload: envelope.payload,
+          })
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              relay: relayRefusal(result),
+            }
+          }
+          if (result.kind === 'pending') {
+            this.publishRelay()
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              relay: {
+                operation: 'requested',
+                ok: true,
+                actionId: result.actionId,
+                approvalId: result.approvalId,
+                status: 'pending_approval',
+              },
+            }
+          }
+          // A replayed write: the same idempotency key was already submitted.
+          // Answer with the original outcome ??? never a second execution.
+          // (A write never returns 'read'; anything else is a refusal.)
+          if (result.kind !== 'replayed') {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'the action could not be completed' },
+              relay: { operation: 'refused', ok: false, failureCode: 'adapter_error', reason: 'the action could not be completed' },
+            }
+          }
+          this.publishRelay()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            relay: {
+              operation: 'replayed',
+              ok: true,
+              actionId: result.action.actionId,
+              status: result.action.status,
+            },
+          }
+        }
+
+        case 'relay.approval.decide': {
+          const admission = this.refuseRelay(requestId)
+          if (admission !== null) return admission
+          const approvalId = readString(envelope.payload, 'approvalId')
+          if (approvalId === null) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'approvalId is missing' },
+              relay: { operation: 'refused', ok: false, reason: 'approvalId is missing' },
+            }
+          }
+          const decision = readString(envelope.payload, 'decision')
+          if (decision !== 'approved' && decision !== 'denied') {
+            const reason = 'a decision must be approved or denied'
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason },
+              relay: { operation: 'refused', ok: false, reason },
+            }
+          }
+          const result = await this.requireRelay().decide(approvalId, decision)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              relay: { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason },
+            }
+          }
+          this.publishRelay()
+          if (result.kind === 'executed') {
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              relay: { operation: 'executed', ok: true, result: result.result },
+            }
+          }
+          if (result.kind === 'denied') {
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              relay: { operation: 'decided', ok: true, status: 'denied' },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            relay: { operation: 'replayed', ok: true, actionId: result.action.actionId, status: result.action.status },
           }
         }
 
@@ -4885,6 +5296,54 @@ function attentionDecisionView(decision: AttentionDecision): AttentionDecisionVi
     cueCode: decision.cueCode,
     focus: decision.focus,
     decidedAt: decision.decidedAt,
+  }
+}
+
+/** The read action a read command names. Assigned by Core, never read from a payload. */
+function readActionFor(command: string): RelayAction {
+  switch (command) {
+    case 'relay.email.read':
+      return 'email.read'
+    case 'relay.calendar.read':
+      return 'calendar.read'
+    case 'relay.github.read':
+      return 'github.read'
+    default:
+      return 'email.read'
+  }
+}
+
+/** The write action a write command names. Assigned by Core, never read from a payload. */
+function writeActionFor(command: string): RelayAction {
+  switch (command) {
+    case 'relay.email.draft.create':
+      return 'email.draft.create'
+    case 'relay.email.send':
+      return 'email.send'
+    case 'relay.calendar.create':
+      return 'calendar.create'
+    case 'relay.calendar.update':
+      return 'calendar.update'
+    case 'relay.calendar.cancel':
+      return 'calendar.cancel'
+    case 'relay.github.issue.create':
+      return 'github.issue.create'
+    case 'relay.github.pr.create':
+      return 'github.pr.create'
+    case 'relay.external.invoke':
+      return 'external.invoke'
+    default:
+      return 'external.invoke'
+  }
+}
+
+/** The renderer-safe shape of a Relay refusal. */
+function relayRefusal(result: { failureCode: RelayFailureCode; reason: string }): RelayCommandOutcome {
+  return {
+    operation: 'refused',
+    ok: false,
+    failureCode: result.failureCode,
+    reason: result.reason,
   }
 }
 

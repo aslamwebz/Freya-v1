@@ -448,6 +448,10 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:office', projection)
   })
 
+  const detachRelay = coreHost?.onRelay((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:relay', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -461,6 +465,7 @@ function createWindow(): BrowserWindow {
     detachAttention?.()
     detachFoundry?.()
     detachOffice?.()
+    detachRelay?.()
   })
 
   if (DEV_SERVER) {
@@ -591,6 +596,7 @@ function registerIpc(): void {
   // writes, `office.presence.request`, goes through `freya:core:submit` like
   // every other command — it is validated and journalled in Core, not here.
   ipcMain.handle('freya:core:office', () => requireCore().office())
+  ipcMain.handle('freya:core:relay', () => requireCore().relay())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

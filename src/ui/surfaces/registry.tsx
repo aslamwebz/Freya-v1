@@ -13,6 +13,7 @@ import { WorkforceSurface } from './WorkforceSurface'
 import { ContextSurface } from './ContextSurface'
 import { PersonalitySurface } from './PersonalitySurface'
 import { AttentionSurface } from './AttentionSurface'
+import { RelaySurface } from './RelaySurface'
 import { OfficeSurface } from './OfficeSurface'
 import type { SurfaceDefinition } from './types'
 
@@ -59,6 +60,7 @@ const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   // actions Core permits — submit an event, register a schedule. Core assigns the
   // source and decides; nothing here can invent an urgency or an interruption.
   attention: () => <AttentionSurface />,
+  relay: () => <RelaySurface />,
   // The Office: a truthful spatial view of real Work/Workforce/Core state. Every
   // station corresponds to one real thing Core owns. Redirect and cancel go
   // through the existing authorized Core commands; the only Office-specific

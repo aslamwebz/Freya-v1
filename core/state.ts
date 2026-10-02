@@ -4,6 +4,7 @@ import { accumulateAttempt, accumulateReported, accumulateUsage, emptyUsage, wit
 import type { ModelUsage, PrincipalId } from './protocol/core-protocol'
 import { initialAttentionState, reduceAttention, type AttentionState } from './attention/state'
 import { initialOfficeState, reduceOfficeState, type OfficeState } from './office/state'
+import { initialRelayState, reduceRelay, type RelayState } from './relay/state'
 
 /**
  * Everything Core knows, derived from durable events.
@@ -77,6 +78,12 @@ export interface CoreState {
    * Presence, journalled as `office.presence.requested` and replayed here.
    */
   office: OfficeState
+  /**
+   * Relay's folded state: action records, approvals, idempotency keys and budget
+   * instants. Derived from `relay.*` events, so replay protection and rate
+   * limits survive a restart without a second store.
+   */
+  relay: RelayState
 }
 
 /** A `core.integrity_fault` as recovered from the journal. */
@@ -101,6 +108,7 @@ export function initialCoreState(): CoreState {
     pendingRequests: [],
     attention: initialAttentionState(),
     office: initialOfficeState(),
+    relay: initialRelayState(),
   }
 }
 
@@ -334,6 +342,10 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
       if (event.type.startsWith('office.')) {
         const office = reduceOfficeState(state.office, event)
         return office === state.office ? state : { ...state, office }
+      }
+      if (event.type.startsWith('relay.')) {
+        const relay = reduceRelay(state.relay, event)
+        return relay === state.relay ? state : { ...state, relay }
       }
       return state
   }

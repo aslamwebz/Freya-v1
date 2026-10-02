@@ -87,6 +87,15 @@ export type ActivityKind =
   | 'attention.decision'
   | 'attention.budget'
   | 'attention.schedule'
+  // Relay. Only the facts a person would want as news: an action was requested
+  // and is waiting on a decision, an action settled, an approval was decided
+  // and a ceiling was reached. No content exists on any of these rows because
+  // none is in the journal.
+  | 'relay.requested'
+  | 'relay.approval'
+  | 'relay.executed'
+  | 'relay.failed'
+  | 'relay.limits'
   | 'other'
 
 export interface CoreActivityEvent {
@@ -774,6 +783,81 @@ export function describeActivity(event: {
         kind: 'attention.schedule',
         text: `An attention schedule was cancelled (${text(event.payload.reason, 'no reason given')}).`,
         tone: 'neutral',
+      }
+
+    /* ---------------------------------------------------------------- relay */
+    //
+    // Metadata only, and worded so a row can never be mistaken for the action's
+    // content. The connector, the action and the outcome are Core's own closed
+    // labels; the summary is the bounded target sentence. No message body, no
+    // event title and no issue text is available to leak, because none is in
+    // the journal.
+
+    case 'relay.action.requested':
+      return {
+        ...base,
+        kind: 'relay.requested',
+        text: `Relay action requested: ${text(event.payload.summary, 'unknown action')}. Awaiting approval.`,
+        tone: 'warn',
+      }
+
+    case 'relay.approval.requested':
+      // Deliberately not a row of its own: the request row above already says
+      // "awaiting approval", and two rows for one fact would read as two
+      // requests.
+      return null
+
+    case 'relay.approval.decided':
+      return event.payload.decision === 'approved'
+        ? { ...base, kind: 'relay.approval', text: 'A Relay approval was granted.', tone: 'good' }
+        : { ...base, kind: 'relay.approval', text: 'A Relay approval was denied.', tone: 'neutral' }
+
+    case 'relay.approval.expired':
+      return {
+        ...base,
+        kind: 'relay.approval',
+        text: 'A Relay approval expired before it was decided.',
+        tone: 'warn',
+      }
+
+    case 'relay.action.executed':
+      return {
+        ...base,
+        kind: 'relay.executed',
+        text: `Relay action completed (${text(event.payload.connector, 'unknown')}.${text(event.payload.action, 'unknown')}).`,
+        tone: 'good',
+      }
+
+    case 'relay.action.failed':
+      return {
+        ...base,
+        kind: 'relay.failed',
+        text: `Relay action failed: ${text(event.payload.failureCode, 'unknown reason')}.`,
+        tone: 'bad',
+      }
+
+    case 'relay.action.cancelled':
+      return {
+        ...base,
+        kind: 'relay.failed',
+        text: `Relay action cancelled: ${text(event.payload.failureCode, 'no reason given')}.`,
+        tone: 'warn',
+      }
+
+    case 'relay.connector.faulted':
+      return {
+        ...base,
+        kind: 'relay.failed',
+        text: `A connector was marked faulted: ${text(event.payload.reason, 'no reason given')}.`,
+        tone: 'bad',
+      }
+
+    case 'relay.limits.exceeded':
+      return {
+        ...base,
+        kind: 'relay.limits',
+        text: `A Relay ceiling was reached (${text(event.payload.limit, 'unknown')}).`,
+        tone: 'warn',
       }
 
     default:

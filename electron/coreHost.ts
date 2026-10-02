@@ -9,8 +9,10 @@ import type { WorkforceProjection, WorkforceSource } from '../core/protocol/work
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import type { FoundryProjection } from '../core/protocol/foundry'
+import type { RelayProjection } from '../core/protocol/relay'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
 import type { OfficeProjection } from '../core/office/projection'
+import type { RelayAdapterSet } from '../core/relay/adapters'
 import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
 import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
@@ -360,6 +362,18 @@ export interface CoreHost {
    * already due whose condition holds against state Core already has.
    */
   attentionTick(): Promise<number>
+  /**
+   * Attach to the Relay projection. Returns a disposer.
+   *
+   * Its own channel like every subsystem's, and the note that matters is what
+   * is *not* here: the host cannot register a connector, fault one, set an
+   * allowlist, execute an action or decide an approval. It reads a projection
+   * and forwards it. What a window receives is Core's report ??? which
+   * connectors exist, which actions are pending, what settled ??? and this host
+   * is a forwarding box, not a second author of any of it.
+   */
+  onRelay(send: (projection: RelayProjection) => void): () => void
+  relay(): RelayProjection | null
   stop(reason?: string): Promise<void>
 }
 
@@ -464,6 +478,21 @@ export interface CoreHostOptions {
    * this off, so their journals are not perturbed.
    */
   attentionObserveSources?: boolean
+  /**
+   * Fills Core's Relay seam. For assembly and tests; production passes none,
+   * and the host does not build one.
+   *
+   * Forwarded *into* Core and nowhere else, exactly like `workforceSource`.
+   * This is not Electron deciding which connectors exist ??? it cannot,
+   * because the option it forwards is something Core can read, not something
+   * that takes an instruction. Relay authority lives in Core; the host's job
+   * is to hand over the adapters it was given and then mirror what Core
+   * reports.
+   */
+  relay?: {
+    adapters: RelayAdapterSet
+    allowlistedRepos?: readonly string[]
+  }
 }
 
 export class ElectronCoreHost implements CoreHost {
@@ -481,6 +510,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly attentionWindows = new Set<(projection: AttentionProjection) => void>()
   private readonly foundryWindows = new Set<(projection: FoundryProjection) => void>()
   private readonly officeWindows = new Set<(projection: OfficeProjection) => void>()
+  private readonly relayWindows = new Set<(projection: RelayProjection) => void>()
   /**
    * The Context transport box. Binds structurally to a reporting Core, holds a
    * window set, and can write nothing — see `ContextChannel`. Deliberately not
@@ -538,6 +568,11 @@ export class ElectronCoreHost implements CoreHost {
         // still decides, and a delivered event cannot mint a capability or reach a
         // model. On in production so a finished Run or Mission becomes attention.
         attentionObserveSources: this.options.attentionObserveSources ?? true,
+        // The Relay seam, forwarded whole for the same reason. It is a set of
+        // adapters, not a door: the option reaches Core, not a window, and a
+        // renderer has no name for it ??? so nothing a window can send arrives
+        // here, and the only thing that travels back out is what Core reports.
+        ...(this.options.relay ? { relay: this.options.relay } : {}),
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),
@@ -563,6 +598,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onAttention((projection) => this.broadcastAttention(projection))
       core.onFoundry((projection) => this.broadcastFoundry(projection))
       core.onOffice((projection) => this.broadcastOffice(projection))
+      core.onRelay((projection) => this.broadcastRelay(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -767,6 +803,7 @@ export class ElectronCoreHost implements CoreHost {
     this.personalityWindows.clear()
     this.attentionWindows.clear()
     this.officeWindows.clear()
+    this.relayWindows.clear()
     this.contextChannel.close()
     await core?.stop(reason)
   }
@@ -932,6 +969,43 @@ export class ElectronCoreHost implements CoreHost {
 
   async attentionTick(): Promise<number> {
     return (await this.core?.attentionTick()) ?? 0
+  }
+
+  /**
+   * Attach to the Relay projection, pushed immediately.
+   *
+   * Null before the Core has started, so a host with nothing to report says
+   * nothing rather than manufacturing an empty connector list ??? the same rule
+   * every other attach here follows, for the same reason.
+   */
+  onRelay(send: (projection: RelayProjection) => void): () => void {
+    this.relayWindows.add(send)
+    const projection = this.relay()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Relay push threw', error)
+      }
+    }
+    return () => {
+      this.relayWindows.delete(send)
+    }
+  }
+
+  relay(): RelayProjection | null {
+    return this.core?.relay() ?? null
+  }
+
+  private broadcastRelay(projection: RelayProjection): void {
+    for (const send of [...this.relayWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Relay push threw', error)
+        this.relayWindows.delete(send)
+      }
+    }
   }
 
   private broadcastAttention(projection: AttentionProjection): void {

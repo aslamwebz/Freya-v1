@@ -12,6 +12,7 @@ import type { WorkforceProjection } from '../../core/protocol/workforce'
 import type { ContextProjection } from '../../core/protocol/context'
 import type { PersonalityProjection } from '../../core/protocol/personality'
 import type { AttentionProjection } from '../../core/protocol/attention'
+import type { RelayProjection } from '../../core/protocol/relay'
 import type { FoundryProjection } from '../../core/protocol/foundry'
 import type { OfficeProjection } from '../../core/office/projection'
 
@@ -181,6 +182,8 @@ export interface FreyaHostBridge {
    */
   coreAttention(): Promise<AttentionProjection | null>
   onCoreAttention(handler: (projection: AttentionProjection) => void): () => void
+  coreRelay(): Promise<RelayProjection | null>
+  onCoreRelay(handler: (projection: RelayProjection) => void): () => void
 
   coreFoundry(): Promise<FoundryProjection | null>
   onCoreFoundry(handler: (projection: FoundryProjection) => void): () => void

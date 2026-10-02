@@ -68,6 +68,14 @@ separate two-factor test-only bypass (`FREYA_E2E=1` plus `FREYA_E2E_ALLOW_MULTI_
 because some restart/session tests intentionally run two throwaway processes against one
 temporary profile. Production cannot enter that path accidentally.
 
+### Artifact integrity manifest
+
+`npm run release:manifest` hashes every distributable renderer and Electron artifact with
+SHA-256 and writes `release/release-manifest.json`. The manifest is path-sorted, contains no
+timestamp, records app/version, source revision plus dirty state, and target platform/arch.
+This is the integrity/provenance payload a later signed installer/update can sign. A dirty
+source tree is recorded honestly rather than being presented as a reproducible candidate.
+
 ### Release gate
 
 `npm run release:gate` runs the existing full verification pipeline, the explicit Red-Team

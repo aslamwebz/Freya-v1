@@ -23,7 +23,8 @@
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:e2e",
     "release:check": "node scripts/release-check.mjs",
     "gauntlet": "npm run test:redteam",
-    "release:gate": "npm run verify && npm run gauntlet && npm run release:check"
+    "release:gate": "npm run verify && npm run gauntlet && npm run release:check",
+    "release:manifest": "node scripts/release-manifest.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",

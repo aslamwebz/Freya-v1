@@ -1084,6 +1084,36 @@ async function main(): Promise<void> {
       )
       await p4.getByRole('button', { name: 'Close Context', exact: true }).click()
 
+      // --- Phase 12 attention crosses the read-only host boundary ----------
+      //
+      // A window may submit an owner event and watch Core decide. What it may
+      // not do is name a source, decide an outcome or see the event text: the
+      // projection carries a length and a code-owned cue, and the only way to
+      // read the text is an explicit per-event read.
+      await launcher.getByRole('button', { name: 'Attention', exact: true }).click()
+      await p4.waitForSelector('.attention-surface[data-health="ready"]')
+      const attentionBridge = await p4.evaluate(() => {
+        const scope = window as unknown as Record<string, unknown>
+        return Object.keys((scope.freyaHost as object | undefined) ?? {})
+          .filter((key) => /attention/i.test(key))
+          .sort()
+      })
+      check(
+        'the Attention bridge is a pull and a subscription, and nothing that decides',
+        JSON.stringify(attentionBridge) === JSON.stringify(['coreAttention', 'onCoreAttention']),
+        attentionBridge.join(', '),
+      )
+      const ATTENTION_TEXT = 'FREYA_E2E_ATTENTION_TEXT'
+      await p4.locator('.attention-surface input').fill(ATTENTION_TEXT)
+      await p4.getByRole('button', { name: 'Submit to Core' }).click()
+      await p4.waitForSelector('.attention-decision')
+      check('Core answered an owner event with a decision', true)
+      check(
+        'the Attention surface never shows the event text, only its length',
+        !((await p4.locator('.attention-surface').textContent()) ?? '').includes(ATTENTION_TEXT),
+      )
+      await p4.getByRole('button', { name: 'Close Attention', exact: true }).click()
+
       // --- idle costs nothing, and says so --------------------------------
       await p4.waitForTimeout(1500)
       const usageText = await p4.evaluate(() =>

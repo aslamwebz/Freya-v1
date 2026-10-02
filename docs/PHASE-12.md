@@ -139,8 +139,11 @@ On 2026-10-02 the full gate passed on `phase-12-events-attention`:
   renderer client and surface.
 - **Phase 12 red-team tests:** 36 tests in 11 files, one per attack family below.
 - **Full suite:** 2,776 tests in 160 files, typecheck, lint, the renderer/main/
-  preload build and 187/187 offline Electron desktop checks, all under
-  `npm run verify` (`EXIT=0`).
+  preload build and 190/190 offline Electron desktop checks, all under
+  `npm run verify` (`EXIT=0`). The desktop suite includes three checks that open
+  the Attention surface through the launcher, confirm the bridge exposes only the
+  pull and the subscription, submit an owner event, and confirm the event text
+  never appears — only its length.
 
 The red-team suite covers forged urgency, notification storms, cooldown bypass,
 event poisoning, replay/restart duplication, scheduler abuse, attention loops,

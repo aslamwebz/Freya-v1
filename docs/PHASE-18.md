@@ -1,9 +1,9 @@
 # Phase 18 — Integration, security and packaging
 
-Status: **in progress**, intentionally developed from verified Phase 16 while Phase 17 remains isolated.
+Status: **integrated hardening complete**, now verified together with Phase 17 Skills.
 
-Phase 18 is the release-hardening layer. Work in this branch must not assume the unfinished
-Skills domain exists, and must remain mergeable after Phase 17 is integrated.
+Phase 18 is the release-hardening layer. Its deterministic release, startup, recovery and
+artifact-integrity controls are now verified against the complete Phase 17 Skills surface.
 
 ## Implemented now
 
@@ -48,8 +48,8 @@ change, not an automatic response to a larger bundle.
 ### Backup and recovery contract
 
 `electron/recovery/backupManifest.ts` defines the files belonging to one Core data path:
-the event journal, encrypted conversation/Brain/Mission/Context/Personality stores, the
-OS-protected `freya.keyring.json`, and workspace layout.
+the event journal, encrypted conversation/Brain/Mission/Context/Personality/Skills stores,
+the OS-protected `freya.keyring.json`, and workspace layout.
 
 The validator refuses incomplete security-state restores and explicitly refuses to describe
 an OS-protected keyring copy as cross-profile migration. The current keyring is protected
@@ -82,9 +82,10 @@ source tree is recorded honestly rather than being presented as a reproducible c
 Gauntlet, and the Phase-18 structural/supply-chain/performance checks. Any failure blocks
 the candidate.
 
-## Deferred until Phase 17 is integrated
+## Still deferred to a release candidate
 
 Final installer generation, code signing/notarization, signed update-channel configuration,
-the final full-Gauntlet release candidate, live backup snapshot/quiesce, and the decision on
-whether Core actually moves to a separate local service are deliberately deferred until the
-complete product surface is present.
+live backup snapshot/quiesce, and the decision on whether Core actually moves to a separate
+local service remain release-candidate work. The full verification and Red-Team release gate
+is now exercised with Phase 17 Skills integrated; those deployment-specific items should be
+closed only when the first distributable alpha/release candidate is prepared.

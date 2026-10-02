@@ -13,6 +13,7 @@ describe('Phase 18 backup/recovery contract', () => {
     expect(paths).toContain(`${dataPath}.missions`)
     expect(paths).toContain(`${dataPath}.context.enc`)
     expect(paths).toContain(`${dataPath}.personality.enc`)
+    expect(paths).toContain(`${dataPath}.skills.enc`)
     expect(paths).toContain('C:\\FreyaData\\freya.keyring.json')
     expect(paths).toContain('C:\\FreyaData\\workspace.json')
     expect(entries.find((entry) => entry.class === 'protected-keyring')?.portableAcrossProfiles).toBe(false)

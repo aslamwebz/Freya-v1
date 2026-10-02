@@ -158,6 +158,13 @@ describe('the Workforce mirror belongs to the process, not the window', () => {
     // Core's own read agrees with what was pushed: one truth, two doors.
     expect(host!.workforce()?.sequence).toBe(7)
 
+    // The legacy read-only mirror is not the canonical Workforce engine shape.
+    // Office must project only the internal domain rather than treating a mirror
+    // source as worker authority (or trying to read internal assignment fields
+    // the mirror deliberately does not expose).
+    expect(host!.office()?.counts.workers).toBe(0)
+    expect(host!.office()?.stations.some((station) => station.kind === 'worker')).toBe(false)
+
     // A window detaching mid-flight does not disturb the Core it attached to —
     // the property every other mirror rests on, here as well.
     dispose()

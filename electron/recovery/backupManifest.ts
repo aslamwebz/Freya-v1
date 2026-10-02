@@ -19,6 +19,7 @@ export function backupManifest(dataPath: string): readonly BackupEntry[] {
     { path: `${dataPath}.missions`, class: 'encrypted-domain', requiredForCompleteRestore: false, portableAcrossProfiles: true },
     { path: `${dataPath}.context.enc`, class: 'encrypted-domain', requiredForCompleteRestore: false, portableAcrossProfiles: true },
     { path: `${dataPath}.personality.enc`, class: 'encrypted-domain', requiredForCompleteRestore: false, portableAcrossProfiles: true },
+    { path: `${dataPath}.skills.enc`, class: 'encrypted-domain', requiredForCompleteRestore: false, portableAcrossProfiles: true },
     { path: join(dir, 'freya.keyring.json'), class: 'protected-keyring', requiredForCompleteRestore: true, portableAcrossProfiles: false },
     { path: join(dir, 'workspace.json'), class: 'workspace', requiredForCompleteRestore: false, portableAcrossProfiles: true },
   ]

@@ -2274,7 +2274,11 @@ class FreyaCore implements Core {
     }
     return projectOffice({
       work: this.work(),
-      workforce: this.workforce(),
+      // Office consumes Core's canonical Workforce domain, not the older
+      // read-only protocol mirror seam. The mirror has a deliberately smaller
+      // shape and may be supplied by a host/test source; treating it as the
+      // internal domain projection can fabricate missing fields and throw.
+      workforce: this.workforceEngine?.projection() ?? null,
       core: this.status(),
       presenceRequests: [...this.state.office.requests.values()],
     })

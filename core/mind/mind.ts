@@ -22,6 +22,12 @@ import {
   type ConversationTurn,
   type TerminalTurnOutcome,
 } from '../conversation/types'
+import {
+  buildExpressionForTurn,
+  withExpressionBlock,
+  type ExpressionMemory,
+} from './expression'
+import type { CueKind, CueUsageLedger, InteractionFact, RelationshipItem } from '../personality/types'
 
 /**
  * The Mind.
@@ -249,6 +255,32 @@ export interface MindServiceOptions {
    * existed.
    */
   onTurnStateChange?: () => void
+  /**
+   * The expression-memory seam for anti-repetition.
+   *
+   * Injected by the Core, which owns the cue ledger. The Mind reads the ledger
+   * before planning and records cue use after the turn — it has no store, no
+   * persistence, and no write path of its own. A null or absent seam means no
+   * expression block is produced, exactly as a Brain that cannot recall produces
+   * no reference block.
+   */
+  expressionMemory?: ExpressionMemory
+  /**
+   * Interaction facts observed by trusted code, for social interpretation.
+   *
+   * Called once per turn, before the provider request. The facts are produced by
+   * trusted pathways that observed something (a greeting arrived, a session
+   * started) — never by model text. An empty list is the normal state.
+   */
+  interactionFacts?: () => readonly InteractionFact[]
+  /**
+   * Admitted relationship items, for social interpretation and expression planning.
+   *
+   * Called once per turn, before the provider request. Only admitted items are
+   * meaningful; the interpretation filters to admitted status internally. An empty
+   * list is the normal first-turn state.
+   */
+  relationshipItems?: () => readonly RelationshipItem[]
 }
 
 export class MindService {
@@ -266,6 +298,9 @@ export class MindService {
   private readonly turnContext: TurnContextReader | null
   private readonly onTurnStateChange: () => void
   private readonly onTurnExperience: ((experience: TurnExperience) => Promise<void>) | null
+  private readonly expressionMemory: ExpressionMemory | null
+  private readonly interactionFacts: () => readonly InteractionFact[]
+  private readonly relationshipItems: () => readonly RelationshipItem[]
 
   /**
    * Experience measurements are keyed by turn, not stored in singleton fields.
@@ -308,6 +343,9 @@ export class MindService {
     this.turnContext = options.turnContext ?? null
     this.onTurnStateChange = options.onTurnStateChange ?? (() => {})
     this.onTurnExperience = options.onTurnExperience ?? null
+    this.expressionMemory = options.expressionMemory ?? null
+    this.interactionFacts = options.interactionFacts ?? (() => [])
+    this.relationshipItems = options.relationshipItems ?? (() => [])
   }
 
   /**
@@ -353,6 +391,38 @@ export class MindService {
       // enrichment. The fault belongs to the Context domain's own health reporting.
       console.error('[freya.mind] turn context compile failed; continuing without it', error)
       return null
+    }
+  }
+
+  /**
+   * Read the cue ledger from the injected expression memory.
+   *
+   * Never throws. A memory that is unavailable, empty, or unhappy returns null, and
+   * the turn proceeds with an empty ledger — the same degradation as a Brain that
+   * cannot recall. Forgetting is not a reason to refuse to answer.
+   */
+  private ledgerFor(): CueUsageLedger | null {
+    if (this.expressionMemory === null) return null
+    try {
+      return this.expressionMemory.readLedger()
+    } catch (error) {
+      console.error('[freya.mind] expression memory read failed; continuing without a ledger', error)
+      return null
+    }
+  }
+
+  /**
+   * Record cue use after a turn completes.
+   *
+   * Never throws. A memory that cannot record is logged and swallowed — a failed
+   * anti-repetition record must not fail a turn that already has a stored answer.
+   */
+  private recordCueUse(cueId: string, kind: CueKind, at: string): void {
+    if (this.expressionMemory === null) return
+    try {
+      this.expressionMemory.recordCueUse(cueId, kind, at)
+    } catch (error) {
+      console.error('[freya.mind] expression memory write failed; continuing', error)
     }
   }
 
@@ -516,7 +586,21 @@ export class MindService {
       // so the Context Compiler's input stays the closed set of five explicit
       // fields the Phase 9 red-team suite asserts, and this block arrives as a
       // separate `user`-role message the compiler was never asked to trust.
-      const messages = withTurnContext(compiled.messages, this.sharedContextFor(text, input.conversationId))
+      const withContext = withTurnContext(compiled.messages, this.sharedContextFor(text, input.conversationId))
+
+      // --- 4b. expression planning, into the SAME provider call --------------
+      //
+      // Deterministic social interpretation and bounded expression planning,
+      // spliced into the packet the Mind was already going to send. No second
+      // provider call, no persistence, no clock read. The block is style guidance
+      // only — it cannot grant capability, bypass Guard, or weaken STOP ALL.
+      const expression = buildExpressionForTurn({
+        now: startedAt,
+        facts: this.interactionFacts(),
+        relationship: this.relationshipItems(),
+        ledger: this.ledgerFor(),
+      })
+      const messages = withExpressionBlock(withContext, expression.block)
 
       // Record what context was actually assembled before the provider is asked.
       // This remains true for failure/cancellation outcomes too; a turn does not
@@ -543,6 +627,15 @@ export class MindService {
         requestedModel: this.selectedModel(),
         goalId: null,
       })
+
+      // Record cue use for the cues this turn offered, regardless of outcome.
+      // The plan was built and the cues were offered to the provider; whether the
+      // turn completed, was cancelled, or failed, the cues were spent. Recording
+      // here — after the provider returns, before the terminal bookkeeping — means
+      // the ledger reflects what was actually offered, not what was answered.
+      for (const cue of expression.offeredCueIds) {
+        this.recordCueUse(cue.cueId, cue.kind, startedAt)
+      }
 
       if (outcome.status === 'denied') {
         // The Governor refused. Nobody was asked, and the turn says so.

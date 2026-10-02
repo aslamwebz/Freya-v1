@@ -42,11 +42,14 @@ import {
   PERSONALITY_LIMITS,
   RELATIONSHIP_STATUSES,
   isCueKind,
+  isLifecycleConsistent,
   isRelationshipItemKind,
+  isRelationshipLifecycleReason,
   isSlug,
   type CueUsageEntry,
   type CueUsageLedger,
   type RelationshipItem,
+  type RelationshipLifecycleReason,
   type RelationshipStatus,
 } from '../types'
 import {
@@ -103,6 +106,8 @@ const STORED_ITEM_KEYS: readonly string[] = [
   'status',
   'admittedAt',
   'admissionReason',
+  'lifecycleAt',
+  'lifecycleReason',
 ]
 
 /**
@@ -260,10 +265,36 @@ export function decodePersonalityItem(value: unknown): RelationshipItem {
     }
   }
 
-  // A retired item must have its text destroyed. A tombstone whose text was
-  // never destroyed is a record whose text somebody believed was gone.
+  const lifecycleAt = value['lifecycleAt']
+  if (lifecycleAt !== null && !isInstant(lifecycleAt)) {
+    refuse('a personality record has a lifecycle time that is not a time')
+  }
+
+  const lifecycleReason = value['lifecycleReason']
+  if (lifecycleReason !== null && !isRelationshipLifecycleReason(lifecycleReason)) {
+    refuse('a personality record has a lifecycle reason outside the closed vocabulary')
+  }
+
+  // A retired item must have its text destroyed. A tombstone whose text was never
+  // destroyed is a record whose text somebody believed was gone — so this is
+  // checked before the shape agreement below, because "it still holds its text" is
+  // the more urgent of the two things wrong with such a record and the one a person
+  // holding the file needs to hear first.
   if (status === 'retired' && text !== '') {
     refuse(`personality record ${itemId} was retired but still holds its text`)
+  }
+
+  // Status, instant and reason have to agree, from the domain's own table. A record
+  // that claims to be withdrawn without saying when, or still live while carrying a
+  // reason, is not a record this build can act on.
+  if (
+    !isLifecycleConsistent(
+      status as RelationshipStatus,
+      lifecycleAt as string | null,
+      lifecycleReason as RelationshipLifecycleReason | null,
+    )
+  ) {
+    refuse('a personality record has a status, lifecycle time and lifecycle reason that do not agree')
   }
 
   return {
@@ -278,6 +309,8 @@ export function decodePersonalityItem(value: unknown): RelationshipItem {
     status: status as RelationshipStatus,
     admittedAt,
     admissionReason,
+    lifecycleAt: lifecycleAt as string | null,
+    lifecycleReason: lifecycleReason as RelationshipLifecycleReason | null,
   }
 }
 

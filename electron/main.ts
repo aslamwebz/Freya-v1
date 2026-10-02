@@ -59,15 +59,30 @@ function e2eKey(variable: string): Uint8Array | null {
  * conversation survives and the Brain does not — or the reverse — and the failure
  * would look like a Brain bug rather than a harness that only half injected.
  */
-function e2eKeys(): { conversation: Uint8Array; brain: Uint8Array; mission: Uint8Array; context: Uint8Array } | null {
+function e2eKeys(): {
+  conversation: Uint8Array
+  brain: Uint8Array
+  mission: Uint8Array
+  context: Uint8Array
+  personality: Uint8Array
+} | null {
   const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
   const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
   const mission = e2eKey('FREYA_E2E_MISSION_KEY')
   const context = e2eKey('FREYA_E2E_CONTEXT_KEY')
-  // All four or none, so a partial fixture cannot quietly run with a real keyring for
+  const personality = e2eKey('FREYA_E2E_PERSONALITY_KEY')
+  // All five or none, so a partial fixture cannot quietly run with a real keyring for
   // the domain it forgot.
-  if (conversation === null || brain === null || mission === null || context === null) return null
-  return { conversation, brain, mission, context }
+  if (
+    conversation === null ||
+    brain === null ||
+    mission === null ||
+    context === null ||
+    personality === null
+  ) {
+    return null
+  }
+  return { conversation, brain, mission, context, personality }
 }
 
 /**
@@ -532,6 +547,7 @@ app.whenReady().then(() => {
         brain: { key: testKeys.brain, reason: null as string | null },
         mission: { key: testKeys.mission, reason: null as string | null },
         context: { key: testKeys.context, reason: null as string | null },
+        personality: { key: testKeys.personality, reason: null as string | null },
       })
     : loadKeyring(dataPath)
   void keyResult.then((result) => {
@@ -552,6 +568,15 @@ app.whenReady().then(() => {
       // Same shape as the Brain's: Missions still work for this session, and the
       // surface reports `durable: false` rather than implying persistence it lacks.
       console.warn(`[freya] Missions are not being saved — ${result.mission.reason}`)
+    }
+    if (result.personality.key === null) {
+      // The one domain whose absence changes behaviour and not only durability.
+      // Without a durable store the cue ledger cannot be trusted, so Core refuses
+      // anti-repetition memory outright and offers no expression guidance at all —
+      // which is correct: an empty ledger would re-offer the same gesture forever.
+      console.warn(
+        `[freya] what Freya records about you will not survive a restart, and she will not reuse gestures — ${result.personality.reason}`,
+      )
     }
     const fixtureProvider = e2eResearchFixtureProvider(process.env)
     coreHost = new ElectronCoreHost(
@@ -577,6 +602,7 @@ app.whenReady().then(() => {
         brainKey: result.brain.key,
         missionKey: result.mission.key,
         contextKey: result.context.key,
+        personalityKey: result.personality.key,
         // Explicit host setting; own-app sees only Freya. System is honestly unsupported.
         ...(['own-app', 'system'].includes(process.env.FREYA_CONTEXT_WINDOW_OBSERVATION ?? '') ? {
           windowObservation: {

@@ -65,6 +65,7 @@ function describeCounts(projection: PersonalityProjection): string {
   if (c.candidate > 0) parts.push(`${c.candidate} candidate`)
   if (c.rejected > 0) parts.push(`${c.rejected} rejected`)
   if (c.superseded > 0) parts.push(`${c.superseded} superseded`)
+  if (c.retired > 0) parts.push(`${c.retired} withdrawn or retired`)
   if (c.dropped > 0) parts.push(`${c.dropped} not projected`)
   if (c.cuesAdmitted > 0) parts.push(`${c.cuesAdmitted} with a cue`)
   return parts.join(' · ')
@@ -75,12 +76,17 @@ function describeCounts(projection: PersonalityProjection): string {
  *
  * Every field is a word or a slug Core supplied. Nothing here is re-spelled,
  * recoloured by status or shortened into something friendlier: `superseded`
- * reads as superseded.
+ * reads as superseded, and a tombstone says when it was taken back rather than
+ * quietly disappearing.
  */
 function recordLine(item: PersonalityRelationshipItemView): string {
   const cue = item.cueKind === null ? '' : ` · cue: ${item.cueKind}`
   const admitted = item.admittedAt === null ? ' · not admitted' : ` · admitted ${item.admittedAt}`
-  return `${item.key} (${item.kind}) · ${item.status} · ${item.sourceType} · ${item.confidence}${cue}${admitted}`
+  const ended =
+    item.lifecycleAt === null || item.lifecycleReason === null
+      ? ''
+      : ` · ${item.lifecycleReason.replace(/-/g, ' ')} ${item.lifecycleAt}`
+  return `${item.key} (${item.kind}) · ${item.status} · ${item.sourceType} · ${item.confidence}${cue}${admitted}${ended}`
 }
 
 export function PersonalitySurface() {
@@ -166,6 +172,24 @@ export function PersonalitySurface() {
 
       {notice}
 
+      {/*
+       * Durability, first and in Core's own words. A relationship that looks
+       * durable and is not is the single worst thing this window could imply, so
+       * the sentence sits above the records rather than in a footer, and a fault
+       * ("the stored bytes could not be believed") is shown separately from a
+       * deliberate choice not to persist — they are different problems with
+       * different fixes.
+       */}
+      <p className="personality-durability" data-durable={projection.persistence.durable}>
+        {projection.persistence.durable
+          ? `Encrypted at rest · ${projection.persistence.retained} record(s) held · nothing leaves this machine unless a turn does`
+          : bounded(
+              projection.persistence.faultReason ??
+                projection.persistence.reason ??
+                'Core reports this is held in this process only, so nothing here survives a restart.',
+            )}
+      </p>
+
       {projection.temperament === null ? (
         <p className="personality-none">Core reports no temperament table.</p>
       ) : (
@@ -246,7 +270,10 @@ export function PersonalitySurface() {
         <p className="personality-note">
           Anti-repetition ledger: {projection.repetition.entries} of{' '}
           {projection.repetition.maxEntries} metadata entries. Hashes and instants only — never
-          what was said.
+          what was said.{' '}
+          {projection.persistence.durable
+            ? null
+            : 'It is currently untrusted, so no expression guidance is being offered at all rather than offered without an anti-repetition memory.'}
         </p>
       )}
     </div>

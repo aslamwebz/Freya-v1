@@ -96,7 +96,10 @@ describe('restart recovery', () => {
 describe('retirement and withdrawal', () => {
   it('destroys text when an item is retired', () => {
     const item = secretItem()
-    const retired = retirePersonalityItem(item)
+    const retired = retirePersonalityItem(item, {
+      now: '2026-06-02T09:00:00.000Z',
+      reason: 'owner-withdrew-this-record',
+    })
     expect(retired.text).toBe('')
     expect(retired.status).toBe('retired')
     expect(retired.itemId).toBe(item.itemId)
@@ -107,7 +110,10 @@ describe('retirement and withdrawal', () => {
   it('keeps retirement across a restart', async () => {
     const path = storePath()
     const item = secretItem()
-    const retired = retirePersonalityItem(item)
+    const retired = retirePersonalityItem(item, {
+      now: '2026-06-02T09:00:00.000Z',
+      reason: 'owner-withdrew-this-record',
+    })
     await writeSnapshot(path, snapshotOf(retired))
 
     const store = await EncryptedPersonalityStore.open({ path, key: testPersonalityKey() })
@@ -124,7 +130,10 @@ describe('retirement and withdrawal', () => {
   it('does not resurrect retired text on recovery', async () => {
     const path = storePath()
     const item = secretItem()
-    const retired = retirePersonalityItem(item)
+    const retired = retirePersonalityItem(item, {
+      now: '2026-06-02T09:00:00.000Z',
+      reason: 'owner-withdrew-this-record',
+    })
     await writeSnapshot(path, snapshotOf(retired))
 
     const store = await EncryptedPersonalityStore.open({ path, key: testPersonalityKey() })

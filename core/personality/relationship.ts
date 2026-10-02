@@ -46,6 +46,7 @@ import {
   type CueKind,
   type RelationshipItem,
   type RelationshipItemKind,
+  type RelationshipLifecycleReason,
 } from './types'
 
 /** The exact keys a relationship-item candidate input must carry. */
@@ -77,6 +78,8 @@ export const RELATIONSHIP_ITEM_KEYS: readonly string[] = [
   'status',
   'admittedAt',
   'admissionReason',
+  'lifecycleAt',
+  'lifecycleReason',
 ]
 
 const CONFIDENCE_VALUES: readonly string[] = ['unknown', 'low', 'medium', 'high', 'verified']
@@ -225,6 +228,8 @@ export function createRelationshipCandidate(input: unknown): RelationshipResult 
     status: 'candidate',
     admittedAt: null,
     admissionReason: null,
+    lifecycleAt: null,
+    lifecycleReason: null,
   })
 
   return { ok: true, item }
@@ -281,8 +286,95 @@ export function rejectRelationshipItem(
     status: 'rejected' as const,
     admittedAt: null,
     admissionReason: decision.reason,
+    lifecycleAt: decision.now,
+    lifecycleReason: 'owner-rejected-this-record' as const,
   })
   return { ok: true, item }
+}
+
+/**
+ * Retire a live record. Destruction, not a flag.
+ *
+ * The item's `text` becomes `''` and its `status` becomes `retired`, so the only
+ * way for withdrawn words to leak afterwards is to have leaked them while they
+ * were live. Everything else is kept — id, kind, key, tags, provenance,
+ * confidence, admitted instant — because "this existed and was taken back" is
+ * an answer the domain owes after a restart, and a record that vanished would
+ * answer `nothing here` instead.
+ *
+ * The reason is one of four **closed labels**, never a sentence: this field
+ * travels to the journal and to a window, and a lifecycle reason that could hold
+ * prose would be a place where private text could ride out of Core.
+ *
+ * Two callers, one function. `owner-withdrew-this-record` is a person taking
+ * something back; `retention-bound-reached` is Core's own bounded retention
+ * retiring the oldest live record. They are the same transition with different
+ * provenance about *who asked*, and pretending otherwise would mean either
+ * forgetting that the owner decided or pretending the owner did.
+ */
+export function retireRelationshipItem(
+  item: RelationshipItem,
+  decision: { now: string; reason: RelationshipLifecycleReason },
+): RelationshipResult {
+  if (item.status !== 'admitted' && item.status !== 'candidate') {
+    return { ok: false, reason: `only live records can be retired, not ${item.status}` }
+  }
+  if (instantMs(decision.now) === null) {
+    return { ok: false, reason: 'decision now must parse as an instant' }
+  }
+  if (decision.reason === 'owner-rejected-this-record' || decision.reason === 'superseded-by-a-newer-record') {
+    return { ok: false, reason: 'that lifecycle reason belongs to a different transition' }
+  }
+  return {
+    ok: true,
+    item: Object.freeze({
+      ...item,
+      text: '',
+      status: 'retired' as const,
+      admittedAt: item.admittedAt,
+      lifecycleAt: decision.now,
+      lifecycleReason: decision.reason,
+    }),
+  }
+}
+
+/**
+ * Mark an admitted record as superseded by a newer one carrying the same key.
+ *
+ * Unlike retirement this **keeps the text**: the older record was true when it was
+ * written, and a person reading it back should still see what was said. It stops
+ * feeding interpretation — only `admitted` items do — so superseding is the
+ * cheapest honest way to stop an outdated preference from steering a turn.
+ */
+export function supersedeRelationshipItem(
+  item: RelationshipItem,
+  decision: { now: string; supersedes: string },
+): RelationshipResult {
+  if (item.status !== 'admitted') {
+    return { ok: false, reason: `only admitted records can be superseded, not ${item.status}` }
+  }
+  if (instantMs(decision.now) === null) {
+    return { ok: false, reason: 'decision now must parse as an instant' }
+  }
+  if (
+    typeof decision.supersedes !== 'string' ||
+    decision.supersedes.length === 0 ||
+    decision.supersedes.length > PERSONALITY_LIMITS.maxItemIdChars
+  ) {
+    return { ok: false, reason: 'the superseding record id must be a bounded non-empty string' }
+  }
+  if (decision.supersedes === item.itemId) {
+    return { ok: false, reason: 'a record cannot supersede itself' }
+  }
+  return {
+    ok: true,
+    item: Object.freeze({
+      ...item,
+      status: 'superseded' as const,
+      lifecycleAt: decision.now,
+      lifecycleReason: 'superseded-by-a-newer-record' as const,
+    }),
+  }
 }
 
 /**

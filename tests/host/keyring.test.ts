@@ -162,9 +162,15 @@ describe('one secret per domain', () => {
     // The property the whole file exists for. If this ever failed, a leaked
     // conversation key would be a leaked Brain, and "the conversation key leaked"
     // would stop being a bounded problem.
-    const domains = [keyring.conversation, keyring.brain, keyring.mission]
+    const domains = [
+      keyring.conversation,
+      keyring.brain,
+      keyring.mission,
+      keyring.context,
+      keyring.personality,
+    ]
     const hexes = domains.map((domain) => Buffer.from(domain.key!).toString('hex'))
-    expect(new Set(hexes).size).toBe(3)
+    expect(new Set(hexes).size).toBe(domains.length)
   })
 
   it('gives each domain a full 256-bit secret', async () => {
@@ -172,6 +178,8 @@ describe('one secret per domain', () => {
     expect(keyring.conversation.key!.length).toBe(32)
     expect(keyring.brain.key!.length).toBe(32)
     expect(keyring.mission.key!.length).toBe(32)
+    expect(keyring.context.key!.length).toBe(32)
+    expect(keyring.personality.key!.length).toBe(32)
   })
 
   it('wraps each secret separately, not as one blob', async () => {
@@ -185,11 +193,22 @@ describe('one secret per domain', () => {
     // The record is there so a keyring written on one platform is never read as
     // though it had been written the same way on another.
     expect(file.protection).toBe('gnome_libsecret')
-    expect(Object.keys(file.keys).sort()).toEqual(['brain', 'context', 'conversation', 'mission'])
+    expect(Object.keys(file.keys).sort()).toEqual([
+      'brain',
+      'context',
+      'conversation',
+      'mission',
+      'personality',
+    ])
     // Separate wrapped blobs: recovering one domain never unwraps another.
     expect(file.keys.brain).not.toBe(file.keys.conversation)
     expect(file.keys.mission).not.toBe(file.keys.conversation)
     expect(file.keys.mission).not.toBe(file.keys.brain)
+    // The one domain that has to be independent *and* is easiest to forget: what
+    // Freya has recorded about a person must not be readable by anything holding
+    // the conversation key, and vice versa.
+    expect(file.keys.personality).not.toBe(file.keys.conversation)
+    expect(file.keys.personality).not.toBe(file.keys.brain)
   })
 
   it('returns the same secrets on the next run', async () => {
@@ -262,7 +281,13 @@ describe('the Mission domain, and the migration that introduces it', () => {
     const file = JSON.parse(await readFile(`${dataPath()}.keyring.json`, 'utf8')) as {
       keys: Record<string, string>
     }
-    expect(Object.keys(file.keys).sort()).toEqual(['brain', 'context', 'conversation', 'mission'])
+    expect(Object.keys(file.keys).sort()).toEqual([
+      'brain',
+      'context',
+      'conversation',
+      'mission',
+      'personality',
+    ])
   })
 
   it('gives the migrated Mission key a different secret from both existing ones', async () => {

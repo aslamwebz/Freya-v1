@@ -1,4 +1,9 @@
-import { PERSONALITY_LIMITS, type RelationshipItem } from '../types'
+import {
+  PERSONALITY_LIMITS,
+  type RelationshipItem,
+  type RelationshipLifecycleReason,
+} from '../types'
+import { retireRelationshipItem } from '../relationship'
 import { PERSONALITY_SNAPSHOT_VERSION, type PersonalitySnapshot } from './port'
 
 /**
@@ -78,17 +83,32 @@ export function isPersonalityItemLive(item: RelationshipItem): boolean {
 /**
  * Destroy the text of an item, keeping its metadata as a tombstone.
  *
- * Used for retirement/withdrawal. The item's `text` is set to '' and its
- * status is changed to 'retired'. All other metadata — itemId, kind, key,
- * tags, provenance, confidence, admittedAt, admissionReason — is preserved
- * so the domain can still report that the item existed and was withdrawn.
+ * A **delegation**, not a second implementation, and that is the point: "a retired
+ * item has no text" has to be one rule in this codebase, or the recovery path and
+ * the write path will eventually disagree about what a tombstone is and a
+ * withdrawn sentence will survive whichever of them is checked less often.
+ *
+ * The item's `text` is set to `''` and its status becomes `retired`. All other
+ * metadata — id, kind, key, tags, provenance, confidence, admitted instant, and the
+ * lifecycle instant and closed reason — is preserved, so the domain can still report
+ * that the item existed and why it ended.
  *
  * This is the same pattern as `retireContextItem` in the Context domain:
- * destruction, not a flag. A flag would leave the words in memory for the
- * next mistake to find; destruction means the only way to leak retired
- * personality data is to have leaked it while it was live.
+ * destruction, not a flag. A flag would leave the words in memory for the next
+ * mistake to find; destruction means the only way to leak retired personality data
+ * is to have leaked it while it was live.
  */
-export function retirePersonalityItem(item: RelationshipItem): RelationshipItem {
+export function retirePersonalityItem(
+  item: RelationshipItem,
+  decision: { now: string; reason: RelationshipLifecycleReason },
+): RelationshipItem {
   if (item.status === 'retired' && item.text === '') return item
-  return { ...item, text: '', status: 'retired' }
+  const retired = retireRelationshipItem(item, decision)
+  if (!retired.ok) {
+    // A record that cannot legally be retired — already rejected, superseded, or
+    // never admitted — is not repaired here. Recovery normalises records that
+    // already claim to be retired; it does not invent a retirement.
+    return item
+  }
+  return retired.item
 }

@@ -122,6 +122,72 @@ export function isCueKind(value: unknown): value is CueKind {
 export const RELATIONSHIP_STATUSES = ['candidate', 'admitted', 'rejected', 'superseded', 'retired'] as const
 export type RelationshipStatus = (typeof RELATIONSHIP_STATUSES)[number]
 
+/**
+ * Why a record left the live set — a **closed label, never a sentence**.
+ *
+ * A record's end is one of four things, and all four are code-owned words rather
+ * than prose. That is deliberate: an admission reason is a bounded sentence Core
+ * wrote, but a *lifecycle* reason travels to the journal, the activity feed and a
+ * window, so it must not be a field a sentence could be written into. `null` on a
+ * live record; one of these four on a record that has ended.
+ *
+ *  - `owner-withdrew-this-record` — a person took something back. The text is
+ *    destroyed, not flagged.
+ *  - `owner-rejected-this-record` — a person declined a candidate.
+ *  - `superseded-by-a-newer-record` — a newer admitted record carries the same
+ *    code-owned key, so the older one no longer speaks for it.
+ *  - `retention-bound-reached` — Core's own bound retired the oldest live record
+ *    to keep the store inside `maxRelationshipItems`. Deterministic and stated,
+ *    never silent.
+ */
+export const RELATIONSHIP_LIFECYCLE_REASONS = [
+  'owner-withdrew-this-record',
+  'owner-rejected-this-record',
+  'superseded-by-a-newer-record',
+  'retention-bound-reached',
+] as const
+export type RelationshipLifecycleReason = (typeof RELATIONSHIP_LIFECYCLE_REASONS)[number]
+
+export function isRelationshipLifecycleReason(value: unknown): value is RelationshipLifecycleReason {
+  return (
+    typeof value === 'string' &&
+    (RELATIONSHIP_LIFECYCLE_REASONS as readonly string[]).includes(value)
+  )
+}
+
+/**
+ * Which lifecycle reasons are legal for which status.
+ *
+ * A record's status and its reason have to agree, and the agreement is a table
+ * rather than a convention: it is checked on the way in from storage as well as
+ * on the way out, so a hand-written file cannot say "withdrawn" about a record
+ * that is still `admitted`, nor leave a `retired` record with no reason at all.
+ * The second of those matters more than it looks — "this was taken back" without
+ * a stated cause is not an answer, it is a shrug.
+ */
+export const LIFECYCLE_REASON_BY_STATUS: Readonly<
+  Record<RelationshipStatus, readonly RelationshipLifecycleReason[]>
+> = Object.freeze({
+  candidate: Object.freeze([]),
+  admitted: Object.freeze([]),
+  rejected: Object.freeze(['owner-rejected-this-record'] as const),
+  superseded: Object.freeze(['superseded-by-a-newer-record'] as const),
+  retired: Object.freeze(['owner-withdrew-this-record', 'retention-bound-reached'] as const),
+})
+
+/** Whether a status, instant and reason are a combination this domain permits. */
+export function isLifecycleConsistent(
+  status: RelationshipStatus,
+  lifecycleAt: string | null,
+  lifecycleReason: RelationshipLifecycleReason | null,
+): boolean {
+  const allowed = LIFECYCLE_REASON_BY_STATUS[status]
+  if (allowed === undefined) return false
+  if (allowed.length === 0) return lifecycleAt === null && lifecycleReason === null
+  if (lifecycleAt === null || lifecycleReason === null) return false
+  return allowed.includes(lifecycleReason)
+}
+
 /** The safe continuity readings a deterministic interpretation may report. */
 export const CONTINUITY_STATES = ['new', 'renewed', 'sustained'] as const
 export type ContinuityState = (typeof CONTINUITY_STATES)[number]
@@ -266,6 +332,16 @@ export interface RelationshipItem {
   readonly status: RelationshipStatus
   readonly admittedAt: string | null
   readonly admissionReason: string | null
+  /**
+   * When this record stopped being live, or null while it is.
+   *
+   * Separate from `admittedAt` because a record that was admitted and later
+   * withdrawn has two different instants and collapsing them would make "when did
+   * you stop believing this" answerable with "when did you start".
+   */
+  readonly lifecycleAt: string | null
+  /** A closed lifecycle label, or null while the record is live. */
+  readonly lifecycleReason: RelationshipLifecycleReason | null
 }
 
 /** One recorded preference judged relevant to the explicit context tokens. */

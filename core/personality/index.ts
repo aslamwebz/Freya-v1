@@ -26,10 +26,21 @@ export {
   createRelationshipCandidate,
   admitRelationshipItem,
   rejectRelationshipItem,
+  retireRelationshipItem,
+  supersedeRelationshipItem,
   eligibleCueCandidates,
   relationshipConfidenceCeiling,
   type RelationshipResult,
 } from './relationship'
+export {
+  readOwnerDirectives,
+  ownerDirectiveKeys,
+  ownerDirectiveCueKind,
+  isKnownOwnerDirectiveKey,
+  type OwnerDirectiveOutcome,
+  type OwnerDirectiveMatch,
+  type OwnerWithdrawalMatch,
+} from './directives'
 export {
   SOCIAL_WINDOWS,
   INTERACTION_FACT_KEYS,
@@ -67,4 +78,11 @@ export {
   type PersonalityEvalCheck,
   type PersonalityEvalReport,
 } from './evaluate'
-export { projectPersonality, type PersonalityProjectionInput } from './projection'
+export { projectPersonality, UNKNOWN_PERSISTENCE_REASON, type PersonalityProjectionInput } from './projection'
+export {
+  PersonalityIntegration,
+  type PersonalityIntegrationOptions,
+  type PersonalityLifecycleEvent,
+  type PersonalityPersistenceSeam,
+  type PersonalityRetentionReport,
+} from './integration'

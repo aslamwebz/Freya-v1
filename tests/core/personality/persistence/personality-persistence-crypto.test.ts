@@ -10,6 +10,7 @@ import {
   personalityRecordAad,
   personalityStoreBinding,
 } from '../../../../core/personality/persistence/encrypted-store'
+import { PERSONALITY_SNAPSHOT_VERSION } from '../../../../core/personality/persistence/port'
 import { EncryptedContextStore } from '../../../../core/context/persistence/encrypted-store'
 import {
   BRAIN_KEY_SEED,
@@ -217,7 +218,7 @@ describe('an authenticating record is still checked against the domain', () => {
     await writeFile(
       filePath,
       `${JSON.stringify({
-        v: 1,
+        v: PERSONALITY_SNAPSHOT_VERSION,
         itemId,
         nonce: nonce.toString('base64'),
         cipher: encrypted.toString('base64'),

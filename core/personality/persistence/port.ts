@@ -46,8 +46,14 @@ import type { PersonalityPersistenceErrorCode } from './errors'
  * A version number rather than a bare object, because a file with no version
  * in it cannot be refused *specifically* — it can only be refused as
  * "unrecognised", which sends somebody looking for damage that is not there.
+ *
+ * Version 2 added the two lifecycle fields (`lifecycleAt`, `lifecycleReason`),
+ * which is why it is a bump rather than a widening: a v1 record's key set does
+ * not match the closed shape, and a *clear* "this build reads version 2" is far
+ * more useful to the person holding the file than "a record has keys that do not
+ * match".
  */
-export const PERSONALITY_SNAPSHOT_VERSION = 1
+export const PERSONALITY_SNAPSHOT_VERSION = 2
 
 /**
  * Everything the Personality domain retains, as one value.

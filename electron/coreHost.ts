@@ -358,6 +358,18 @@ export interface CoreHostOptions {
    */
   missionKey?: Uint8Array | null
   contextKey?: Uint8Array | null
+  /**
+   * Personality's own key, from the keyring.
+   *
+   * A **fifth** independent secret for the same reason as the other four: what
+   * Freya has recorded about a person should not be one key-compromise away from
+   * the conversation log, and recovering another domain's key must not yield it.
+   * Null means Core falls back to an ephemeral relationship, reports
+   * `durable: false` in the projection, and — because anti-repetition depends on
+   * remembering what was offered — serves no expression guidance at all rather
+   * than resetting its memory.
+   */
+  personalityKey?: Uint8Array | null
   /** Explicit main-process opt-in; never accepted from a renderer. */
   windowObservation?: {
     enabled: boolean
@@ -458,6 +470,11 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
         ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),
         contextKey: this.options.contextKey ?? null,
+        // Bytes in, and nowhere else. Core holds a `PersonalityPersistenceRuntime`
+        // it cannot inspect, so there is nothing here for it to leak the key
+        // through — and no path for it to leak the relationship *text* through
+        // either, since the projection carries metadata only.
+        personalityKey: this.options.personalityKey ?? null,
         // The Workforce seam, forwarded whole. Nothing is derived from it here:
         // the host neither reads nor interprets a workforce, it only hands Core
         // the reader it was given and mirrors what Core reports.

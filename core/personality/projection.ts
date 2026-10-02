@@ -60,8 +60,20 @@ import {
   type RelationshipStatus,
   type SocialInterpretation,
 } from './types'
+import type { PersonalityPersistenceHealth } from './persistence/port'
 
 export { ABSENT_PERSONALITY_PROJECTION, NO_PERSONALITY_DOMAIN_REASON } from '../protocol/personality'
+
+/**
+ * What a projection says when nobody told it how durable the records are.
+ *
+ * Deliberately the *pessimistic* answer rather than a cheerful `durable: true`.
+ * A caller that forgot to pass a health report has not established that anything
+ * survives a restart, and a projection that claimed otherwise would be the exact
+ * lie this field exists to prevent.
+ */
+export const UNKNOWN_PERSISTENCE_REASON =
+  'Core did not report how these records are stored, so this window will not claim they survive a restart'
 
 /**
  * What a projection is built from.
@@ -78,15 +90,33 @@ export interface PersonalityProjectionInput {
   readonly interpretation: SocialInterpretation | null
   readonly expression: ExpressionPlan | null
   readonly ledger: CueUsageLedger | null
+  /**
+   * Actual durability of what this domain retains.
+   *
+   * Required, not optional, and that is the point: a projection that omitted it
+   * would let a reader conclude that relationship records survive a restart
+   * simply because it could see them. Absent is not honest here — the *host* has
+   * a health report for exactly this, and the only difference between "durable"
+   * and "held in this process only" is a fact the owner cannot otherwise see.
+   */
+  readonly persistence?: PersonalityPersistenceHealth
 }
 
+/**
+ * Every status a record may be shown in.
+ *
+ * Including `retired`: a tombstone carries no text — that is the entire point of
+ * destroying it — so showing one leaks nothing, and hiding one would be the
+ * dishonest choice. A person is entitled to see that Freya once held a record
+ * about them and that it was taken back.
+ */
 const RELATIONSHIP_STATUSES: readonly RelationshipStatus[] = [
   'candidate',
   'admitted',
   'rejected',
   'superseded',
+  'retired',
 ]
-
 /**
  * Whether one record may be shaped into a view at all.
  *
@@ -119,6 +149,8 @@ function itemView(item: RelationshipItem): PersonalityRelationshipItemView {
     sourceType: item.provenance.sourceType,
     confidence: item.confidence,
     admittedAt: item.admittedAt,
+    lifecycleAt: item.lifecycleAt,
+    lifecycleReason: item.lifecycleReason,
   }
 }
 
@@ -172,6 +204,7 @@ export function projectPersonality(input: PersonalityProjectionInput): Personali
     candidate: 0,
     rejected: 0,
     superseded: 0,
+    retired: 0,
     cuesAdmitted: 0,
     dropped: Math.max(0, raw.length - bounded.length),
   }
@@ -190,8 +223,10 @@ export function projectPersonality(input: PersonalityProjectionInput): Personali
       counts.candidate += 1
     } else if (item.status === 'rejected') {
       counts.rejected += 1
-    } else {
+    } else if (item.status === 'superseded') {
       counts.superseded += 1
+    } else {
+      counts.retired += 1
     }
   }
 
@@ -205,6 +240,7 @@ export function projectPersonality(input: PersonalityProjectionInput): Personali
     reason: null,
     schemaVersion: PERSONALITY_SCHEMA_VERSION,
     sequence: input.sequence ?? 0,
+    persistence: input.persistence ?? { mode: 'ephemeral', durable: false, reason: UNKNOWN_PERSISTENCE_REASON, faultReason: null, retained: 0 },
     temperament: input.temperament === null ? null : temperamentView(input.temperament),
     items,
     counts,

@@ -54,6 +54,7 @@ import type {
   CueKind,
   FormalityPreference,
   RelationshipItemKind,
+  RelationshipLifecycleReason,
   RelationshipStatus,
   TemperamentDimension,
   TemperamentLevel,
@@ -118,6 +119,16 @@ export interface PersonalityRelationshipItemView {
   readonly sourceType: SourceTrust
   readonly confidence: Confidence
   readonly admittedAt: string | null
+  /**
+   * When this record stopped being live, or null while it is.
+   *
+   * A closed label, never a sentence — see `RelationshipLifecycleReason`. Showing
+   * it is what lets a person read "withdrawn on the 3rd" instead of guessing from
+   * a status word, and it is why the label is a closed vocabulary in the first
+   * place: this field crosses to a window.
+   */
+  readonly lifecycleAt: string | null
+  readonly lifecycleReason: RelationshipLifecycleReason | null
 }
 
 /**
@@ -188,6 +199,14 @@ export interface PersonalityCounts {
   readonly candidate: number
   readonly rejected: number
   readonly superseded: number
+  /**
+   * Tombstones: records whose text has been destroyed.
+   *
+   * Reported because "this existed and was withdrawn" is an answer a person is
+   * owed, and because a relationship count that silently dropped the withdrawn
+   * records would look like a relationship that had never had any.
+   */
+  readonly retired: number
   readonly cuesAdmitted: number
   readonly dropped: number
 }
@@ -217,6 +236,29 @@ export interface PersonalityProjection {
   readonly schemaVersion: number
   /** Highest sequence folded in, so a window can prove it is current. */
   readonly sequence: number
+  /**
+   * Whether what Core is showing actually survives a restart, right now.
+   *
+   * The single most consequential field on this projection, and the reason a
+   * window may show a relationship at all: records visible here and gone on the
+   * next launch is a relationship that looks durable and is not. It mirrors the
+   * Context projection's field for the same reason and with the same refusal —
+   * there is no "probably fine" reading of `durable`.
+   *
+   * `faultReason` is separate because "we chose not to persist" and "persistence
+   * is broken" are different problems with different fixes, and a surface that
+   * showed one sentence for both would send somebody looking in the wrong place.
+   */
+  readonly persistence: {
+    readonly mode: 'encrypted' | 'ephemeral'
+    readonly durable: boolean
+    /** One sentence for a person. Null when durable and healthy. */
+    readonly reason: string | null
+    /** Non-null only when the stored bytes could not be believed. */
+    readonly faultReason: string | null
+    /** Records held: live items and tombstones together. */
+    readonly retained: number
+  }
   /** Null when Core reports no temperament table, never a synthesised one. */
   readonly temperament: PersonalityTemperamentView | null
   readonly items: readonly PersonalityRelationshipItemView[]
@@ -288,6 +330,13 @@ export const ABSENT_PERSONALITY_PROJECTION: PersonalityProjection = Object.freez
   reason: 'Core has not reported a Personality yet',
   schemaVersion: 1,
   sequence: 0,
+  persistence: Object.freeze({
+    mode: 'ephemeral' as const,
+    durable: false,
+    reason: 'no Personality domain has reported how its records are stored, so nothing is claimed to survive a restart',
+    faultReason: null,
+    retained: 0,
+  }),
   temperament: null,
   items: Object.freeze([]) as readonly PersonalityRelationshipItemView[],
   counts: Object.freeze({
@@ -296,6 +345,7 @@ export const ABSENT_PERSONALITY_PROJECTION: PersonalityProjection = Object.freez
     candidate: 0,
     rejected: 0,
     superseded: 0,
+    retired: 0,
     cuesAdmitted: 0,
     dropped: 0,
   }),

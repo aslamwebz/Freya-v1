@@ -84,20 +84,38 @@ describe('the Personality mirror belongs to the process, not the window', () => 
     expect(seen).toHaveLength(0)
   })
 
-  it('pushes Core’s honest "no domain" reading the moment a window attaches', async () => {
+  it("pushes Core's own honest reading the moment a window attaches", async () => {
     await host!.start()
     const seen: PersonalityProjection[] = []
     const dispose = host!.onPersonality((projection) => seen.push(projection))
 
     expect(seen).toHaveLength(1)
-    expect(seen[0]?.health).toBe('unavailable')
-    expect(seen[0]?.reason).toBe(NO_PERSONALITY_DOMAIN_REASON)
+    // Core owns a Personality domain now, so this is a *real* relationship that
+    // happens to be empty — not "this build has no personality". The two are
+    // different facts and a window must be able to tell them apart.
+    expect(seen[0]?.health).toBe('ready')
+    expect(seen[0]?.reason).toBeNull()
     expect(seen[0]?.items).toEqual([])
-    expect(seen[0]?.temperament).toBeNull()
-    // This build's sentence, not the generic one — a window must not read "no
-    // domain" as "Core has not got round to reporting yet".
-    expect(seen[0]?.reason).not.toBe(ABSENT_PERSONALITY_PROJECTION.reason)
+    expect(seen[0]?.temperament).not.toBeNull()
+    expect(seen[0]?.counts.admitted).toBe(0)
+    // No key was supplied by this host, so the truth about durability is
+    // "process only" and it is said in words rather than implied by an empty list.
+    expect(seen[0]?.persistence.durable).toBe(false)
+    expect(seen[0]?.persistence.mode).toBe('ephemeral')
+    expect(seen[0]?.persistence.reason).not.toBeNull()
     dispose()
+  })
+
+  it('reports no domain at all only before Core has started one', () => {
+    // A host whose Core has not started has genuinely nothing to report, and says
+    // the generic sentence rather than Core's per-build one.
+    expect(host!.personality()).toBeNull()
+    const seen: PersonalityProjection[] = []
+    host!.onPersonality((projection) => seen.push(projection))
+    expect(seen).toHaveLength(0)
+    // The two absences are still distinct words in the vocabulary, even though
+    // only one of them is now reachable through this host.
+    expect(NO_PERSONALITY_DOMAIN_REASON).not.toBe(ABSENT_PERSONALITY_PROJECTION.reason)
   })
 
   it('forwards a source into Core and mirrors what comes back', async () => {

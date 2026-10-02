@@ -288,6 +288,40 @@ export interface MindServiceOptions {
    * list is the normal first-turn state.
    */
   relationshipItems?: () => readonly RelationshipItem[]
+  /**
+   * The owner's own message, once per turn, after the terminal event is written.
+   *
+   * This is the Phase 11 production admission path, and it lives in the Mind
+   * because the Mind is the only component that knows what the owner actually
+   * said. It reports the text and decides nothing: Core reads it with a closed
+   * directive table and either records an explicit standing instruction or records
+   * nothing at all.
+   *
+   * Deliberately narrow. The Mind does not interpret, does not classify, and does
+   * not keep the text anywhere. It fires *after* the turn's terminal event so a
+   * relationship record can never precede the record of the exchange that produced
+   * it, and a callback that throws is logged and swallowed — losing a preference
+   * note is much smaller than failing a turn that already has a stored answer.
+   */
+  onOwnerMessage?: (message: OwnerMessageEvent) => void
+}
+
+/**
+ * One owner turn, as the relationship domain may hear about it.
+ *
+ * `text` is the owner's own words, in the owner's own conversation, and it is
+ * handed over once and forgotten: nothing in Core stores this field, and the only
+ * thing that may survive a turn is a bounded clause the closed directive table
+ * recognised.
+ */
+export interface OwnerMessageEvent {
+  readonly turnId: string
+  readonly conversationId: string
+  readonly text: string
+  readonly startedAt: string
+  readonly endedAt: string
+  /** The gateway's own account of contact. Never inferred from the outcome. */
+  readonly providerContacted: boolean
 }
 
 export class MindService {
@@ -308,6 +342,7 @@ export class MindService {
   private readonly expressionMemory: ExpressionMemory | null
   private readonly interactionFacts: () => readonly InteractionFact[]
   private readonly relationshipItems: () => readonly RelationshipItem[]
+  private readonly onOwnerMessage: ((message: OwnerMessageEvent) => void) | null
 
   /**
    * Experience measurements are keyed by turn, not stored in singleton fields.
@@ -353,6 +388,24 @@ export class MindService {
     this.expressionMemory = options.expressionMemory ?? null
     this.interactionFacts = options.interactionFacts ?? (() => [])
     this.relationshipItems = options.relationshipItems ?? (() => [])
+    this.onOwnerMessage = options.onOwnerMessage ?? null
+  }
+
+  /**
+   * Report the owner's own message to the relationship lane.
+   *
+   * Best effort by construction, like the experience hook: this is enrichment of a
+   * turn that already has its answer, and a personality lane that throws must not
+   * be able to fail a conversation. It fires after the terminal event, so the
+   * journal already says the turn happened before anything is recorded about it.
+   */
+  private reportOwnerMessage(message: OwnerMessageEvent): void {
+    if (this.onOwnerMessage === null) return
+    try {
+      this.onOwnerMessage(message)
+    } catch (error) {
+      console.error('[freya.mind] the owner message could not be reported', error)
+    }
   }
 
   /**
@@ -594,6 +647,7 @@ export class MindService {
       } catch (error) {
         return await this.finishTurn(input, turn, 'denied', {
           reason: `the turn could not be authorised: ${describe(error)}`,
+          ownerText: text,
         })
       }
 
@@ -615,7 +669,7 @@ export class MindService {
         )
       } catch (error) {
         if (error instanceof ContextBudgetExceeded) {
-          return await this.finishTurn(input, turn, 'failed', { reason: error.message })
+          return await this.finishTurn(input, turn, 'failed', { reason: error.message, ownerText: text })
         }
         throw error
       }
@@ -682,18 +736,20 @@ export class MindService {
 
       if (outcome.status === 'denied') {
         // The Governor refused. Nobody was asked, and the turn says so.
-        return await this.finishTurn(input, turn, 'denied', { reason: outcome.reason })
+        return await this.finishTurn(input, turn, 'denied', { reason: outcome.reason, ownerText: text })
       }
       if (outcome.status === 'cancelled') {
         return await this.finishTurn(input, turn, 'cancelled', {
           reason: outcome.reason,
           providerContacted: outcome.providerContacted,
+          ownerText: text,
         })
       }
       if (outcome.status === 'failed') {
         return await this.finishTurn(input, turn, 'failed', {
           reason: outcome.reason,
           providerContacted: outcome.providerContacted,
+          ownerText: text,
         })
       }
 
@@ -717,6 +773,7 @@ export class MindService {
           reason: `the answer could not be stored: ${conversationFault(error)}`,
           providerId: outcome.providerId,
           model: outcome.model,
+          ownerText: text,
         })
       }
 
@@ -729,6 +786,7 @@ export class MindService {
           assistantMessageId: assistantMessage.messageId,
           providerId: outcome.providerId,
           model: outcome.model,
+          ownerText: text,
         },
         assistantMessage,
       )
@@ -828,6 +886,14 @@ private async finishTurn(
        * and a Mind that guessed would report a paid call as free.
        */
       providerContacted?: boolean
+      /**
+       * The owner's own words for this turn, handed to the relationship lane only.
+       *
+       * Passed explicitly rather than looked up, so the text cannot outlive the
+       * turn in a map and be reported to a *later* one. `finishTurn` never stores
+       * it and never puts it in the terminal event.
+       */
+      ownerText?: string
     },
     assistantMessage: ConversationMessage | null = null,
   ): Promise<MindTurnResult> {
@@ -892,6 +958,21 @@ private async finishTurn(
       referenceItemCount: experience?.referenceItemCount ?? 0,
       answerPersisted: assistantMessage !== null,
     })
+
+    // The relationship lane hears about the owner's message last, after the
+    // journal and the Brain already describe the turn truthfully. Nothing here can
+    // change the turn's outcome, and nothing here can make the record exist before
+    // the exchange that produced it.
+    if (detail.ownerText !== undefined) {
+      this.reportOwnerMessage({
+        turnId: turn.turnId,
+        conversationId: input.conversationId,
+        text: detail.ownerText,
+        startedAt: detail.startedAt ?? experience?.startedAt ?? turn.startedAt,
+        endedAt,
+        providerContacted,
+      })
+    }
 
     return {
       turnId: turn.turnId,

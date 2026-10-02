@@ -118,6 +118,7 @@ describe('the projection is derived, not assembled', () => {
       'interpretation',
       'items',
       'limits',
+      'persistence',
       'presenceCue',
       'reason',
       'repetition',
@@ -131,9 +132,47 @@ describe('the projection is derived, not assembled', () => {
       candidate: 0,
       rejected: 0,
       superseded: 0,
+      retired: 0,
       cuesAdmitted: 1,
       dropped: 0,
     })
+  })
+
+  it('reports durability truthfully, and never claims it was not told', () => {
+    const durable = project({
+      ...fullInput(),
+      persistence: { mode: 'encrypted', durable: true, reason: null, faultReason: null, retained: 4 },
+    })
+    expect(durable.persistence).toEqual({
+      mode: 'encrypted',
+      durable: true,
+      reason: null,
+      faultReason: null,
+      retained: 4,
+    })
+
+    // A caller that passed no health report has established nothing about a
+    // restart, and the projection says the pessimistic thing rather than the
+    // cheerful one.
+    const unknown = project(fullInput())
+    expect(unknown.persistence.durable).toBe(false)
+    expect(unknown.persistence.reason).toContain('will not claim they survive a restart')
+
+    const degraded = project({
+      ...fullInput(),
+      persistence: {
+        mode: 'ephemeral',
+        durable: false,
+        reason: 'this machine has no secure Personality key',
+        faultReason: 'the Personality store directory could not be created',
+        retained: 0,
+      },
+    })
+    // A fault and a deliberate choice stay distinguishable, because they have
+    // different fixes and a surface showing one sentence for both sends somebody
+    // to the wrong place.
+    expect(degraded.persistence.reason).toContain('no secure Personality key')
+    expect(degraded.persistence.faultReason).toContain('directory could not be created')
   })
 
   it('carries no authority or mental-state field anywhere in the shape', () => {

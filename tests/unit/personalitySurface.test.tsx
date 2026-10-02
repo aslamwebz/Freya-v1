@@ -50,11 +50,12 @@ function ready(over: Partial<PersonalityProjection> = {}): PersonalityProjection
   return {
     ...base,
     counts: {
-      items: 3,
+      items: 4,
       admitted: 1,
       candidate: 1,
       rejected: 0,
       superseded: 1,
+      retired: 1,
       cuesAdmitted: 1,
       dropped: 0,
     },
@@ -68,6 +69,8 @@ function ready(over: Partial<PersonalityProjection> = {}): PersonalityProjection
         sourceType: 'owner-assertion',
         confidence: 'high',
         admittedAt: '2026-10-02T09:00:00.000Z',
+        lifecycleAt: null,
+        lifecycleReason: null,
       },
       {
         itemId: 'rel-candidate',
@@ -78,6 +81,8 @@ function ready(over: Partial<PersonalityProjection> = {}): PersonalityProjection
         sourceType: 'model-inference',
         confidence: 'low',
         admittedAt: null,
+        lifecycleAt: null,
+        lifecycleReason: null,
       },
       {
         itemId: 'rel-superseded',
@@ -88,6 +93,20 @@ function ready(over: Partial<PersonalityProjection> = {}): PersonalityProjection
         sourceType: 'system-observation',
         confidence: 'medium',
         admittedAt: '2026-09-01T09:00:00.000Z',
+        lifecycleAt: '2026-10-01T09:00:00.000Z',
+        lifecycleReason: 'superseded-by-a-newer-record',
+      },
+      {
+        itemId: 'rel-retired',
+        kind: 'inside-joke',
+        key: 'old-running-joke',
+        status: 'retired',
+        cueKind: 'inside-joke',
+        sourceType: 'owner-assertion',
+        confidence: 'medium',
+        admittedAt: '2026-08-01T09:00:00.000Z',
+        lifecycleAt: '2026-09-20T09:00:00.000Z',
+        lifecycleReason: 'owner-withdrew-this-record',
       },
     ],
     interpretation: {
@@ -195,6 +214,7 @@ describe('the Personality view shows only what Core reported', () => {
           candidate: 0,
           rejected: 0,
           superseded: 0,
+          retired: 0,
           cuesAdmitted: 0,
           dropped: 0,
         },
@@ -274,12 +294,89 @@ describe('records are drawn as metadata, never as content', () => {
     expect(container.textContent).toContain('formality-relaxed (preference) · admitted')
   })
 
-  it('reports Core’s counts in words, including what it refused to project', () => {
+  it("reports Core's counts in words, including what it refused to project", () => {
     renderSurface()
     expect(
-      screen.getByText(/3 records · 1 admitted · 1 candidate · 1 superseded · 1 with a cue/),
+      screen.getByText(
+        /4 records · 1 admitted · 1 candidate · 1 superseded · 1 withdrawn or retired · 1 with a cue/,
+      ),
     ).toBeInTheDocument()
     expect(screen.getByText(/Read-only\. Every level, key, status and confidence below/i)).toBeInTheDocument()
+  })
+
+  it("says when a record was taken back rather than quietly dropping the row", () => {
+    const { container } = renderSurface()
+    const tombstone = container.querySelector('[data-status="retired"]')
+    expect(tombstone?.textContent).toBe(
+      'old-running-joke (inside-joke) · retired · owner-assertion · medium · cue: inside-joke · ' +
+        'admitted 2026-08-01T09:00:00.000Z · owner withdrew this record 2026-09-20T09:00:00.000Z',
+    )
+  })
+
+  it("states durability before any record, in Core's own words", () => {
+    const { container, unmount } = renderSurface()
+    const durability = container.querySelector('.personality-durability')
+    // The fixture reports the pessimistic default: a caller that did not tell this
+    // window how the records are stored gets told so rather than shown a lie.
+    expect(durability?.getAttribute('data-durable')).toBe('false')
+    expect(durability?.textContent).toMatch(/will not claim they survive a restart/i)
+    unmount()
+
+    push(ready({ persistence: { mode: 'encrypted', durable: true, reason: null, faultReason: null, retained: 4 } }))
+    const second = renderSurface()
+    const line = second.container.querySelector('.personality-durability')
+    expect(line?.getAttribute('data-durable')).toBe('true')
+    expect(line?.textContent).toContain('Encrypted at rest')
+  })
+
+  it('distinguishes a broken store from a deliberate choice not to persist', () => {
+    const { container, unmount } = renderSurface()
+    push(ready({
+      persistence: {
+        mode: 'ephemeral',
+        durable: false,
+        reason: 'this machine has no secure Personality key',
+        faultReason: null,
+        retained: 0,
+      },
+    }))
+    const second = renderSurface()
+    expect(second.container.querySelector('.personality-durability')?.textContent).toContain(
+      'no secure Personality key',
+    )
+    unmount()
+
+    push(ready({
+      persistence: {
+        mode: 'ephemeral',
+        durable: false,
+        reason: 'personality data is held in this process only',
+        faultReason: 'the Personality store directory could not be created',
+        retained: 0,
+      },
+    }))
+    const third = renderSurface()
+    // The fault wins on screen: it is the one with something to fix.
+    expect(third.container.querySelector('.personality-durability')?.textContent).toContain(
+      'directory could not be created',
+    )
+    expect(container).toBeTruthy()
+  })
+
+  it('says expression guidance is suspended when the ledger cannot be trusted', () => {
+    push(ready({
+      persistence: {
+        mode: 'ephemeral',
+        durable: false,
+        reason: 'this machine has no secure Personality key',
+        faultReason: null,
+        retained: 0,
+      },
+    }))
+    renderSurface()
+    expect(
+      screen.getByText(/no expression guidance is being offered at all/i),
+    ).toBeInTheDocument()
   })
 })
 

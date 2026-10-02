@@ -1,6 +1,12 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from 'vitest'
-import { ingest, startAttentionCore, stopAttentionCore, type AttentionFixture } from './harness'
+import {
+  ingest,
+  startAttentionCore,
+  stopAttentionCore,
+  submit,
+  type AttentionFixture,
+} from './harness'
 import { ATTENTION_LIMITS } from '../../../core/attention'
 
 /**
@@ -43,4 +49,34 @@ describe('a storm cannot become a stream of interruptions', () => {
     }
     expect(lastReason).toBe('rate-limit')
   })
+
+  it('a flood of refused events cannot evict the history that caps interruptions', async () => {
+    const fixture = await startAttentionCore()
+    fixtures.push(fixture)
+    const t0 = fixture.clock.now.getTime()
+    await submit(fixture, 'attention.schedule.register', {
+      kind: 'reminder',
+      text: 'repeating',
+      dueAt: new Date(t0).toISOString(),
+      intervalMs: 60_000,
+      maxRepeats: 8,
+    })
+    expect(await fixture.core.attentionTick(fixture.clock.now)).toBe(1)
+    expect(fixture.core.attention().counts.interrupted).toBe(1)
+
+    // Past the per-source ingest rate every flood event still appends an
+    // `attention.decision.made`. If those refusals crowded the bounded decision
+    // fold, the first fire's cooldown and per-source budget history would be
+    // forgotten inside its own window and the next due fire would interrupt
+    // again — so one later tick after a flood larger than the fold must still
+    // produce no second interruption.
+    for (let i = 0; i < 260; i += 1) {
+      await ingest(fixture, { kind: 'reminder', text: `flood ${i}` })
+    }
+    fixture.clock.now = new Date(t0 + 60_000)
+    expect(await fixture.core.attentionTick(fixture.clock.now)).toBe(1)
+
+    const counts = fixture.core.attention().counts
+    expect(counts.interrupted).toBeLessThanOrEqual(ATTENTION_LIMITS.maxInterruptsPerWindowPerSource)
+  }, 30_000)
 })

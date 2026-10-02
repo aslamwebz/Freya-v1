@@ -259,8 +259,15 @@ export const ATTENTION_LIMITS = Object.freeze({
   maxEventTextChars: 1_000,
   /** How many retained events the in-memory inbox holds. */
   maxInboxEntries: 100,
-  /** How many recent decisions the fold keeps, for budgets and the projection. */
-  maxRetainedDecisions: 256,
+  /**
+   * How many recent decisions the fold keeps, for budgets and the projection.
+   *
+   * Sized to what one budget window can legitimately produce — every closed source
+   * at its own ingest rate (6 × 60/hour) — so the history a cooldown or a budget
+   * is measured against is never evicted inside the window that measures it.
+   * Rate-limited refusals are journalled but not retained here; see `state.ts`.
+   */
+  maxRetainedDecisions: 384,
   /** How many dedupe keys the fold remembers. */
   maxSeenKeys: 512,
   /** How many schedules may exist at once. */

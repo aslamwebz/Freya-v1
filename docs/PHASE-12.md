@@ -132,13 +132,14 @@ attention cue, labelled from a closed table this codebase owns.
 
 ## Verification
 
-On 2026-10-02 the full gate passed on `phase-12-events-attention`:
+On 2026-10-02 the full gate passed on `phase-12-events-attention`, and an
+independent review on `review/phase-12-go` re-ran it at head `6a0bd88`:
 
 - **Focused Phase 12 tests:** 61 tests in 5 files — the domain vocabulary and
   policy, the engine through the real Core boundary, the host bridge, and the
   renderer client and surface.
-- **Phase 12 red-team tests:** 36 tests in 11 files, one per attack family below.
-- **Full suite:** 2,776 tests in 160 files, typecheck, lint, the renderer/main/
+- **Phase 12 red-team tests:** 37 tests in 11 files, one per attack family below.
+- **Full suite:** 2,777 tests in 160 files, typecheck, lint, the renderer/main/
   preload build and 190/190 offline Electron desktop checks, all under
   `npm run verify` (`EXIT=0`). The desktop suite includes three checks that open
   the Attention surface through the launcher, confirm the bridge exposes only the
@@ -148,6 +149,17 @@ On 2026-10-02 the full gate passed on `phase-12-events-attention`:
 The red-team suite covers forged urgency, notification storms, cooldown bypass,
 event poisoning, replay/restart duplication, scheduler abuse, attention loops,
 renderer forgery, privacy leakage, model-call amplification and STOP ALL.
+
+The review found and fixed one containment gap: a flood of over-rate events is
+still journalled as a `rate-limit` `do-nothing`, and those refusals previously
+occupied the bounded decision retention, so ~260 of them evicted the cooldown and
+budget history they were meant to protect and let a later schedule fire interrupt
+again inside the same window. Rate-limit refusals are now journalled but not
+retained, and `maxRetainedDecisions` covers the most the closed sources can
+legitimately produce in one window. The permanent regression is
+`a flood of refused events cannot evict the history that caps interruptions` in
+`tests/red-team/attention/notification-storm.test.ts`; it fails against the
+pre-fix fold and passes against the fixed one.
 
 ## Deliberately deferred
 

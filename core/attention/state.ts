@@ -17,9 +17,18 @@
  * ## Bounded
  *
  * `seenKeys` and `decisions` are capped, because a fold that grew with every event
- * would be a memory leak shaped like a security feature. The caps are generous
- * relative to the rolling window the policy reads, so a budget decision never loses
- * the history it needs within one window.
+ * would be a memory leak shaped like a security feature. Two rules make the caps
+ * safe rather than merely small:
+ *
+ *  - A `rate-limit` decision is journalled for the audit, but it is *not* retained
+ *    in `decisions`. It is a `do-nothing`, and the policy reads this list only for
+ *    cooldowns and budgets — outcomes that shouted. Retaining flood decisions
+ *    would let a source that is already rate-limited push the history that caps
+ *    *other* sources' interrupts out of the fold, which is exactly what the caps
+ *    below promise cannot happen.
+ *  - `maxRetainedDecisions` covers the most this fold can legally receive in one
+ *    budget window — every closed source at its own ingest rate — so a budget
+ *    never loses the history it needs within one window.
  */
 
 import type { AnyCoreEvent } from '../events/envelope'
@@ -166,7 +175,13 @@ export function reduceAttention(state: AttentionState, event: AnyCoreEvent): Att
       }
       return {
         ...state,
-        decisions: pushBounded(state.decisions, record, ATTENTION_LIMITS.maxRetainedDecisions),
+        // A rate-limit `do-nothing` is written for the audit but never retained:
+        // the policy reads this list only for cooldowns and budgets, so a flood of
+        // refused events must not be able to evict the history that enforces them.
+        decisions:
+          event.payload.reason === 'rate-limit'
+            ? state.decisions
+            : pushBounded(state.decisions, record, ATTENTION_LIMITS.maxRetainedDecisions),
         counts: {
           ...countOutcome(state.counts, record.outcome),
           decisions: state.counts.decisions + 1,

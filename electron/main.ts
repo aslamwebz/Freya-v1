@@ -380,6 +380,17 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:context', projection)
   })
 
+  // Personality is a ninth channel, and the smallest of them: temperament,
+  // relationship *metadata* and one optional cue for Presence to draw. What
+  // does not cross is the point of it — no recorded text, no tags, no admission
+  // reason, no guidance line, no key and no path — so a window can show what
+  // Core knows about the relationship without holding what the relationship
+  // says. Nothing here writes: the channel has no counterpart that carries a
+  // payload toward Core.
+  const detachPersonality = coreHost?.onPersonality((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:personality', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -389,6 +400,7 @@ function createWindow(): BrowserWindow {
     detachMission?.()
     detachWorkforce?.()
     detachContext?.()
+    detachPersonality?.()
   })
 
   if (DEV_SERVER) {
@@ -474,6 +486,13 @@ function registerIpc(): void {
   // context command — a window cannot put context *in*, because Context
   // authority is Core's to hold inside itself, not this bridge's to lend.
   ipcMain.handle('freya:core:context', () => requireCore().context())
+  // The Personality projection, same bargain, tighter still: a read of what
+  // Core reported, `null` until a Core has started, and no handle to a source,
+  // a record or a cue behind it. There is deliberately no
+  // `freya:core:personality:write` and no `personality.*` command — a window
+  // cannot file a preference, record a habit or declare an inside joke, because
+  // relationship truth is Core's to hold and this bridge lends none of it.
+  ipcMain.handle('freya:core:personality', () => requireCore().personality())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

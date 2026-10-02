@@ -11,6 +11,7 @@ import { WorkSurface } from './WorkSurface'
 import { MissionSurface } from './MissionSurface'
 import { WorkforceSurface } from './WorkforceSurface'
 import { ContextSurface } from './ContextSurface'
+import { PersonalitySurface } from './PersonalitySurface'
 import type { SurfaceDefinition } from './types'
 
 /**
@@ -46,6 +47,12 @@ const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   // truthfully is the honest window, and a placeholder would advertise a
   // system this transport is already wired to receive.
   context: () => <ContextSurface />,
+  // The Personality view: a pure mirror of Core's projection. Registered even
+  // though Core reports no domain yet, because "no relationship record exists,
+  // and none is simulated" rendered truthfully is the honest window — and a
+  // placeholder here would advertise a social memory this transport is already
+  // wired to receive the day Core has one.
+  personality: () => <PersonalitySurface />,
 }
 
 /** The registry, resolved once from the two catalogs it is built from. */

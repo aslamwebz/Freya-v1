@@ -445,33 +445,68 @@ export class PersonalityIntegration implements ExpressionMemory {
         if (target !== null) this.endRecord(target.itemId, 'owner-withdrew-this-record', 'withdrawn')
         continue
       }
+
+      if (outcome.kind === 'standing') {
+        this.admit(
+          {
+            itemId: `relationship:${this.newId()}`,
+            kind: outcome.itemKind,
+            key: outcome.key,
+            text: outcome.clause,
+            tags: outcome.tags,
+            // Null on purpose: the cue lane is not the instruction lane. A register
+            // preference is not a gesture that can be repeated too often.
+            cueKind: null,
+            // The owner's own words, in the owner's own conversation.
+            source: 'owner-assertion',
+            sourceRef: context.turnId,
+            observedAt: at,
+            recordedAt: at,
+            proposedConfidence: outcome.explicitStanding ? 'high' : 'medium',
+            actor: 'owner',
+          },
+          {
+            reason: outcome.explicitStanding
+              ? 'the owner gave an explicit standing instruction in conversation'
+              : 'the owner asked for this in conversation; recorded as provisional',
+          },
+        )
+        continue
+      }
+
+      // A named shorthand: the one directive that may produce a cue, and the one
+      // whose slug came from the owner rather than from `./directives`.
+      //
+      // `key: null` means the phrase could not be a safe slug, and the record is
+      // refused outright. There is no sanitised version: a nickname cleaned up into
+      // something merely safe is a nickname Freya gets wrong in front of the person
+      // who gave it to her, and refusing is the direction the naming validator
+      // refuses in too.
+      if (outcome.key === null) continue
       this.admit(
         {
           itemId: `relationship:${this.newId()}`,
           kind: outcome.itemKind,
           key: outcome.key,
-          text: outcome.clause,
+          // The phrase as written, which is the data the owner reads back. The
+          // guidance line names the slug; this never becomes guidance.
+          text: outcome.phrase,
           tags: outcome.tags,
-          // Null on purpose: the cue lane is not the instruction lane.
-          cueKind: null,
-          // The owner's own words, in the owner's own conversation.
+          cueKind: outcome.cueKind,
           source: 'owner-assertion',
           sourceRef: context.turnId,
           observedAt: at,
           recordedAt: at,
-          proposedConfidence: outcome.explicitStanding ? 'high' : 'medium',
+          proposedConfidence: 'high',
           actor: 'owner',
         },
-        {
-          reason: outcome.explicitStanding
-            ? 'the owner gave an explicit standing instruction in conversation'
-            : 'the owner asked for this in conversation; recorded as provisional',
-        },
+        { reason: 'the owner named this shorthand in conversation' },
       )
     }
-    const events = Object.freeze(this.pending)
+
+    const drained = Object.freeze(this.pending)
     this.pending = []
-    return events
+    return drained
   }
 
   /* ------------------------------------------------ expression memory seam */

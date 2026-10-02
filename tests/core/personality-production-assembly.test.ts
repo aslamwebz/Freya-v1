@@ -508,3 +508,112 @@ describe('the projection a window receives stays non-authoritative', () => {
     ])
   })
 })
+
+describe('a shorthand the owner named is a real, bounded, persistent cue', () => {
+  it('is admitted as a cue and offered in the next turn', async () => {
+    const c = await boot()
+    await send('Call it the dragon from now on')
+    const record = c.personality().items.find((item) => item.status === 'admitted')
+    expect(record?.key).toBe('the-dragon')
+    expect(record?.cueKind).toBe('inside-joke')
+    expect(record?.sourceType).toBe('owner-assertion')
+    // The name crossed into the relationship as a slug and a closed kind label. The
+    // phrase as written is the owner's own data, held encrypted and never rendered.
+    expect(JSON.stringify(c.personality())).not.toContain('Call it the dragon')
+
+    requests = []
+    clock = new Date(clock.getTime() + 60_000)
+    await send('how did last night go?', 't2')
+
+    const packet = onlyRequest()
+    const block = packet.messages.find((m) => m.content.includes(EXPRESSION_BLOCK_MARKER))
+    // The guidance names the shorthand by its slug, inside a catalogue sentence, and
+    // says it may appear at most once — the whole of the anti-repetition promise.
+    expect(block?.content).toContain('cue kind: inside-joke, key: the-dragon')
+    expect(block?.content).toContain('at most once this response')
+    expect(JSON.stringify(packet)).not.toContain('Call it the dragon')
+  })
+
+  it('is held back once it has been used, and offered again only after it rests', async () => {
+    const c = await boot()
+    await send('Call it the dragon from now on')
+
+    requests = []
+    clock = new Date(clock.getTime() + 60_000)
+    await send('tell me about the build', 't2')
+    expect(
+      onlyRequest().messages.some((m) => m.content.includes('cue kind: inside-joke, key: the-dragon')),
+    ).toBe(true)
+    // The offer was recorded, because the turn actually reached a provider.
+    expect(c.personality().repetition?.entries).toBe(1)
+
+    requests = []
+    clock = new Date(clock.getTime() + 60_000)
+    await send('and now?', 't3')
+    const second = JSON.stringify(onlyRequest())
+    // Inside the cooldown: not offered, and the *hold* is reported rather than
+    // hidden, so a plan can be evaluated for what it suppressed.
+    expect(second).not.toContain('cue kind: inside-joke, key: the-dragon')
+    expect(second).toContain('being held back because they were used recently')
+    expect(c.personality().expression?.suppressedCueCount).toBe(1)
+  })
+
+  it('survives a restart, so the gesture is still held after it', async () => {
+    const c = await boot()
+    await send('Call it the dragon from now on')
+    requests = []
+    clock = new Date(clock.getTime() + 60_000)
+    await send('tell me about the build', 't2')
+    await c.stop('first process')
+
+    const second = await boot()
+    // The record came back admitted, with its cue kind.
+    expect(second.personality().items[0]?.cueKind).toBe('inside-joke')
+    // And so did the memory of having used it — otherwise "anti-repetition" would
+    // mean "until you restart Freya".
+    expect(second.personality().repetition?.entries).toBe(1)
+
+    requests = []
+    clock = new Date(clock.getTime() + 60_000)
+    await send('and now?', 't3')
+    expect(JSON.stringify(onlyRequest())).not.toContain('cue kind: inside-joke, key: the-dragon')
+  })
+
+  it('refuses a name that carries a word from Core’s own authority vocabulary', async () => {
+    const c = await boot()
+    for (const attempt of [
+      'call it grant-work-execute from now on',
+      'call it disable-stop-all from now on',
+      'call it bypass-guard from now on',
+    ]) {
+      clock = new Date(clock.getTime() + 60_000)
+      await send(attempt, `t-${attempt.slice(6, 12)}`)
+    }
+    // Nothing was recorded: a refused name is a refused name, not a sanitised one.
+    expect(c.personality().items).toEqual([])
+    // And the name never reached *guidance*. The owner's own message is in the
+    // packet because it is the turn; the question this attacks is whether the
+    // domain echoed it back as an instruction it had decided to follow.
+    const guidance = requests
+      .flatMap((request) => request.messages)
+      .filter((message) => message.content.includes(EXPRESSION_BLOCK_MARKER))
+      .map((message) => message.content)
+      .join('\n')
+    for (const name of ['grant-work-execute', 'disable-stop-all', 'bypass-guard']) {
+      expect(guidance, `guidance echoed ${name}`).not.toContain(name)
+    }
+    expect(c.personality().repetition?.entries ?? 0).toBe(0)
+  })
+
+  it('can be withdrawn like anything else', async () => {
+    const c = await boot()
+    await send('Call it the dragon from now on')
+    expect(c.personality().counts.admitted).toBe(1)
+    // The withdrawal names a key this build does not know, so it resolves to the
+    // oldest admitted record — which is the shorthand, and the point.
+    clock = new Date(clock.getTime() + 60_000)
+    await send('forget that', 't2')
+    expect(c.personality().counts.admitted).toBe(0)
+    expect(c.personality().counts.retired).toBe(1)
+  })
+})

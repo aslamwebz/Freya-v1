@@ -67,6 +67,7 @@
 
 import {
   PERSONALITY_LIMITS,
+  isSlug,
   type CueKind,
   type RelationshipItemKind,
 } from './types'
@@ -149,6 +150,177 @@ const STANDING_PATTERNS: readonly { readonly key: string; readonly pattern: RegE
 ])
 
 /**
+ * NAMING — the one directive whose output is a *cue*, and the narrowest one here.
+ *
+ * "Call it the dragon from now on" is a naming act. The owner is not describing a
+ * preference and hoping it is inferred; they are handing over a word, and the
+ * record's whole purpose is that Freya may use that word later. Without this the
+ * anti-repetition ledger would govern a gesture that production can never
+ * establish, which would leave the most interesting half of this phase — a
+ * shorthand the owner named, held back when it has been used too often —
+ * permanently unexercised.
+ *
+ * ## Why the name has to survive being a slug
+ *
+ * Everything downstream assumes a cue's `key` is a code-owned slug, because the
+ * expression plan prints it into a guidance line and the plan's whole safety
+ * argument is that nothing word-shaped can reach a model from this domain. So the
+ * owner's phrase is validated, not trusted:
+ *
+ *  - lower-cased, then words joined with single dashes;
+ *  - at most **four** words, so it stays a nickname rather than becoming a phrase
+ *    that could be read as a sentence;
+ *  - each resulting token must be an alphanumeric run of at least two characters,
+ *    so no punctuation, no quote, no dash of the owner's own and no whitespace
+ *    survives;
+ *  - **no token may appear in {@link FORBIDDEN_SHORTHAND_TOKENS}** — the naming
+ *    vocabulary's answer to `disable-stop-all`.
+ *
+ * That last rule is the one that matters. A slug cannot carry an *instruction*,
+ * but it can carry a *word*, and `stop-all` is a word. The guidance line would
+ * then read "a shared shorthand (cue kind: inside-joke, key: disable-stop-all)
+ * may appear at most once this response" — technically advisory, and still a
+ * sentence containing "disable stop all" in a position a model reads before the
+ * user's actual question. So the naming lane refuses any phrase containing a token
+ * from the closed list below, and refusal means *no record at all* rather than a
+ * sanitised one: a nickname Freya mangled into something safer is a nickname she
+ * will get wrong in front of the person who gave it to her.
+ *
+ * ## The cue kind is `inside-joke` because it is the least privileged one
+ *
+ * The four cue kinds are `greeting`, `catchphrase`, `habit`, `inside-joke`. Only
+ * `catchphrase` and `inside-joke` are about *words*, and `inside-joke` is the one
+ * that reads as explicitly unserious — so a phrase that turned out to be something
+ * else shows up as a joke rather than as a habit Freya has adopted. Nothing in the
+ * naming lane can produce a `greeting`: how and when to greet is decided by the
+ * interpreter from observed contact, not by a word in a record.
+ */
+/**
+ * The standing-instruction words that make a naming act *standing*. Shared with
+ * `hasStandingMarker`, so "from now on" means the same thing in both places.
+ */
+const STANDING_MARKERS_WORDS = [
+  'from now on',
+  'going forward',
+  'in future',
+  'from here on',
+  'always',
+  'every time',
+  'by default',
+] as const
+
+/**
+ * Naming: a verb, an optional referent phrase, then the name, then a standing word.
+ *
+ * The referent is matched **greedily and loosely** — anything up to a sentence
+ * boundary — because the alternative is guessing where the thing being named stops
+ * and the name begins. "Call it the dragon from now on" and "let's call the flaky
+ * test 'the gremlin' from now on" are the same sentence shape with different
+ * amounts of furniture in the middle, and a pattern that tried to enumerate the
+ * referent would have to be wrong about one of them.
+ *
+ * So the name is whatever sits between the furniture and the standing word, and
+ * {@link shorthandSlug} decides whether that is safe. The furniture is discarded:
+ * the guidance line should name the nickname, not the test the nickname was given
+ * to.
+ */
+/**
+ * Naming, in two shapes, tried in order.
+ *
+ * The shapes are separated because a person who *quotes* a name is doing something
+ * different from one who writes it bare. "Let's call the flaky test 'the gremlin'
+ * from now on" puts the name between quotation marks and everything before it —
+ * the thing being named — is furniture; "Call it the dragon from now on" puts the
+ * name at the end of a clause whose furniture is a short, enumerable referent. One
+ * combined pattern has to be right about both, and being wrong about either means
+ * recording the wrong word as the owner's nickname.
+ *
+ * The name class is deliberately tight. Quoted names may contain spaces and
+ * apostrophes because {@link shorthandSlug} strips them; bare names may not contain
+ * an apostrophe at all, because an unquoted apostrophe is more likely to be the
+ * owner's sentence punctuation than part of the name.
+ */
+const NAMING_VERBS = String.raw`(?:call|refer to|let's call|name|we call|start calling)`
+const NAMING_MARKERS =
+  '(?:from now on|going forward|in future|from here on|whenever|always|every time|by default)'
+
+const NAMING_PATTERNS: readonly RegExp[] = Object.freeze([
+  // A quoted name, or one introduced by "as". The furniture is anything short
+  // enough to be a clause and is discarded rather than guessed at.
+  new RegExp(
+    `\\b${NAMING_VERBS}\\b[^.?!]{0,60}?(?:["'\u201c]|as\\s)([A-Za-z][A-Za-z0-9 '\u2019-]{0,48}?)["'\u201d]?\\s+${NAMING_MARKERS}\\b`,
+    'i',
+  ),
+  // A bare name: the verb, an optional short referent, then the name.
+  new RegExp(
+    `\\b${NAMING_VERBS}\\s+(?:it|this|that|them|the\\s+\\w+|for\\s+\\w+)?\\s*` +
+      `([A-Za-z][A-Za-z0-9 -]{1,48}?)\\s+${NAMING_MARKERS}\\b`,
+    'i',
+  ),
+])
+
+/**
+ * Tokens a named shorthand may never contain.
+ *
+ * The naming vocabulary's subset of `evaluate.ts`'s `FORBIDDEN_FIELD_NAMES`,
+ * plus the four words Core's own authority is built out of. Case-insensitive and
+ * matched per dash-separated token, so `the-dragon` passes and
+ * `grant-work-execute` does not.
+ */
+export const FORBIDDEN_SHORTHAND_TOKENS: readonly string[] = Object.freeze([
+  'authority',
+  'bypass',
+  'capability',
+  'capabilities',
+  'disable',
+  'grant',
+  'grants',
+  'governor',
+  'guard',
+  'instruction',
+  'instructions',
+  'override',
+  'permission',
+  'permissions',
+  'prompt',
+  'stopall',
+  'stop',
+  'system',
+  'unsafe',
+  'unlock',
+])
+
+const FORBIDDEN_TOKEN_SET: ReadonlySet<string> = new Set(FORBIDDEN_SHORTHAND_TOKENS)
+
+/** Longest name this build will record, in words. */
+const MAX_SHORTHAND_WORDS = 4
+
+/**
+ * Turn an owner's phrase into a code-owned slug, or refuse it.
+ *
+ * Returns null rather than a repair. There is no "close enough" here: a nickname
+ * that had to be cleaned up to be safe is a nickname Freya will use wrongly, and
+ * the owner is the only person who can say what the right word is.
+ */
+export function shorthandSlug(phrase: unknown): string | null {
+  if (typeof phrase !== 'string') return null
+  const words = phrase
+    .trim()
+    .toLowerCase()
+    .split(/[\s'’-]+/)
+    .filter((word) => word.length > 0)
+  if (words.length === 0 || words.length > MAX_SHORTHAND_WORDS) return null
+  for (const word of words) {
+    // Alphanumeric only, and two characters minimum, so no token is a single
+    // letter that could accidentally concatenate into something else.
+    if (!/^[a-z][a-z0-9]{1,}$/.test(word)) return null
+    if (FORBIDDEN_TOKEN_SET.has(word)) return null
+  }
+  const slug = words.join('-')
+  return isSlug(slug) ? slug : null
+}
+
+/**
  * A withdrawal: "forget that", "stop doing that", "drop the rule about".
  *
  * Matched independently of the standing table, so a withdrawal can address a key
@@ -157,6 +329,24 @@ const STANDING_PATTERNS: readonly { readonly key: string; readonly pattern: RegE
  */
 const WITHDRAWAL_PATTERN =
   /\b(?:forget|unlearn|stop|drop|remove)\s+(?:that|about|it|this)?\s*(?:you\s+)?(?:remember(?:ing)?|knowing|doing|saying|saying)?\s*(?:about\s+)?(?:being\s+)?(?:keep(?:ing)?\s+it\s+)?(?:short|brief|terse|formal|relaxed|casual|direct|detailed)?/i
+
+/**
+ * One recognised naming act. Unlike a standing directive this carries a `cueKind`,
+ * because a named shorthand is the only thing in this domain that *is* a
+ * shorthand: without it there would be nothing for the anti-repetition ledger to
+ * hold back in production.
+ */
+export interface OwnerNamingMatch {
+  readonly kind: 'naming'
+  /** The validated slug the owner chose, or null when it could not be one. */
+  readonly key: string | null
+  readonly itemKind: RelationshipItemKind
+  readonly cueKind: CueKind
+  readonly tags: readonly string[]
+  /** The phrase as the owner wrote it. Data, kept for the owner to read back. */
+  readonly phrase: string
+  readonly clause: string
+}
 
 /**
  * One recognised outcome. `withdrawal` items carry no kind, key or tags: a
@@ -189,22 +379,11 @@ export interface OwnerWithdrawalMatch {
   readonly key: string | null
 }
 
-export type OwnerDirectiveOutcome = OwnerDirectiveMatch | OwnerWithdrawalMatch
-
-/** Words that turn a request into a *standing* one rather than a single answer. */
-const STANDING_MARKERS = [
-  'from now on',
-  'going forward',
-  'in future',
-  'from here on',
-  'always',
-  'every time',
-  'by default',
-] as const
+export type OwnerDirectiveOutcome = OwnerDirectiveMatch | OwnerNamingMatch | OwnerWithdrawalMatch
 
 /** Closed wording for the explicit-standing flag, kept out of the pattern table. */
 function hasStandingMarker(lower: string): boolean {
-  return STANDING_MARKERS.some((marker) => lower.includes(marker))
+  return STANDING_MARKERS_WORDS.some((marker) => lower.includes(marker))
 }
 
 function boundClause(text: string, start: number, end: number): string {
@@ -238,6 +417,16 @@ function boundClause(text: string, start: number, end: number): string {
  * is created from a sentence that also retracts. That is the conservative
  * direction — a message that might mean two things produces no new belief — and
  * it is the direction that leaves the owner with less recorded, not more.
+ *
+ * ## Order, and why a naming act wins over a register instruction
+ *
+ * Withdrawal, then naming, then register. A sentence that both names a shorthand
+ * and asks about register ("call it the dragon from now on, and be brief") is
+ * ambiguous only about the *register*, and the shorthand is the part that would be
+ * lost — a nickname given once and then quietly not recorded because the same
+ * sentence also mentioned brevity is a worse failure than a missed preference that
+ * the owner can simply say again. Naming first is therefore the recoverable
+ * direction; the register instruction is dropped and nothing false is recorded.
  */
 export function readOwnerDirectives(text: unknown): readonly OwnerDirectiveOutcome[] {
   if (typeof text !== 'string') return Object.freeze([])
@@ -254,6 +443,24 @@ export function readOwnerDirectives(text: unknown): readonly OwnerDirectiveOutco
         kind: 'withdrawal' as const,
         clause: boundClause(trimmed, withdrawal.index ?? 0, (withdrawal.index ?? 0) + withdrawal[0].length),
         key: withdrawalKey(lower),
+      }),
+    ])
+  }
+
+  const naming = NAMING_PATTERNS.map((pattern) => trimmed.match(pattern)).find((m) => m !== null)
+  if (naming !== undefined && naming !== null) {
+    const phrase = naming[1]?.trim() ?? ''
+    return Object.freeze([
+      Object.freeze({
+        kind: 'naming' as const,
+        // Null means the phrase could not be a safe slug. The store refuses to
+        // record it, rather than recording something Freya would mispronounce.
+        key: shorthandSlug(phrase),
+        itemKind: 'inside-joke' as const,
+        cueKind: ownerDirectiveCueKind(),
+        tags: Object.freeze([...SHORTHAND_TAGS]),
+        phrase: phrase.slice(0, PERSONALITY_LIMITS.maxItemTextChars),
+        clause: boundClause(trimmed, naming.index ?? 0, (naming.index ?? 0) + naming[0].length),
       }),
     ])
   }
@@ -310,15 +517,21 @@ export function ownerDirectiveKeys(): readonly string[] {
 }
 
 /**
- * Cue kinds the recogniser may ever assign.
+ * The cue kind a naming act may assign, and the only one.
  *
- * Always none. Present as an explicit statement rather than as an absent field so
- * that a later change has to edit this line, which is a visible contract change,
- * instead of quietly adding a cue to an instruction recogniser.
+ * An *instruction* is never a cue — a preference about register carries no
+ * `cueKind` at all, because telling Freya to be brief is not a gesture she can
+ * repeat too often. A *named shorthand* is, and only `inside-joke` is, for the
+ * reason the naming section gives: it is the kind that reads as explicitly
+ * unserious, so a phrase that turns out to mean something else shows up as a joke
+ * rather than as a habit Freya has adopted.
  */
-export function ownerDirectiveCueKind(): CueKind | null {
-  return null
+export function ownerDirectiveCueKind(): CueKind {
+  return 'inside-joke'
 }
+
+/** The tags a named shorthand is filed under. */
+export const SHORTHAND_TAGS: readonly string[] = Object.freeze(['shorthand'])
 
 /**
  * The tags a standing instruction is relevant to, and the tokens Core supplies for

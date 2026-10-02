@@ -8,3 +8,11 @@ release/
 
 # Phase 1 scratch probes
 .scratch/
+
+# Local environment and secrets. Never committed; `.env.example` is the tracked
+# template and is deliberately re-included.
+.env
+.env.*
+*.env
+.env.local
+!.env.example

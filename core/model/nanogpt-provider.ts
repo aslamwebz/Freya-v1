@@ -2,6 +2,8 @@ import {
   throwIfAborted,
   ModelRequestCancelled,
   type ModelCallOptions,
+  type ModelCatalogEntry,
+  type ModelCatalogOptions,
   type ModelProvider,
   type ModelRequest,
   type ModelResult,
@@ -25,6 +27,12 @@ import type { ProviderStatus } from '../protocol/core-protocol'
  *
  * The key is read here, held in a closure, and never returned by `status()`,
  * never logged, and never recorded in an event.
+ *
+ * The base URL is the OpenAI-compatible root — `https://nano-gpt.com/api/v1` —
+ * and the endpoints are the standard `GET {base}/models` and
+ * `POST {base}/chat/completions`. A base given without the `/v1` suffix is
+ * accepted too; the version segment is added only when it is not already there,
+ * so the two spellings cannot quietly produce `/v1/v1/...`.
  */
 
 export interface NanoGptConfig {
@@ -56,6 +64,12 @@ export function readNanoGptConfig(env: NanoGptEnv): NanoGptConfig | null {
   }
 }
 
+/** A catalogue is display metadata with a bound; a megabyte of ids is not a list. */
+const MAX_CATALOG_ENTRIES = 2_000
+
+/** Model ids that are not this shape are refused rather than rendered. */
+const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$/
+
 export interface NanoGptProviderOptions {
   config: NanoGptConfig | null
   /** Injected so tests never touch a network. */
@@ -72,10 +86,101 @@ export class NanoGptProvider implements ModelProvider {
   private readonly fetchImpl: typeof fetch
   private readonly timeoutMs: number
 
+  /**
+   * The last catalogue this provider was able to read, as ids.
+   *
+   * Populated only by `listModels`, which is reached only by an explicit owner
+   * command — never by boot, a timer, or a turn. `servesModel` consults it so a
+   * selected model that was never listed cannot silently become a paid request
+   * the provider would answer with an error at best and a surprise bill at worst.
+   */
+  private catalogue: Set<string> | null = null
+
   constructor(options: NanoGptProviderOptions) {
     this.config = options.config
     this.fetchImpl = options.fetchImpl ?? fetch
     this.timeoutMs = options.timeoutMs ?? 30_000
+  }
+
+  /**
+   * Join an endpoint path to the configured base.
+   *
+   * `https://nano-gpt.com/api/v1` is the documented OpenAI-compatible root and
+   * gets the path appended directly; a base without the version segment gets
+   * `/v1` inserted once. Anything else about the URL is whatever the operator
+   * configured — this adds no host, no key, and no guessing.
+   */
+  private endpoint(path: string): string {
+    if (this.config === null) throw new Error('nanogpt provider is not configured')
+    const base = this.config.baseUrl
+    return base.endsWith('/v1') ? `${base}/${path}` : `${base}/v1/${path}`
+  }
+
+  /**
+   * Whether this provider would accept `model` on a chat completion.
+   *
+   * True for the configured default, and for anything the last successful
+   * catalogue listed. A provider that has never read its catalogue serves only
+   * its own model — "maybe NanoGPT has this id" is not a fact this method may
+   * assert, and refusing an unlisted id is the truthful answer that fails
+   * visibly at selection time rather than expensively mid-turn.
+   */
+  servesModel(model: string): boolean {
+    if (this.config === null) return false
+    if (model === this.config.model) return true
+    return this.catalogue !== null && this.catalogue.has(model)
+  }
+
+  /**
+   * Read the callable text-model catalogue. `GET {base}/models`.
+   *
+   * Model *ids* are display metadata, not inference: this endpoint spends no
+   * credits, so it is reachable whenever a key is configured — including while
+   * `FREYA_ALLOW_LIVE_MODEL` is off, which lets someone choose a sensible
+   * default before ever enabling spend. It is still a network read, so it is
+   * bounded, cancellable, and triggered only by an explicit command. Nothing
+   * about this method runs when Freya is idle.
+   */
+  async listModels(options: ModelCatalogOptions): Promise<readonly ModelCatalogEntry[]> {
+    if (this.config === null) throw new Error('nanogpt provider is not configured')
+    throwIfAborted(options.signal, 'cancelled before the model catalogue was requested')
+
+    const response = await this.fetchImpl(this.endpoint('models'), {
+      method: 'GET',
+      signal: options.signal,
+      headers: { authorization: `Bearer ${this.config.apiKey}` },
+    })
+    if (options.signal.aborted) {
+      throw new ModelRequestCancelled('the model catalogue request was cancelled')
+    }
+    if (!response.ok) {
+      // The status is safe to record; the body may echo the request.
+      throw new Error(`nanogpt models responded ${response.status}`)
+    }
+
+    const body = (await response.json()) as { data?: unknown }
+    if (!Array.isArray(body.data)) {
+      throw new Error('nanogpt returned a model catalogue that is not a list')
+    }
+    const entries: ModelCatalogEntry[] = []
+    const seen = new Set<string>()
+    for (const raw of body.data) {
+      if (typeof raw !== 'object' || raw === null) continue
+      const record = raw as { id?: unknown; object?: unknown; owned_by?: unknown }
+      if (record.id === undefined || typeof record.id !== 'string') continue
+      if (record.object !== undefined && record.object !== 'model') continue
+      const id = record.id.trim()
+      if (!MODEL_ID_PATTERN.test(id) || id === this.config.model || seen.has(id)) continue
+      seen.add(id)
+      entries.push({ id, ownedBy: typeof record.owned_by === 'string' ? record.owned_by : null })
+      if (entries.length >= MAX_CATALOG_ENTRIES) {
+        throw new Error('nanogpt returned more model ids than Freya will list')
+      }
+    }
+    // Recorded only after the whole body parsed: a truncated or refused read
+    // must not leave a half catalogue behind that `servesModel` would trust.
+    this.catalogue = new Set(entries.map((entry) => entry.id))
+    return entries
   }
 
   status(): ProviderStatus {
@@ -159,7 +264,7 @@ export class NanoGptProvider implements ModelProvider {
     unref(timer)
 
     try {
-      const response = await this.fetchImpl(`${this.config.baseUrl}/v1/chat/completions`, {
+      const response = await this.fetchImpl(this.endpoint('chat/completions'), {
         method: 'POST',
         signal: controller.signal,
         headers: {

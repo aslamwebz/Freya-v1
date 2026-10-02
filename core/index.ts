@@ -524,6 +524,17 @@ class FreyaCore implements Core {
   private conversations!: ConversationService
   private voiceService!: VoiceService
   /**
+   * The model the owner selected for subsequent chat turns, or null for the
+   * provider's own configured default.
+   *
+   * A session setting, deliberately not durable and never journaled: what each
+   * turn actually used is already recorded per request by the Gateway's
+   * `model.request.started`. Nothing reads this except the Mind, on the way to a
+   * request the Governor must still authorise, so a selection can neither bypass
+   * a budget nor survive a restart as a hidden preference.
+   */
+  private selectedModel: string | null = null
+  /**
    * The Work engine, or undefined before it is built.
    *
    * Optional rather than definite so that `work()` can report `unavailable` during
@@ -824,6 +835,11 @@ class FreyaCore implements Core {
       // The only fact about the outside world the Mind is told, and it is a fact
       // about Freya rather than about any provider.
       runtimeFacts: () => (this.state.stopAll.active ? ['Cognition is currently stopped.'] : []),
+      // The owner's model selection, read per turn. The Mind cannot set it, the
+      // renderer cannot put one in a turn payload, and the Gateway still asks the
+      // Governor before anything is contacted — this only answers "which model,
+      // if the owner named one" for a request that has already been allowed.
+      selectedModel: () => this.selectedModel,
       // Read-only recall. The Mind asks; the Brain decides what is recallable. This
       // callback holds no store and no admission policy, so the request path
       // cannot widen what Freya remembers — and a turn never writes memory at all,
@@ -2201,6 +2217,101 @@ class FreyaCore implements Core {
             ok: true,
             status: this.status(),
             conversation: { operation: 'cancelled', cancelled: result.cancelled },
+          }
+        }
+
+        /* ------------------------------------------------------------------ *
+         * Model catalogue and selection.
+         *
+         * Two commands, and neither is a door to a provider. The catalogue read
+         * is a metadata fetch the Gateway performs through the provider it
+         * already owns — no provider object ever crosses back — and the
+         * selection is a session setting that reaches a turn only as the
+         * `requestedModel` on an intent the Governor still has to authorise.
+         * Selecting does not create a grant, raise a ceiling, open the contact
+         * gate, or skip turn-context compilation: the selected model rides the
+         * exact same path an unselected turn always took.
+         * ------------------------------------------------------------------ */
+
+        case 'model.catalog.read': {
+          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+          const catalog = await this.gateway.readModelCatalog()
+          if (catalog.ok !== true) {
+            // An honest sentence, not an empty list. A window that receives
+            // `models: []` for a missing key would render "NanoGPT has no
+            // models" — a fabrication this branch exists to prevent.
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: catalog.reason },
+              model: { operation: 'refused', reason: catalog.reason },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            model: {
+              operation: 'catalog',
+              models: catalog.models.map((entry) => ({ id: entry.id, ownedBy: entry.ownedBy })),
+              defaultModel: catalog.defaultModel,
+              selected: this.selectedModel,
+            },
+          }
+        }
+
+        case 'model.select': {
+          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+          // A payload with no `model` key means "back to the provider default".
+          // Absence is a real instruction here, and treating it as malformed
+          // would make "use the default" unspellable from a window.
+          if (!hasKey(envelope.payload, 'model')) {
+            this.selectedModel = null
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              model: { operation: 'selected', selected: null },
+            }
+          }
+          const model = readString(envelope.payload, 'model')
+          if (model === null || model.length > 256) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'a model id must be a string of at most 256 characters' },
+              model: { operation: 'refused', reason: 'a model id must be a string of at most 256 characters' },
+            }
+          }
+          if (!this.gateway.canServeModel(model)) {
+            // Refused now, visibly, rather than becoming a turn that spends a
+            // grant and fails mid-call. This is the same question the Gateway
+            // will ask when the turn arrives, so a selection accepted here can
+            // still fail later only if the provider genuinely stops serving it.
+            const reason =
+              `no configured provider can serve model "${model}" — read the model catalogue first, ` +
+              'or select the provider default'
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason },
+              model: { operation: 'refused', reason, selected: this.selectedModel },
+            }
+          }
+          this.selectedModel = model
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            model: { operation: 'selected', selected: model },
           }
         }
 

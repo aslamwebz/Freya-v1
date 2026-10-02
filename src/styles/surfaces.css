@@ -313,6 +313,72 @@
   white-space: nowrap;
 }
 
+/* The model selector. It chooses which text model answers the *next* turn,
+   and nothing else — no budget, no gate. The catalogue is loaded when the
+   person asks, never while Freya is idle. */
+.chat-model {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.chat-model label {
+  font: var(--label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-size: 9.5px;
+}
+
+.chat-model-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.chat-model select {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--gold-line);
+  border-radius: 8px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  outline: none;
+}
+
+.chat-model select:focus {
+  border-color: var(--gold);
+}
+
+.chat-model select option {
+  background: var(--bg-2, #0a0c10);
+  color: var(--ink);
+}
+
+.chat-model-load {
+  flex: none;
+  border: 1px solid var(--gold-line);
+  background: transparent;
+  color: var(--gold-hi);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font: var(--label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 9.5px;
+}
+
+.chat-model-load:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Durability, stated. A person is entitled to know their conversation is not
    being saved before they say something they would rather not lose. */
 .chat-persistence {

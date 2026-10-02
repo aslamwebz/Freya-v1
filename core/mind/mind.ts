@@ -177,6 +177,18 @@ export interface MindServiceOptions {
   /** Minimal runtime facts for the compiled packet. Opaque to the Mind. */
   runtimeFacts?: () => readonly string[]
   /**
+   * The model the owner has selected for subsequent turns, or null.
+   *
+   * Supplied by the Core, which is the only place a selection is ever stored —
+   * never read from a turn payload, never chosen by the renderer's text, and
+   * never decided here. It reaches the provider through the Governor-issued
+   * permit like everything else: it changes *which model answers*, and nothing
+   * about the grant, the budget, the gate, or the compiled context. A null
+   * answer is the normal state and means "the provider's own configured model",
+   * which is exactly what a turn did before any selector existed.
+   */
+  selectedModel?: () => string | null
+  /**
    * What Freya remembers about this turn's text, if anything.
    *
    * **Retrieval is not the Mind's job and cannot be the Mind's decision.** This is a
@@ -249,6 +261,7 @@ export class MindService {
   private readonly now: () => Date
   private readonly newId: () => string
   private readonly runtimeFacts: () => readonly string[]
+  private readonly selectedModel: () => string | null
   private readonly recall: ((query: string) => ReferenceKnowledge | null) | null
   private readonly turnContext: TurnContextReader | null
   private readonly onTurnStateChange: () => void
@@ -290,6 +303,7 @@ export class MindService {
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => randomUUID())
     this.runtimeFacts = options.runtimeFacts ?? (() => [])
+    this.selectedModel = options.selectedModel ?? (() => null)
     this.recall = options.recall ?? null
     this.turnContext = options.turnContext ?? null
     this.onTurnStateChange = options.onTurnStateChange ?? (() => {})
@@ -523,7 +537,10 @@ export class MindService {
         grantId: grant.grantId,
         correlationId: turnId,
         cognitionRequestId: turnId,
-        requestedModel: null,
+        // The owner's selection, when there is one. It is a *request*, not a
+        // decision: the Governor still authors, the Gateway still refuses any
+        // model it cannot serve, and a null here is the ordinary default.
+        requestedModel: this.selectedModel(),
         goalId: null,
       })
 

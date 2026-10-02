@@ -25,6 +25,33 @@ Other scripts:
 | `npm run test:e2e` | drives the real Electron app, including a relaunch |
 | `npm run verify` | all of the above, in order |
 
+## Chat with a real model (`.env` setup)
+
+Freya talks to NanoGPT through its OpenAI-compatible API only when you tell it
+to, and nothing about the configuration ever reaches the window:
+
+1. Copy `.env.example` to `.env` (git-ignored) in the repository root.
+2. Set `NANOGPT_API_KEY` to your key, keep
+   `NANOGPT_BASE_URL=https://nano-gpt.com/api/v1`, and set `NANOGPT_MODEL` to a
+   callable text model id.
+3. Set `FREYA_ALLOW_LIVE_MODEL=1` — the separate, deliberate decision to spend.
+   Without it the provider reports `disabled` and chat refuses truthfully.
+
+`.env` is read by the Electron **main process only**. The renderer cannot see
+it, the preload bridge forwards named commands and bounded payloads instead of
+environment values, and the key appears exactly once anywhere: the
+`Authorization` header of a provider call. It is never in the event journal, a
+projection, a log line, or the chat transcript.
+
+With the provider configured, the Chat surface's model selector can list the
+text models NanoGPT reports (`GET /models` — on demand, never on boot, never
+while idle) and the model you choose becomes what the *next* turn asks the
+provider for. A selection carries no power: Guard, the Governor, per-turn
+budgets, cancellation, STOP ALL and the compiled turn context all apply exactly
+as they did without it. To check the endpoint without the app, run
+`npm run core:model-probe` with the same variables set — one small, capped
+request, through the same Gateway.
+
 ## What is in here
 
 - **One command centre** — header, command bar, navigation, dashboard, dock.

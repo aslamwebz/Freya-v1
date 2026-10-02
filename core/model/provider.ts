@@ -84,6 +84,24 @@ export interface ModelCallOptions {
   signal: AbortSignal
 }
 
+/**
+ * One callable text model a provider reports about itself.
+ *
+ * An id and a label — that is the whole of what crosses back. A catalogue entry
+ * is display metadata, never a credential, and never an authorisation: being
+ * listed only means the provider would send that id to its own endpoint if the
+ * owner selected it.
+ */
+export interface ModelCatalogEntry {
+  id: string
+  ownedBy: string | null
+}
+
+/** What the gateway hands a catalogue read alongside its nothing-else. */
+export interface ModelCatalogOptions {
+  signal: AbortSignal
+}
+
 export interface ModelProvider {
   readonly id: string
   readonly kind: 'fake' | 'nanogpt'
@@ -91,6 +109,25 @@ export interface ModelProvider {
   readonly live: boolean
   /** Current readiness, for the status projection. */
   status(): ProviderStatus
+  /**
+   * Whether this provider can serve `model` as it now knows it.
+   *
+   * Optional: a provider with no catalogue answers through its own configured
+   * model alone, which is what the gateway falls back to. A provider that does
+   * list a catalogue must answer honestly — `true` only for ids it would
+   * actually send to the endpoint, never for "probably".
+   */
+  servesModel?(model: string): boolean
+  /**
+   * List the callable text models this provider can serve.
+   *
+   * Optional and command-triggered only: nothing calls it on boot, on a timer,
+   * or when idle. A provider without one simply has no catalogue beyond its own
+   * configured model. Metadata about model ids is not inference and costs
+   * nothing, but it is still a network read, so it is cancellable like every
+   * other call this interface makes.
+   */
+  listModels?(options: ModelCatalogOptions): Promise<readonly ModelCatalogEntry[]>
   /**
    * Perform one call. Reached only through the Model Gateway.
    *

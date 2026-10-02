@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
 import { ElectronCoreHost } from './coreHost'
 import { loadKeyring } from './keyring'
+import { loadLocalEnv } from './localEnv'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
@@ -13,6 +14,12 @@ const ROOT = join(HERE, '..')
 const DEV_SERVER = process.env.FREYA_DEV_SERVER
 const WORKSPACE_FILE = 'workspace.json'
 const CORE_LOG_FILE = 'core-events.jsonl'
+
+// Local `.env` first, in the main process, before anything reads configuration.
+// Real environment variables win over the file; values are never logged, and
+// nothing here is forwarded to a window — the preload bridge carries named
+// commands and bounded payloads only, never environment content.
+loadLocalEnv(join(ROOT, '.env'))
 
 let mainWindow: BrowserWindow | null = null
 /** Null until the app is ready; every handler that needs it is registered after. */

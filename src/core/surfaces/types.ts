@@ -97,7 +97,8 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     type: 'chat',
     title: 'Chat',
     summary:
-      'Conversation with Freya. Commands reach Core and are recorded; model replies are not connected yet.',
+      'Conversation with Freya. Turns run through Core — Guard, Governor, compiled context — and ' +
+      'answered by the configured provider, or refused in words when there is none.',
     width: 520,
     height: 560,
     minWidth: 360,

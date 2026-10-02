@@ -6,6 +6,8 @@ import {
   ensureConversationAttached,
   visibleMessages,
 } from '../../platform/conversationClient'
+import { readModelCatalog, selectModel } from '../../platform/modelClient'
+import type { ModelView } from '../../../core/protocol/core-protocol'
 import type { ConversationProjection, VoiceProjection } from '../../../core/protocol/conversation'
 import { MicButton } from './MicButton'
 
@@ -28,9 +30,13 @@ import { MicButton } from './MicButton'
  *
  * ## What this surface cannot do
  *
- * It cannot send a privileged command, choose a model, name a grant, or reach a
- * provider. The only door is `conversation.turn.submit`, and the Mind behind it
- * compiles the context, creates the turn's grant and asks the Governor.
+ * It cannot send a privileged command, name a grant, raise a ceiling, or reach
+ * a provider. The doors are `conversation.turn.submit`, `conversation.turn.cancel`,
+ * and the two model commands — and a model choice is a *name* that Core validates
+ * against what a configured provider can serve before it means anything. The Mind
+ * behind a turn still compiles the context, creates the grant and asks the
+ * Governor exactly as it did when this comment said a window could not choose
+ * a model at all.
  */
 
 export function ChatSurface() {
@@ -41,6 +47,10 @@ export function ChatSurface() {
   const [sending, setSending] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [transcript, setTranscript] = useState<HTMLDivElement | null>(null)
+  const [models, setModels] = useState<readonly ModelView[]>([])
+  const [catalogState, setCatalogState] = useState<'idle' | 'loading' | 'loaded'>('idle')
+  const [selectedModel, setSelectedModel] = useState<string | null>(null)
+  const [defaultModel, setDefaultModel] = useState<string | null>(null)
   const mirror = conversationMirror()
 
   useEffect(() => {
@@ -87,6 +97,41 @@ export function ChatSurface() {
     const created = await mirror.create()
     return created.operation === 'created' ? created.conversation.conversationId : null
   }, [mirror, projection?.activeConversationId])
+
+  /**
+   * Ask Core for the catalogue — now, because the person asked, and never on
+   * mount. A refusal keeps its sentence: an empty list rendered after a failed
+   * read would say "NanoGPT has no models", which is not what happened.
+   */
+  const loadCatalog = useCallback(async () => {
+    setCatalogState('loading')
+    setNotice(null)
+    const outcome = await readModelCatalog()
+    if (outcome.operation === 'catalog') {
+      setModels(outcome.models ?? [])
+      setDefaultModel(outcome.defaultModel ?? null)
+      setSelectedModel(outcome.selected ?? null)
+      setCatalogState('loaded')
+    } else {
+      setCatalogState('idle')
+      setNotice(outcome.reason ?? 'The model catalogue could not be read.')
+    }
+  }, [])
+
+  /**
+   * Name a model for subsequent turns. On a refusal the list and the selection
+   * stay where they were, because Core stayed where it was — the old selection
+   * is still what the next turn will run.
+   */
+  const chooseModel = useCallback(async (model: string | null) => {
+    setNotice(null)
+    const outcome = await selectModel(model)
+    if (outcome.operation === 'selected') {
+      setSelectedModel(outcome.selected ?? null)
+    } else {
+      setNotice(outcome.reason ?? 'That model could not be selected.')
+    }
+  }, [])
 
   const send = useCallback(async () => {
     const text = draft.trim()
@@ -164,6 +209,44 @@ export function ChatSurface() {
             </li>
           ))}
         </ul>
+
+        {/* The model selector. It changes what the *next* turn asks for, and
+            nothing else: no budget, no gate, no grant. A choice is re-checked
+            inside Core against what a configured provider can actually serve,
+            and a refusal here is Core's sentence rather than a silent revert. */}
+        <div className="chat-model">
+          <label htmlFor="chat-model-select">Model</label>
+          <div className="chat-model-row">
+            <select
+              id="chat-model-select"
+              value={selectedModel ?? ''}
+              onChange={(event) => {
+                const value = event.target.value
+                void chooseModel(value === '' ? null : value)
+              }}
+            >
+              <option value="">
+                {defaultModel === null
+                  ? 'Provider default'
+                  : `Provider default (${defaultModel})`}
+              </option>
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.id}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="chat-model-load"
+              onClick={() => void loadCatalog()}
+              disabled={catalogState === 'loading'}
+              title="Ask the configured provider which text models it can serve"
+            >
+              {catalogState === 'loading' ? 'Loading…' : 'Load models'}
+            </button>
+          </div>
+        </div>
 
         {/* Durability, stated rather than assumed. Someone should know their
             conversation is not being saved before they say something they would

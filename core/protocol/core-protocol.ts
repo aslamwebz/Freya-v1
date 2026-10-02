@@ -208,7 +208,7 @@ export interface ModelUsage {
   unknownUsageCalls: number
 }
 
-/* ---------------------------------------------------------- projection */
+  /* ---------------------------------------------------------- projection */
 
 export type CoreLifecycle = 'booting' | 'ready' | 'degraded' | 'stopping' | 'stopped'
 
@@ -438,6 +438,24 @@ export type CoreCommandName =
   | 'context.revoke'
   | 'context.revokeScope'
   | 'context.reference.read'
+  /* --------------------------------------------------------------- model */
+  /**
+   * The model catalogue and the owner's selection.
+   *
+   * `model.catalog.read` lists the callable text models from the configured
+   * provider. It is a metadata read — no inference, no spend, no grant — and it
+   * runs only when a person asks, never on boot and never while idle.
+   * `model.select` records one model id as the answer for *subsequent* turns.
+   *
+   * Note what a selection is not: it names no provider, no budget, no ceiling
+   * and no capability. Core validates it against what a configured provider can
+   * actually serve, refuses what it cannot serve with a stated reason, and a
+   * selected turn still passes Guard, the Governor, its grant, the compiled
+   * context and the contact gate exactly as every turn before any selector
+   * existed. A selection that cannot be honoured fails truthfully.
+   */
+  | 'model.catalog.read'
+  | 'model.select'
 
 export interface CoreCommandEnvelope {
   command: CoreCommandName
@@ -553,6 +571,48 @@ export interface CoreCommandResult {
    * other.
    */
   context?: ContextCommandOutcome
+
+  /**
+   * The model view of a model command's result.
+   *
+   * Its own slot for the same reason every other subsystem's exists, and here
+   * the contents are deliberately only ids and states: a catalogue is display
+   * metadata, a selection is a session setting, and neither is a place for a
+   * credential, a provider object, or anything a window could re-send as an
+   * authorisation. A refusal lands here with its reason, because "Core
+   * understood and declined" must never render as success.
+   */
+  model?: ModelCommandOutcome
+}
+
+/**
+ * One listed model, in the words the provider used.
+ *
+ * An id and an owner label — the whole of what a selector needs and the whole
+ * of what may cross the bridge. Nothing about a model's cost, capability or
+ * context window is asserted here, because Freya is not the authority on any
+ * of those and an invented figure would be a lie the size of a number.
+ */
+export interface ModelView {
+  id: string
+  ownedBy: string | null
+}
+
+/**
+ * What a model command produced.
+ *
+ * `refused` is an outcome rather than an exception everywhere: a missing key,
+ * a network failure and an unusable selection all answer in words, and none of
+ * them is ever papered over with an empty list or an echoed default.
+ */
+export interface ModelCommandOutcome {
+  operation: 'catalog' | 'selected' | 'refused'
+  reason?: string
+  models?: readonly ModelView[]
+  /** The provider's own configured default, which is what "no selection" means. */
+  defaultModel?: string | null
+  /** The selection after the command: a name, or null for "the default". */
+  selected?: string | null
 }
 
 /**

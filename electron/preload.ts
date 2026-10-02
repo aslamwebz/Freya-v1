@@ -305,6 +305,14 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'conversation.read',
   'conversation.turn.submit',
   'conversation.turn.cancel',
+  // Model catalogue and selection. A window may ask which text models the
+  // configured provider can serve, and may name one of them for subsequent
+  // turns. Note what neither command reaches: no provider, no grant, no
+  // budget, no ceiling, and no environment value — the catalogue is what Core's
+  // provider says it is, and a selection is re-validated inside Core against
+  // what a configured provider can actually serve before it means anything.
+  'model.catalog.read',
+  'model.select',
   'voice.status.read',
   'voice.capture.start',
   'voice.capture.end',
@@ -427,6 +435,8 @@ function carriesNothing(payload: unknown): boolean {
 }
 
 const MAX_ID_CHARS = 256
+/** A model id is bounded like an id; the same ceiling Core re-checks inside. */
+const MAX_MODEL_ID_CHARS = 256
 /** Matches the Searcher's own ceiling, so the bridge and Core agree on the limit. */
 const MAX_SEARCH_QUERY_CHARS = 512
 const MAX_SOURCE_URL_CHARS = 2_048
@@ -589,6 +599,24 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
         return { ok: false, reason: 'turn id is invalid' }
       }
       return { ok: true, payload: { turnId } }
+    }
+
+    case 'model.catalog.read':
+      // A read with no arguments. Anything attached is dropped rather than
+      // forwarded: there is nothing this command could usefully be told.
+      return { ok: true }
+
+    case 'model.select': {
+      // One optional bounded string, and nothing else crosses.
+      //
+      // `model` present names a model for subsequent turns; `model` absent is
+      // the spelled "back to the provider default". A value that is not a
+      // string, or longer than a model id can be, is refused here at the
+      // boundary and re-checked inside Core — the bridge is a capability
+      // boundary, not the only wall.
+      const model = string('model', MAX_MODEL_ID_CHARS, false)
+      if (model === null) return { ok: false, reason: 'model id is invalid' }
+      return { ok: true, payload: model === undefined ? {} : { model } }
     }
 
     case 'voice.capture.end': {

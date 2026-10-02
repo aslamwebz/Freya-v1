@@ -3,6 +3,7 @@ import {
   isModelRequestCancelled,
   ModelRequestCancelled,
   type ModelCallOptions,
+  type ModelCatalogEntry,
   type ModelMessage,
   type ModelProvider,
   type ModelRequest,
@@ -346,10 +347,74 @@ export class ModelGateway {
   private resolve(requestedModel: string | null): ModelProvider | null {
     for (const provider of this.providers.values()) {
       if (provider.status().status !== 'configured') continue
-      if (requestedModel !== null && provider.status().model !== requestedModel) continue
+      if (requestedModel !== null && !providerCanServe(provider, requestedModel)) continue
       return provider
     }
     return null
+  }
+
+  /**
+   * Read the model catalogue, without exposing a provider.
+   *
+   * A metadata read, not a spend: it never touches the recorder, never enters
+   * the active registry, and cannot make `activeCallCount` move — an idle Freya
+   * stays idly zero even mid-list, because nothing is being billed. It is
+   * reached only when Core asks on behalf of an explicit owner command. The
+   * answer says honestly which states cannot produce a catalogue rather than
+   * returning an empty list that would look like "NanoGPT has no models".
+   */
+  async readModelCatalog(): Promise<
+    | { ok: true; providerId: string; defaultModel: string | null; models: readonly ModelCatalogEntry[] }
+    | { ok: false; reason: string }
+  > {
+    const listable = [...this.providers.values()].filter(
+      (provider) => typeof provider.listModels === 'function',
+    )
+    if (listable.length === 0) {
+      return { ok: false, reason: 'no registered provider can list models' }
+    }
+    const states = listable.map((provider) => provider.status())
+    const usable = listable.filter(
+      (provider) => provider.status().status === 'configured' || provider.status().status === 'disabled',
+    )
+    if (usable.length === 0) {
+      const worst = states[0]?.detail ?? 'the provider is not configured'
+      return { ok: false, reason: `no configured provider can list models — ${worst}` }
+    }
+    // The *first* provider that can list. Provider order is Core's decision at
+    // construction, so this follows the same rule as `resolve` follows for turns.
+    const provider = usable[0] as ModelProvider
+    try {
+      const models = await provider.listModels!({ signal: AbortSignal.timeout(15_000) })
+      return {
+        ok: true,
+        providerId: provider.id,
+        defaultModel: provider.status().model,
+        models,
+      }
+    } catch (error) {
+      // The provider's message is already free of credentials — the key travels
+      // only in a header the fetch transport never echoes into an error.
+      return {
+        ok: false,
+        reason: error instanceof Error ? error.message : 'the model catalogue could not be read',
+      }
+    }
+  }
+
+  /**
+   * Whether some configured provider could serve `model` right now.
+   *
+   * The same question `resolve` will ask when a turn arrives, answered without
+   * making a turn. Core uses it to refuse an unusable selection visibly at the
+   * moment it is chosen, rather than letting it fail later as a spent attempt.
+   */
+  canServeModel(model: string): boolean {
+    for (const provider of this.providers.values()) {
+      if (provider.status().status !== 'configured') continue
+      if (providerCanServe(provider, model)) return true
+    }
+    return false
   }
 
   /**
@@ -379,12 +444,19 @@ export class ModelGateway {
 
       provider = this.resolve(permit.model)
       if (provider === null) {
-        const reason = 'no configured provider can serve this request'
+        const reason =
+          permit.model === null
+            ? 'no configured provider can serve this request'
+            : `no configured provider can serve model "${permit.model}"`
         await this.recorder.failed({ requestId: permit.requestId, providerId: permit.providerId, reason })
         throw new ProviderUnavailableError(reason)
       }
 
-      const model = provider.status().model ?? permit.model ?? 'unknown'
+      // The permit's model wins when there is one: an owner selection that reached
+      // this point *is* the request, and silently replacing it with the provider's
+      // default would make the selector a lie. Without a selection, the provider's
+      // own configured model answers, as it always has.
+      const model = permit.model ?? provider.status().model ?? 'unknown'
 
       // `started` is written here, immediately before the provider is asked. It
       // is the gateway saying "I am about to spend something", which is why the
@@ -602,6 +674,20 @@ export function wasProviderContacted(error: unknown): boolean {
     return (error as ProviderContact).providerContacted === true
   }
   return true
+}
+
+/**
+ * Whether a provider serves a named model.
+ *
+ * A provider that can answer the question answers it; one that cannot is held to
+ * the only thing it does know — the model its own status names. That default is
+ * deliberately narrow: a provider without a catalogue gets exactly one usable
+ * id, and a request naming any other is refused at the door rather than sent
+ * off to fail downstream.
+ */
+function providerCanServe(provider: ModelProvider, model: string): boolean {
+  if (provider.servesModel) return provider.servesModel(model)
+  return provider.status().model === model
 }
 
 export class ProviderUnavailableError extends Error {

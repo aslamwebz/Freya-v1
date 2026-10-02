@@ -105,6 +105,14 @@ import {
 } from './protocol/attention'
 import { AttentionEngine, type AttentionSourceScope } from './attention/engine'
 import type { AttentionDecision, AttentionSource, FocusState } from './attention/types'
+import { FoundryEngine } from './foundry/engine'
+import { registerFoundryWorkCapabilities } from './foundry/work'
+import {
+  ABSENT_FOUNDRY_PROJECTION,
+  FOUNDRY_NO_PAYLOAD,
+  NO_FOUNDRY_DOMAIN_REASON,
+  type FoundryProjection,
+} from './protocol/foundry'
 import { projectOffice, ABSENT_OFFICE_PROJECTION, type OfficeProjection } from './office/projection'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
 import type { CognitionGrantSpec } from './cognition/grants'
@@ -568,6 +576,10 @@ export interface Core {
   attention(): AttentionProjection
   /** Subscribe to the Attention projection. Same mirror semantics as the others. */
   onAttention(listener: (projection: AttentionProjection) => void): () => void
+  /** Core's content-free Foundry projection, derived from the durable journal. */
+  foundry(): FoundryProjection
+  /** Subscribe to the Foundry projection. No mutation authority crosses this seam. */
+  onFoundry(listener: (projection: FoundryProjection) => void): () => void
   /**
    * Core's account of the Office: Freya's station, live run stations, worker
    * stations, approval stations and the history timeline.
@@ -716,6 +728,9 @@ class FreyaCore implements Core {
    * already-authorized state for the focus reading.
    */
   private attentionEngine: AttentionEngine | undefined
+  private readonly foundryListeners = new Set<(projection: FoundryProjection) => void>()
+  /** The Phase 15 Foundry domain, owned by Core and replayed from the durable journal. */
+  private foundryEngine: FoundryEngine | undefined
   /** Display-ready activity, rebuilt from the log on every start. */
   private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
@@ -987,10 +1002,28 @@ class FreyaCore implements Core {
     // and read the same log. Any event written before this line is a bug.
     this.disposeState = this.fabric.subscribe((event) => {
       this.state = reduceCoreState(this.state, event)
+      this.foundryEngine?.replay(event)
       this.recordActivity(event)
       this.observeAttentionSource(event)
+      if (event.type.startsWith('foundry.')) this.publishFoundry()
       this.notify()
     })
+
+    // Foundry is journal-first like the rest of Core. Its engine submits a draft
+    // event, EventFabric assigns the durable identity/sequence and persists it,
+    // and only that persisted event is folded into Foundry state. Replaying the
+    // journal here makes restart state and live state the same function of history.
+    this.foundryEngine = new FoundryEngine(
+      async (event) =>
+        await this.fabric.append(event.type as never, event.payload as never, {
+          source: event.source,
+          actor: event.actor,
+          correlationId: event.correlationId,
+          causationId: event.causationId,
+        }),
+      this.options.now,
+    )
+    for (const event of await this.fabric.readAll()) this.foundryEngine.replay(event)
 
     // Conversation and voice, built after the owner exists because the Mind needs
     // the owner's authority to create a turn's grant — and it must not be able to
@@ -1147,6 +1180,7 @@ class FreyaCore implements Core {
     for (const capability of this.workCapabilities()) {
       this.workRegistry.register(capability)
     }
+    registerFoundryWorkCapabilities(this.workRegistry, this.requireFoundry())
     registerPhaseSixCapabilities(this.workRegistry)
     this.workEngine = new WorkEngine({
       fabric: this.fabric,
@@ -1169,6 +1203,25 @@ class FreyaCore implements Core {
           : `Freya was stopped by ${this.state.stopAll.activatedBy}`,
     })
     await this.workEngine.open()
+
+    // Foundry does not trust a model or its own creator step to say work passed.
+    // Its production verifier reads Work's already-independent terminal Step verdict.
+    // The artifact carries the creating run/step ids, so this is a check of the exact
+    // action that produced it rather than a generic "the run looked okay" badge.
+    this.requireFoundry().registerVerifier({
+      name: 'work.step.verified',
+      verify: (artifactHash) => {
+        const artifact = [...this.requireFoundry().getState().artifacts.values()].find(
+          (candidate) => candidate.hash === artifactHash,
+        )
+        if (!artifact) return 'FAIL: artifact does not exist'
+        const run = this.workEngine?.projection().runs.find((candidate) => candidate.runId === artifact.runId)
+        const step = run?.steps.find((candidate) => candidate.stepId === artifact.stepId)
+        return step?.status === 'verified'
+          ? 'PASS: the creating Work step is independently verified'
+          : 'FAIL: the creating Work step is not verified'
+      },
+    })
 
     // Missions sit above Work, so they are constructed after it and hold a read-only
     // view of it. The engine asks Work about a Run; Work never asks Missions about
@@ -1942,6 +1995,45 @@ class FreyaCore implements Core {
     }
   }
 
+  foundry(): FoundryProjection {
+    if (this.foundryEngine === undefined) {
+      return { ...ABSENT_FOUNDRY_PROJECTION, reason: NO_FOUNDRY_DOMAIN_REASON }
+    }
+    try {
+      return this.foundryEngine.projection()
+    } catch (error) {
+      return {
+        ...ABSENT_FOUNDRY_PROJECTION,
+        reason: `the Foundry domain could not be read: ${describe(error)}`,
+      }
+    }
+  }
+
+  onFoundry(listener: (projection: FoundryProjection) => void): () => void {
+    this.foundryListeners.add(listener)
+    try {
+      listener(this.foundry())
+    } catch (error) {
+      console.error('[freya.core] Foundry subscriber threw', error)
+    }
+    return () => {
+      this.foundryListeners.delete(listener)
+    }
+  }
+
+  private publishFoundry(): void {
+    if (this.foundryListeners.size === 0) return
+    const projection = this.foundry()
+    for (const listener of [...this.foundryListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Foundry listener threw', error)
+        this.foundryListeners.delete(listener)
+      }
+    }
+  }
+
   async attentionTick(now?: Date): Promise<number> {
     if (this.attentionEngine === undefined) return 0
     return await this.attentionEngine.tick(now)
@@ -1952,6 +2044,13 @@ class FreyaCore implements Core {
       throw new Error('the Attention engine is not available')
     }
     return this.attentionEngine
+  }
+
+  private requireFoundry(): FoundryEngine {
+    if (this.foundryEngine === undefined) {
+      throw new Error('the Foundry engine is not available')
+    }
+    return this.foundryEngine
   }
 
   /**
@@ -2487,7 +2586,8 @@ class FreyaCore implements Core {
       command !== 'context.status.read' &&
       command !== 'context.reference.read' &&
       command !== 'attention.status.read' &&
-      command !== 'attention.inbox.read'
+      command !== 'attention.inbox.read' &&
+      command !== 'foundry.status.read'
     ) {
       return reject(envelope, `core is ${this.lifecycle} and cannot accept mutating commands`)
     }
@@ -2904,6 +3004,25 @@ class FreyaCore implements Core {
             ok: true,
             status: this.status(),
             model: { operation: 'selected', selected: model },
+          }
+        }
+
+        /* ---------------------------------------------------------- foundry */
+
+        case 'foundry.status.read': {
+          if (carriesFields(envelope.payload)) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: FOUNDRY_NO_PAYLOAD },
+              foundry: { operation: 'refused', ok: false, reason: FOUNDRY_NO_PAYLOAD },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            foundry: { operation: 'status', ok: true },
           }
         }
 

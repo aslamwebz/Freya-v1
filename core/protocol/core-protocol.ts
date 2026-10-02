@@ -13,6 +13,7 @@ import type { ConversationCommandOutcome, VoiceCommandOutcome } from './conversa
 import type { ContextCommandOutcome } from './context'
 import type { WorkforceCommandOutcome } from './workforce'
 import type { AttentionCommandOutcome } from './attention'
+import type { FoundryCommandOutcome } from './foundry'
 
 /* ------------------------------------------------------------ identity */
 
@@ -88,6 +89,21 @@ export const CAPABILITIES = [
   // which is the one thing nobody should reach by accident.
   'mission.status.read',
   'mission.manage',
+
+  // Foundry — Phase 15.
+  //
+  // Three, not one, and the split is the point.
+  //
+  // `foundry.status.read` is held by the owner only and is what a Foundry
+  // surface needs in order to render. `foundry.artifact.manage` creates and
+  // transitions artifacts. `foundry.activation.manage` activates, deactivates,
+  // promotes and installs. Splitting them means a future body can be given
+  // the ability to watch the foundry without being able to activate anything —
+  // and activating is the only operation that can make a thing runnable,
+  // which is the one thing nobody should reach by accident.
+  'foundry.status.read',
+  'foundry.artifact.manage',
+  'foundry.activation.manage',
 ] as const
 
 export type Capability = (typeof CAPABILITIES)[number]
@@ -477,6 +493,8 @@ export type CoreCommandName =
   | 'attention.schedule.register'
   | 'attention.schedule.cancel'
   | 'attention.inbox.read'
+  /* ------------------------------------------------------------- foundry */
+  | 'foundry.status.read'
   /* --------------------------------------------------------------- office */
   /**
    * Phase 14. The Office: a truthful spatial view of real Work/Workforce state.
@@ -635,6 +653,9 @@ export interface CoreCommandResult {
    * than a second copy of the state.
    */
   attention?: AttentionCommandOutcome
+
+  /** The Foundry outcome for the current command. */
+  foundry?: FoundryCommandOutcome
 
   /**
    * The Office view of an office command's result.

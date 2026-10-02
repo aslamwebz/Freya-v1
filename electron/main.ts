@@ -433,6 +433,10 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:attention', projection)
   })
 
+  const detachFoundry = coreHost?.onFoundry((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:foundry', projection)
+  })
+
   // The Office is an eleventh channel, and the one whose whole content is
   // derived: Freya's station, live run stations, worker stations, approval
   // stations and the history timeline. What does not cross is the point of it —
@@ -455,6 +459,7 @@ function createWindow(): BrowserWindow {
     detachContext?.()
     detachPersonality?.()
     detachAttention?.()
+    detachFoundry?.()
     detachOffice?.()
   })
 
@@ -576,6 +581,7 @@ function registerIpc(): void {
   // `attention.tick` command — a window cannot decide, spend a budget, bypass a
   // cooldown or drive the scheduler.
   ipcMain.handle('freya:core:attention', () => requireCore().attention())
+  ipcMain.handle('freya:core:foundry', () => requireCore().foundry())
   // The Office projection, same bargain as every other channel: a read of what
   // Core reports. The Office is a pure function of real Work/Workforce/Core
   // state, so what crosses is exactly what Core derived — stations, counts,

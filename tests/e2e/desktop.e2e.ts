@@ -134,6 +134,33 @@ async function launch(
   return { app, page }
 }
 
+async function waitForPresenceState(
+  app: ElectronApplication,
+  expected: string,
+  timeoutMs = 10_000,
+): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs
+  let state: string | null = null
+
+  while (Date.now() < deadline) {
+    state = await app
+      .evaluate(async ({ BrowserWindow }) => {
+        const windows = BrowserWindow.getAllWindows()
+        const presenceWindow = windows.find((window) => window.getTitle() === 'Freya Presence')
+        if (!presenceWindow || presenceWindow.webContents.isDestroyed()) return null
+        return await presenceWindow.webContents.executeJavaScript(
+          'document.querySelector(".desktop-presence")?.getAttribute("data-state") ?? null',
+        )
+      })
+      .catch(() => null)
+
+    if (state === expected) return state
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+
+  return state
+}
+
 /**
  * Open the Chat surface and wait for its composer.
  *
@@ -1232,14 +1259,7 @@ async function main(): Promise<void> {
         // no work in flight, the only honest state is idle.
         // The presence window is a separate window, so we need to check it
         // through the app's windows, not the main page.
-        const presenceStateFromWindow = await presenceApp.evaluate(({ BrowserWindow }) => {
-          const windows = BrowserWindow.getAllWindows()
-          const presenceWindow = windows.find((w) => w.getTitle() === 'Freya Presence')
-          if (!presenceWindow) return null
-          return presenceWindow.webContents.executeJavaScript(
-            'document.querySelector(".desktop-presence")?.getAttribute("data-state") ?? null',
-          )
-        })
+        const presenceStateFromWindow = await waitForPresenceState(presenceApp, 'idle')
         check(
           'the presence window shows idle when nothing is happening',
           presenceStateFromWindow === 'idle',

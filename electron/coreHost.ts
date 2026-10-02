@@ -8,6 +8,7 @@ import type { MissionProjection } from '../core/missions/types'
 import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
+import type { FoundryProjection } from '../core/protocol/foundry'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
 import type { OfficeProjection } from '../core/office/projection'
 import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
@@ -339,6 +340,8 @@ export interface CoreHost {
    */
   onAttention(send: (projection: AttentionProjection) => void): () => void
   attention(): AttentionProjection | null
+  onFoundry(send: (projection: FoundryProjection) => void): () => void
+  foundry(): FoundryProjection | null
   /**
    * Attach to the Office projection. Returns a disposer.
    *
@@ -476,6 +479,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
   private readonly personalityWindows = new Set<(projection: PersonalityProjection) => void>()
   private readonly attentionWindows = new Set<(projection: AttentionProjection) => void>()
+  private readonly foundryWindows = new Set<(projection: FoundryProjection) => void>()
   private readonly officeWindows = new Set<(projection: OfficeProjection) => void>()
   /**
    * The Context transport box. Binds structurally to a reporting Core, holds a
@@ -557,6 +561,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onWorkforce((projection) => this.broadcastWorkforce(projection))
       core.onPersonality((projection) => this.broadcastPersonality(projection))
       core.onAttention((projection) => this.broadcastAttention(projection))
+      core.onFoundry((projection) => this.broadcastFoundry(projection))
       core.onOffice((projection) => this.broadcastOffice(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
@@ -867,6 +872,36 @@ export class ElectronCoreHost implements CoreHost {
 
   attention(): AttentionProjection | null {
     return this.core?.attention() ?? null
+  }
+
+  onFoundry(send: (projection: FoundryProjection) => void): () => void {
+    this.foundryWindows.add(send)
+    const projection = this.foundry()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Foundry push threw', error)
+      }
+    }
+    return () => {
+      this.foundryWindows.delete(send)
+    }
+  }
+
+  foundry(): FoundryProjection | null {
+    return this.core?.foundry() ?? null
+  }
+
+  private broadcastFoundry(projection: FoundryProjection): void {
+    for (const send of [...this.foundryWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Foundry push threw', error)
+        this.foundryWindows.delete(send)
+      }
+    }
   }
 
   /**

@@ -59,6 +59,15 @@ No live-copy command is exposed yet. Copying mutable stores while Freya is writi
 create a backup that only *looks* complete. A real backup command needs a Core-owned
 quiesce/snapshot boundary first.
 
+### Startup ownership
+
+Production now acquires Electron's single-instance profile lock before opening the workspace,
+keyring, journal or encrypted domain stores. A second launch restores/focuses the existing
+window; it cannot construct a second Core against the same profile. The E2E harness has a
+separate two-factor test-only bypass (`FREYA_E2E=1` plus `FREYA_E2E_ALLOW_MULTI_INSTANCE=1`)
+because some restart/session tests intentionally run two throwaway processes against one
+temporary profile. Production cannot enter that path accidentally.
+
 ### Release gate
 
 `npm run release:gate` runs the existing full verification pipeline, the explicit Red-Team

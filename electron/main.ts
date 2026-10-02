@@ -7,6 +7,7 @@ import { loadLocalEnv } from './localEnv'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import { PresenceHost } from './presence/host'
+import { installSingleInstanceGuard } from './startup/singleInstance'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ModelProvider } from '../core/model/provider'
 
@@ -41,6 +42,29 @@ let attentionTimer: ReturnType<typeof setInterval> | null = null
 /** Resolves when the renderer has answered the closing-time request. */
 let pendingCollect: (() => void) | null = null
 let quitting = false
+
+// The E2E harness sometimes opens two throwaway processes against the same
+// temporary profile to prove session cleanup. Production never does: both explicit
+// E2E gates are required before the profile lock may be bypassed.
+const e2eAllowsParallelInstances =
+  process.env.FREYA_E2E === '1' && process.env.FREYA_E2E_ALLOW_MULTI_INSTANCE === '1'
+const ownsProfile = e2eAllowsParallelInstances || installSingleInstanceGuard(
+  {
+    requestLock: () => app.requestSingleInstanceLock(),
+    quit: () => app.quit(),
+    onSecondInstance: (handler) => { app.on('second-instance', handler) },
+  },
+  () => mainWindow,
+  () => {
+    // A second launch during early boot simply yields to the primary process; its
+    // normal startup will create the first window. Once Core exists, a missing
+    // window is safe to recreate without constructing another Core or touching a
+    // second copy of the durable stores.
+    if (!app.isReady() || quitting || workspace === null || coreHost === null) return
+    mainWindow = createWindow()
+    startPresenceFor(mainWindow)
+  },
+)
 
 /** Long enough for a round trip, short enough that a wedged renderer still quits. */
 const COLLECT_TIMEOUT_MS = 750
@@ -629,6 +653,7 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
+  if (!ownsProfile) return
   workspace = new WorkspaceFile({
     path: join(app.getPath('userData'), WORKSPACE_FILE),
   })
@@ -771,11 +796,12 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  if (!ownsProfile) return
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', (event) => {
-  if (quitting || !workspace) return
+  if (!ownsProfile || quitting || !workspace) return
   // A quit can arrive without the window's close event ever firing, so this
   // hook has to do the collect itself and then re-enter the quit.
   event.preventDefault()
@@ -800,6 +826,7 @@ app.on('before-quit', (event) => {
  * refused.
  */
 app.on('web-contents-created', (_event, contents) => {
+  if (!ownsProfile) return
   contents.session.setPermissionRequestHandler((_wc, permission, callback, details) => {
     // Electron exposes the requested media kinds on newer versions only, so this
     // reads defensively. When they are not reported, the request is refused: an

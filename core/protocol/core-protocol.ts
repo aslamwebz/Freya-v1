@@ -13,6 +13,7 @@ import type { ConversationCommandOutcome, VoiceCommandOutcome } from './conversa
 import type { ContextCommandOutcome } from './context'
 import type { WorkforceCommandOutcome } from './workforce'
 import type { AttentionCommandOutcome } from './attention'
+import type { FoundryCommandOutcome } from './foundry'
 
 /* ------------------------------------------------------------ identity */
 
@@ -88,6 +89,21 @@ export const CAPABILITIES = [
   // which is the one thing nobody should reach by accident.
   'mission.status.read',
   'mission.manage',
+
+  // Foundry — Phase 15.
+  //
+  // Three, not one, and the split is the point.
+  //
+  // `foundry.status.read` is held by the owner only and is what a Foundry
+  // surface needs in order to render. `foundry.artifact.manage` creates and
+  // transitions artifacts. `foundry.activation.manage` activates, deactivates,
+  // promotes and installs. Splitting them means a future body can be given
+  // the ability to watch the foundry without being able to activate anything —
+  // and activating is the only operation that can make a thing runnable,
+  // which is the one thing nobody should reach by accident.
+  'foundry.status.read',
+  'foundry.artifact.manage',
+  'foundry.activation.manage',
 ] as const
 
 export type Capability = (typeof CAPABILITIES)[number]
@@ -477,6 +493,23 @@ export type CoreCommandName =
   | 'attention.schedule.register'
   | 'attention.schedule.cancel'
   | 'attention.inbox.read'
+  /* ------------------------------------------------------------- foundry */
+  /**
+   * Phase 15. The *only* Foundry command, and a read.
+   *
+   * There is deliberately no `foundry.artifact.create`, no `foundry.tool.register`,
+   * no `foundry.activation.activate` and no `foundry.promotion.promote` in this
+   * vocabulary: creating artifacts, registering tools and activating apps are
+   * Foundry authority, and Foundry authority lives in Core rather than in a
+   * window. A renderer reaching for any of those names finds `unknown command`,
+   * which is the correct answer.
+   *
+   * The read takes no payload either — see `FOUNDRY_NO_PAYLOAD`. A window may
+   * ask what the foundry is, and may not accompany the question with an owner,
+   * a principal, an authority, a trust level, a provenance, a capability or a
+   * claim of its own.
+   */
+  | 'foundry.status.read'
 
 export interface CoreCommandEnvelope {
   command: CoreCommandName
@@ -616,6 +649,18 @@ export interface CoreCommandResult {
    * than a second copy of the state.
    */
   attention?: AttentionCommandOutcome
+
+  /**
+   * The Foundry view of a Foundry command's result.
+   *
+   * Its own slot for the same reason every other subsystem's exists: whether
+   * Core answered a foundry read, or refused it, is a fact about Foundry
+   * and must never have to be dug out of a security projection. The
+   * projection itself arrives on its own channel — see
+   * `foundry.status.read` and the Foundry mirror — so this slot carries the
+   * *outcome* of one command rather than a second copy of the state.
+   */
+  foundry?: FoundryCommandOutcome
 }
 
 /**

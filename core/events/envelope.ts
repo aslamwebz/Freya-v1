@@ -280,6 +280,33 @@ export const CORE_EVENT_TYPES = [
   'attention.schedule.registered',
   'attention.schedule.fired',
   'attention.schedule.cancelled',
+
+  // Foundry (Phase 15) — metadata only, and the family where deterministic
+  // identity is the whole point.
+  //
+  // A Foundry event describes *that an artifact was produced, verified,
+  // promoted or activated* and *what its deterministic identity is*. There is
+  // no slot for the artifact's content, its spec, or its verification evidence:
+  // those are process-local and never written here. Every field is an id, a
+  // hash, a status, a closed enum, an integer counter, a measured length, or
+  // a closed reason code.
+  //
+  // The hash is the deterministic identity — a SHA-256 of the artifact's
+  // content and inputs. It is computed by the Foundry engine at creation time
+  // and is never mutable. It is the answer to "is this the same thing as
+  // that?" without relying on a name that could be reused.
+  'foundry.artifact.created',
+  'foundry.artifact.transitioned',
+  'foundry.verification.recorded',
+  'foundry.promotion.recorded',
+  'foundry.activation.recorded',
+  'foundry.tool.registered',
+  'foundry.tool.transitioned',
+  'foundry.module.registered',
+  'foundry.module.transitioned',
+  'foundry.app.registered',
+  'foundry.app.transitioned',
+  'foundry.limit.exceeded',
 ] as const
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number]
@@ -1200,6 +1227,129 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
 
   'attention.schedule.cancelled': {
     scheduleId: string
+    reason: string
+  }
+
+  /* ------------------------------------------------------------- foundry */
+
+  /**
+   * An artifact was created.
+   *
+   * `hash` is the deterministic identity — a SHA-256 of the artifact's content
+   * and inputs. It is computed by the Foundry engine at creation time and is
+   * never mutable. `contentLength` is a measurement; the content is not here.
+   */
+  'foundry.artifact.created': {
+    artifactId: string
+    hash: string
+    kind: string
+    runId: string
+    stepId: string
+    createdBy: PrincipalId
+    parentHash: string | null
+    specHash: string | null
+    contentLength: number
+  }
+
+  'foundry.artifact.transitioned': {
+    artifactId: string
+    toStatus: string
+  }
+
+  /**
+   * A verification attempt was recorded.
+   *
+   * `verdict` is derived from the evidence by the Foundry engine, not by the
+   * verifier itself. `evidence` is bounded and structured, never the full
+   * verifier output.
+   */
+  'foundry.verification.recorded': {
+    verificationId: string
+    artifactHash: string
+    verifierName: string
+    verdict: 'passed' | 'failed' | 'inconclusive'
+    evidence: string
+    verifiedAt: string
+    requestedBy: PrincipalId
+  }
+
+  /**
+   * A promotion was recorded.
+   *
+   * Promotion is the explicit, owner-authorized gate between "verified" and
+   * "reusable". `verificationId` names the evidence that justified it.
+   */
+  'foundry.promotion.recorded': {
+    promotionId: string
+    artifactHash: string
+    fromStatus: string
+    toStatus: string
+    promotedBy: PrincipalId
+    promotedAt: string
+    reason: string
+    verificationId: string
+  }
+
+  /**
+   * An activation was recorded.
+   *
+   * Activation is the explicit, owner-authorized gate between "promoted" and
+   * "active". `expiresAt` is null for unbounded activations.
+   */
+  'foundry.activation.recorded': {
+    activationId: string
+    artifactHash: string
+    fromStatus: string
+    toStatus: string
+    activatedBy: PrincipalId
+    activatedAt: string
+    reason: string
+    expiresAt: string | null
+  }
+
+  'foundry.tool.registered': {
+    toolId: string
+    hash: string
+    name: string
+    capability: string
+    createdBy: PrincipalId
+    artifactHash: string
+  }
+
+  'foundry.tool.transitioned': {
+    toolId: string
+    toStatus: string
+  }
+
+  'foundry.module.registered': {
+    moduleId: string
+    hash: string
+    name: string
+    createdBy: PrincipalId
+    artifactHash: string
+  }
+
+  'foundry.module.transitioned': {
+    moduleId: string
+    toStatus: string
+  }
+
+  'foundry.app.registered': {
+    appId: string
+    hash: string
+    name: string
+    createdBy: PrincipalId
+    artifactHash: string
+    moduleHashes: string[]
+  }
+
+  'foundry.app.transitioned': {
+    appId: string
+    toStatus: string
+  }
+
+  'foundry.limit.exceeded': {
+    limit: string
     reason: string
   }
 }

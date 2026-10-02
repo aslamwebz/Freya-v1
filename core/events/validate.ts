@@ -1148,6 +1148,118 @@ const PAYLOAD_RULES: {
     ['scheduleId', 'reason'],
     (p) => isEventId(p.scheduleId) && isNonEmptyString(p.reason),
   ),
+
+  /* ------------------------------------------------------------- foundry */
+
+  'foundry.artifact.created': workRule(
+    ['artifactId', 'hash', 'kind', 'runId', 'stepId', 'createdBy', 'parentHash', 'specHash', 'contentLength'],
+    (p) =>
+      isEventId(p.artifactId) &&
+      isNonEmptyString(p.hash) &&
+      isNonEmptyString(p.kind) &&
+      isEventId(p.runId) &&
+      isEventId(p.stepId) &&
+      isNonEmptyString(p.createdBy) &&
+      (p.parentHash === null || isNonEmptyString(p.parentHash)) &&
+      (p.specHash === null || isNonEmptyString(p.specHash)) &&
+      isNonNegativeInt(p.contentLength),
+  ),
+
+  'foundry.artifact.transitioned': workRule(
+    ['artifactId', 'toStatus'],
+    (p) => isEventId(p.artifactId) && isNonEmptyString(p.toStatus),
+  ),
+
+  'foundry.verification.recorded': workRule(
+    ['verificationId', 'artifactHash', 'verifierName', 'verdict', 'evidence', 'verifiedAt', 'requestedBy'],
+    (p) =>
+      isEventId(p.verificationId) &&
+      isNonEmptyString(p.artifactHash) &&
+      isNonEmptyString(p.verifierName) &&
+      (p.verdict === 'passed' || p.verdict === 'failed' || p.verdict === 'inconclusive') &&
+      isNonEmptyString(p.evidence) &&
+      isNonEmptyString(p.verifiedAt) &&
+      isNonEmptyString(p.requestedBy),
+  ),
+
+  'foundry.promotion.recorded': workRule(
+    ['promotionId', 'artifactHash', 'fromStatus', 'toStatus', 'promotedBy', 'promotedAt', 'reason', 'verificationId'],
+    (p) =>
+      isEventId(p.promotionId) &&
+      isNonEmptyString(p.artifactHash) &&
+      isNonEmptyString(p.fromStatus) &&
+      isNonEmptyString(p.toStatus) &&
+      isNonEmptyString(p.promotedBy) &&
+      isNonEmptyString(p.promotedAt) &&
+      isNonEmptyString(p.reason) &&
+      isEventId(p.verificationId),
+  ),
+
+  'foundry.activation.recorded': workRule(
+    ['activationId', 'artifactHash', 'fromStatus', 'toStatus', 'activatedBy', 'activatedAt', 'reason', 'expiresAt'],
+    (p) =>
+      isEventId(p.activationId) &&
+      isNonEmptyString(p.artifactHash) &&
+      isNonEmptyString(p.fromStatus) &&
+      isNonEmptyString(p.toStatus) &&
+      isNonEmptyString(p.activatedBy) &&
+      isNonEmptyString(p.activatedAt) &&
+      isNonEmptyString(p.reason) &&
+      (p.expiresAt === null || isNonEmptyString(p.expiresAt)),
+  ),
+
+  'foundry.tool.registered': workRule(
+    ['toolId', 'hash', 'name', 'capability', 'createdBy', 'artifactHash'],
+    (p) =>
+      isEventId(p.toolId) &&
+      isNonEmptyString(p.hash) &&
+      isNonEmptyString(p.name) &&
+      isNonEmptyString(p.capability) &&
+      isNonEmptyString(p.createdBy) &&
+      isNonEmptyString(p.artifactHash),
+  ),
+
+  'foundry.tool.transitioned': workRule(
+    ['toolId', 'toStatus'],
+    (p) => isEventId(p.toolId) && isNonEmptyString(p.toStatus),
+  ),
+
+  'foundry.module.registered': workRule(
+    ['moduleId', 'hash', 'name', 'createdBy', 'artifactHash'],
+    (p) =>
+      isEventId(p.moduleId) &&
+      isNonEmptyString(p.hash) &&
+      isNonEmptyString(p.name) &&
+      isNonEmptyString(p.createdBy) &&
+      isNonEmptyString(p.artifactHash),
+  ),
+
+  'foundry.module.transitioned': workRule(
+    ['moduleId', 'toStatus'],
+    (p) => isEventId(p.moduleId) && isNonEmptyString(p.toStatus),
+  ),
+
+  'foundry.app.registered': workRule(
+    ['appId', 'hash', 'name', 'createdBy', 'artifactHash', 'moduleHashes'],
+    (p) =>
+      isEventId(p.appId) &&
+      isNonEmptyString(p.hash) &&
+      isNonEmptyString(p.name) &&
+      isNonEmptyString(p.createdBy) &&
+      isNonEmptyString(p.artifactHash) &&
+      Array.isArray(p.moduleHashes) &&
+      p.moduleHashes.every((h: unknown) => isNonEmptyString(h)),
+  ),
+
+  'foundry.app.transitioned': workRule(
+    ['appId', 'toStatus'],
+    (p) => isEventId(p.appId) && isNonEmptyString(p.toStatus),
+  ),
+
+  'foundry.limit.exceeded': workRule(
+    ['limit', 'reason'],
+    (p) => isNonEmptyString(p.limit) && isNonEmptyString(p.reason),
+  ),
 }
 
 /** A bounded, control-character-free label. A name, never prose. */

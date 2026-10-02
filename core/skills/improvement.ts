@@ -32,7 +32,10 @@ import {
  *    filters on version, so the previous version's evidence stops counting the moment
  *    the version changes. Stale-evidence reuse is refused by arithmetic rather than by
  *    a check somebody has to remember.
- * 4. **Revisions are bounded per version.** `maxRevisionsPerVersion` (3). An
+ * 4. **Revisions are bounded per lineage.** `maxRevisionsPerSkill` (3), counted as
+ *    `version - 1` — because a bound that resets on every revision is not a bound, and
+ *    a loop that always revises what it just made would never trip a per-version one.
+ *    An
  *    improvement loop that does not converge stops after three attempts with
  *    `revision-limit`, which is the answer to "no infinite retry/training loops".
  * 5. **Nothing here burns a model call.** No gateway, no provider, no authority
@@ -166,7 +169,11 @@ export interface RevisionPlan {
 export interface RevisionRequest {
   /** The version being revised. Read from the record; never from a payload. */
   readonly currentVersion: number
-  /** How many revisions this version has already spawned. */
+  /**
+   * How many revisions this lineage already has (`version - 1`).
+   *
+   * Counted over the lineage so the bound can actually stop a loop.
+   */
   readonly revisionsSoFar: number
   /** A digest of the current version's body, for the identical-revision check. */
   readonly currentContentHash: string
@@ -204,12 +211,12 @@ export function planRevision(request: RevisionRequest): RevisionPlan {
     summaryLength: summary.length,
   }
 
-  if (request.revisionsSoFar >= SKILL_LIMITS.maxRevisionsPerVersion) {
+  if (request.revisionsSoFar >= SKILL_LIMITS.maxRevisionsPerSkill) {
     return {
       ...base,
       baseVersion: request.currentVersion,
       refusal: 'revision-limit',
-      reason: `version ${request.currentVersion} has already spawned ${request.revisionsSoFar} revisions; a revision loop must converge`,
+      reason: `this procedure already has ${request.revisionsSoFar} revisions; a revision loop must converge`,
     }
   }
 

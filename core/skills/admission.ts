@@ -185,14 +185,25 @@ export function admitSkill(request: AdmissionRequest): AdmissionOutcome {
     }
   }
 
-  // A skill that requires a capability this Core cannot execute is a skill that can
-  // never run. Refusing it at admission keeps the registry free of entries that are
+  // A skill that requires a Guard capability this Core cannot execute is a skill that
+  // can never run. Refusing it at admission keeps the registry free of entries that are
   // promises nobody can keep.
+  //
+  // The check is against what *some registered Work capability declares*, not against
+  // a capability name: `requiredCapabilities` holds Guard vocabulary entries
+  // (`work.execute`, `search.web`), while the registry is keyed by implementation name
+  // (`test.record`, a future Searcher capability). Comparing the two directly would
+  // refuse every skill in this build for the wrong reason.
+  const executable = new Set<string>()
+  for (const name of request.registry.names()) {
+    const registered = request.registry.capability(name)
+    if (registered !== undefined) executable.add(registered.capability)
+  }
   for (const capability of requiredCapabilities) {
-    if (!request.registry.has(capability)) {
+    if (!executable.has(capability)) {
       return refuse(
         'capability-not-registered',
-        `this Core has no Work capability called ${capability}, so nothing could execute it`,
+        `this Core has no registered capability that needs ${capability}, so nothing could execute it`,
       )
     }
   }

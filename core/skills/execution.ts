@@ -2,6 +2,7 @@ import type { Capability, PrincipalId } from '../protocol/core-protocol'
 import {
   isForbiddenSkillCapability,
   isSelectableSkillStatus,
+  isSkillCapability,
   SKILL_LIMITS,
   type SkillRecord,
   type SkillRefusalCode,
@@ -224,12 +225,17 @@ export function planSkillExecution(input: PlanSkillExecutionInput): SkillExecuti
   }
 
   for (const step of body.steps) {
-    const capability = body.requiredCapabilities.find((entry) => step.capability === entry) ?? undefined
-    if (capability === undefined && !held.has(step.capability as Capability)) {
-      // A step whose capability the Run does not hold. The skill's `requiredCapabilities`
-      // should have listed it; this is the second line of the same defence, and it is
-      // here because a mismatch between the two is exactly what an admission bug looks
-      // like from here.
+    // A step normally names a *registered Work capability* (`test.record`), not a
+    // Guard vocabulary entry — and this file holds no registry, so it cannot map one to
+    // the other, nor should it: mapping is Work's business and Work re-validates every
+    // step against the registry when the Run is created.
+    //
+    // What *is* checkable here is a step that names a Guard capability directly, because
+    // that is a claim about authority rather than about an implementation. It is a
+    // second line of defence against an admission bug that let one through, and it is
+    // skipped rather than approximated when the name is not in the vocabulary.
+    if (!isSkillCapability(step.capability)) continue
+    if (!held.has(step.capability)) {
       return refuse(
         'capability-not-granted',
         `step ${step.key} names ${step.capability}, which the Run does not hold`,

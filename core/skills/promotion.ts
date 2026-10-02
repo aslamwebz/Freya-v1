@@ -1,4 +1,10 @@
-import { canTransitionSkill, type EvaluationAuthor, type SkillStatus, type SkillVerificationState } from './types'
+import {
+  canTransitionSkill,
+  statusPreference,
+  type EvaluationAuthor,
+  type SkillStatus,
+  type SkillVerificationState,
+} from './types'
 import type { SkillEvaluation } from './types'
 import type { SkillFoldRecord } from './state'
 
@@ -31,7 +37,7 @@ import type { SkillFoldRecord } from './state'
  * | `minDistinctSubjectsForPromoted`| 2     | three evaluations of the *same* attempt |
  * | `maxContradictedForPromoted`    | 0     | a skill that also fails being promoted on its best day |
  * | `maxEvidenceAgeMs`              | 30 d  | evidence from before a change that invalidated it |
- * | `maxRevisionsPerVersion`        | 3     | an improvement loop that never converges |
+ * | `maxRevisionsPerSkill`          | 3     | an improvement loop that never converges |
  *
  * `minDistinctSubjectsForPromoted` is the one that stops the cheapest possible
  * forgery: replaying one successful run three times is three established evaluations
@@ -73,8 +79,13 @@ export const SKILL_PROMOTION_THRESHOLDS = Object.freeze({
   maxInconclusiveForPromoted: 4,
   /** How old the freshest evidence may be. */
   maxEvidenceAgeMs: 30 * 24 * 60 * 60 * 1_000,
-  /** Revisions one version may spawn before improvement refuses. */
-  maxRevisionsPerVersion: 3,
+  /**
+   * Revisions one skill lineage may accumulate before improvement refuses.
+   *
+   * Over the lineage, not over one version: a per-version bound resets on every
+   * revision, so a loop that always revises what it just made would never trip it.
+   */
+  maxRevisionsPerSkill: 3,
 })
 
 /** Why a promotion was refused, or what it established. Closed codes. */
@@ -196,17 +207,29 @@ export function decidePromotion(request: PromotionRequest): PromotionDecision {
     return refuse('illegal-transition', 'only the owner may promote a skill')
   }
 
-  // Downgrades are the owner's prerogative and need no evidence: withdrawing a trial
-  // or a promotion is a decision about Freya's behaviour, not a claim about the world.
-  if (to !== 'promoted' && to !== 'verified') {
-    return {
-      allowed: true,
-      from: record.status,
-      to,
-      reason: 'evaluation-basis',
-      detail: 'a downgrade needs no evidence, because it only removes behaviour',
-      evidence,
-    }
+  const allow = (detail: string): PromotionDecision => ({
+    allowed: true,
+    from: record.status,
+    to,
+    reason: 'evaluation-basis',
+    detail,
+    evidence,
+  })
+
+  // A **downgrade** — leaving `verified` or `promoted` for a weaker status — needs no
+  // evidence at all: it only removes behaviour, and a person may always decide to stop
+  // relying on something.
+  if (statusPreference(to) > statusPreference(record.status)) {
+    return allow('a downgrade needs no evidence, because it only removes behaviour')
+  }
+
+  // `draft` is the owner's acknowledgement that they have looked at it. A claim about
+  // attention, not about the world, so it is deliberately evidence-free and checked
+  // **before** the empty-evidence gate: otherwise "Freya has read this" could not be
+  // distinguished from "Freya has checked this", and a procedure could never be opened
+  // in order to check it.
+  if (to === 'draft') {
+    return allow('marking a procedure reviewed is the owner looking at it, not a claim about the world')
   }
 
   if (evaluations.length === 0) {
@@ -216,23 +239,23 @@ export function decidePromotion(request: PromotionRequest): PromotionDecision {
     )
   }
 
-  if (record.verification !== 'verified') {
-    return refuse(
-      'verification-state',
-      `this version is ${record.verification}, so it cannot become ${to}`,
-    )
+  // `trial` is the first status from which a procedure can be planned into a Run, so it
+  // is the first status that needs *any* evidence — the smallest amount there is.
+  if (to === 'trial') {
+    if (evidence.established < SKILL_PROMOTION_THRESHOLDS.minEvaluationsForTrial) {
+      return refuse(
+        'established-threshold',
+        `${evidence.established} established evaluations; ${SKILL_PROMOTION_THRESHOLDS.minEvaluationsForTrial} are required before a procedure may be tried`,
+      )
+    }
+    return allow(`${evidence.established} established evaluation(s); a procedure may now be tried`)
   }
 
-  const threshold =
-    to === 'verified' ? SKILL_PROMOTION_THRESHOLDS.minEvaluationsForVerified : SKILL_PROMOTION_THRESHOLDS.minEstablishedForPromoted
-
-  if (evidence.established < threshold) {
-    return refuse(
-      'established-threshold',
-      `${evidence.established} established evaluations; ${threshold} are required for ${to}`,
-    )
-  }
-
+  // `verified` and `promoted` run the full battery, ordered *most specific first* so a
+  // refusal always names the actual shortfall. `verification-state` is deliberately
+  // last among the evidence gates: it is the catch-all for a `failed` or `stale`
+  // version, and putting it first would answer every question with "this version is
+  // unverified" and tell a person nothing about what to go and do.
   if (evidence.contradicted > SKILL_PROMOTION_THRESHOLDS.maxContradictedForPromoted) {
     return refuse(
       'contradicted-evidence',
@@ -247,15 +270,37 @@ export function decidePromotion(request: PromotionRequest): PromotionDecision {
     )
   }
 
+  const threshold =
+    to === 'verified'
+      ? SKILL_PROMOTION_THRESHOLDS.minEvaluationsForVerified
+      : SKILL_PROMOTION_THRESHOLDS.minEstablishedForPromoted
+
+  if (evidence.established < threshold) {
+    return refuse(
+      'established-threshold',
+      `${evidence.established} established evaluations; ${threshold} are required for ${to}`,
+    )
+  }
+
+  if (record.verification !== 'verified') {
+    return refuse(
+      'verification-state',
+      `this version is ${record.verification}, so it cannot become ${to}`,
+    )
+  }
+
   const freshest = evidence.freshestAt === null ? null : Date.parse(evidence.freshestAt)
   if (freshestAtIsStale(freshest, now)) {
     return refuse(
       'evidence-too-old',
-      'the newest evidence is older than the evidence window, so it may describe something else',
+      'the newest evidence is outside the evidence window, so it may describe something else',
     )
   }
 
-  if (to === 'promoted' && evidence.distinctSubjects < SKILL_PROMOTION_THRESHOLDS.minDistinctSubjectsForPromoted) {
+  if (
+    to === 'promoted' &&
+    evidence.distinctSubjects < SKILL_PROMOTION_THRESHOLDS.minDistinctSubjectsForPromoted
+  ) {
     return refuse(
       'subject-diversity',
       `${evidence.distinctSubjects} distinct subject(s); ${SKILL_PROMOTION_THRESHOLDS.minDistinctSubjectsForPromoted} are required so one lucky run cannot promote a procedure`,
@@ -302,7 +347,14 @@ export function deriveVerificationState(record: SkillFoldRecord): SkillVerificat
   return 'unverified'
 }
 
-/** The evaluation ages out of the window. Reported, never decided by a caller. */
+/**
+ * Whether every evaluation for the current version is inside the evidence window.
+ *
+ * Reported for a surface, and used by `decidePromotion` — never decided by a caller.
+ * Both directions are checked, and the direction that matters is the *future* one: an
+ * evidence record dated ahead of the clock is treated as untrustworthy rather than as
+ * infinitely fresh, because the fail-open reading is the dangerous one.
+ */
 export function isEvidenceCurrent(record: SkillFoldRecord, now: Date): boolean {
   const evaluations = currentVersionEvaluations(record)
   if (evaluations.length === 0) return false
@@ -310,6 +362,7 @@ export function isEvidenceCurrent(record: SkillFoldRecord, now: Date): boolean {
     const at = Date.parse(evaluation.evaluatedAt)
     if (!Number.isFinite(at)) return false
     if (at > now.getTime()) return false
+    if (now.getTime() - at > SKILL_PROMOTION_THRESHOLDS.maxEvidenceAgeMs) return false
   }
   return true
 }

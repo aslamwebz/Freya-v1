@@ -245,6 +245,19 @@ export class SkillEngine {
     })
     if (!parsed.ok) return await this.rejection(attemptId, parsed.code, targetRefOf(payload))
 
+    // Identity is derived from the name, so admitting a name that already exists is a
+    // **refusal** rather than a second record — and the refusal says what to do instead.
+    // Without this the caller would get `ok: true` for a skill the fold had silently
+    // dropped, which is the worst of both answers: a success that changed nothing.
+    const existing = findSkillByName(this.getState(), parsed.record.name)
+    if (existing !== null) {
+      return await this.rejection(
+        attemptId,
+        'duplicate-identity',
+        parsed.record.name,
+      )
+    }
+
     const outcome = await this.appendAdmission(parsed.record, false)
     if (!outcome.ok) return outcome
     return {
@@ -351,8 +364,10 @@ export class SkillEngine {
 
     const current = this.bodyOf(record.skillId)
     const currentHash = current?.contentHash ?? record.versions.find((v) => v.version === record.version)?.contentHash ?? ''
-    const revisionsSoFar =
-      record.versions.find((version) => version.version === record.version)?.revisions ?? 0
+    // `version - 1`, not the metadata counter: the metadata counter belongs to the
+    // version being *left*, and it resets to zero on every revision, so it cannot bound
+    // a loop that always revises what it just created.
+    const revisionsSoFar = record.version - 1
 
     // A revision inherits its parent's trust class and never raises it. This is the
     // laundering route's lock: `untrusted-content` stays `untrusted-content` forever,

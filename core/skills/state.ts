@@ -379,7 +379,12 @@ export function reduceSkillState(state: SkillState, event: AnyCoreEvent): SkillS
           status: p.to,
           promotedAt: p.to === 'promoted' ? event.occurredAt : record.promotedAt,
           updatedAt: event.occurredAt,
-          ...(p.to === 'draft'
+          // `stale` only on a *withdrawal*: leaving `verified` or `promoted` for a
+          // lower status is a decision to stop relying on the evidence, and the record
+          // must stop claiming it is verified. The ordinary first pass
+          // `candidate → draft` is not a withdrawal — the version never had evidence
+          // to lose — so it leaves the state alone.
+          ...(p.to === 'draft' && (p.from === 'verified' || p.from === 'promoted')
             ? { verification: 'stale' as SkillVerificationState }
             : {}),
         }
@@ -425,7 +430,7 @@ export function reduceSkillState(state: SkillState, event: AnyCoreEvent): SkillS
           decision: decisionFrom(p),
         }
         const evaluations = pushBounded(
-          [...record.evaluations, evaluation],
+          record.evaluations,
           evaluation,
           SKILL_LIMITS.maxRetainedEvaluations,
         )

@@ -449,7 +449,7 @@ export function SkillsSurface() {
           Thresholds Core will not bend: {projection.thresholds.minEstablishedForPromoted} established
           evaluation(s) across {projection.thresholds.minDistinctSubjectsForPromoted} subjects, at most{' '}
           {projection.thresholds.maxContradictedForPromoted} contradicted, and{' '}
-          {projection.thresholds.maxRevisionsPerVersion} revisions per version so an improvement loop
+          {projection.thresholds.maxRevisionsPerSkill} revisions per procedure so an improvement loop
           has to converge.
         </p>
         <p className="skills-limits">

@@ -559,6 +559,7 @@ export const SKILL_REFUSAL_CODES = [
   'untrusted-content',
   'boundary-violation',
   'skill-store-full',
+  'duplicate-identity',
   'duplicate-version',
   'no-such-skill',
   'no-such-version',
@@ -613,8 +614,14 @@ export const SKILL_LIMITS = Object.freeze({
   maxRetainedEvaluations: 64,
   /** Improvement proposals held open at once. */
   maxOpenProposals: 16,
-  /** Revisions one version may spawn. The loop bound. */
-  maxRevisionsPerVersion: 3,
+  /**
+   * Revisions one skill lineage may accumulate. The loop bound.
+   *
+   * Counted over the lineage (`version - 1`) rather than over one version, because a
+   * bound that resets every revision is not a bound at all: a loop that revises the
+   * version it just created would see `0` every time and never stop.
+   */
+  maxRevisionsPerSkill: 3,
   /** Steps one skill may declare. */
   maxSteps: 24,
   /** Entries in each contract list (inputs, outputs, preconditions, postconditions). */
@@ -917,7 +924,9 @@ export function normaliseSkillName(raw: unknown): string | null {
   const trimmed = raw.trim().toLowerCase()
   if (trimmed.length === 0 || trimmed.length > SKILL_LIMITS.maxNameChars) return null
   const collapsed = trimmed.replace(/[\s_]+/g, '-').replace(/-{2,}/g, '-')
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(collapsed)) return null
+  // Neither a leading nor a trailing dash: without that rule `a` and `a-` would be two
+  // skills, and a trailing dash is invisible in every list a person reads.
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(collapsed)) return null
   return collapsed
 }
 
@@ -936,6 +945,10 @@ export function normaliseContractEntry(
   const entry = raw as Record<string, unknown>
   const name = normaliseSkillName(entry.name)
   if (name === null) return null
+  // The description must be a string *before* it is sanitised. Defaulting a missing
+  // one to `''` would be a repair, and a contract entry that silently lost its
+  // description is a contract the owner did not write.
+  if (typeof entry.description !== 'string') return null
   const description = sanitiseSkillText(entry.description, SKILL_LIMITS.maxEntryChars)
   return { name, description }
 }

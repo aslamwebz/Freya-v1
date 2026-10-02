@@ -173,7 +173,7 @@ export interface SkillThresholdView {
   readonly minEstablishedForPromoted: number
   readonly minDistinctSubjectsForPromoted: number
   readonly maxContradictedForPromoted: number
-  readonly maxRevisionsPerVersion: number
+  readonly maxRevisionsPerSkill: number
 }
 
 /** One ranked selection result. Deterministic and ordered by evidence. */
@@ -352,7 +352,7 @@ export const ABSENT_SKILL_PROJECTION: SkillProjection = Object.freeze({
     minEstablishedForPromoted: 0,
     minDistinctSubjectsForPromoted: 0,
     maxContradictedForPromoted: 0,
-    maxRevisionsPerVersion: 0,
+    maxRevisionsPerSkill: 0,
   }),
   skills: Object.freeze([]) as readonly SkillView[],
   proposals: Object.freeze([]) as readonly SkillProposalView[],

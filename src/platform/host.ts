@@ -15,6 +15,7 @@ import type { AttentionProjection } from '../../core/protocol/attention'
 import type { RelayProjection } from '../../core/protocol/relay'
 import type { FoundryProjection } from '../../core/protocol/foundry'
 import type { OfficeProjection } from '../../core/office/projection'
+import type { SkillProjection } from '../../core/protocol/skills'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -184,6 +185,16 @@ export interface FreyaHostBridge {
   onCoreAttention(handler: (projection: AttentionProjection) => void): () => void
   coreRelay(): Promise<RelayProjection | null>
   onCoreRelay(handler: (projection: RelayProjection) => void): () => void
+
+
+  /**
+   * The Skills projection and its subscription. A read and a follow, and nothing else:
+   * the bridge has no method that writes a skill body, sets a status, submits a
+   * verification record or moves a promotion threshold.
+   */
+  coreSkills(): Promise<SkillProjection | null>
+  onCoreSkills(handler: (projection: SkillProjection) => void): () => void
+
 
   coreFoundry(): Promise<FoundryProjection | null>
   onCoreFoundry(handler: (projection: FoundryProjection) => void): () => void

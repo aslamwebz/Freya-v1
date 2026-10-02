@@ -77,24 +77,27 @@ function e2eKeys(): {
   mission: Uint8Array
   context: Uint8Array
   personality: Uint8Array
+  skill: Uint8Array
 } | null {
   const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
   const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
   const mission = e2eKey('FREYA_E2E_MISSION_KEY')
   const context = e2eKey('FREYA_E2E_CONTEXT_KEY')
+  const skill = e2eKey('FREYA_E2E_SKILL_KEY')
   const personality = e2eKey('FREYA_E2E_PERSONALITY_KEY')
-  // All five or none, so a partial fixture cannot quietly run with a real keyring for
+  // All six or none, so a partial fixture cannot quietly run with a real keyring for
   // the domain it forgot.
   if (
     conversation === null ||
     brain === null ||
     mission === null ||
     context === null ||
-    personality === null
+    personality === null ||
+    skill === null
   ) {
     return null
   }
-  return { conversation, brain, mission, context, personality }
+  return { conversation, brain, mission, context, personality, skill }
 }
 
 /**
@@ -452,6 +455,16 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:relay', projection)
   })
 
+  /**
+   * Skills: a twelfth channel. Core owns the truth about procedures, their lifecycle
+   * and their evidence; this window only displays what Core pushed. There is
+   * deliberately no `freya:core:skills:write` channel and no preload method that
+   * accepts a skill body, so the bridge cannot become a second admission door.
+   */
+  const detachSkills = coreHost?.onSkills((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:skills', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -466,6 +479,7 @@ function createWindow(): BrowserWindow {
     detachFoundry?.()
     detachOffice?.()
     detachRelay?.()
+    detachSkills?.()
   })
 
   if (DEV_SERVER) {
@@ -597,6 +611,8 @@ function registerIpc(): void {
   // every other command — it is validated and journalled in Core, not here.
   ipcMain.handle('freya:core:office', () => requireCore().office())
   ipcMain.handle('freya:core:relay', () => requireCore().relay())
+  // The Skills projection is read-only; mutation remains Core-command-only.
+  ipcMain.handle('freya:core:skills', () => requireCore().skills())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)
@@ -637,6 +653,7 @@ app.whenReady().then(() => {
         mission: { key: testKeys.mission, reason: null as string | null },
         context: { key: testKeys.context, reason: null as string | null },
         personality: { key: testKeys.personality, reason: null as string | null },
+        skill: { key: testKeys.skill, reason: null as string | null },
       })
     : loadKeyring(dataPath)
   void keyResult.then((result) => {
@@ -657,6 +674,9 @@ app.whenReady().then(() => {
       // Same shape as the Brain's: Missions still work for this session, and the
       // surface reports `durable: false` rather than implying persistence it lacks.
       console.warn(`[freya] Missions are not being saved — ${result.mission.reason}`)
+    }
+    if (result.skill.key === null) {
+      console.warn(`[freya] Skills are not being saved — ${result.skill.reason}`)
     }
     if (result.personality.key === null) {
       // The one domain whose absence changes behaviour and not only durability.
@@ -692,6 +712,7 @@ app.whenReady().then(() => {
         missionKey: result.mission.key,
         contextKey: result.context.key,
         personalityKey: result.personality.key,
+        skillKey: result.skill.key,
         // Explicit host setting; own-app sees only Freya. System is honestly unsupported.
         ...(['own-app', 'system'].includes(process.env.FREYA_CONTEXT_WINDOW_OBSERVATION ?? '') ? {
           windowObservation: {

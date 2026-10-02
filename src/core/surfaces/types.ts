@@ -21,6 +21,7 @@ export const SURFACE_TYPES = [
   'context',
   'personality',
   'attention',
+  'skills',
   'office',
   'security',
   'settings',
@@ -288,6 +289,23 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
     height: 560,
     minWidth: 400,
     minHeight: 320,
+    instance: 'singleton',
+    status: 'working',
+  },
+  skills: {
+    type: 'skills',
+    // The Phase 17 view. It renders exactly what Core reports — procedures, their
+    // lifecycle status, and their evidence as verdicts and counts — and it cannot
+    // invent a verdict, submit a verification record, or move a promotion threshold.
+    // An owner may record, revise, report on, promote and retire a procedure from
+    // here; Core assigns the trust class, the status and every threshold.
+    title: 'Skills',
+    summary:
+      'The procedures Freya has recorded and what stands behind each one: every lifecycle status, every verdict as a code with the deterministic evidence it was computed from, the open improvement proposals, and the thresholds Core will not bend. Model opinion is recorded as a character count and changes no verdict.',
+    width: 660,
+    height: 580,
+    minWidth: 420,
+    minHeight: 340,
     instance: 'singleton',
     status: 'working',
   },

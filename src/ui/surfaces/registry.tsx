@@ -15,6 +15,7 @@ import { PersonalitySurface } from './PersonalitySurface'
 import { AttentionSurface } from './AttentionSurface'
 import { RelaySurface } from './RelaySurface'
 import { OfficeSurface } from './OfficeSurface'
+import { SkillsSurface } from './SkillsSurface'
 import type { SurfaceDefinition } from './types'
 
 /**
@@ -66,6 +67,8 @@ const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   // through the existing authorized Core commands; the only Office-specific
   // command is the bounded presence request.
   office: () => <OfficeSurface />,
+  // The Skills view: a mirror of Core's projection plus the owner actions Core permits.
+  skills: () => <SkillsSurface />,
 }
 
 /** The registry, resolved once from the two catalogs it is built from. */

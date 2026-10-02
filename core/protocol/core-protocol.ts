@@ -15,6 +15,7 @@ import type { WorkforceCommandOutcome } from './workforce'
 import type { AttentionCommandOutcome } from './attention'
 import type { FoundryCommandOutcome } from './foundry'
 import type { RelayCommandOutcome } from './relay'
+import type { SkillCommandOutcome } from './skills'
 
 /* ------------------------------------------------------------ identity */
 
@@ -90,6 +91,29 @@ export const CAPABILITIES = [
   // which is the one thing nobody should reach by accident.
   'mission.status.read',
   'mission.manage',
+
+  /**
+   * Skills (Phase 17). Two, and the split is the same one `work.*` and `mission.*`
+   * make.
+   *
+   * `skill.status.read` is the owner's read: procedures, their lifecycle status, and
+   * the evidence behind them as metadata. It grants nothing.
+   *
+   * `skill.manage` is admission, revision, promotion, retirement and improvement
+   * proposals. It is deliberately *not* a capability a worker may ever hold (see
+   * `WORKER_CAPABILITIES`), because a subordinate agent that could promote its own
+   * procedure would be a self-awarded success with a capability string instead of a
+   * method ??? and one that survives every argument about method interfaces.
+   *
+   * What is conspicuously **absent** from this vocabulary: nothing that lets a skill
+   * be executed. Execution is Work's business; a skill is planned into a Run through
+   * `work.run.create` and reaches a capability only through the capability the Run
+   * already holds. There is no `skill.execute`, and adding one would be the single
+   * most dangerous line this file could contain.
+   */
+  'skill.status.read',
+  'skill.manage',
+
 
   // Foundry — Phase 15.
   //
@@ -581,6 +605,38 @@ export type CoreCommandName =
   | 'relay.external.invoke'
   | 'relay.approval.decide'
 
+  /* --------------------------------------------------------------- skills */
+  /**
+   * Phase 17. Nine commands, and every one of them is either a read or an owner act
+   * that routes through Core's own admission, evaluation and promotion tables.
+   *
+   * A window may admit a procedure it wrote, revise it, report what it observed about
+   * one, ask Core to move a lifecycle status, retire one, propose an improvement,
+   * read the projection, ask for a deterministic selection, and read back one
+   * procedure's own text.
+   *
+   * It may **not**: name a skill's trust class, assert its verification state, submit
+   * a verification record, set a promotion threshold, skip the evidence window,
+   * promote an artifact into Freya's running code, or plan a skill into work. There is
+   * deliberately no `skill.execute`, no `skill.verify`, no `skill.promote.artifact` and
+   * no `skill.threshold.set`; a window reaching for those names finds `unknown
+   * command`, which is the correct answer.
+   *
+   * `skill.recordEvaluation` takes evidence a *person* observed ??? test results, checks,
+   * their own confirmation, a completion result ??? and never a verification record.
+   * Core's own Work and Mission verifiers supply those, from inside Core.
+   */
+  | 'skill.status.read'
+  | 'skill.admit'
+  | 'skill.revise'
+  | 'skill.recordEvaluation'
+  | 'skill.transition'
+  | 'skill.retire'
+  | 'skill.propose'
+  | 'skill.proposal.settle'
+  | 'skill.select'
+  | 'skill.detail.read'
+
 export interface CoreCommandEnvelope {
   command: CoreCommandName
   /** Correlates the acknowledgement with the request that caused it. */
@@ -719,6 +775,23 @@ export interface CoreCommandResult {
    * than a second copy of the state.
    */
   attention?: AttentionCommandOutcome
+
+  /**
+   * The Skills view of a skill command's result.
+   *
+   * Its own slot for the same reason every other subsystem's exists: whether Core
+   * admitted a procedure, refused a promotion, or recorded an evaluation is a fact
+   * about Skills and must never have to be dug out of a security projection where it
+   * would be cached and copied wherever status is.
+   *
+   * The projection itself arrives on its own channel ??? see `skill.status.read` and the
+   * Skills mirror ??? so this slot carries the *outcome* of one command rather than a
+   * second copy of the registry. A refusal lands here with its **closed code**, so a
+   * surface can distinguish "this may never be true" from "this is not true yet"
+   * without parsing a sentence.
+   */
+  skill?: SkillCommandOutcome
+
 
   /** The Foundry outcome for the current command. */
   foundry?: FoundryCommandOutcome

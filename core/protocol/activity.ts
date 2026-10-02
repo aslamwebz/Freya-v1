@@ -87,6 +87,20 @@ export type ActivityKind =
   | 'attention.decision'
   | 'attention.budget'
   | 'attention.schedule'
+  // Skills. Only the facts a person would want as news: a procedure was recorded, one
+  // was verified or promoted, one was retired or blocked, and one attempt to admit or
+  // improve something was refused. No summary text, no contract description and no
+  // model commentary exists on any of these rows, because none of those is in the
+  // journal ??? a row's commentary length is the only trace of an opinion, and it is a
+  // number.
+  | 'skill.admitted'
+  | 'skill.revised'
+  | 'skill.evaluated'
+  | 'skill.promoted'
+  | 'skill.retired'
+  | 'skill.rejected'
+  | 'skill.improvement'
+
   // Relay. Only the facts a person would want as news: an action was requested
   // and is waiting on a decision, an action settled, an approval was decided
   // and a ceiling was reached. No content exists on any of these rows because
@@ -860,6 +874,104 @@ export function describeActivity(event: {
         tone: 'warn',
       }
 
+    /* --------------------------------------------------------------- skills */
+    //
+    // Metadata only, and worded so a row can never be mistaken for the procedure's
+    // content. The name is Core's own slug, the counts are integers, and the
+    // evaluation row reports a **verdict and a character count** rather than any
+    // sentence a model wrote ??? because there is no sentence in the journal to report.
+
+    case 'skill.admitted':
+      return {
+        ...base,
+        kind: 'skill.admitted',
+        text: `A ${text(event.payload.kind, 'procedure')} was recorded as ${text(event.payload.name, 'a skill')} v${number(event.payload.version, 0)} (${number(event.payload.stepCount, 0)} steps, ${text(event.payload.trustClass, 'unknown')} trust).`,
+        tone: 'neutral',
+      }
+
+    case 'skill.revised':
+      return {
+        ...base,
+        kind: 'skill.revised',
+        // A revision deliberately says "re-entered verification", because that is the
+        // promise the revision makes and a feed that only showed the version bump
+        // would leave a reader believing the old evidence still backed it.
+        text: `${text(event.payload.name, 'A skill')} was revised to v${number(event.payload.version, 0)} and re-entered verification.`,
+        tone: 'busy',
+      }
+
+    case 'skill.evaluation.recorded':
+      return {
+        ...base,
+        kind: 'skill.evaluated',
+        text: `Skill v${number(event.payload.version, 0)} evaluated: ${text(event.payload.verdict, 'unknown')} (${text(event.payload.reason, 'no reason')}), from ${number(event.payload.deterministicCount, 0)} deterministic evidence item(s) and ${number(event.payload.commentaryChars, 0)} characters of model commentary.`,
+        tone: event.payload.verdict === 'established' ? 'good' : event.payload.verdict === 'contradicted' ? 'warn' : 'neutral',
+      }
+
+    case 'skill.transitioned': {
+      const to = text(event.payload.to, 'unknown')
+      // `payload` is `Record<string, unknown>` here by design, so the nested evidence
+      // object is read through a guard rather than trusted ??? and a missing or malformed
+      // one renders as zero established evaluations, which is the conservative reading.
+      const evidence = record(event.payload.evidence)
+      return {
+        ...base,
+        kind: to === 'promoted' ? 'skill.promoted' : 'skill.admitted',
+        text: to === 'promoted'
+          ? `A skill was promoted (${number(evidence.established, 0)} established evaluation(s) across ${number(evidence.distinctSubjects, 0)} subject(s)).`
+          : `A skill moved to ${to} (${text(event.payload.reason, 'no reason given')}).`,
+        tone: to === 'promoted' ? 'good' : to === 'blocked' ? 'bad' : 'neutral',
+      }
+    }
+
+    case 'skill.retired':
+      return {
+        ...base,
+        kind: 'skill.retired',
+        text: `A skill was ${text(event.payload.to, 'retired')} (${text(event.payload.reason, 'no reason given')}).`,
+        tone: event.payload.to === 'blocked' ? 'bad' : 'warn',
+      }
+
+    case 'skill.proposal.rejected':
+      return {
+        ...base,
+        kind: 'skill.rejected',
+        text: `A skill proposal was refused (${text(event.payload.code, 'unknown')}).`,
+        tone: 'warn',
+      }
+
+    case 'skill.improvement.proposed':
+      return {
+        ...base,
+        kind: 'skill.improvement',
+        text: `An improvement was proposed against ${text(event.payload.target, 'an unknown target')}, resting on ${Array.isArray(event.payload.basisEvaluationIds) ? event.payload.basisEvaluationIds.length : 0} recorded evaluation(s).`,
+        tone: 'neutral',
+      }
+
+    case 'skill.improvement.settled':
+      return {
+        ...base,
+        kind: 'skill.improvement',
+        text: `An improvement proposal was ${text(event.payload.decision, 'settled')} (${text(event.payload.reason, 'no reason given')}).`,
+        tone: event.payload.decision === 'refused' ? 'warn' : 'neutral',
+      }
+
+    case 'skill.execution.planned':
+      return {
+        ...base,
+        kind: 'skill.admitted',
+        text: `A skill was planned into an existing Run (${number(event.payload.stepCount, 0)} step(s)).`,
+        tone: 'busy',
+      }
+
+    case 'skill.runtime.promotion.refused':
+      return {
+        ...base,
+        kind: 'skill.rejected',
+        text: `An artifact was refused entry into Freya's running code (${text(event.payload.reason, 'no reason given')}).`,
+        tone: 'warn',
+      }
+
     default:
       // Kept, but not promoted to a headline: an event type nobody has given a
       // sentence yet still deserves a row rather than a silent gap.
@@ -897,6 +1009,13 @@ function text(value: unknown, fallback = 'unknown'): string {
 
 function number(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+/** A nested payload object, or an empty one. Never trusts its input's shape. */
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
 }
 
 function modelSuffix(payload: Record<string, unknown>): string {

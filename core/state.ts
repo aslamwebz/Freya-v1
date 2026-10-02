@@ -5,6 +5,7 @@ import type { ModelUsage, PrincipalId } from './protocol/core-protocol'
 import { initialAttentionState, reduceAttention, type AttentionState } from './attention/state'
 import { initialOfficeState, reduceOfficeState, type OfficeState } from './office/state'
 import { initialRelayState, reduceRelay, type RelayState } from './relay/state'
+import { initialSkillState, reduceSkillState, type SkillState } from './skills/state'
 
 /**
  * Everything Core knows, derived from durable events.
@@ -84,6 +85,13 @@ export interface CoreState {
    * limits survive a restart without a second store.
    */
   relay: RelayState
+  /**
+   * Skills' folded state: records, lifecycle status, verification, version history,
+   * evaluation records and open improvement proposals. Derived from `skill.*` events
+   * like everything else, so promotions, contradictions and retirement survive a
+   * restart without a second store.
+   */
+  skills: SkillState
 }
 
 /** A `core.integrity_fault` as recovered from the journal. */
@@ -109,6 +117,7 @@ export function initialCoreState(): CoreState {
     attention: initialAttentionState(),
     office: initialOfficeState(),
     relay: initialRelayState(),
+skills: initialSkillState(),
   }
 }
 
@@ -346,6 +355,13 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
       if (event.type.startsWith('relay.')) {
         const relay = reduceRelay(state.relay, event)
         return relay === state.relay ? state : { ...state, relay }
+      }
+      // Skills own their own slice and their own reducer, for the same reason: the
+      // lifecycle table, the version arithmetic and the evidence window are three
+      // invariants that belong together and should not be spread across this switch.
+      if (event.type.startsWith('skill.')) {
+        const skills = reduceSkillState(state.skills, event)
+        return skills === state.skills ? state : { ...state, skills }
       }
       return state
   }

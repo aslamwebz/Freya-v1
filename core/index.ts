@@ -105,6 +105,23 @@ import {
 } from './protocol/attention'
 import { AttentionEngine, type AttentionSourceScope } from './attention/engine'
 import type { AttentionDecision, AttentionSource, FocusState } from './attention/types'
+import {
+  ABSENT_SKILL_PROJECTION,
+  NO_SKILL_DOMAIN_REASON,
+  SKILL_NO_PAYLOAD,
+  type SkillCommandOutcome,
+  type SkillProjection,
+} from './protocol/skills'
+import { SkillEngine, type SkillOwnerScope } from './skills/engine'
+import { SkillPersistenceRuntime } from './skillsPersistence'
+import type { SkillExecutionPort } from './skills/execution'
+import { OWNER_SUBMITTABLE_EVIDENCE_KINDS } from './skills/evaluation'
+import {
+  SKILL_REFUSAL_CODES,
+  isSkillRetirementReason,
+  isSkillStatus,
+  type SkillRecord as SkillRecordShape,
+} from './skills/types'
 import { FoundryEngine } from './foundry/engine'
 import { registerFoundryWorkCapabilities } from './foundry/work'
 import {
@@ -318,6 +335,11 @@ export interface CoreOptions {
   missionKey?: Uint8Array
   /** Context's independent secure key; absent means explicit process-only Context. */
   contextKey?: Uint8Array | null
+  /**
+   * Skills' independent encrypted persistence key. Null means explicit
+   * process-only Skill storage; never plaintext fallback.
+   */
+  skillKey?: Uint8Array | null
   /**
    * Personality's own independent secure key, from the keyring.
    *
@@ -659,6 +681,22 @@ export interface Core {
   contextWindowLane(scope: ContextScopeRef): ActiveWindowAdmissionLane
   /** Subscribe to the Context projection. Same mirror semantics as the others. */
   onContext(listener: (projection: ContextProjectionView) => void): () => void
+  /**
+   * Core's account of skills: procedures, their lifecycle status, the evidence behind
+   * them as counts, the open improvement proposals, and whether bodies survive a
+   * restart.
+   *
+   * Read-only, and the shape of the read is the whole policy. A skill's summary,
+   * contract descriptions and required-capability **list** are not fields of the
+   * projection: they cross only through an explicit `skill.detail.read` for one skill,
+   * to the owner. Commentary crosses as a *character count*. Nothing here is
+   * writable by a window, and there is no method on this interface that admits,
+   * promotes, retires, evaluates or executes a skill ??? every one of those is an owner
+   * command Core handles behind Guard.
+   */
+  skills(): SkillProjection
+  /** Subscribe to the Skills projection. Same mirror semantics as the others. */
+  onSkills(listener: (projection: SkillProjection) => void): () => void
   readonly lifecycle: CoreLifecycle
 }
 
@@ -744,6 +782,7 @@ class FreyaCore implements Core {
   private personalitySource: PersonalitySource | null
   /** Detaches Core from the Personality source's change channel. Set once, at start. */
   private disposePersonalitySource: () => void = () => {}
+  private readonly skillListeners = new Set<(projection: SkillProjection) => void>()
   /**
    * Core's own Personality & Relationship integration, built at `start()`.
    *
@@ -767,6 +806,12 @@ class FreyaCore implements Core {
    * already-authorized state for the focus reading.
    */
   private attentionEngine: AttentionEngine | undefined
+  /**
+   * The Phase 17 Skill engine, built and owned by Core.
+   * It has no model gateway and no provider authority.
+   */
+  private skillEngine: SkillEngine | undefined
+  private skillPersistence: SkillPersistenceRuntime | undefined
   private readonly foundryListeners = new Set<(projection: FoundryProjection) => void>()
   /** The Phase 15 Foundry domain, owned by Core and replayed from the durable journal. */
   private foundryEngine: FoundryEngine | undefined
@@ -914,6 +959,23 @@ class FreyaCore implements Core {
    */
   issueAttentionSourceScope(source: AttentionSource): AttentionSourceScope {
     return this.requireAttention().sourceScope(source)
+  }
+
+  /**
+   * The owner's face of skills.
+   *
+   * Same shape of decision as `issueOwnerAuthority`, for the same reason: holding the
+   * object *is* the authority, so there is no capability string a caller could pass to
+   * acquire it, and this method is not on the `Core` interface. It is reachable from
+   * `core/testing.ts` and from inside this module only.
+   *
+   * Admission, revision, promotion, retirement and improvement proposals all hang off
+   * this one object, and a *subordinate* scope does not exist: there is no agent route
+   * into the skill lifecycle, because "an agent that can promote its own procedure" is
+   * a self-awarded success with a method name instead of a capability string.
+   */
+  issueSkillOwnerScope(): SkillOwnerScope {
+    return this.requireSkills().ownerScope(this.owner.id)
   }
 
   async start(): Promise<CoreStatus> {
@@ -1404,6 +1466,34 @@ class FreyaCore implements Core {
     this.relayAdmissionOpen = true
     await this.relayEngine.reconcile()
 
+    /**
+     * Skills, built last, because they read Work.
+     *
+     * Two things are wired here and both are deliberate. The **encrypted body store**
+     * is recovered before the engine adopts anything, and adoption is filtered against
+     * the journal fold: a body the journal does not vouch for is discarded rather than
+     * adopted, so a rewritten store file cannot introduce a skill Core never recorded.
+     * The **Work port** is a four-method read port with no writes, no capability
+     * request and no approval ??? a skill may ask whether a Run and a Step exist and
+     * which capabilities that Run already holds, and that is all it may ask.
+     *
+     * Nothing here burns a model call, and nothing here is reachable from a renderer
+     * except through the nine `skill.*` commands, each of which routes through the
+     * admission, evaluation and promotion tables.
+     */
+    const recoveredSkills = await this.buildSkillPersistence()
+    this.skillEngine = new SkillEngine({
+      fabric: this.fabric,
+      getState: () => this.state.skills,
+      persistence: this.skillPersistence,
+      registry: this.requireWorkRegistry(),
+      work: this.skillWorkPort(),
+      now: this.options.now,
+      newId: this.options.newId,
+      onChange: () => this.publishSkills(),
+      stopAll: () => this.state.stopAll.active,
+    })
+    await this.skillEngine.open(recoveredSkills)
 
     const recoveredSequence = this.fabric.lastSequence
     this.startedAt = (this.options.now ?? (() => new Date()))().toISOString()
@@ -1560,6 +1650,10 @@ class FreyaCore implements Core {
       await this.personalityPersistence?.close()
       this.personalityDomain = undefined
       await this.contextPersistence?.close()
+      // Skills close on the same terms, and for the same reason: a body commit that
+      // landed after its own journal event would be a record of something the log
+      // says never happened. Ordered before the fabric closes for that reason.
+      await this.skillPersistence?.close()
       await this.conversationStore?.close()
       await this.fabric?.close()
       this.notify()
@@ -2056,6 +2150,94 @@ class FreyaCore implements Core {
     }
     return () => {
       this.attentionListeners.delete(listener)
+    }
+  }
+
+  skills(): SkillProjection {
+    if (this.skillEngine === undefined) {
+      return { ...ABSENT_SKILL_PROJECTION, reason: NO_SKILL_DOMAIN_REASON }
+    }
+    try {
+      return this.skillEngine.projection()
+    } catch (error) {
+      return {
+        ...ABSENT_SKILL_PROJECTION,
+        reason: `the Skill domain could not be read: ${describe(error)}`,
+      }
+    }
+  }
+
+  onSkills(listener: (projection: SkillProjection) => void): () => void {
+    this.skillListeners.add(listener)
+    try {
+      listener(this.skills())
+    } catch (error) {
+      console.error('[freya.core] Skills subscriber threw', error)
+      this.skillListeners.delete(listener)
+    }
+    return () => {
+      this.skillListeners.delete(listener)
+    }
+  }
+
+  private publishSkills(): void {
+    if (this.skillListeners.size === 0) return
+    const projection = this.skills()
+    for (const listener of [...this.skillListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Skills listener threw', error)
+        this.skillListeners.delete(listener)
+      }
+    }
+  }
+
+  /**
+   * Evaluate `skill.manage` for the owner and record the decision, or answer the
+   * refusal.
+   *
+   * Guard runs before any skill code, and the decision is journalled like every other
+   * capability evaluation ??? so a refused skill mutation appears in the audit stream
+   * rather than only in the caller's return value, and a Guard rule can be withdrawn
+   * later with the evidence still there.
+   */
+  private async guardSkill(requestId: string): Promise<CoreCommandResult | null> {
+    const decision = this.guard.evaluate(this.owner, 'skill.manage')
+    if (decision.allowed) return null
+    await this.recordGuard(decision, this.owner.id, 'skill.manage', requestId)
+    return this.skillRefusal(requestId, 'no-model-calls', decision.reason)
+  }
+
+  /**
+   * A skill command's answer, in the one shape a surface has to render.
+   *
+   * `ok: false` on the envelope as well as in the Skills slot, for the same reason
+   * `workRefusal` and `missionRefusal` both set it: a window that only read the
+   * envelope would otherwise render a refusal as a success, which is the failure this
+   * slot exists to prevent.
+   */
+  private skillResult(requestId: string, outcome: SkillCommandOutcome): CoreCommandResult {
+    return {
+      requestId,
+      ok: outcome.ok,
+      status: outcome.ok ? this.status() : undefined,
+      refusal: outcome.ok ? undefined : { reason: outcome.reason ?? 'this skill command was refused' },
+      skill: outcome,
+    }
+  }
+
+  /** A refusal Core produced itself, with no engine round trip. */
+  private skillRefusal(
+    requestId: string,
+    code: SkillCommandOutcome['code'],
+    reason: string,
+  ): CoreCommandResult {
+    return {
+      requestId,
+      ok: false,
+      refusal: { reason },
+      skill: { operation: 'refused', ok: false, code, reason },
     }
   }
 
@@ -2709,6 +2891,93 @@ class FreyaCore implements Core {
       throw new Error('the Work engine is not available')
     }
     return this.workEngine
+  }
+
+  private requireWorkRegistry(): WorkRegistry {
+    if (this.workRegistry === undefined) {
+      throw new Error('the Work registry is not available')
+    }
+    return this.workRegistry
+  }
+
+  private requireSkills(): SkillEngine {
+    if (this.skillEngine === undefined) {
+      throw new Error('the Skill engine is not available')
+    }
+    return this.skillEngine
+  }
+
+  /**
+   * Recover the encrypted Skill store, or degrade in words.
+   *
+   * A store that cannot be opened is **not** silently replaced with an ephemeral one:
+   * that would report `mode: 'ephemeral'` for a file that exists, and a surface would
+   * say "procedures will not be remembered" when the truth is "the file is damaged
+   * and Freya stopped trusting it". So the runtime records a fault, the projection
+   * reports `durable: false` with that reason, and no body is adopted ??? which means
+   * nothing can be planned into a Run from a procedure Core cannot read.
+   */
+  private async buildSkillPersistence(): Promise<readonly SkillRecordShape[]> {
+    const path = `${this.options.dataPath}.skills.enc`
+    try {
+      const opened = await SkillPersistenceRuntime.open({
+        path,
+        key: this.options.skillKey ?? null,
+        onHealthChange: () => this.publishSkills(),
+      })
+      this.skillPersistence = opened.runtime
+      return opened.bodies
+    } catch (error) {
+      console.error('[freya.core] encrypted Skill store unavailable', describe(error))
+      this.skillPersistence = undefined
+      return []
+    }
+  }
+
+  /**
+   * The narrow read port Skills have on Work.
+   *
+   * Four lookups and no writes ??? which is the point. `runCapabilities` answers what
+   * the Run *already holds*: it maps each planned step's registered capability to the
+   * Guard capability that capability declares, which is exactly the set Guard will
+   * evaluate again before anything executes. There is no `requestCapability`, no
+   * `grant` and no `approve` on this object, so a skill cannot widen what it will be
+   * allowed to do; it can only discover what it was already planned with.
+   */
+  private skillWorkPort(): SkillExecutionPort {
+    const engine = this.workEngine
+    const registry = this.workRegistry
+    return {
+      missionExists: (missionId) => this.missionEngine?.exists(missionId) === true,
+      runExists: (runId) => {
+        if (engine === undefined) return false
+        return engine.snapshot().runs.has(runId)
+      },
+      runState: (runId) => {
+        if (engine === undefined) return 'missing'
+        const run = engine.snapshot().runs.get(runId)
+        if (run === undefined) return 'missing'
+        return isTerminalRunStatus(run.status) ? 'terminal' : 'running'
+      },
+      stepExists: (runId, stepId) => {
+        if (engine === undefined) return false
+        const state = engine.snapshot()
+        return (state.runSteps.get(runId) ?? []).includes(stepId) && state.steps.has(stepId)
+      },
+      runCapabilities: (runId) => {
+        if (engine === undefined || registry === undefined) return []
+        const state = engine.snapshot()
+        const held = new Set<Capability>()
+        for (const stepId of state.runSteps.get(runId) ?? []) {
+          const step = state.steps.get(stepId)
+          if (step === undefined) continue
+          const capability = registry.capability(step.capability)
+          if (capability === undefined) continue
+          held.add(capability.capability)
+        }
+        return [...held]
+      },
+    }
   }
 
   /**
@@ -4501,6 +4770,175 @@ class FreyaCore implements Core {
           return { requestId, ok: outcome.ok, status: this.status(), work: workResult(outcome) }
         }
 
+        /* ------------------------------------------------------------ skills */
+        //
+        // Phase 17. Nine commands, and the shape of the group is the same argument the
+        // vocabulary makes: a window may *ask* what Core knows and may *do* the owner
+        // acts Core has a table for, and it may do nothing else.
+        //
+        // Every mutating case below evaluates `skill.manage` through Guard first and
+        // records the decision, so a refusal appears in the audit stream rather than
+        // only in the caller's return value. Every one of them then routes through
+        // Core's own admission, evaluation, promotion and improvement code ??? none of
+        // them writes a status, a verdict or a threshold that this module decided.
+
+        case 'skill.status.read': {
+          // Argument-free by construction. A window that could accompany "what do you
+          // know about procedures?" with a status, a trust class or a threshold would
+          // be asking Core a question it has already answered.
+          if (carriesFields(envelope.payload)) {
+            const refusal = SKILL_NO_PAYLOAD
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: refusal },
+              skill: { operation: 'refused', ok: false, reason: refusal },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            skill: {
+              operation: 'status',
+              ok: true,
+              projection: this.skills(),
+              evidenceKinds: [...OWNER_SUBMITTABLE_EVIDENCE_KINDS],
+            },
+          }
+        }
+
+        case 'skill.admit': {
+          const guard = await this.guardSkill(requestId)
+          if (guard !== null) return guard
+          const outcome = await this.issueSkillOwnerScope().admit(
+            envelope.payload,
+            // The trust class is Core's, not the payload's: a window cannot declare
+            // its own text `code-owned`. `untrusted-content` is reachable only from
+            // inside Core, by the pathway that assembled the text.
+            'owner-declared',
+          )
+          return this.skillResult(requestId, outcome)
+        }
+
+        case 'skill.revise': {
+          const guard = await this.guardSkill(requestId)
+          if (guard !== null) return guard
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.skillRefusal(requestId, 'no-such-skill', 'skill id is missing')
+          const outcome = await this.issueSkillOwnerScope().revise(skillId, envelope.payload)
+          return this.skillResult(requestId, outcome)
+        }
+
+        case 'skill.recordEvaluation': {
+          const guard = await this.guardSkill(requestId)
+          if (guard !== null) return guard
+          // `author` is `owner` here by construction, and `fromCommand` is `true` by
+          // construction, so `parseEvaluationRequest` refuses a `verification-record`
+          // or a `model-opinion` evidence item outright. A window can report what it
+          // saw; it cannot assert a verification, and it cannot submit an opinion as
+          // evidence.
+          const outcome = await this.issueSkillOwnerScope().recordEvaluation(envelope.payload)
+          return this.skillResult(requestId, outcome)
+        }
+
+        case 'skill.transition': {
+          const guard = await this.guardSkill(requestId)
+          if (guard !== null) return guard
+          const skillId = readString(envelope.payload, 'skillId')
+          const to = readString(envelope.payload, 'to')
+          if (skillId === null) return this.skillRefusal(requestId, 'no-such-skill', 'skill id is missing')
+          if (to === null || !isSkillStatus(to)) {
+            return this.skillRefusal(requestId, 'illegal-transition', 'the requested status is not one Freya knows')
+          }
+          const outcome = await this.issueSkillOwnerScope().transition(skillId, to)
+          return this.skillResult(requestId, outcome)
+        }
+
+        case 'skill.retire': {
+          const guard = await this.guardSkill(requestId)
+          if (guard !== null) return guard
+          const skillId = readString(envelope.payload, 'skillId')
+          const reason = readString(envelope.payload, 'reason')
+          if (skillId === null) return this.skillRefusal(requestId, 'no-such-skill', 'skill id is missing')
+          if (reason === null || !isSkillRetirementReason(reason)) {
+            return this.skillRefusal(
+              requestId,
+              'illegal-transition',
+              'a retirement reason must be one of the reasons Freya records',
+            )
+          }
+          const outcome = await this.issueSkillOwnerScope().retire(skillId, reason)
+          return this.skillResult(requestId, outcome)
+        }
+
+        case 'skill.propose': {
+          const guard = await this.guardSkill(requestId)
+          if (guard !== null) return guard
+          const outcome = await this.issueSkillOwnerScope().propose(envelope.payload)
+          return this.skillResult(requestId, outcome)
+        }
+
+        case 'skill.proposal.settle': {
+          const guard = await this.guardSkill(requestId)
+          if (guard !== null) return guard
+          const proposalId = readString(envelope.payload, 'proposalId')
+          const decision = readString(envelope.payload, 'decision')
+          if (proposalId === null) {
+            return this.skillRefusal(requestId, 'no-evaluation-basis', 'proposal id is missing')
+          }
+          if (decision !== 'accepted' && decision !== 'refused') {
+            return this.skillRefusal(requestId, 'artifact-refused', 'a proposal settles as accepted or refused')
+          }
+          // A refusal needs a closed code so a reader can tell *why*; an acceptance
+          // carries none, because there is nothing to explain about a thing that was
+          // allowed.
+          const reason = readString(envelope.payload, 'reason')
+          const code = decision === 'refused' ? reason : 'no-evaluation-basis'
+          if (code === null || !SKILL_REFUSAL_CODES.includes(code as never)) {
+            return this.skillRefusal(requestId, 'artifact-refused', 'a refusal needs a closed reason code')
+          }
+          const outcome = await this.issueSkillOwnerScope().settle(proposalId, decision, code as never)
+          return this.skillResult(requestId, outcome)
+        }
+
+        case 'skill.select': {
+          // A read. No Guard evaluation, because nothing is decided here: selection
+          // is a pure function of already-authorized state, and Core decides it rather
+          // than being asked to decide it.
+          const outcome = this.requireSkills().select({
+            applicability: readStringArray(envelope.payload, 'applicability'),
+            includeTrial: readBooleanField(envelope.payload, 'includeTrial'),
+            includeVerified: readBooleanField(envelope.payload, 'includeVerified'),
+            limit: readNumber(envelope.payload, 'limit') ?? undefined,
+          })
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            skill: { operation: 'selected', ok: true, selection: outcome },
+          }
+        }
+
+        case 'skill.detail.read': {
+          // The owner's explicit read of one procedure's own text. The only command in
+          // this family that carries body content across the bridge, and it takes a
+          // single id ??? there is deliberately no command that lists every body, because
+          // a standing feed of procedures would defeat the encryption the store exists
+          // to provide.
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.skillRefusal(requestId, 'no-such-skill', 'skill id is missing')
+          const detail = this.issueSkillOwnerScope().detail(skillId)
+          if (detail === null) {
+            return this.skillRefusal(
+              requestId,
+              'no-such-skill',
+              'there is no such skill, or its stored body could not be read at this version',
+            )
+          }
+          return { requestId, ok: true, status: this.status(), skill: { operation: 'detail', ok: true, detail } }
+        }
+
         default:
           return reject(envelope, `unknown command: ${String(command)}`)
       }
@@ -5250,6 +5688,21 @@ function readGrantSpec(payload: unknown): CognitionGrantSpec | null {
   }
 }
 
+
+/**
+ * A boolean field, or null.
+ *
+ * Only ever read for `includeTrial`/`includeVerified` on `skill.select`, so an
+ * unrecognised value is `null` rather than a coerced `false` ??? a window sending
+ * `includeTrial: "yes"` gets "no trials", which is the conservative reading, and the
+ * selection report says how many candidates it considered so the discrepancy is
+ * visible rather than silent.
+ */
+function readBooleanField(payload: unknown, key: string): boolean | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const value = (payload as Record<string, unknown>)[key]
+  return typeof value === 'boolean' ? value : undefined
+}
 
 function readNumber(payload: unknown, key: string): number | null {
   if (typeof payload !== 'object' || payload === null) return null

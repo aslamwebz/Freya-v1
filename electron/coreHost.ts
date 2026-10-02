@@ -8,6 +8,7 @@ import type { MissionProjection } from '../core/missions/types'
 import type { WorkforceProjection, WorkforceSource } from '../core/protocol/workforce'
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
+import type { SkillProjection } from '../core/protocol/skills'
 import type { FoundryProjection } from '../core/protocol/foundry'
 import type { RelayProjection } from '../core/protocol/relay'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
@@ -344,6 +345,13 @@ export interface CoreHost {
   attention(): AttentionProjection | null
   onFoundry(send: (projection: FoundryProjection) => void): () => void
   foundry(): FoundryProjection | null
+
+  /**
+   * Attach to the Skills projection. Returns a disposer.
+   * Core pushes; the window receives a read-only mirror.
+   */
+  onSkills(send: (projection: SkillProjection) => void): () => void
+  skills(): SkillProjection | null
   /**
    * Attach to the Office projection. Returns a disposer.
    *
@@ -410,7 +418,7 @@ export interface CoreHostOptions {
   /**
    * Personality's own key, from the keyring.
    *
-   * A **fifth** independent secret for the same reason as the other four: what
+   * An independent secret for the same reason as the other four: what
    * Freya has recorded about a person should not be one key-compromise away from
    * the conversation log, and recovering another domain's key must not yield it.
    * Null means Core falls back to an ephemeral relationship, reports
@@ -419,6 +427,8 @@ export interface CoreHostOptions {
    * than resetting its memory.
    */
   personalityKey?: Uint8Array | null
+  /** Skills' independent encrypted persistence key. */
+  skillKey?: Uint8Array | null
   /** Explicit main-process opt-in; never accepted from a renderer. */
   windowObservation?: {
     enabled: boolean
@@ -508,6 +518,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly workforceWindows = new Set<(projection: WorkforceProjection) => void>()
   private readonly personalityWindows = new Set<(projection: PersonalityProjection) => void>()
   private readonly attentionWindows = new Set<(projection: AttentionProjection) => void>()
+  private readonly skillWindows = new Set<(projection: SkillProjection) => void>()
   private readonly foundryWindows = new Set<(projection: FoundryProjection) => void>()
   private readonly officeWindows = new Set<(projection: OfficeProjection) => void>()
   private readonly relayWindows = new Set<(projection: RelayProjection) => void>()
@@ -546,11 +557,8 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
         ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),
         contextKey: this.options.contextKey ?? null,
-        // Bytes in, and nowhere else. Core holds a `PersonalityPersistenceRuntime`
-        // it cannot inspect, so there is nothing here for it to leak the key
-        // through — and no path for it to leak the relationship *text* through
-        // either, since the projection carries metadata only.
         personalityKey: this.options.personalityKey ?? null,
+        skillKey: this.options.skillKey ?? null,
         // The Workforce seam, forwarded whole. Nothing is derived from it here:
         // the host neither reads nor interprets a workforce, it only hands Core
         // the reader it was given and mirrors what Core reports.
@@ -599,6 +607,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onFoundry((projection) => this.broadcastFoundry(projection))
       core.onOffice((projection) => this.broadcastOffice(projection))
       core.onRelay((projection) => this.broadcastRelay(projection))
+      core.onSkills((projection) => this.broadcastSkills(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -804,6 +813,7 @@ export class ElectronCoreHost implements CoreHost {
     this.attentionWindows.clear()
     this.officeWindows.clear()
     this.relayWindows.clear()
+    this.skillWindows.clear()
     this.contextChannel.close()
     await core?.stop(reason)
   }
@@ -967,6 +977,33 @@ export class ElectronCoreHost implements CoreHost {
     return this.core?.office() ?? null
   }
 
+  /**
+   * Attach to the Skills projection, pushed immediately.
+   *
+   * The immediate push is what makes a window that just reloaded agree with one that
+   * never left, and returning `null` before Core starts is the honest reading rather
+   * than a manufactured "no procedures".
+   */
+  onSkills(send: (projection: SkillProjection) => void): () => void {
+    this.skillWindows.add(send)
+    const projection = this.skills()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Skills push threw', error)
+        this.skillWindows.delete(send)
+      }
+    }
+    return () => {
+      this.skillWindows.delete(send)
+    }
+  }
+
+  skills(): SkillProjection | null {
+    return this.core?.skills() ?? null
+  }
+
   async attentionTick(): Promise<number> {
     return (await this.core?.attentionTick()) ?? 0
   }
@@ -1026,6 +1063,17 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window Office push threw', error)
         this.officeWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastSkills(projection: SkillProjection): void {
+    for (const send of [...this.skillWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Skills push threw', error)
+        this.skillWindows.delete(send)
       }
     }
   }

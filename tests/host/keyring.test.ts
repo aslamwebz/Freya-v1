@@ -193,17 +193,23 @@ describe('one secret per domain', () => {
     // The record is there so a keyring written on one platform is never read as
     // though it had been written the same way on another.
     expect(file.protection).toBe('gnome_libsecret')
+    // Separate domain keys are written for every durable private store.
     expect(Object.keys(file.keys).sort()).toEqual([
       'brain',
       'context',
       'conversation',
       'mission',
       'personality',
+      'skill',
     ])
     // Separate wrapped blobs: recovering one domain never unwraps another.
     expect(file.keys.brain).not.toBe(file.keys.conversation)
     expect(file.keys.mission).not.toBe(file.keys.conversation)
     expect(file.keys.mission).not.toBe(file.keys.brain)
+    expect(file.keys.skill).not.toBe(file.keys.conversation)
+    expect(file.keys.skill).not.toBe(file.keys.brain)
+    expect(file.keys.skill).not.toBe(file.keys.mission)
+    expect(file.keys.skill).not.toBe(file.keys.context)
     // The one domain that has to be independent *and* is easiest to forget: what
     // Freya has recorded about a person must not be readable by anything holding
     // the conversation key, and vice versa.
@@ -287,6 +293,7 @@ describe('the Mission domain, and the migration that introduces it', () => {
       'conversation',
       'mission',
       'personality',
+      'skill',
     ])
   })
 

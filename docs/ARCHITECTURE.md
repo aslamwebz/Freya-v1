@@ -998,6 +998,55 @@ reconciliation rather than watched, exactly as a Mission's lifetime is.
 
 Full detail is in [PHASE-8.md](PHASE-8.md).
 
+### 6.7 Attention: code decides, and "do nothing" is a decision
+
+Phase 12 added events and attention. The rule it is written around is the one a
+"smart notifications" feature is most tempted to break:
+
+> **The score, the budget, the cooldown and the outcome are code. An event's text
+> is data the policy never reads.**
+
+```
+  authorized source (owner · mission · work · research · context · system)
+        │  source is assigned by Core, never read from a payload
+        ▼
+  AttentionEngine.ingest
+        │  sanitize → bound → dedupe → append attention.event.ingested
+        ▼
+  decideAttention            closed tables: kind → importance/urgency,
+        │                    capped by source class; a hint raises at most one level
+        │  demote only: STOP ALL > rate limit > focus > cooldown > budget
+        ▼
+  do-nothing · remember · subtle-cue · speak · interrupt
+        │
+        ├── attention.decision.made  (always, including do-nothing)
+        └── one directive, a code-owned cue label, for Presence
+```
+
+Four properties, each a test rather than a comment:
+
+- **An untrusted payload cannot forge urgency.** The source is a parameter, not a
+  field; the score is a closed table capped by source class; only `system` can reach
+  `critical`; and `interrupt` requires a genuinely urgent due time or kind. A
+  `severityHint` raises importance by at most one level and cannot interrupt alone.
+- **A storm cannot become a stream of interruptions.** A per-source ingest rate and
+  a code-owned interruption budget (across all sources, per source and per goal)
+  demote every outcome past the ceiling; a cooldown after an interrupt is absolute,
+  so a forged urgency cannot jump it.
+- **Attention spends nothing and mints nothing.** `core/attention/` imports no
+  gateway, provider, authority or cognition module. A red-team test reads the domain
+  source and refuses such an import, and the fake provider's call count stays zero
+  through any amount of traffic.
+- **Replay does not repeat a decision.** Decisions live in the journal, so replay
+  folds them; a re-delivered event is recognised by a dedupe key derived from the
+  source's own reference and appends nothing.
+
+The bounded wake is the one timer attention has, and it is driven by the
+composition root — there is no `attention.tick` command, so a renderer cannot make
+a schedule fire. The focus reading uses only state Core already held (a provider
+call in flight, a Run executing); no screen, keystroke, accessibility tree or model
+is read. Full detail is in [PHASE-12.md](PHASE-12.md).
+
 ---
 
 ## 7. Deliberately absent

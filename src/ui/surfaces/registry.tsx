@@ -12,6 +12,7 @@ import { MissionSurface } from './MissionSurface'
 import { WorkforceSurface } from './WorkforceSurface'
 import { ContextSurface } from './ContextSurface'
 import { PersonalitySurface } from './PersonalitySurface'
+import { AttentionSurface } from './AttentionSurface'
 import type { SurfaceDefinition } from './types'
 
 /**
@@ -53,6 +54,10 @@ const BODIES: Partial<Record<SurfaceType, () => React.ReactNode>> = {
   // placeholder here would advertise a social memory this transport is already
   // wired to receive the day Core has one.
   personality: () => <PersonalitySurface />,
+  // The Attention view: a pure mirror of Core's projection plus the two owner
+  // actions Core permits — submit an event, register a schedule. Core assigns the
+  // source and decides; nothing here can invent an urgency or an interruption.
+  attention: () => <AttentionSurface />,
 }
 
 /** The registry, resolved once from the two catalogs it is built from. */

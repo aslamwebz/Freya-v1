@@ -2847,3 +2847,143 @@
   color: var(--ink-2);
   overflow-wrap: anywhere;
 }
+
+/* ------------------------------------------------------------- attention */
+
+.attention-surface {
+  padding: 18px 20px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  height: 100%;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.attention-absent,
+.attention-none,
+.attention-note,
+.attention-limits {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  max-width: 68ch;
+}
+
+.attention-notice {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--gold-hi);
+}
+
+.attention-posture {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+}
+
+.attention-posture[data-ready='false'] {
+  border-color: rgba(198, 150, 88, 0.34);
+}
+
+.attention-posture b {
+  font: 500 14px/1 var(--font-display);
+  letter-spacing: 0.2em;
+  color: var(--gold-hi);
+}
+
+.attention-posture span {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.attention-section h2 {
+  margin: 0 0 8px;
+  font: 400 10px/1 var(--font-display);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.attention-section label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.attention-section input,
+.attention-section select {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  color: var(--ink-1);
+  font-size: 12px;
+}
+
+.attention-section button {
+  margin: 0 8px 8px 0;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+  color: var(--gold-hi);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.attention-decision,
+.attention-directive {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.attention-directive[data-outcome='interrupt'] {
+  color: var(--gold-hi);
+}
+
+.attention-schedules,
+.attention-inbox {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attention-schedules li,
+.attention-inbox li {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.attention-detail {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--gold-line);
+  background: var(--glass);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-1);
+  overflow-wrap: anywhere;
+}

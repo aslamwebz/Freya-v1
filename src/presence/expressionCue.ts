@@ -1,5 +1,7 @@
 import type { CueKind } from '../../core/personality/types'
 import type { PersonalityCueView, PersonalityProjection } from '../../core/protocol/personality'
+import type { AttentionCueCode } from '../../core/attention/types'
+import type { AttentionDirectiveView, AttentionProjection } from '../../core/protocol/attention'
 
 /**
  * The one expression cue Presence is allowed to draw.
@@ -56,4 +58,34 @@ export function expressionCueLine(cue: PersonalityCueView | null): string | null
 /** The same, read straight off a projection. */
 export function projectionCueLine(projection: PersonalityProjection | null): string | null {
   return projection === null ? null : expressionCueLine(projection.presenceCue)
+}
+
+/**
+ * The one attention cue Presence is allowed to draw.
+ *
+ * The same discipline as the personality cue: Core chose the outcome and the
+ * code-owned cue label, and this module turns that into one short line. The
+ * event's text never crosses the bridge, so there is nothing here that reproduces
+ * content — a person sees *that* Core decided to cue and *what class* of thing it
+ * was about, never the words. A renderer cannot invent an urgency; it can only
+ * draw the label Core sent.
+ */
+export const ATTENTION_CUE_LABELS: Readonly<Record<AttentionCueCode, string>> = Object.freeze({
+  'gentle-nudge': 'gentle nudge',
+  'deadline-soon': 'deadline soon',
+  'task-finished': 'task finished',
+  'needs-attention': 'needs attention',
+  'status-update': 'status update',
+  'all-clear': 'all clear',
+})
+
+export function attentionCueLine(directive: AttentionDirectiveView | null): string | null {
+  if (directive === null) return null
+  const label = ATTENTION_CUE_LABELS[directive.cueCode ?? 'status-update']
+  return bounded(`Attention: ${label} (${directive.outcome})`)
+}
+
+/** The same, read straight off an attention projection. */
+export function projectionAttentionCueLine(projection: AttentionProjection | null): string | null {
+  return projection === null ? null : attentionCueLine(projection.directive)
 }

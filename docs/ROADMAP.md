@@ -89,11 +89,24 @@ relationship habits/inside jokes and model-independent personality evaluation.
 
 The Constitution remains above personality.
 
-## Phase 12 — Events and Attention
+## Phase 12 — Events and Attention (Core landed)
 
-Authorized event ingestion, importance/urgency, interruption budgets, cooldown,
-focus awareness, scheduled/conditional attention and outcomes: remember, subtle
-cue, speak or interrupt. "Do nothing" is a valid outcome.
+Authorized event ingestion, code-owned importance/urgency, interruption budgets,
+cooldown, focus awareness, scheduled/conditional attention and outcomes: remember,
+subtle cue, speak or interrupt. "Do nothing" is a valid, well-tested outcome.
+
+The score, the budget, the cooldown and the outcome are closed Core tables; an
+event's text is data the policy never reads. Ingestion is only through authorized
+sources, and a renderer cannot name its own source, set an importance, decide an
+outcome, spend an interruption budget or drive the scheduler. No attention decision
+can mint a capability, clear STOP ALL or reach a model.
+
+What was built, and what was left out on purpose, is recorded in
+[PHASE-12.md](PHASE-12.md). The short version: this phase built the attention
+decision, not a notification centre with opinions. A native/connector event source
+is Phase 16's Relay boundary; OS-wide focus sensing remains unsupported; and voice
+delivery of `speak`/`interrupt` is a Presence concern, not this phase's.
+
 
 ## Phase 13 — Desktop Presence
 

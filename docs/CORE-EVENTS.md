@@ -492,6 +492,44 @@ The genuinely security-relevant part is already recorded where it belongs:
 `guard.decision` is written every time Guard refuses a capability, and
 `work.action.started` names the principal whose capabilities were evaluated.
 
+### Attention
+
+`attention.event.ingested` · `attention.decision.made` ·
+`attention.budget.exceeded` · `attention.schedule.registered` ·
+`attention.schedule.fired` · `attention.schedule.cancelled`
+
+Metadata only, and the rule is the strictest family's: an event's **text** is
+process-local data, never written here, and there is **no slot** for it. The
+validator rejects an unexpected key, so a payload with the right fields plus a
+`text` is refused rather than quietly kept.
+
+```
+  attention.event.ingested       eventId, dedupeKey, source, kind, goalRef,
+                                 textLength, severityHint, occurredAt, dueAt
+  attention.decision.made        decisionId, eventId, source, kind, goalRef,
+                                 outcome, importance, urgency, reason, cueCode, focus
+  attention.budget.exceeded      source, goalRef, limit, observed
+  attention.schedule.registered  scheduleId, kind, goalRef, severityHint, dueAt,
+                                 intervalMs, maxRepeats, condition
+  attention.schedule.fired       scheduleId, eventId, repeats
+  attention.schedule.cancelled   scheduleId, reason
+```
+
+Four details worth naming:
+
+- **`do-nothing` is written like any other outcome.** A decision not to act is a
+  decision, and a journal that recorded only the loud outcomes would misrepresent
+  how often Freya stays quiet.
+- **`dedupeKey` is the replay defence.** It is derived from the source's own
+  reference when it has one, so a re-delivered event is recognised across a restart
+  and produces no second decision.
+- **`source` is assigned by Core.** It is a closed label, never read from a payload,
+  so a hand-edited line cannot claim `system` to reach `critical`.
+- **No attention event is a security event.** A decision cannot grant cognition,
+  clear a stop or widen a permission, and a budget that ran out says nothing about
+  the authority to run anything — the same argument that keeps `work.*` and
+  `brain.degraded` out of `SECURITY_EVENT_TYPES`.
+
 ---
 
 ## Replay

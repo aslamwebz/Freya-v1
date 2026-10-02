@@ -80,6 +80,13 @@ export type ActivityKind =
   | 'workforce.worker.reconciled'
   | 'workforce.claim.recorded'
   | 'workforce.limit.exceeded'
+  // Attention. Only the facts a person would want as news: an event was received,
+  // what Core decided about it, a budget that ran out and a schedule that fired.
+  // No event text exists on any of these rows because none is in the journal.
+  | 'attention.ingested'
+  | 'attention.decision'
+  | 'attention.budget'
+  | 'attention.schedule'
   | 'other'
 
 export interface CoreActivityEvent {
@@ -707,6 +714,66 @@ export function describeActivity(event: {
         kind: 'workforce.limit.exceeded',
         text: `Workforce ceiling reached: ${text(event.payload.limit, 'unknown')}.`,
         tone: 'warn',
+      }
+
+    /* ------------------------------------------------------------ attention */
+    //
+    // Metadata only, and worded so a row can never be mistaken for the event's
+    // content. The kind, the source and the outcome are Core's own closed labels;
+    // the length is the only measurement of the text that left the domain.
+
+    case 'attention.event.ingested':
+      return {
+        ...base,
+        kind: 'attention.ingested',
+        text: `Attention event received from ${text(event.payload.source, 'unknown')} (${text(event.payload.kind, 'unknown')}, ${number(event.payload.textLength, 0)} characters).`,
+        tone: 'neutral',
+      }
+
+    case 'attention.decision.made': {
+      const outcome = text(event.payload.outcome, 'unknown')
+      const reason = text(event.payload.reason, 'unknown')
+      return {
+        ...base,
+        kind: 'attention.decision',
+        text:
+          outcome === 'do-nothing'
+            ? `Attention: do nothing (${reason}).`
+            : `Attention: ${outcome} (${text(event.payload.importance, 'unknown')} importance, ${text(event.payload.urgency, 'unknown')} urgency, ${reason}).`,
+        tone: outcome === 'interrupt' ? 'warn' : outcome === 'do-nothing' ? 'neutral' : 'busy',
+      }
+    }
+
+    case 'attention.budget.exceeded':
+      return {
+        ...base,
+        kind: 'attention.budget',
+        text: `Attention budget reached (${text(event.payload.limit, 'unknown')}); the outcome was demoted.`,
+        tone: 'warn',
+      }
+
+    case 'attention.schedule.registered':
+      return {
+        ...base,
+        kind: 'attention.schedule',
+        text: `Attention schedule registered for ${text(event.payload.dueAt, 'an unknown time')}.`,
+        tone: 'neutral',
+      }
+
+    case 'attention.schedule.fired':
+      return {
+        ...base,
+        kind: 'attention.schedule',
+        text: 'An attention schedule came due.',
+        tone: 'neutral',
+      }
+
+    case 'attention.schedule.cancelled':
+      return {
+        ...base,
+        kind: 'attention.schedule',
+        text: `An attention schedule was cancelled (${text(event.payload.reason, 'no reason given')}).`,
+        tone: 'neutral',
       }
 
     default:

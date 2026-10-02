@@ -20,6 +20,7 @@ export const SURFACE_TYPES = [
   'team',
   'context',
   'personality',
+  'attention',
   'office',
   'security',
   'settings',
@@ -261,6 +262,23 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
       'Who Freya is as a temperament, and what she has actually recorded about you: every record shown as metadata with the source class and confidence Core assigned it, and never the recorded text. Nothing on this surface is simulated and nothing here can be written.',
     width: 640,
     height: 540,
+    minWidth: 400,
+    minHeight: 320,
+    instance: 'singleton',
+    status: 'working',
+  },
+  attention: {
+    type: 'attention',
+    // The Phase 12 read-only surface. It renders exactly what Core reports —
+    // counts, the focus reading, the last decision and at most one cue — and it
+    // cannot invent an urgency, an importance or an interruption. An owner may
+    // submit an event or register a schedule from here; Core assigns the source
+    // and decides.
+    title: 'Attention',
+    summary:
+      'What arrived and what Core decided to do about it: how often it stayed quiet, how often it cued, spoke or interrupted, the budgets and cooldowns it respected, and the schedules it holds. Every label is Core’s own; nothing here can invent an urgency.',
+    width: 640,
+    height: 560,
     minWidth: 400,
     minHeight: 320,
     instance: 'singleton',

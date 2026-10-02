@@ -12,6 +12,7 @@ import type { WorkforceProjection } from '../../core/protocol/workforce'
 import type { ContextProjection } from '../../core/protocol/context'
 import type { PersonalityProjection } from '../../core/protocol/personality'
 import type { AttentionProjection } from '../../core/protocol/attention'
+import type { RelayProjection } from '../../core/protocol/relay'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -179,6 +180,21 @@ export interface FreyaHostBridge {
    */
   coreAttention(): Promise<AttentionProjection | null>
   onCoreAttention(handler: (projection: AttentionProjection) => void): () => void
+
+  /**
+   * The Relay projection, exactly as Core last reported it — or `null` when no
+   * Core is reporting.
+   *
+   * Two functions, same as every other subsystem. What crosses is Core's report:
+   * which connectors are registered, which actions are pending approval, what
+   * recent actions settled. No credential, no content and no capability crosses
+   * — the projection has no field any of them could occupy — and there is no
+   * function here that registers a connector, faults one, sets an allowlist or
+   * executes an action. Submitting an action is a command with a narrow
+   * payload contract, and this read lends no authority in either direction.
+   */
+  coreRelay(): Promise<RelayProjection | null>
+  onCoreRelay(handler: (projection: RelayProjection) => void): () => void
 }
 
 declare global {

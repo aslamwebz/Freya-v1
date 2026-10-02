@@ -413,6 +413,14 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:attention', projection)
   })
 
+  // Relay is an eleventh channel: which connectors are registered, which actions
+  // are pending approval and what recent actions settled. No credential, no
+  // content and no capability crosses — the projection has no field any of them
+  // could occupy — and nothing here executes anything.
+  const detachRelay = coreHost?.onRelay((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:relay', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -424,6 +432,7 @@ function createWindow(): BrowserWindow {
     detachContext?.()
     detachPersonality?.()
     detachAttention?.()
+    detachRelay?.()
   })
 
   if (DEV_SERVER) {
@@ -521,6 +530,12 @@ function registerIpc(): void {
   // `attention.tick` command — a window cannot decide, spend a budget, bypass a
   // cooldown or drive the scheduler.
   ipcMain.handle('freya:core:attention', () => requireCore().attention())
+  // The Relay projection, same bargain as every other channel: a read of what
+  // Core reports, `null` until a Core has started. There is deliberately no
+  // `freya:core:relay:write` and no connector registration handle — a window
+  // cannot register a connector, fault one, set an allowlist or execute an
+  // action, because connector authority is Core's to hold inside itself.
+  ipcMain.handle('freya:core:relay', () => requireCore().relay())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

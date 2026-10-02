@@ -37,8 +37,11 @@ import {
   isRelayReadAction,
   type RelayAction,
   type RelayActionRecord,
+  type RelayCalendarEvent,
   type RelayConnectorId,
+  type RelayEmailMessage,
   type RelayFailureCode,
+  type RelayGitHubIssue,
   type RelayState,
 } from './types'
 import {
@@ -62,9 +65,9 @@ import {
 
 /** What a read returned, in the bounded shape the protocol carries. */
 export type RelayReadResult =
-  | { readonly kind: 'email.messages'; readonly messages: readonly import('./types').RelayEmailMessage[]; readonly nextCursor: string | null }
-  | { readonly kind: 'calendar.events'; readonly events: readonly import('./types').RelayCalendarEvent[]; readonly nextCursor: string | null }
-  | { readonly kind: 'github.issues'; readonly issues: readonly import('./types').RelayGitHubIssue[]; readonly nextCursor: string | null }
+  | { readonly kind: 'email.messages'; readonly messages: readonly RelayEmailMessage[]; readonly nextCursor: string | null }
+  | { readonly kind: 'calendar.events'; readonly events: readonly RelayCalendarEvent[]; readonly nextCursor: string | null }
+  | { readonly kind: 'github.issues'; readonly issues: readonly RelayGitHubIssue[]; readonly nextCursor: string | null }
   | { readonly kind: 'external.result'; readonly data: unknown }
 
 /** What a write produced, after approval. */

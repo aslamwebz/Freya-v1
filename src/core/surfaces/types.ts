@@ -208,13 +208,20 @@ export const surfaceTypes: Record<SurfaceType, SurfaceTypeDescriptor> = {
   relay: {
     type: 'relay',
     title: 'Relay',
-    summary: 'Messaging and external connectors. Relay is not implemented in Phase 0.',
-    width: 560,
-    height: 480,
-    minWidth: 380,
-    minHeight: 300,
+    // The Phase 16 surface. It renders exactly what Core reports — which
+    // connectors are registered, which actions are pending approval, what
+    // recent actions settled — and it cannot forge availability, widen a
+    // capability or execute a write without an approval Core holds. An owner
+    // may request a read or request a write from here; Core validates, gates
+    // and decides.
+    summary:
+      'Email, calendar, GitHub and external connectors through bounded capabilities: what is connected, what is waiting on your decision, and what settled. Every action is approved by you before it runs; nothing here can forge a connector or widen a permission.',
+    width: 640,
+    height: 540,
+    minWidth: 400,
+    minHeight: 320,
     instance: 'singleton',
-    status: 'placeholder',
+    status: 'working',
   },
   team: {
     type: 'team',

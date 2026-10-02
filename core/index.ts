@@ -98,7 +98,7 @@ import {
 } from './protocol/attention'
 import { AttentionEngine, type AttentionSourceScope } from './attention/engine'
 import type { AttentionDecision, AttentionSource, FocusState } from './attention/types'
-import { RelayEngine } from './relay/engine'
+import { RelayEngine, type RelayReadResult } from './relay/engine'
 import type { RelayAdapterSet } from './relay/adapters'
 import { projectRelay } from './relay/projection'
 import type { RelayAction, RelayFailureCode } from './relay/types'
@@ -1967,7 +1967,7 @@ class FreyaCore implements Core {
    * authority here; the only thing that crosses is *that* a connector reported
    * something, and how many items were involved.
    */
-  private observeRelaySignal(command: string, result: { readonly kind: 'read'; readonly result: import('./relay/engine').RelayReadResult }): void {
+  private observeRelaySignal(command: string, result: { readonly kind: 'read'; readonly result: RelayReadResult }): void {
     if (this.attentionEngine === undefined || this.options.attentionObserveSources !== true) return
     switch (result.result.kind) {
       case 'email.messages': {

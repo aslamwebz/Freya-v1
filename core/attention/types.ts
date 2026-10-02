@@ -101,6 +101,21 @@ export function isAttentionSource(value: unknown): value is AttentionSource {
   return typeof value === 'string' && (ATTENTION_SOURCES as readonly string[]).includes(value)
 }
 
+/** Closed reasons that may be persisted when a schedule stops without firing. */
+export const ATTENTION_SCHEDULE_CANCEL_REASONS = [
+  'owner-cancelled',
+  'restart',
+  'content-unavailable',
+] as const
+export type AttentionScheduleCancelReason = (typeof ATTENTION_SCHEDULE_CANCEL_REASONS)[number]
+
+export function isAttentionScheduleCancelReason(value: unknown): value is AttentionScheduleCancelReason {
+  return (
+    typeof value === 'string' &&
+    (ATTENTION_SCHEDULE_CANCEL_REASONS as readonly string[]).includes(value)
+  )
+}
+
 /**
  * The kinds of event attention understands.
  *

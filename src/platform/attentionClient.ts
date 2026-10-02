@@ -56,7 +56,7 @@ export interface AttentionMirror {
     condition?: string
   }): Promise<AttentionCommandOutcome>
 
-  cancelSchedule(scheduleId: string, reason?: string): Promise<AttentionCommandOutcome>
+  cancelSchedule(scheduleId: string): Promise<AttentionCommandOutcome>
 
   /** Read one retained event's text back, explicitly. Never a standing feed. */
   readEvent(eventId: string): Promise<AttentionEventDetail | null>
@@ -188,11 +188,8 @@ export function createAttentionMirror(): AttentionMirror {
       return submit('attention.schedule.register', input)
     },
 
-    async cancelSchedule(scheduleId, reason) {
-      return submit('attention.schedule.cancel', {
-        scheduleId,
-        ...(reason === undefined ? {} : { reason }),
-      })
+    async cancelSchedule(scheduleId) {
+      return submit('attention.schedule.cancel', { scheduleId })
     },
 
     async readEvent(eventId) {

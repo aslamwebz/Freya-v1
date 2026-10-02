@@ -120,6 +120,16 @@ describe('the preload bridge gives a window exactly two Attention reads', () => 
     }
   })
 
+  it('does not let renderer cancellation carry free-form prose', async () => {
+    const preload = await codeOnly('../../electron/preload.ts')
+    const cancelBlock = preload.slice(
+      preload.indexOf("case 'attention.schedule.cancel'"),
+      preload.indexOf("case 'attention.inbox.read'"),
+    )
+    expect(cancelBlock).toContain("key !== 'scheduleId'")
+    expect(cancelBlock).not.toContain("string('reason'")
+    expect(cancelBlock).toContain('accepts only scheduleId')
+  })
   it('keeps the "no Attention domain" sentence in one place, quoted from the protocol', async () => {
     const protocol = await codeOnly('../../core/protocol/attention.ts')
     const preload = await codeOnly('../../electron/preload.ts')

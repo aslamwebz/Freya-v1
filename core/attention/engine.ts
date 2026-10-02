@@ -414,13 +414,13 @@ export class AttentionEngine {
     return { ok: true, scheduleId }
   }
 
-  async cancelSchedule(scheduleId: string, reason: string): Promise<boolean> {
+  async cancelSchedule(scheduleId: string): Promise<boolean> {
     const schedule = this.getState().schedules.find((item) => item.scheduleId === scheduleId)
     if (schedule === undefined || schedule.status !== 'pending') return false
     this.scheduleText.delete(scheduleId)
     await this.fabric.append(
       'attention.schedule.cancelled',
-      { scheduleId, reason },
+      { scheduleId, reason: 'owner-cancelled' },
       { actor: 'owner', correlationId: scheduleId },
     )
     this.onChange()

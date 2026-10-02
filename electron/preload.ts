@@ -776,9 +776,13 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       if (scheduleId === null || scheduleId === undefined) {
         return { ok: false, reason: 'schedule id is invalid' }
       }
-      const reason = string('reason', 200, false)
-      if (reason === null) return { ok: false, reason: 'schedule cancellation reason is invalid' }
-      return { ok: true, payload: { scheduleId, ...(reason === undefined ? {} : { reason }) } }
+      if (
+        record !== null &&
+        Object.keys(record).some((key) => key !== 'scheduleId')
+      ) {
+        return { ok: false, reason: 'schedule cancellation accepts only scheduleId' }
+      }
+      return { ok: true, payload: { scheduleId } }
     }
 
     case 'attention.inbox.read': {

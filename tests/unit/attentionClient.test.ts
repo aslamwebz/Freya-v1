@@ -125,9 +125,9 @@ describe('the owner actions this lane may take', () => {
     const mirror = attentionMirror()
     await mirror.schedule({ kind: 'reminder', text: 'breathe', dueAt: '2026-10-02T09:00:00.000Z' })
     expect(coreSubmit.mock.calls[0]?.[0]).toBe('attention.schedule.register')
-    await mirror.cancelSchedule('s1', 'changed my mind')
+    await mirror.cancelSchedule('s1')
     expect(coreSubmit.mock.calls[1]?.[0]).toBe('attention.schedule.cancel')
-    expect(coreSubmit.mock.calls[1]?.[1]).toEqual({ scheduleId: 's1', reason: 'changed my mind' })
+    expect(coreSubmit.mock.calls[1]?.[1]).toEqual({ scheduleId: 's1' })
   })
 
   it('reads one retained event back and nothing else', async () => {

@@ -6,6 +6,7 @@ import { loadKeyring } from './keyring'
 import { loadLocalEnv } from './localEnv'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
+import { PresenceHost } from './presence/host'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ModelProvider } from '../core/model/provider'
 
@@ -26,6 +27,8 @@ let mainWindow: BrowserWindow | null = null
 let workspace: WorkspaceFile | null = null
 /** One Core per process. Survives renderer reloads; dies only with the app. */
 let coreHost: ElectronCoreHost | null = null
+/** The presence host. Owns the presence window and pushes frames to it. */
+let presenceHost: PresenceHost | null = null
 /**
  * The bounded attention wake.
  *
@@ -244,6 +247,8 @@ function shutdownCoreAndThen(finish: () => void): void {
     clearInterval(attentionTimer)
     attentionTimer = null
   }
+  presenceHost?.stop()
+  presenceHost = null
   collectWorkspaceAndThen(() => {
     void (coreHost?.stop('app quitting') ?? Promise.resolve())
       .catch((error: unknown) => {
@@ -480,6 +485,29 @@ function createWindow(): BrowserWindow {
   return window
 }
 
+/** Start a Presence companion for this dashboard window and prime it from Core. */
+function startPresenceFor(window: BrowserWindow): void {
+  window.once('ready-to-show', () => {
+    if (window.isDestroyed()) return
+    presenceHost?.stop()
+    const next = new PresenceHost({
+      displayNumber: requestedDisplayNumber(),
+      dev: Boolean(DEV_SERVER),
+    })
+    presenceHost = next
+    next.start(window)
+
+    const host = coreHost
+    if (host !== null) {
+      next.updateCore(host.status())
+      next.updateAttention(host.attention())
+      next.updateWork(host.work())
+      next.updatePersonality(host.personality())
+      next.updateVoice(host.voice())
+    }
+  })
+}
+
 /* ------------------------------------------------------------------ *
  * IPC — a deliberately small, named surface
  * ------------------------------------------------------------------ */
@@ -653,6 +681,15 @@ app.whenReady().then(() => {
     )
     registerIpc()
     mainWindow = createWindow()
+    startPresenceFor(mainWindow)
+
+    // Wire the presence host to Core projections. The presence host receives
+    // the same projections as the main window, but it only forwards them to
+    // the presence window — it never interprets them.
+    coreHost?.attach((status) => presenceHost?.updateCore(status))
+    coreHost?.onAttention((projection) => presenceHost?.updateAttention(projection))
+    coreHost?.onWork((projection) => presenceHost?.updateWork(projection))
+    coreHost?.onPersonality((projection) => presenceHost?.updatePersonality(projection))
 
     // Deliberately not awaited before the window opens: a slow or unwritable log
     // should degrade Core, not hold the app off the screen. A window created
@@ -672,7 +709,10 @@ app.whenReady().then(() => {
   })
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()
+    if (mainWindow === null || mainWindow.isDestroyed()) {
+      mainWindow = createWindow()
+      startPresenceFor(mainWindow)
+    }
   })
 })
 
@@ -731,9 +771,11 @@ let voiceCaptureOpen = false
 function trackVoiceCapture(envelope: CoreCommandEnvelope, result: { ok: boolean }): void {
   if (envelope.command === 'voice.capture.start') {
     voiceCaptureOpen = result.ok
+    presenceHost?.updateVoice(requireCore().voice())
     return
   }
   if (envelope.command === 'voice.capture.end' || envelope.command === 'voice.capture.cancel') {
     voiceCaptureOpen = false
+    presenceHost?.updateVoice(requireCore().voice())
   }
 }

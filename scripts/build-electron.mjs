@@ -20,6 +20,14 @@ await build({
   external: ['electron'],
 })
 
+// The presence window's preload, also CommonJS and sandboxed.
+await build({
+  ...shared,
+  entryPoints: ['electron/presence/preload.ts'],
+  outfile: 'dist-electron/presencePreload.cjs',
+  external: ['electron'],
+})
+
 await build({
   ...shared,
   entryPoints: ['electron/main.ts'],

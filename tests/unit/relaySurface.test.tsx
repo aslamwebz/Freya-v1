@@ -26,7 +26,7 @@ let coreSubmit: ReturnType<typeof vi.fn>
 let coreRelay: ReturnType<typeof vi.fn>
 let handlers: Set<(projection: RelayProjection) => void>
 
-function ready(over: Partial<RelayProjection> = {}): RelayProjection {
+function ready(): RelayProjection {
   return projectRelay(5, initialRelayState(), () => 'ready')
 }
 

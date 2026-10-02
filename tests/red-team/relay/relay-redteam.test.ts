@@ -1,8 +1,6 @@
 // @vitest-environment node
-import { readFile } from 'node:fs/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  deepStrings,
   expectNoSentinels,
   journalText,
   startRelayCore,
@@ -116,12 +114,11 @@ describe('token and secret leakage', () => {
 
 describe('capability laundering', () => {
   it('a read capability does not imply a write capability', async () => {
-    const fixture = await start()
     // The owner holds every capability, so this is a structural check on the
     // vocabulary: the names are different and Guard enforces them separately.
     const { DefaultGuard } = await import('../../../core/security/guard')
     const guard = new DefaultGuard()
-    const reader = { id: 'owner', capabilities: new Set(['relay.email.read']), trusted: true }
+    const reader = { id: 'owner' as const, capabilities: new Set(['relay.email.read'] as const), trusted: true }
     expect(guard.evaluate(reader, 'relay.email.read').allowed).toBe(true)
     expect(guard.evaluate(reader, 'relay.email.send').allowed).toBe(false)
   })
@@ -140,6 +137,7 @@ describe('capability laundering', () => {
     // worker authority interface has no relay method.
     const { workerAuthority } = await import('../../../core/testing')
     const worker = workerAuthority(fixture.core)
+    void fixture
     const workerRecord = worker as unknown as Record<string, unknown>
     for (const key of Object.keys(workerRecord)) {
       expect(key.startsWith('relay')).toBe(false)

@@ -3,16 +3,15 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createCore, type Core } from '../../../core/index'
-import type { CoreCommandResult } from '../../../core/protocol/core-protocol'
+import { createCore } from '../../../core/index'
+import type { Capability, Core, CoreCommandResult } from '../../../core/protocol/core-protocol'
 import {
   FakeCalendarAdapter,
   FakeEmailAdapter,
   FakeExternalAdapter,
   FakeGitHubAdapter,
-  RelayTransientError,
 } from '../../../core/relay/adapters'
-import { RelayEngine } from '../../../core/relay/engine'
+import type { RelayEngine } from '../../../core/relay/engine'
 import type { RelayEmailMessage } from '../../../core/relay/types'
 import { RELAY_LIMITS } from '../../../core/relay/types'
 
@@ -794,13 +793,12 @@ describe('external connectors', () => {
 
 describe('capability boundaries', () => {
   it('read access does not imply write access', async () => {
-    const fixture = await startFixture()
     // The read capability and the write capability are different names in the
     // closed vocabulary. A principal holding only the read capability is
     // refused by Guard before the engine is reached.
     const { DefaultGuard } = await import('../../../core/security/guard')
     const guard = new DefaultGuard()
-    const reader = { id: 'owner', capabilities: new Set(['relay.email.read']), trusted: true }
+    const reader = { id: 'owner' as const, capabilities: new Set<Capability>(['relay.email.read']), trusted: true }
     const readDecision = guard.evaluate(reader, 'relay.email.read')
     expect(readDecision.allowed).toBe(true)
     const writeDecision = guard.evaluate(reader, 'relay.email.send')

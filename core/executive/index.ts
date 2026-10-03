@@ -30,6 +30,7 @@ export {
   collectSignals,
   determineReason,
   assessItem,
+  unmetDependencies,
   determineBlocker,
   createBoundedAction,
   prioritize,

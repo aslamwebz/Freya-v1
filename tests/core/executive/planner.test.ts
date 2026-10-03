@@ -59,6 +59,13 @@ describe('detectEvidenceState', () => {
     ]
     expect(detectEvidenceState(evidence, NOW)).toBe('stale')
   })
+
+  it('honours an explicit stale marker on recent evidence', () => {
+    const evidence = [
+      { evidenceId: 'e1', source: 'test', observedAt: NOW, state: 'stale' as const },
+    ]
+    expect(detectEvidenceState(evidence, NOW)).toBe('stale')
+  })
 })
 
 describe('detectConflictedEvidence', () => {

@@ -96,6 +96,35 @@ describe('projectExecutiveState', () => {
     const s2 = projectExecutiveState(context)
     expect(s1).toEqual(s2)
   })
+
+  it('surfaces plan assumptions as uncertainty, never hiding them', () => {
+    const context = makeContext({
+      plans: [
+        {
+          planId: 'plan-1',
+          goalRef: 'goal-1',
+          steps: [],
+          assumptions: [
+            {
+              assumptionId: 'assumption-cap',
+              statement: 'Capability cap-9 is available',
+              confidence: 'low',
+              source: 'capability-gap',
+              evidence: [],
+              expiresAt: NOW,
+              reversible: true,
+            },
+          ],
+          confidence: 'low',
+          reversible: true,
+          createdAt: NOW,
+          deadlineAt: NOW,
+        },
+      ],
+    })
+    const state = projectExecutiveState(context)
+    expect(state.whatIsUncertain.join(' ')).toContain('Capability cap-9 is available')
+  })
 })
 
 describe('createExecutiveItem', () => {

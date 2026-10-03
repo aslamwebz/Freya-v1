@@ -58,6 +58,9 @@ export function detectEvidenceState(evidence: readonly Evidence[], now: string):
   // A conflict is a property of the evidence itself and outranks freshness:
   // two sources disagreeing is never reported as merely fresh or stale.
   if (evidence.some((e) => e.state === 'conflicted')) return 'conflicted'
+  // An explicit invalidation is a property of the evidence too: evidence the
+  // owner or a source has marked stale is stale even if its timestamp is recent.
+  if (evidence.some((e) => e.state === 'stale')) return 'stale'
 
   const nowMs = instantMs(now)
   if (nowMs === null) return 'missing'

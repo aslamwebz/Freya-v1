@@ -81,6 +81,9 @@ function coordItem(over: Partial<CoordinationItem> = {}): CoordinationItem {
     priority: 0.5,
     missionId: null,
     runId: null,
+    requiresApproval: false,
+    approvalId: null,
+    allowedSpecialisations: [],
     ...over,
   }
 }
@@ -95,6 +98,8 @@ function coordContext(over: Partial<CoordinatorContext> = {}): CoordinatorContex
     budgetRemaining: 1000,
     pendingApprovals: new Set(),
     maxConcurrentAssignments: 8,
+    guardCleared: true,
+    governorAuthorized: true,
     ...over,
   }
 }
@@ -118,7 +123,7 @@ describe('redteam: model output is data, not authority', () => {
 
   it('model-claimed outcome cannot create evidence state', () => {
     // Evidence state comes from the Evidence records, never from a claim.
-    const signals = collectSignals(item({ evidenceState: 'fresh' }), NOW)
+    const signals = collectSignals(item({ evidenceState: 'fresh' }), NOW, new Set())
     expect(signals).not.toContain('conflicted-evidence')
     expect(signals).not.toContain('stale-evidence')
   })

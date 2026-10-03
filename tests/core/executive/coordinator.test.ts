@@ -14,6 +14,7 @@ import {
   type WorkerInfo,
   type CoordinationItem,
   type CoordinatorContext,
+  type DelegationRecord,
 } from '../../../core/executive'
 
 const NOW = '2026-10-01T12:00:00.000Z'
@@ -39,6 +40,9 @@ function makeItem(over: Partial<CoordinationItem> = {}): CoordinationItem {
     priority: 0.5,
     missionId: null,
     runId: null,
+    requiresApproval: false,
+    approvalId: null,
+    allowedSpecialisations: [],
     ...over,
   }
 }
@@ -53,7 +57,23 @@ function makeContext(over: Partial<CoordinatorContext> = {}): CoordinatorContext
     budgetRemaining: 1000,
     pendingApprovals: new Set(),
     maxConcurrentAssignments: 8,
+    guardCleared: true,
+    governorAuthorized: true,
     ...over,
+  }
+}
+
+function makeDelegationRecord(delegationId: string, workerId: string): DelegationRecord {
+  return {
+    delegationId,
+    workerId,
+    missionId: null,
+    runId: null,
+    status: 'active',
+    assignedAt: NOW,
+    deadlineAt: NOW,
+    capabilities: ['cap-1'],
+    contextRefs: [],
   }
 }
 
@@ -318,12 +338,14 @@ describe('isWaitDeadlineExpired', () => {
     expect(isWaitDeadlineExpired(start, NOW)).toBe(true)
   })
 
-  it('returns false for future, equal or invalid instants', () => {
+  it('returns true for future, equal or invalid instants', () => {
     const future = new Date(instantMs(NOW)! + 60 * 1000).toISOString()
     expect(isWaitDeadlineExpired(future, NOW)).toBe(false)
     expect(isWaitDeadlineExpired(NOW, NOW)).toBe(false)
-    expect(isWaitDeadlineExpired('invalid', NOW)).toBe(false)
-    expect(isWaitDeadlineExpired(NOW, 'invalid')).toBe(false)
+    // A wait that cannot be measured must not become unbounded: a malformed
+    // instant escalates rather than waiting forever.
+    expect(isWaitDeadlineExpired('invalid', NOW)).toBe(true)
+    expect(isWaitDeadlineExpired(NOW, 'invalid')).toBe(true)
   })
 })
 
@@ -334,5 +356,206 @@ describe('escalate', () => {
     expect(result.blockedReason).toBe('test reason')
     expect(result.delegation).toBeNull()
     expect(result.workerId).toBeNull()
+  })
+})
+
+describe('authority preservation: proof-carrying preconditions', () => {
+  it('refuses to delegate when Guard has not cleared', () => {
+    const context = makeContext({ guardCleared: false, workers: [makeWorker()] })
+    const result = coordinateItem(makeItem(), context)
+    expect(result.decision).toBe('stop')
+    expect(result.delegation).toBeNull()
+    expect(result.reasoning).toContain('guard-not-cleared')
+  })
+
+  it('refuses to delegate when Governor has not authorized cognition', () => {
+    const context = makeContext({ governorAuthorized: false, workers: [makeWorker()] })
+    const result = coordinateItem(makeItem(), context)
+    expect(result.decision).toBe('stop')
+    expect(result.delegation).toBeNull()
+    expect(result.reasoning).toContain('governor-not-authorized')
+  })
+
+  it('STOP ALL still outranks an uncleared Guard', () => {
+    const context = makeContext({
+      stopAllActive: true,
+      guardCleared: false,
+      workers: [makeWorker()],
+    })
+    expect(coordinateItem(makeItem(), context).reasoning).toContain('stop-all-active')
+  })
+
+  it('waits while a required approval is still pending', () => {
+    const item = makeItem({ requiresApproval: true, approvalId: 'approval-1' })
+    const context = makeContext({
+      workers: [makeWorker()],
+      pendingApprovals: new Set(['approval-1']),
+    })
+    const result = coordinateItem(item, context)
+    expect(result.decision).toBe('wait')
+    expect(result.delegation).toBeNull()
+    expect(result.reasoning).toContain('approval-pending')
+  })
+
+  it('escalates when a required approval is not named', () => {
+    const item = makeItem({ requiresApproval: true, approvalId: null })
+    const context = makeContext({ workers: [makeWorker()] })
+    const result = coordinateItem(item, context)
+    expect(result.decision).toBe('escalate')
+    expect(result.delegation).toBeNull()
+    expect(result.reasoning).toContain('approval-id-missing')
+  })
+
+  it('proceeds once the required approval is no longer pending', () => {
+    const item = makeItem({ requiresApproval: true, approvalId: 'approval-1' })
+    const context = makeContext({ workers: [makeWorker()], pendingApprovals: new Set() })
+    expect(coordinateItem(item, context).decision).toBe('proceed')
+  })
+})
+
+describe('specialisation narrowing', () => {
+  it('refuses a worker whose specialisation is not allowed', () => {
+    const item = makeItem({ allowedSpecialisations: ['code'] })
+    const context = makeContext({ workers: [makeWorker({ specialisation: 'research' })] })
+    const result = coordinateItem(item, context)
+    expect(result.decision).toBe('wait')
+    expect(result.delegation).toBeNull()
+  })
+
+  it('accepts a worker whose specialisation is allowed', () => {
+    const item = makeItem({ allowedSpecialisations: ['code', 'research'] })
+    const context = makeContext({ workers: [makeWorker({ specialisation: 'research' })] })
+    expect(coordinateItem(item, context).decision).toBe('proceed')
+  })
+
+  it('treats an empty allowed list as unrestricted', () => {
+    const item = makeItem({ allowedSpecialisations: [] })
+    const context = makeContext({ workers: [makeWorker({ specialisation: 'writing' })] })
+    expect(coordinateItem(item, context).decision).toBe('proceed')
+  })
+})
+
+describe('global concurrency ceiling', () => {
+  it('waits when the global assignment ceiling is already reached', () => {
+    const context = makeContext({
+      workers: [makeWorker()],
+      activeDelegations: [makeDelegationRecord('delegation-1', 'worker-9')],
+      maxConcurrentAssignments: 1,
+    })
+    const result = coordinateItem(makeItem(), context)
+    expect(result.decision).toBe('wait')
+    expect(result.delegation).toBeNull()
+    expect(result.reasoning).toContain('concurrency-ceiling-reached')
+  })
+
+  it('cannot be widened past the code-owned ceiling', () => {
+    const active = Array.from({ length: 8 }, (_, i) =>
+      makeDelegationRecord(`delegation-${i}`, `worker-${i}`),
+    )
+    const context = makeContext({
+      workers: [makeWorker()],
+      activeDelegations: active,
+      maxConcurrentAssignments: 1_000_000,
+    })
+    expect(coordinateItem(makeItem(), context).decision).toBe('wait')
+  })
+
+  it('consumes the global ceiling across a batch', () => {
+    const context = makeContext({
+      items: [makeItem({ itemId: 'a', priority: 0.9 }), makeItem({ itemId: 'b', priority: 0.8 })],
+      workers: [makeWorker()],
+      maxConcurrentAssignments: 1,
+    })
+    const results = coordinate(context)
+    expect(results[0]?.decision).toBe('proceed')
+    expect(results[1]?.decision).toBe('wait')
+    expect(results[1]?.reasoning).toContain('concurrency-ceiling-reached')
+  })
+})
+
+describe('batch resource consumption', () => {
+  it('does not over-allocate global budget across items', () => {
+    const context = makeContext({
+      items: [
+        makeItem({ itemId: 'a', priority: 0.9, requiredBudget: 60 }),
+        makeItem({ itemId: 'b', priority: 0.8, requiredBudget: 60 }),
+      ],
+      workers: [makeWorker({ remainingBudget: 1000 })],
+      budgetRemaining: 100,
+    })
+    const results = coordinate(context)
+    expect(results[0]?.decision).toBe('proceed')
+    expect(results[1]?.decision).toBe('escalate')
+  })
+
+  it('does not over-allocate a worker budget across items', () => {
+    const context = makeContext({
+      items: [
+        makeItem({ itemId: 'a', priority: 0.9, requiredBudget: 60 }),
+        makeItem({ itemId: 'b', priority: 0.8, requiredBudget: 60 }),
+      ],
+      workers: [makeWorker({ remainingBudget: 100 })],
+      budgetRemaining: 1000,
+    })
+    const results = coordinate(context)
+    expect(results[0]?.decision).toBe('proceed')
+    expect(results[1]?.decision).toBe('wait')
+  })
+
+  it('does not exceed a worker open-assignment ceiling across a batch', () => {
+    const context = makeContext({
+      items: [makeItem({ itemId: 'a', priority: 0.9 }), makeItem({ itemId: 'b', priority: 0.8 })],
+      workers: [makeWorker({ maxOpenAssignments: 1 })],
+      maxConcurrentAssignments: 8,
+    })
+    const results = coordinate(context)
+    expect(results[0]?.decision).toBe('proceed')
+    expect(results[1]?.decision).toBe('wait')
+  })
+})
+
+describe('invalid injected clock', () => {
+  it('escalates instead of minting a 1970 delegation deadline', () => {
+    const context = makeContext({ now: 'not-an-instant', workers: [makeWorker()] })
+    const result = coordinateItem(makeItem(), context)
+    expect(result.decision).toBe('escalate')
+    expect(result.delegation).toBeNull()
+    expect(result.reasoning).toContain('invalid-clock')
+  })
+
+  it('produces no delegation with a fabricated epoch deadline', () => {
+    const context = makeContext({ now: 'not-an-instant', workers: [makeWorker()] })
+    expect(coordinate(context).every((r) => r.delegation === null)).toBe(true)
+  })
+})
+
+describe('malformed input cannot widen authority or budget', () => {
+  it('refuses a negative required budget rather than increasing the batch budget', () => {
+    const item = makeItem({ requiredBudget: -1000 })
+    const context = makeContext({ workers: [makeWorker()], budgetRemaining: 10 })
+    const result = coordinateItem(item, context)
+    expect(result.decision).toBe('stop')
+    expect(result.delegation).toBeNull()
+    expect(result.reasoning).toContain('invalid-required-budget')
+  })
+
+  it('does not let a negative budget item mint a delegation in a batch', () => {
+    const context = makeContext({
+      items: [makeItem({ itemId: 'a', requiredBudget: -1000 })],
+      workers: [makeWorker()],
+      budgetRemaining: 10,
+    })
+    expect(coordinate(context)[0]?.delegation).toBeNull()
+  })
+
+  it('treats a non-finite concurrency ceiling as zero, never unbounded', () => {
+    const context = makeContext({
+      workers: [makeWorker()],
+      maxConcurrentAssignments: Number.NaN,
+    })
+    const result = coordinateItem(makeItem(), context)
+    expect(result.decision).toBe('wait')
+    expect(result.delegation).toBeNull()
+    expect(result.reasoning).toContain('concurrency-ceiling-reached')
   })
 })

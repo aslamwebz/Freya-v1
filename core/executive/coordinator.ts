@@ -9,8 +9,11 @@
  * Guard, does not override Governor, does not clear STOP ALL, does not
  * exceed budgets, and does not approve its own requests.
  *
- * A coordination failure is a refusal, not a warning. There is no
- * "proceed anyway" branch.
+ * The domain never reaches a service. Authority is carried in as **proof**:
+ * `guardCleared` and `governorAuthorized` are preconditions a caller may only
+ * obtain from Guard and Governor, and `pendingApprovals` is the durable set of
+ * approvals that have not been granted. A coordination failure is a refusal,
+ * not a warning. There is no "proceed anyway" branch.
  */
 
 import {
@@ -42,6 +45,15 @@ export interface CoordinationItem {
   readonly priority: number
   readonly missionId: string | null
   readonly runId: string | null
+  /** Whether this item's action requires an owner approval before delegation. */
+  readonly requiresApproval: boolean
+  /** The approval this item depends on. Required when `requiresApproval` is true. */
+  readonly approvalId: string | null
+  /**
+   * The worker specialisations this item may be assigned to. An empty list
+   * means unrestricted. This is a *narrowing*: it can only remove workers.
+   */
+  readonly allowedSpecialisations: readonly string[]
 }
 
 /** The coordination context. */
@@ -54,6 +66,16 @@ export interface CoordinatorContext {
   readonly budgetRemaining: number
   readonly pendingApprovals: ReadonlySet<string>
   readonly maxConcurrentAssignments: number
+  /**
+   * Proof that Guard's capability check has cleared for this coordination pass.
+   * The coordinator cannot call Guard; the caller must carry the proof in.
+   */
+  readonly guardCleared: boolean
+  /**
+   * Proof that Governor cognition authorization is available for this pass.
+   * The coordinator cannot call Governor; the caller must carry the proof in.
+   */
+  readonly governorAuthorized: boolean
 }
 
 /* ------------------------------------------------------------------ decisions */
@@ -68,11 +90,43 @@ export interface CoordinationResult {
   readonly blockedReason: string | null
 }
 
+/** A refusal that mints nothing. */
+function refuse(
+  decision: CoordinationDecision,
+  item: CoordinationItem,
+  reasoning: string,
+  blockedReason: string,
+): CoordinationResult {
+  return {
+    decision,
+    itemId: item.itemId,
+    workerId: null,
+    delegation: null,
+    reasoning: [reasoning],
+    blockedReason,
+  }
+}
+
+/**
+ * The effective global concurrency ceiling.
+ *
+ * A caller may narrow `maxConcurrentAssignments`, but it may never raise it
+ * above the code-owned `EXECUTIVE_LIMITS.maxActiveDelegations`. A caller that
+ * passes a wider number gets the ceiling, not the widening.
+ */
+function concurrencyCeiling(context: CoordinatorContext): number {
+  const requested = Number.isFinite(context.maxConcurrentAssignments)
+    ? context.maxConcurrentAssignments
+    : 0
+  return Math.max(0, Math.min(requested, EXECUTIVE_LIMITS.maxActiveDelegations))
+}
+
 /**
  * Check if a worker is eligible for assignment.
  *
- * Filters: status must be idle, must hold required capabilities,
- * must have remaining budget, must not exceed concurrency ceiling.
+ * Filters: status must be idle, must hold required capabilities, must satisfy
+ * the item's specialisation narrowing, must have remaining budget, must not
+ * exceed the per-worker concurrency ceiling.
  */
 export function isWorkerEligible(
   worker: WorkerInfo,
@@ -82,6 +136,12 @@ export function isWorkerEligible(
   if (worker.status !== 'idle') return false
   if (worker.currentOpenAssignments >= worker.maxOpenAssignments) return false
   if (worker.remainingBudget < item.requiredBudget) return false
+  if (
+    item.allowedSpecialisations.length > 0 &&
+    !item.allowedSpecialisations.includes(worker.specialisation)
+  ) {
+    return false
+  }
   for (const cap of item.requiredCapabilities) {
     if (!worker.capabilities.includes(cap)) return false
   }
@@ -158,69 +218,103 @@ export function isRetryCeilingExceeded(attempt: number): boolean {
  *
  * Deterministic: same inputs + same clock = same decision.
  * A coordination failure is a refusal, not a warning.
+ *
+ * Precedence is absolute and ordered: STOP ALL, then Guard, then Governor,
+ * then a valid injected clock, then budget, then approvals, then the global
+ * concurrency ceiling, then worker eligibility. Nothing later may override
+ * anything earlier.
  */
 export function coordinateItem(item: CoordinationItem, context: CoordinatorContext): CoordinationResult {
   if (context.stopAllActive) {
-    return {
-      decision: 'stop',
-      itemId: item.itemId,
-      workerId: null,
-      delegation: null,
-      reasoning: ['stop-all-active'],
-      blockedReason: 'STOP ALL is active',
-    }
+    return refuse('stop', item, 'stop-all-active', 'STOP ALL is active')
+  }
+
+  if (!context.guardCleared) {
+    return refuse('stop', item, 'guard-not-cleared', 'Guard capability check has not cleared')
+  }
+
+  if (!context.governorAuthorized) {
+    return refuse(
+      'stop',
+      item,
+      'governor-not-authorized',
+      'Governor cognition authorization is unavailable',
+    )
+  }
+
+  // An invalid injected clock must not silently become an epoch deadline. A
+  // delegation built from `0` would carry a 1970 deadline, which is a lie.
+  if (instantMs(context.now) === null) {
+    return refuse('escalate', item, 'invalid-clock', 'The injected clock is not a valid instant')
+  }
+
+  // A negative or non-finite budget must never widen a budget: subtracting it
+  // from the batch total would *increase* the remaining budget.
+  if (!Number.isFinite(item.requiredBudget) || item.requiredBudget < 0) {
+    return refuse(
+      'stop',
+      item,
+      'invalid-required-budget',
+      'The required budget is not a non-negative number',
+    )
   }
 
   if (context.budgetRemaining < item.requiredBudget) {
-    return {
-      decision: 'escalate',
-      itemId: item.itemId,
-      workerId: null,
-      delegation: null,
-      reasoning: ['budget-exhausted'],
-      blockedReason: 'Insufficient budget remaining',
+    return refuse('escalate', item, 'budget-exhausted', 'Insufficient budget remaining')
+  }
+
+  if (item.requiresApproval) {
+    if (item.approvalId === null) {
+      return refuse(
+        'escalate',
+        item,
+        'approval-id-missing',
+        'This item requires an approval it does not name',
+      )
     }
+    if (context.pendingApprovals.has(item.approvalId)) {
+      return refuse('wait', item, 'approval-pending', 'The required approval is still pending')
+    }
+  }
+
+  const ceiling = concurrencyCeiling(context)
+  if (context.activeDelegations.length >= ceiling) {
+    return refuse(
+      'wait',
+      item,
+      'concurrency-ceiling-reached',
+      `The workforce already holds its ${ceiling} open assignments`,
+    )
   }
 
   const eligibleWorkers = context.workers.filter((w) => isWorkerEligible(w, item, context))
 
   if (eligibleWorkers.length === 0) {
     if (shouldPreempt(item, context)) {
-      return {
-        decision: 'wait',
-        itemId: item.itemId,
-        workerId: null,
-        delegation: null,
-        reasoning: ['preemption-required'],
-        blockedReason: 'No idle worker available; preemption required',
-      }
+      return refuse(
+        'wait',
+        item,
+        'preemption-required',
+        'No idle worker available; preemption required',
+      )
     }
-    return {
-      decision: 'wait',
-      itemId: item.itemId,
-      workerId: null,
-      delegation: null,
-      reasoning: ['no-eligible-worker'],
-      blockedReason: 'No eligible worker available',
-    }
+    return refuse('wait', item, 'no-eligible-worker', 'No eligible worker available')
   }
 
   const sorted = sortWorkersByPreference(eligibleWorkers)
   const selected = sorted[0]
 
   if (selected === undefined) {
-    return {
-      decision: 'escalate',
-      itemId: item.itemId,
-      workerId: null,
-      delegation: null,
-      reasoning: ['no-worker-selected'],
-      blockedReason: 'No worker could be selected',
-    }
+    return refuse('escalate', item, 'no-worker-selected', 'No worker could be selected')
   }
 
   const nowMs = instantMs(context.now)
-  const deadlineMs = (nowMs ?? 0) + EXECUTIVE_LIMITS.maxWaitMs
+  if (nowMs === null) {
+    // Defensive: the guard above already refused this. Kept so the deadline can
+    // never be derived from a fabricated epoch even if the order changes.
+    return refuse('escalate', item, 'invalid-clock', 'The injected clock is not a valid instant')
+  }
+  const deadlineMs = nowMs + EXECUTIVE_LIMITS.maxWaitMs
 
   const delegation: Delegation = {
     delegationId: `delegation-${item.itemId}-${context.now}`,
@@ -246,21 +340,76 @@ export function coordinateItem(item: CoordinationItem, context: CoordinatorConte
 /**
  * Coordinate multiple items.
  *
- * Items are processed in priority order (highest first).
- * Deterministic: same inputs + same clock = same decisions.
+ * Items are processed in priority order (highest first), ties broken by
+ * lexicographic item id so the order is total and deterministic.
+ *
+ * The batch is simulated: a `proceed` consumes global budget, the selected
+ * worker's remaining budget and open-assignment slot, and one global
+ * concurrency slot before the next item is considered. Without this, two items
+ * could each be told there is budget and a worker for work that only fits one.
  */
 export function coordinate(context: CoordinatorContext): readonly CoordinationResult[] {
-  const sortedItems = [...context.items].sort((a, b) => b.priority - a.priority)
-  return sortedItems.map((item) => coordinateItem(item, context))
+  const sortedItems = [...context.items].sort((a, b) => {
+    if (a.priority !== b.priority) return b.priority - a.priority
+    return a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0
+  })
+
+  let budgetRemaining = context.budgetRemaining
+  const workers = context.workers.map((worker) => ({ ...worker }))
+  const activeDelegations = [...context.activeDelegations]
+  const results: CoordinationResult[] = []
+
+  for (const item of sortedItems) {
+    const stepContext: CoordinatorContext = {
+      ...context,
+      budgetRemaining,
+      workers,
+      activeDelegations,
+    }
+    const result = coordinateItem(item, stepContext)
+    results.push(result)
+
+    if (result.decision === 'proceed' && result.delegation !== null) {
+      budgetRemaining -= item.requiredBudget
+
+      const index = workers.findIndex((worker) => worker.workerId === result.workerId)
+      const worker = index >= 0 ? workers[index] : undefined
+      if (worker !== undefined) {
+        workers[index] = {
+          ...worker,
+          currentOpenAssignments: worker.currentOpenAssignments + 1,
+          remainingBudget: worker.remainingBudget - item.requiredBudget,
+        }
+      }
+
+      activeDelegations.push({
+        delegationId: result.delegation.delegationId,
+        workerId: result.delegation.workerId,
+        missionId: result.delegation.missionId,
+        runId: item.runId,
+        status: 'active',
+        assignedAt: context.now,
+        deadlineAt: result.delegation.deadlineAt,
+        capabilities: result.delegation.capabilities,
+        contextRefs: result.delegation.contextRefs,
+      })
+    }
+  }
+
+  return results
 }
 
 /**
  * Check if a wait deadline has expired.
+ *
+ * A wait that cannot be measured must not become an unbounded wait. If either
+ * instant is malformed the wait is treated as expired so the item escalates to
+ * the owner rather than waiting forever on a clock nobody can read.
  */
 export function isWaitDeadlineExpired(waitStartedAt: string, now: string): boolean {
   const startMs = instantMs(waitStartedAt)
   const nowMs = instantMs(now)
-  if (startMs === null || nowMs === null) return false
+  if (startMs === null || nowMs === null) return true
   return nowMs - startMs > EXECUTIVE_LIMITS.maxWaitMs
 }
 
@@ -271,12 +420,5 @@ export function isWaitDeadlineExpired(waitStartedAt: string, now: string): boole
  * create new capabilities, and is always visible to the owner.
  */
 export function escalate(item: CoordinationItem, reason: string): CoordinationResult {
-  return {
-    decision: 'escalate',
-    itemId: item.itemId,
-    workerId: null,
-    delegation: null,
-    reasoning: ['escalated-to-owner'],
-    blockedReason: reason,
-  }
+  return refuse('escalate', item, 'escalated-to-owner', reason)
 }

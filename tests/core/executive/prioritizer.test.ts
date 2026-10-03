@@ -101,39 +101,40 @@ describe('scoreToTier', () => {
 describe('collectSignals', () => {
   it('collects owner-explicit signal for priority intent', () => {
     const item = makeItem({ ownerIntent: 'priority' })
-    const signals = collectSignals(item, NOW)
+    const signals = collectSignals(item, NOW, new Set())
     expect(signals).toContain('owner-explicit')
   })
 
   it('collects deadline-imminent signal for urgent deadlines', () => {
     const deadline = new Date(instantMs(NOW)! + 30 * 60 * 1000).toISOString()
     const item = makeItem({ deadlineAt: deadline })
-    const signals = collectSignals(item, NOW)
+    const signals = collectSignals(item, NOW, new Set())
     expect(signals).toContain('deadline-imminent')
   })
 
-  it('collects dependency-blocked signal for unmet dependencies', () => {
+  it('collects dependency-blocked signal only while the dependency is active', () => {
     const item = makeItem({ dependencies: ['dep-1'] })
-    const signals = collectSignals(item, NOW)
-    expect(signals).toContain('dependency-blocked')
+    expect(collectSignals(item, NOW, new Set(['dep-1']))).toContain('dependency-blocked')
+    // A dependency that has completed is met, and no longer blocks.
+    expect(collectSignals(item, NOW, new Set())).not.toContain('dependency-blocked')
   })
 })
 
 describe('determineReason', () => {
   it('returns owner_override for priority intent', () => {
     const item = makeItem({ ownerIntent: 'priority' })
-    expect(determineReason(item, NOW)).toBe('owner_override')
+    expect(determineReason(item, NOW, new Set())).toBe('owner_override')
   })
 
   it('returns deadline_within_urgent_window for urgent deadlines', () => {
     const deadline = new Date(instantMs(NOW)! + 30 * 60 * 1000).toISOString()
     const item = makeItem({ deadlineAt: deadline })
-    expect(determineReason(item, NOW)).toBe('deadline_within_urgent_window')
+    expect(determineReason(item, NOW, new Set())).toBe('deadline_within_urgent_window')
   })
 
   it('returns no_signals for normal items', () => {
     const item = makeItem()
-    expect(determineReason(item, NOW)).toBe('no_signals')
+    expect(determineReason(item, NOW, new Set())).toBe('no_signals')
   })
 })
 
@@ -169,6 +170,37 @@ describe('determineBlocker', () => {
   it('returns null when no blocker exists', () => {
     const item = makeItem()
     expect(determineBlocker(item)).toBeNull()
+  })
+
+  it('blocks only while a dependency is still active', () => {
+    const item = makeItem({ dependencies: ['dep-1', 'dep-2'] })
+    expect(determineBlocker(item, new Set(['dep-1']))).toEqual({
+      type: 'dependency-unmet',
+      dependsOn: ['dep-1'],
+    })
+    expect(determineBlocker(item, new Set())).toBeNull()
+  })
+
+  it('holds conflicted evidence in a blocked state', () => {
+    const item = makeItem({ evidenceState: 'conflicted' })
+    expect(determineBlocker(item)).toEqual({ type: 'conflicted-evidence' })
+  })
+
+  it('does not block stale evidence, only conflicted', () => {
+    const item = makeItem({ evidenceState: 'stale' })
+    expect(determineBlocker(item)).toBeNull()
+  })
+
+  it('expires a deadline against the injected clock, not creation', () => {
+    const item = makeItem({
+      createdAt: '2026-10-01T00:00:00.000Z',
+      deadlineAt: '2026-10-01T06:00:00.000Z',
+    })
+    expect(determineBlocker(item, new Set(), '2026-10-01T05:00:00.000Z')).toBeNull()
+    expect(determineBlocker(item, new Set(), '2026-10-01T07:00:00.000Z')).toEqual({
+      type: 'deadline-expired',
+      deadlineAt: '2026-10-01T06:00:00.000Z',
+    })
   })
 })
 
@@ -216,5 +248,37 @@ describe('prioritize', () => {
     const result = prioritize(context)
     expect(result.ranked[0]?.itemId).toBe('a')
     expect(result.ranked[1]?.itemId).toBe('b')
+  })
+
+  it('does not block an item whose dependencies have completed', () => {
+    const item = makeItem({ itemId: 'dependent', dependencies: ['done-1'] })
+    const context: PrioritizerContext = {
+      now: NOW,
+      items: [item],
+      evidence: [],
+      activeItemIds: new Set(),
+    }
+    const result = prioritize(context)
+    expect(result.blocked.length).toBe(0)
+    expect(result.ranked[0]?.itemId).toBe('dependent')
+  })
+
+  it('blocks an item while its dependency is still active', () => {
+    const item = makeItem({ itemId: 'dependent', dependencies: ['live-1'] })
+    const context: PrioritizerContext = {
+      now: NOW,
+      items: [item],
+      evidence: [],
+      activeItemIds: new Set(['live-1']),
+    }
+    const result = prioritize(context)
+    expect(result.blocked[0]?.blocker).toEqual({ type: 'dependency-unmet', dependsOn: ['live-1'] })
+  })
+
+  it('holds conflicted evidence in the blocked list', () => {
+    const item = makeItem({ itemId: 'conflicted', evidenceState: 'conflicted' })
+    const result = prioritize(makeContext([item]))
+    expect(result.blocked[0]?.blocker).toEqual({ type: 'conflicted-evidence' })
+    expect(result.ranked.length).toBe(0)
   })
 })

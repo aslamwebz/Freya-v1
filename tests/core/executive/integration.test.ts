@@ -67,6 +67,9 @@ function makeCoordItem(over: Partial<CoordinationItem> = {}): CoordinationItem {
     priority: 0.5,
     missionId: null,
     runId: null,
+    requiresApproval: false,
+    approvalId: null,
+    allowedSpecialisations: [],
     ...over,
   }
 }
@@ -116,6 +119,8 @@ describe('integration: wake -> prioritize -> plan -> coordinate -> state', () =>
       budgetRemaining: 1000,
       pendingApprovals: new Set(),
       maxConcurrentAssignments: 8,
+      guardCleared: true,
+      governorAuthorized: true,
     }
     const decision = coordinateItem(coordinator.items[0]!, coordinator)
     expect(decision.decision).toBe('proceed')
@@ -164,26 +169,37 @@ describe('integration: authority is preserved end-to-end', () => {
       budgetRemaining: 1000,
       pendingApprovals: new Set(),
       maxConcurrentAssignments: 8,
+      guardCleared: true,
+      governorAuthorized: true,
     }
     expect(coordinateItem(context.items[0]!, context).decision).toBe('stop')
   })
 
-  it('a pending approval blocks ranking and no delegation is minted', () => {
+  it('a pending approval blocks ranking and coordination refuses the delegation', () => {
     const blocked = makeItem({ itemId: 'needs-approval', approvalPending: true })
     const ranked = prioritize(prio([blocked]))
     expect(ranked.blocked.length).toBe(1)
     expect(ranked.ranked.length).toBe(0)
+
+    // The prioritizer removing the item is not proof the coordinator refuses it.
+    // Feed the coordinator an approval-required item whose approval is pending
+    // and prove it waits without minting a delegation.
     const context: CoordinatorContext = {
       now: NOW,
-      items: [],
+      items: [makeCoordItem({ itemId: 'needs-approval', requiresApproval: true, approvalId: 'approval-1' })],
       workers: [makeWorker()],
       activeDelegations: [],
       stopAllActive: false,
       budgetRemaining: 1000,
       pendingApprovals: new Set(['approval-1']),
       maxConcurrentAssignments: 8,
+      guardCleared: true,
+      governorAuthorized: true,
     }
-    expect(context.pendingApprovals.has('approval-1')).toBe(true)
+    const decision = coordinateItem(context.items[0]!, context)
+    expect(decision.decision).toBe('wait')
+    expect(decision.delegation).toBeNull()
+    expect(decision.reasoning).toContain('approval-pending')
   })
 
   it('an exhausted budget escalates rather than delegating', () => {
@@ -196,6 +212,8 @@ describe('integration: authority is preserved end-to-end', () => {
       budgetRemaining: 0,
       pendingApprovals: new Set(),
       maxConcurrentAssignments: 8,
+      guardCleared: true,
+      governorAuthorized: true,
     }
     const decision = coordinateItem(makeCoordItem({ requiredBudget: 10 }), context)
     expect(decision.decision).toBe('escalate')

@@ -177,14 +177,32 @@ export function scoreToTier(score: number): PriorityTier {
 }
 
 /**
+ * The dependencies of an item that are still unmet.
+ *
+ * A dependency is unmet only while the item it names is still active. A
+ * dependency that has completed is met, and must not keep blocking its
+ * dependents forever. `activeItemIds` is the set of ids still in flight.
+ */
+export function unmetDependencies(
+  item: WorkItemMetadata,
+  activeItemIds: ReadonlySet<string>,
+): string[] {
+  return item.dependencies.filter((dep) => activeItemIds.has(dep))
+}
+
+/**
  * Collect the signals that contributed to a priority assessment.
  */
-export function collectSignals(item: WorkItemMetadata, now: string): PrioritySignal[] {
+export function collectSignals(
+  item: WorkItemMetadata,
+  now: string,
+  activeItemIds: ReadonlySet<string>,
+): PrioritySignal[] {
   const signals: PrioritySignal[] = []
   if (item.ownerIntent === 'priority') signals.push('owner-explicit')
   const urgency = computeUrgency(item.deadlineAt, now)
   if (urgency === 'immediate') signals.push('deadline-imminent')
-  if (item.dependencies.length > 0) {
+  if (unmetDependencies(item, activeItemIds).length > 0) {
     signals.push('dependency-blocked')
   } else if (item.dependentCount > 0) {
     signals.push('dependency-ready')
@@ -200,12 +218,16 @@ export function collectSignals(item: WorkItemMetadata, now: string): PrioritySig
 /**
  * Determine the priority reason code.
  */
-export function determineReason(item: WorkItemMetadata, now: string): PriorityReason {
+export function determineReason(
+  item: WorkItemMetadata,
+  now: string,
+  activeItemIds: ReadonlySet<string>,
+): PriorityReason {
   if (item.ownerIntent === 'priority') return PRIORITY_REASONS.owner_override
   const urgency = computeUrgency(item.deadlineAt, now)
   if (urgency === 'immediate') return PRIORITY_REASONS.deadline_within_urgent_window
   if (urgency === 'soon') return PRIORITY_REASONS.deadline_within_elevated_window
-  if (item.dependencies.length > 0) return PRIORITY_REASONS.hard_dependency_unmet
+  if (unmetDependencies(item, activeItemIds).length > 0) return PRIORITY_REASONS.hard_dependency_unmet
   if (item.dependentCount > 0) return PRIORITY_REASONS.hard_dependency_met
   if (item.verificationPending) return PRIORITY_REASONS.verification_overdue
   if (item.approvalPending) return PRIORITY_REASONS.approval_expired
@@ -221,8 +243,8 @@ export function determineReason(item: WorkItemMetadata, now: string): PriorityRe
  * Assess a single work item's priority.
  */
 export function assessItem(item: WorkItemMetadata, context: PrioritizerContext): PriorityAssessment {
-  const signals = collectSignals(item, context.now)
-  const reason = determineReason(item, context.now)
+  const signals = collectSignals(item, context.now, context.activeItemIds)
+  const reason = determineReason(item, context.now, context.activeItemIds)
   const score = computeScore(item, context.now, context.activeItemIds)
   const tier = scoreToTier(score)
   return {
@@ -236,15 +258,25 @@ export function assessItem(item: WorkItemMetadata, context: PrioritizerContext):
 
 /**
  * Determine the blocker for a blocked item, if any.
+ *
+ * `activeItemIds` is the set of ids still in flight, so a dependency that has
+ * completed is met. `now` is the injected clock: a deadline is expired when it
+ * is at or before `now`, never when it is merely before creation.
  */
-export function determineBlocker(item: WorkItemMetadata): Blocker | null {
+export function determineBlocker(
+  item: WorkItemMetadata,
+  activeItemIds: ReadonlySet<string> = new Set(),
+  now: string = item.createdAt,
+): Blocker | null {
   if (item.stopAllActive) return { type: 'stop-all' }
   if (item.budgetExhausted) return { type: 'budget-exhausted', grantId: 'unknown' }
   if (item.approvalPending) return { type: 'approval-pending', approvalId: 'unknown' }
-  if (item.dependencies.length > 0) return { type: 'dependency-unmet', dependsOn: item.dependencies }
+  const unmet = unmetDependencies(item, activeItemIds)
+  if (unmet.length > 0) return { type: 'dependency-unmet', dependsOn: unmet }
+  if (item.evidenceState === 'conflicted') return { type: 'conflicted-evidence' }
   if (item.deadlineAt !== null) {
     const deadlineMs = instantMs(item.deadlineAt)
-    const nowMs = instantMs(item.createdAt)
+    const nowMs = instantMs(now)
     if (deadlineMs !== null && nowMs !== null && deadlineMs <= nowMs) {
       return { type: 'deadline-expired', deadlineAt: item.deadlineAt }
     }
@@ -298,13 +330,13 @@ export function prioritize(context: PrioritizerContext): PrioritizationResult {
       continue
     }
 
-    const blocker = determineBlocker(item)
+    const blocker = determineBlocker(item, activeIds, now)
     if (blocker !== null) {
       blocked.push({
         itemId: item.itemId,
         kind: item.kind,
         blocker,
-        reasoning: [determineReason(item, now)],
+        reasoning: [determineReason(item, now, activeIds)],
       })
       continue
     }
@@ -312,7 +344,7 @@ export function prioritize(context: PrioritizerContext): PrioritizationResult {
     const score = computeScore(item, now, activeIds)
     const tier = scoreToTier(score)
     const urgency = computeUrgency(item.deadlineAt, now)
-    const reason = determineReason(item, now)
+    const reason = determineReason(item, now, activeIds)
 
     if (item.ownerIntent === 'defer') {
       deferred.push({

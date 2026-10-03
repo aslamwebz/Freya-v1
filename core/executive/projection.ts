@@ -66,9 +66,20 @@ export function projectExecutiveState(context: ProjectionContext): ExecutiveStat
     (item) => `${item.itemId}: ${item.blocker.type}`,
   )
 
-  const whatIsUncertain: string[] = context.prioritization.ranked
-    .filter((item) => item.urgency === 'immediate' || item.priority === 'critical')
-    .map((item) => `${item.itemId}: ${item.reasoning.join(', ')}`)
+  // Uncertainty is never hidden. Every explicit assumption a plan carries is
+  // surfaced here; an assumption nobody can see is a hidden inference.
+  const assumptionUncertainty: string[] = context.plans.flatMap((plan) =>
+    plan.assumptions.map(
+      (assumption) => `${assumption.assumptionId}: ${assumption.statement} (${assumption.confidence})`,
+    ),
+  )
+
+  const whatIsUncertain: string[] = [
+    ...context.prioritization.ranked
+      .filter((item) => item.urgency === 'immediate' || item.priority === 'critical')
+      .map((item) => `${item.itemId}: ${item.reasoning.join(', ')}`),
+    ...assumptionUncertainty,
+  ].slice(0, EXECUTIVE_LIMITS.maxWhatIsUncertainItems)
 
   const nextBoundedAction = whatMatters.length > 0 ? createNextBoundedAction(whatMatters[0]!, context.now) : null
 

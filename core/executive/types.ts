@@ -373,6 +373,7 @@ export type Blocker =
   | { readonly type: 'budget-exhausted'; readonly grantId: string }
   | { readonly type: 'capability-missing'; readonly capability: string }
   | { readonly type: 'stop-all' }
+  | { readonly type: 'conflicted-evidence' }
   | { readonly type: 'deadline-expired'; readonly deadlineAt: string }
   | { readonly type: 'worker-unavailable'; readonly workerId: string }
 

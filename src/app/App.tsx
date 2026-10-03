@@ -12,6 +12,7 @@ import { Brain } from './presence/Brain'
 import { brainState } from './presence/state'
 import { Home, type ScreenSlots } from './screens/Home'
 import { Mind } from './screens/Mind'
+import { World } from './screens/World'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
@@ -107,7 +108,9 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
     ? Home({ snapshot })
     : current.id === 'mind'
       ? Mind()
-      : placeholder(current.label, current.symbol, 'This screen is next in the build.')
+      : current.id === 'world'
+        ? World()
+        : placeholder(current.label, current.symbol, 'This screen is next in the build.')
   const cycleTheme = () => preferences.update({ theme: THEMES[(themeIndex + 1) % THEMES.length]! })
 
   const send = () => {
@@ -165,24 +168,27 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
 
       <div className="a-ticker" aria-hidden="true"><span>PERSISTENT</span><span>·</span><span>EVOLVING</span><span>·</span><span>ALIGNED</span><span>·</span><span>FOR A BRIGHTER TOMORROW</span></div>
 
-      <main id="a-main" tabIndex={-1} className="a-body">
-        <section className="a-col a-col-left" aria-label="Left panels">{slots.left}</section>
+      <main id="a-main" tabIndex={-1} className="a-body" data-layout={slots.layout === 'wide' ? 'wide' : 'standard'}>
+        {slots.layout === 'wide' ? null : <section className="a-col a-col-left" aria-label="Left panels">{slots.left}</section>}
         <section className="a-centre" aria-label="Freya centre">
-          <div className="a-planet" aria-hidden="true" />
-          {/* The Brain: the one constant of every screen. */}
-          <div className="a-centre-stage" data-screen={current.id}>
-            <Brain state={cognition} motif={design.centre} variant={design.style} rings={design.rings === 'on'} />
-            <div className="a-centre-labels" aria-hidden="true">
-              <span className="a-cl a-cl-top">{arc[0]}</span>
-              <span className="a-cl a-cl-left">{arc[1]}</span>
-              <span className="a-cl a-cl-right">{arc[2]}</span>
-              <span className="a-cl a-cl-bl">{arc[3]}</span>
-              <span className="a-cl a-cl-br">{arc[4]}</span>
-            </div>
-          </div>
-          <div className="a-centre-caption"><b>FREYA</b><span>PHASE 19</span><small>SAME MIND. A BRIGHTER TOMORROW.</small></div>
+          {slots.centre ?? (
+            <>
+              <div className="a-planet" aria-hidden="true" />
+              <div className="a-centre-stage" data-screen={current.id}>
+                <Brain state={cognition} motif={design.centre} variant={design.style} rings={design.rings === 'on'} />
+                <div className="a-centre-labels" aria-hidden="true">
+                  <span className="a-cl a-cl-top">{arc[0]}</span>
+                  <span className="a-cl a-cl-left">{arc[1]}</span>
+                  <span className="a-cl a-cl-right">{arc[2]}</span>
+                  <span className="a-cl a-cl-bl">{arc[3]}</span>
+                  <span className="a-cl a-cl-br">{arc[4]}</span>
+                </div>
+              </div>
+              <div className="a-centre-caption"><b>FREYA</b><span>PHASE 19</span><small>SAME MIND. A BRIGHTER TOMORROW.</small></div>
+            </>
+          )}
         </section>
-        <section className="a-col a-col-right" aria-label="Right panels">{slots.right}</section>
+        {slots.layout === 'wide' ? null : <section className="a-col a-col-right" aria-label="Right panels">{slots.right}</section>}
         {slots.bottom ? <section className="a-bottom" aria-label="Lower panels">{slots.bottom}</section> : null}
       </main>
 

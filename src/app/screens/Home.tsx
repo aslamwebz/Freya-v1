@@ -7,6 +7,10 @@ export interface ScreenSlots {
   readonly left: ReactNode
   readonly right: ReactNode
   readonly bottom: ReactNode
+  /** A screen may replace the centre (a graph, a timeline, an office). */
+  readonly centre?: ReactNode
+  /** 'wide' spans the centre across the side columns. */
+  readonly layout?: 'standard' | 'wide'
 }
 
 /** A small attention ring. A null value renders as an em dash, never a 0%. */

@@ -1,0 +1,26 @@
+/* Screen-specific layouts. */
+
+/* World */
+.w-view { display: grid; grid-template-rows: auto 1fr; gap: var(--a-gap); min-height: 0; }
+.w-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.w-filters { display: flex; gap: .4rem; flex-wrap: wrap; }
+.w-filter { border: 1px solid var(--f-line); background: none; color: var(--f-muted); border-radius: 999px; padding: .3rem .8rem; cursor: pointer; }
+.w-filter[aria-pressed='true'] { color: var(--f-heading); border-color: var(--f-action); background: color-mix(in srgb, var(--f-action) 12%, transparent); }
+.w-main { display: grid; grid-template-columns: 1fr 22rem; gap: var(--a-gap); min-height: 0; }
+.w-graph { width: 100%; height: 100%; min-height: 30rem; }
+.w-edge { stroke: color-mix(in srgb, var(--f-action) 32%, transparent); stroke-width: 1; }
+.w-core-glow { fill: color-mix(in srgb, var(--f-action) 14%, transparent); }
+.w-core { fill: color-mix(in srgb, var(--f-cognition) 40%, transparent); stroke: var(--f-action); }
+.w-core-label { fill: var(--f-ink); font-size: 11px; letter-spacing: .2em; text-anchor: middle; }
+.w-node { fill: color-mix(in srgb, var(--f-panel) 80%, transparent); stroke: var(--f-glass-edge); }
+.w-node-label { fill: var(--f-heading); font-size: 12px; letter-spacing: .14em; text-anchor: middle; }
+.w-node-count { fill: var(--f-muted); font-size: 11px; text-anchor: middle; }
+.w-node-item { fill: var(--f-muted); font-size: 10px; text-anchor: middle; }
+.w-person { overflow-y: auto; }
+.w-person-head { display: flex; align-items: center; gap: .7rem; }
+.w-person-avatar { width: 44px; height: 44px; font-size: 1.1rem; }
+.w-tabs { display: flex; gap: .8rem; border-bottom: 1px solid var(--f-line); }
+.w-tabs span { padding-bottom: .35rem; color: var(--f-muted); font-size: .84rem; }
+.w-tabs span[data-active='true'] { color: var(--f-heading); border-bottom: 2px solid var(--f-action); }
+.w-stats-row { display: flex; gap: 2rem; color: var(--f-muted); }
+.w-stats-row b { color: var(--f-ink); font-size: 1.2rem; }

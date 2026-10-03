@@ -10,6 +10,7 @@ import { Relay } from './Relay'
 import { Workforce } from './Workforce'
 import { Widgets } from './Widgets'
 import { BrainCore } from './BrainCore'
+import { Settings } from './Settings'
 export function Workspace({ id, open, panels, ...props }: WorkspaceProps & { id: WorkspaceId; open: (id: WorkspaceId) => void; panels: readonly string[] }) {
   switch (id) {
     case 'home': return <Home {...props} open={open} panels={panels} />
@@ -22,5 +23,6 @@ export function Workspace({ id, open, panels, ...props }: WorkspaceProps & { id:
     case 'workforce': return <Workforce {...props} />
     case 'widgets': return <Widgets open={open} />
     case 'brain-core': return <BrainCore {...props} />
+    case 'settings': return <Settings {...props} />
   }
 }

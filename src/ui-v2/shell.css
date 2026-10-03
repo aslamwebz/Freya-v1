@@ -191,3 +191,8 @@ body { background: #040910; }
 .f-focus-panel>.f-muted { margin-top:.3rem; margin-bottom:.2rem; }
 .f-focus-panel .f-progress-line { margin-top:.45rem; }
 .f-focus-panel .f-tags { margin-top:.4rem; }
+
+/* Settings reads as one calm column rather than a wall of panels. */
+.f-settings { max-width:46rem; display:grid; gap:1rem; }
+.f-settings .f-panel { display:grid; gap:.85rem; }
+.f-settings-actions { display:flex; gap:.6rem; flex-wrap:wrap; margin-top:.3rem; }

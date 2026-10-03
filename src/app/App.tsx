@@ -147,14 +147,10 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
       <header className="a-head">
         <div className="a-head-left">
           <a className="a-mark" href="#a-main" aria-label="Freya Home" onClick={() => setScreen('home')}><span className="a-orbit" aria-hidden="true" /></a>
-          <div className="a-brand"><b>FREYA</b><i>|</i><span>PHASE 19</span>
+          <div className="a-brand"><b>FREYA</b>
             <small>A persistent intelligence for a brighter tomorrow</small></div>
         </div>
         <div className="a-head-right">
-          <div className="a-look" role="group" aria-label="Look">
-            <Button aria-pressed={settings.theme === 'abyss'} onClick={() => preferences.update({ theme: 'abyss' })}>Home</Button>
-            <Button aria-pressed={settings.theme === 'violet'} onClick={() => preferences.update({ theme: 'violet' })}>Mind</Button>
-          </div>
           <blockquote><span>{QUOTES[quote]![0]}</span><em>{QUOTES[quote]![1]}</em></blockquote>
           <Clock />
           <Button className="a-theme" aria-label="Change theme" onClick={cycleTheme}><Glyph name="settings" /></Button>

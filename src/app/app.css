@@ -44,8 +44,8 @@
   position: relative; z-index: 2;
   display: flex; flex-direction: column; gap: .2rem;
   padding: .7rem .7rem 1rem;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--f-bg) 92%, transparent), color-mix(in srgb, var(--f-panel) 60%, transparent));
-  border-right: 1px solid var(--f-line);
+  background: none;
+  border-right: 0;
 }
 .a-mark { display: grid; place-items: center; width: 44px; height: 44px; margin: 0 .3rem; text-decoration: none; flex: none; }
 .a-orbit {
@@ -105,7 +105,6 @@
   display: flex; gap: .7rem; justify-content: flex-end;
   padding: 0 1.6rem .5rem;
   font-size: .6rem; letter-spacing: .24em; color: var(--f-muted);
-  border-bottom: 1px solid var(--f-line);
 }
 
 /* Body: left · centre · right, with a lower row spanning left + centre. */
@@ -201,6 +200,3 @@
 .a-win-close:hover { background: var(--f-danger); color: #fff; }
 
 /* The two looks: Home (blue) and Mind (violet). */
-.a-look { display: flex; gap: .25rem; padding: .2rem; border: 1px solid var(--f-line); border-radius: 999px; }
-.a-look .f-button { border-radius: 999px; padding: .28rem .8rem; color: var(--f-muted); }
-.a-look .f-button[aria-pressed='true'] { color: var(--f-heading); background: color-mix(in srgb, var(--f-action) 14%, transparent); }

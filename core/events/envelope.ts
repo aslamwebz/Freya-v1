@@ -838,6 +838,8 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
     titleLength: number
     summaryLength: number
     bodyLength: number
+    referenceCount: number
+    conflictCount: number
   }
   'life.entry.withdrawn': { entryId: string; revision: number; reason: string }
   'life.conflict.detected': { conflictId: string; entryA: string; entryB: string }

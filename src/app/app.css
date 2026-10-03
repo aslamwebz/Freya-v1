@@ -160,9 +160,10 @@
   display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: .7rem;
   width: min(60rem, 100%);
   padding: .5rem .7rem; border-radius: 999px;
-  border: 1px solid var(--f-line);
-  background: var(--f-dialog);
-  box-shadow: var(--f-shadow);
+  border: 1px solid color-mix(in srgb, var(--f-glass-edge) 45%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--f-ink) 6%, transparent), transparent 45%), var(--f-glass);
+  backdrop-filter: blur(20px) saturate(150%);
+  box-shadow: var(--f-shadow), inset 0 1px 0 color-mix(in srgb, var(--f-ink) 12%, transparent);
 }
 .a-voice { border-radius: 50%; padding: .55rem; }
 .a-cmd .f-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

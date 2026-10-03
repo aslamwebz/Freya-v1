@@ -161,9 +161,7 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
           <div className="a-planet" aria-hidden="true" />
           {/* The Brain: the one constant of every screen. */}
           <div className="a-centre-stage" data-screen={current.id}>
-            {design.centre === 'brain'
-              ? <Brain state={cognition} variant={design.style} rings={design.rings === 'on'} />
-              : <p className="a-centre-note">{design.centre[0]?.toUpperCase()}{design.centre.slice(1)} centre — in progress</p>}
+            <Brain state={cognition} motif={design.centre} variant={design.style} rings={design.rings === 'on'} />
             <div className="a-centre-labels" aria-hidden="true">
               <span className="a-cl a-cl-top">UNDERSTAND</span>
               <span className="a-cl a-cl-left">PLAN</span>

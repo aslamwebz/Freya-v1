@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type * as ThreeTypes from 'three'
 import type { BrainState } from './state'
-import type { CentreStyle } from '../dressing/store'
+import type { Centre, CentreStyle } from '../dressing/store'
 
 /**
  * The Brain — Freya thinking.
@@ -40,7 +40,7 @@ interface BrainHandle {
   setState(state: BrainState): void
 }
 
-export function Brain({ state, variant = 'lattice', rings = true }: { state: BrainState; variant?: CentreStyle; rings?: boolean }) {
+export function Brain({ state, motif = 'brain', variant = 'lattice', rings = true }: { state: BrainState; motif?: Centre; variant?: CentreStyle; rings?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const handleRef = useRef<BrainHandle | null>(null)
   const stateRef = useRef<BrainState>(state)
@@ -56,7 +56,7 @@ export function Brain({ state, variant = 'lattice', rings = true }: { state: Bra
         const THREE = await import('three')
         const canvas = canvasRef.current
         if (disposed || canvas === null) return
-        cleanup = build(THREE, canvas, stateRef, variant, rings, (handle) => {
+        cleanup = build(THREE, canvas, stateRef, motif, variant, rings, (handle) => {
           handleRef.current = handle
           handle.setState(stateRef.current)
         })
@@ -71,7 +71,7 @@ export function Brain({ state, variant = 'lattice', rings = true }: { state: Bra
       cleanup = null
       handleRef.current = null
     }
-  }, [variant, rings])
+  }, [motif, variant, rings])
 
   useEffect(() => {
     handleRef.current?.setState(state)
@@ -93,6 +93,7 @@ function build(
   THREE: typeof ThreeTypes,
   canvas: HTMLCanvasElement,
   stateRef: { current: BrainState },
+  motif: Centre,
   variant: CentreStyle,
   rings: boolean,
   onReady: (handle: BrainHandle) => void,
@@ -103,8 +104,8 @@ function build(
   const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100)
   camera.position.z = 5.2
 
-  // A point distribution for the chosen style.
-  const shellPositions = shellPoints(variant)
+  // A point distribution for the chosen motif (and, for the brain, its style).
+  const shellPositions = centrePoints(motif, variant)
   const shellGeom = new THREE.BufferGeometry()
   shellGeom.setAttribute('position', new THREE.Float32BufferAttribute(shellPositions, 3))
 
@@ -243,9 +244,70 @@ function build(
   }
 }
 
-/** The point distribution for a centre style. */
-function shellPoints(variant: CentreStyle): number[] {
+/** The point distribution for a centre. The brain also varies by style. */
+function centrePoints(motif: Centre, variant: CentreStyle): number[] {
   const points: number[] = []
+  if (motif === 'orb') {
+    const n = 1500
+    const golden = Math.PI * (3 - Math.sqrt(5))
+    for (let i = 0; i < n; i += 1) {
+      const y = 1 - (i / (n - 1)) * 2
+      const radius = Math.sqrt(Math.max(0, 1 - y * y))
+      const angle = i * golden
+      const r = 0.96 + Math.random() * 0.06
+      points.push(Math.cos(angle) * radius * r, y * r, Math.sin(angle) * radius * r)
+    }
+    return points
+  }
+  if (motif === 'galaxy') {
+    const arms = 3
+    const perArm = 340
+    for (let a = 0; a < arms; a += 1) {
+      const phase = (a / arms) * Math.PI * 2
+      for (let i = 0; i < perArm; i += 1) {
+        const t = i / perArm
+        const angle = phase + t * 3.2
+        const radius = 0.12 + t * 0.92
+        const spread = (Math.random() - 0.5) * 0.09 * (1 - t * 0.6)
+        points.push(Math.cos(angle) * radius + spread, (Math.random() - 0.5) * 0.14 * (1 - t), Math.sin(angle) * radius + spread)
+      }
+    }
+    return points
+  }
+  if (motif === 'reactor') {
+    const core = 380
+    for (let i = 0; i < core; i += 1) {
+      const u = Math.random() * 2 - 1
+      const theta = Math.random() * Math.PI * 2
+      const s = Math.sqrt(Math.max(0, 1 - u * u))
+      const r = 0.42 * Math.cbrt(Math.random())
+      points.push(Math.cos(theta) * s * r, u * r, Math.sin(theta) * s * r)
+    }
+    const ring = 640
+    for (let i = 0; i < ring; i += 1) {
+      const angle = (i / ring) * Math.PI * 2
+      const r = 1.02 + (Math.random() - 0.5) * 0.04
+      points.push(Math.cos(angle) * r, (Math.random() - 0.5) * 0.03, Math.sin(angle) * r)
+    }
+    return points
+  }
+  if (motif === 'tesseract') {
+    const corners: [number, number, number][] = [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]]
+    const edges: [number, number][] = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]
+    const s = 0.85
+    for (const [a, b] of edges) {
+      const from = corners[a]!
+      const to = corners[b]!
+      for (let k = 0; k < 26; k += 1) {
+        const t2 = k / 25
+        points.push((from[0] + (to[0] - from[0]) * t2) * s,
+          (from[1] + (to[1] - from[1]) * t2) * s,
+          (from[2] + (to[2] - from[2]) * t2) * s)
+      }
+    }
+    return points
+  }
+  // The brain: lattice (default), slices, or flow.
   if (variant === 'slices') {
     const bands = 14
     const per = 36
@@ -263,11 +325,11 @@ function shellPoints(variant: CentreStyle): number[] {
   if (variant === 'flow') {
     const n = 520
     for (let i = 0; i < n; i += 1) {
-      const t = i / n
-      const angle = t * Math.PI * 2 * 7
-      const y = Math.sin(t * Math.PI * 2 * 3) * 0.55
+      const t2 = i / n
+      const angle = t2 * Math.PI * 2 * 7
+      const y = Math.sin(t2 * Math.PI * 2 * 3) * 0.55
       const shell = Math.sqrt(Math.max(0, 1 - y * y))
-      const radius = (0.75 + 0.25 * Math.sin(t * Math.PI * 6)) * shell
+      const radius = (0.75 + 0.25 * Math.sin(t2 * Math.PI * 6)) * shell
       points.push(Math.cos(angle) * radius, y, Math.sin(angle) * radius)
     }
     return points

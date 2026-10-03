@@ -5,6 +5,7 @@ const paths: Record<string, string> = {
   memory: 'M20 6c0 2-16 2-16 0s16-2 16 0ZM4 6v12c0 4 16 4 16 0V6M4 12c0 3 16 3 16 0',
   create: 'm12 3 2 7 7 2-7 2-2 7-2-7-7-2 7-2 2-7Z',
   home: 'M3 11 12 3l9 8M5 10v10h5v-6h4v6h5V10',
+  chat: 'M4 5h16v11H9l-4 4V5Zm3 4h10M7 12h6',
   mind: 'M9 18c-5 0-6-7-3-9 0-5 6-6 6-2 0-4 6-3 6 2 3 2 2 9-3 9M12 7v14M7 11l3 2m7-2-3 2',
   mission: 'M12 3 2 21h20L12 3Zm0 6v5m0 3h.01',
   forge: 'm12 3 10 6-10 6L2 9l10-6ZM2 13l10 6 10-6M2 17l10 6 10-6',

@@ -1,5 +1,6 @@
 export const WORKSPACES = [
   { id: 'home', label: 'Home', symbol: 'home', description: 'A little clarity. A wider possibility.' },
+  { id: 'chat', label: 'Chat', symbol: 'chat', description: 'Talk with Freya. She thinks once and says what she actually has.' },
   { id: 'mind', label: 'Mind', symbol: 'mind', description: 'Understand the moment. See what matters.' },
   { id: 'mission', label: 'Mission', symbol: 'mission', description: 'From intention to meaningful progress.' },
   { id: 'forge', label: 'Forge', symbol: 'forge', description: 'From possibility to capability.' },

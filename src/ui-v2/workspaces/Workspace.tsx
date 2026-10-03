@@ -1,6 +1,7 @@
 import type { WorkspaceId } from './catalog'
 import type { WorkspaceProps } from './shared'
 import { Home } from './Home'
+import { Chat } from './Chat'
 import { Mind } from './Mind'
 import { Mission } from './Mission'
 import { Forge } from './Forge'
@@ -14,6 +15,7 @@ import { Settings } from './Settings'
 export function Workspace({ id, open, panels, ...props }: WorkspaceProps & { id: WorkspaceId; open: (id: WorkspaceId) => void; panels: readonly string[] }) {
   switch (id) {
     case 'home': return <Home {...props} open={open} panels={panels} />
+    case 'chat': return <Chat />
     case 'mind': return <Mind {...props} />
     case 'mission': return <Mission {...props} />
     case 'forge': return <Forge {...props} />

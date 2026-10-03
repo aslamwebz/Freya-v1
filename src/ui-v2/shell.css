@@ -196,3 +196,15 @@ body { background: #040910; }
 .f-settings { max-width:46rem; display:grid; gap:1rem; }
 .f-settings .f-panel { display:grid; gap:.85rem; }
 .f-settings-actions { display:flex; gap:.6rem; flex-wrap:wrap; margin-top:.3rem; }
+
+/* Chat — the transcript, and only the states Core actually reported. */
+.f-chat { display:grid; gap:.8rem; max-width:52rem; }
+.f-chat-log { display:grid; gap:.7rem; overflow-y:auto; max-height:min(60vh, 34rem); padding-right:.3rem; }
+.f-chat-empty { color:var(--f-muted); }
+.f-chat-turn { display:grid; gap:.2rem; padding:.7rem .9rem; border:1px solid var(--f-line); border-radius:var(--f-radius-small); background:var(--f-panel); }
+.f-chat-turn[data-role='user'] { border-color:var(--f-action); }
+.f-chat-turn[data-state='generating'] { opacity:.8; }
+.f-chat-turn b { font-size:.72em; letter-spacing:.12em; text-transform:uppercase; color:var(--f-heading); }
+.f-chat-turn span { white-space:pre-wrap; word-break:break-word; }
+.f-chat-boundary { color:var(--f-attention); border-left:2px solid var(--f-attention); padding-left:.6rem; }
+.f-chat-stop { justify-self:start; }

@@ -10,6 +10,8 @@ import { createViews, type ViewState } from './workspaces/viewState'
 import { Button, Field } from './primitives/Controls'
 import { Clock } from './primitives/Clock'
 import { Glyph } from './primitives/Glyph'
+import { conversationMirror, ensureConversationAttached } from '../platform/conversationClient'
+import { sendMessage } from './chat/sendMessage'
 
 export function App({ preferences, windows, adapter }: { preferences: PreferencesStore; windows: WindowsStore; adapter: UiAdapter }) {
   const settings = useSyncExternalStore(preferences.subscribe, preferences.getSnapshot, preferences.getSnapshot)
@@ -28,6 +30,14 @@ export function App({ preferences, windows, adapter }: { preferences: Preference
    * declares its own pending state. The shell only claims the mode it is in.
    */
   const preview = uiMode(snapshot) === 'preview'
+  const mirror = conversationMirror()
+  const conversation = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
+  const generating = conversation?.activeTurn != null
+  // A live window subscribes to the conversation immediately so a message sent
+  // before Chat is opened still lands in the same conversation.
+  useEffect(() => {
+    if (!preview) void ensureConversationAttached()
+  }, [preview])
   const [selected, select] = useState<WorkspaceId>('home')
   const current = settings.mode === 'immersive' ? windowState.active ?? selected : selected
   const [views, setViews] = useState(createViews)
@@ -76,12 +86,23 @@ export function App({ preferences, windows, adapter }: { preferences: Preference
       {settings.mode === 'immersive' && <div className="f-window-switcher" aria-label="Open windows">{windowState.windows.map((window) => <Button key={window.id}
         aria-label={`Restore ${workspaceLabel(window.id)} window`} aria-pressed={windowState.active === window.id && !window.minimized}
         onClick={() => { windows.focus(window.id); select(window.id) }}>{window.pinned && <span aria-hidden="true">⌖</span>}{workspaceLabel(window.id)}{window.minimized && <small>Minimized</small>}</Button>)}</div>}
-      <footer className="f-dock"><form aria-label="Freya composer" onSubmit={(event) => { event.preventDefault(); if (draft.trim()) setNotice(preview ? 'Preview only. Your message has not been sent.' : 'The composer is not connected yet. Nothing has been sent.') }}>
+      <footer className="f-dock"><form aria-label="Freya composer" onSubmit={(event) => {
+        event.preventDefault()
+        const text = draft
+        if (!text.trim()) return
+        if (preview) { setNotice('Preview only. Your message has not been sent.'); return }
+        setDraft('')
+        setNotice('')
+        open('chat')
+        void sendMessage(mirror, conversation?.activeConversationId ?? null, text).then((result) => {
+          setNotice(result.ok ? '' : result.notice)
+        })
+      }}>
         <Button className="f-voice" disabled aria-label="Voice unavailable in design preview" title="No microphone is accessed"><Glyph name="mic" size={24} /></Button>
-        <Field label="Ask Freya" placeholder={intent === 'Create' ? 'An idea worth exploring…' : 'Ask Freya…'} value={draft} onChange={(event) => setDraft(event.target.value)} />
+        <Field label="Ask Freya" placeholder={generating ? 'Freya is answering…' : intent === 'Create' ? 'An idea worth exploring…' : 'Ask Freya…'} value={draft} onChange={(event) => setDraft(event.target.value)} />
         <div className="f-intents">{['Think', 'Plan', 'Create', 'Search'].map((value) => <Button key={value} aria-pressed={intent === value} onClick={() => setIntent(value)}>{value}</Button>)}</div>
-        <Button type="submit" variant="primary" disabled={!draft.trim()} aria-label="Try composer preview"><Glyph name="arrow" /></Button>
-      </form>{notice && <p role="status" className="f-composer-status">{notice}</p>}</footer>
+        <Button type="submit" variant="primary" disabled={!draft.trim() || generating} aria-label="Send message"><Glyph name="arrow" /></Button>
+      </form>{generating && <p role="status" className="f-composer-status">Freya is thinking…</p>}{notice && <p role="status" className="f-composer-status">{notice}</p>}</footer>
     </div>
     {customizing && <aside ref={customizePanel} className="f-customization" role="dialog" aria-label="Customize workspace">
       <header><div><p className="f-eyebrow">Make it yours</p><h2>Customize</h2></div><Button aria-label="Close customization" onClick={() => customize(false)}>×</Button></header>

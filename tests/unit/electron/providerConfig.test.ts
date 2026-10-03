@@ -1,9 +1,10 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync } from 'node:fs'
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { loadLocalEnv } from '../../../electron/localEnv'
 
 /**
  * The provider config store.
@@ -228,5 +229,74 @@ describe('provider config', () => {
     expect(env.NANOGPT_BASE_URL).toBe('https://env/v1')
     expect(env.NANOGPT_MODEL).toBe('env-model')
     expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
+  })
+})
+
+/**
+ * The precedence exactly as `main.ts` applies it: the `.env` loader runs first,
+ * then the stored setting is overlaid, then the explicit launch snapshot is
+ * restored last. These tests exercise that order with the real loader rather than
+ * a hand-seeded object, so a change to the sequencing in `main.ts` that breaks the
+ * contract is caught here.
+ */
+describe('provider configuration precedence (explicit > stored > .env)', () => {
+  const KEYS = ['NANOGPT_API_KEY', 'NANOGPT_BASE_URL', 'NANOGPT_MODEL', 'FREYA_ALLOW_LIVE_MODEL'] as const
+
+  async function withCleanEnv(run: () => Promise<void>): Promise<void> {
+    const saved = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]))
+    for (const key of KEYS) delete process.env[key]
+    try {
+      await run()
+    } finally {
+      for (const key of KEYS) {
+        if (saved[key] === undefined) delete process.env[key]
+        else process.env[key] = saved[key]
+      }
+    }
+  }
+
+  it('lets the stored setting override .env', async () => {
+    await withCleanEnv(async () => {
+      const envPath = join(dir, '.env')
+      await writeFile(envPath, 'NANOGPT_API_KEY=sk-file\nNANOGPT_MODEL=file-model\n', 'utf8')
+      loadLocalEnv(envPath)
+      expect(process.env.NANOGPT_API_KEY).toBe('sk-file')
+
+      await store().write({ model: 'stored-model', liveEnabled: true, apiKey: 'sk-stored' })
+      await store().applyToEnv(process.env, {})
+
+      expect(process.env.NANOGPT_API_KEY).toBe('sk-stored')
+      expect(process.env.NANOGPT_MODEL).toBe('stored-model')
+      expect(process.env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
+    })
+  })
+
+  it('lets an explicit launch value beat both the store and .env', async () => {
+    await withCleanEnv(async () => {
+      const envPath = join(dir, '.env')
+      await writeFile(envPath, 'NANOGPT_API_KEY=sk-file\n', 'utf8')
+      loadLocalEnv(envPath)
+
+      await store().write({ model: 'stored-model', liveEnabled: true, apiKey: 'sk-stored' })
+      await store().applyToEnv(process.env, { NANOGPT_API_KEY: 'sk-real' })
+
+      expect(process.env.NANOGPT_API_KEY).toBe('sk-real')
+      expect(process.env.NANOGPT_MODEL).toBe('stored-model')
+    })
+  })
+
+  it('leaves a .env credential and live flag alone when the store owns neither', async () => {
+    await withCleanEnv(async () => {
+      const envPath = join(dir, '.env')
+      await writeFile(envPath, 'NANOGPT_API_KEY=sk-file\nFREYA_ALLOW_LIVE_MODEL=1\n', 'utf8')
+      loadLocalEnv(envPath)
+
+      await store().write({ baseUrl: 'https://stored/v1' })
+      await store().applyToEnv(process.env, {})
+
+      expect(process.env.NANOGPT_API_KEY).toBe('sk-file')
+      expect(process.env.NANOGPT_BASE_URL).toBe('https://stored/v1')
+      expect(process.env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
+    })
   })
 })

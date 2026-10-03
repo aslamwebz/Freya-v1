@@ -2,11 +2,14 @@ import type { ReactNode } from 'react'
 import { uiMode, type Resource, type UiSnapshot } from '../state/contract'
 import { Badge, Button, EmptyState } from '../primitives/Controls'
 import { Glyph } from '../primitives/Glyph'
+import type { PreferencesStore } from '../theme/preferences'
 export { Compass } from './Presence'
 import type { ViewState } from './viewState'
 
 export interface WorkspaceProps {
   readonly snapshot: UiSnapshot; readonly view: ViewState; readonly update: (patch: Partial<ViewState>) => void
+  /** The appearance store, present in the live shell. Absent in a bare component test. */
+  readonly preferences?: PreferencesStore
 }
 
 /**

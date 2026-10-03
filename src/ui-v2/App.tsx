@@ -56,7 +56,7 @@ export function App({ preferences, windows, adapter }: { preferences: Preference
   const open = (id: WorkspaceId) => { select(id); if (settings.mode === 'immersive') windows.open(id) }
   const openWidget = (id: WorkspaceId) => { select(id); preferences.update({ mode: 'immersive' }); windows.open(id) }
   const mode = (value: Preferences['mode']) => { if (value === 'app') select(current); preferences.update({ mode: value }); if (value === 'immersive') windows.open(current) }
-  const render = (id: WorkspaceId) => <Workspace id={id} snapshot={snapshot} view={views[id]} update={(patch) => updateView(id, patch)} open={openWidget} panels={settings.homePanels} />
+  const render = (id: WorkspaceId) => <Workspace id={id} snapshot={snapshot} view={views[id]} update={(patch) => updateView(id, patch)} open={openWidget} panels={settings.homePanels} preferences={preferences} />
   const meta = WORKSPACES.find((space) => space.id === current)!
   return <div className="freya-v2" data-theme={settings.theme} data-density={settings.density}
     data-text-scale={settings.textScale} data-workspace={current} data-mode={settings.mode} data-backdrop={settings.backdrop} data-effects={settings.reducedEffects ? 'reduced' : 'full'}

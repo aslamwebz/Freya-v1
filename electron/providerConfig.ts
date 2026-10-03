@@ -30,6 +30,14 @@ import { dirname } from 'node:path'
 /** Bumped only when the on-disk shape changes incompatibly. */
 export const PROVIDER_CONFIG_VERSION = 1
 
+/** The four environment names Core's nano-gpt provider reads. */
+export const PROVIDER_ENV_NAMES = [
+  'NANOGPT_API_KEY',
+  'NANOGPT_BASE_URL',
+  'NANOGPT_MODEL',
+  'FREYA_ALLOW_LIVE_MODEL',
+] as const
+
 /** The non-secret half a window is allowed to see. Never carries the key. */
 export interface ProviderConfig {
   baseUrl: string
@@ -73,11 +81,15 @@ export class ProviderConfigStore {
   /** The non-secret config, plus whether a stored key can actually be opened. */
   async read(): Promise<ProviderConfig> {
     const file = (await this.readFile()) ?? EMPTY
+    return this.viewOf(file, this.unwrap(file.wrappedKey))
+  }
+
+  private viewOf(file: ProviderConfigFile, key: string | null): ProviderConfig {
     return {
       baseUrl: file.baseUrl,
       model: file.model,
       liveEnabled: file.liveEnabled,
-      hasKey: this.unwrap(file.wrappedKey) !== null,
+      hasKey: key !== null && key.length > 0,
     }
   }
 
@@ -102,48 +114,80 @@ export class ProviderConfigStore {
       wrappedKey,
     }
     await writeAtomically(this.filePath, file)
-    return {
-      baseUrl: file.baseUrl,
-      model: file.model,
-      liveEnabled: file.liveEnabled,
-      hasKey: this.unwrap(file.wrappedKey) !== null,
-    }
+    return this.viewOf(file, this.unwrap(file.wrappedKey))
   }
 
   /**
    * Apply the stored provider values to `env` in the exact names Core reads.
    *
-   * When no key is stored, `NANOGPT_API_KEY` is deleted rather than left as
-   * whatever the process happened to carry, so a store with no credential cannot
-   * masquerade as a configured provider. Only the raw key bytes reach `env`, and
-   * `env` is main-process memory — never a window, a log or a journal.
+   * One file read, not two: the same record supplies both the non-secret view and
+   * the wrapped key, so a concurrent write between the two cannot produce a view
+   * and a key that disagree.
+   *
+   * When no config has been stored this does nothing at all. An absent store must
+   * not delete a credential that came from the real environment or `.env`, nor
+   * force live inference off for a launch that never configured the app setting.
+   *
+   * When a key is stored it is decrypted into `env`; when the store exists but has
+   * no key, `NANOGPT_API_KEY` is deleted so a cleared credential cannot linger.
+   * `explicit` is the process launch environment captured before the `.env`
+   * loader ran: any value in it is written back last, so an explicit launch always
+   * wins over both a `.env` file and the stored app setting. Only the raw key
+   * bytes reach `env`, and `env` is main-process memory — never a window, a log or
+   * a journal.
    */
-  async applyToEnv(env: NodeJS.ProcessEnv): Promise<ProviderConfig> {
-    const view = await this.read()
-    const key = await this.readDecryptedKey()
+  async applyToEnv(
+    env: NodeJS.ProcessEnv,
+    explicit: Record<string, string | undefined> = {},
+  ): Promise<ProviderConfig> {
+    const file = await this.readFile()
+    if (file === null) return this.viewOf(EMPTY, null)
+    const key = this.unwrap(file.wrappedKey)
+    const view = this.viewOf(file, key)
     const resolved = resolveProviderEnv(env as Record<string, string | undefined>, {
       apiKey: key,
-      baseUrl: view.baseUrl,
-      model: view.model,
-      liveEnabled: view.liveEnabled,
+      baseUrl: file.baseUrl,
+      model: file.model,
+      liveEnabled: file.liveEnabled,
     })
     for (const [name, value] of Object.entries(resolved)) {
       if (value !== undefined) env[name] = value
     }
-    if (key === null || key.length === 0) delete env.NANOGPT_API_KEY
+    if (key === null) delete env.NANOGPT_API_KEY
+    for (const name of PROVIDER_ENV_NAMES) {
+      if (explicit[name] !== undefined) env[name] = explicit[name]
+    }
     return view
   }
 
-  private async readDecryptedKey(): Promise<string | null> {
-    const file = await this.readFile()
-    return this.unwrap(file?.wrappedKey ?? null)
+  /**
+   * Why OS secure storage cannot protect a key, or null when it can.
+   *
+   * The `basic_text` check is copied in shape from `electron/keyring.ts`: Electron
+   * reports encryption as *available* on some Linux configurations while having
+   * selected a backend whose wrapping key is a hard-coded plaintext password. That
+   * is not a security boundary, so it is treated exactly like no storage at all.
+   */
+  private unavailableReason(): string | null {
+    if (!safeStorage.isEncryptionAvailable()) {
+      return 'this machine has no OS secure storage'
+    }
+    if (
+      process.platform === 'linux' &&
+      typeof safeStorage.getSelectedStorageBackend === 'function' &&
+      safeStorage.getSelectedStorageBackend() === 'basic_text'
+    ) {
+      return 'Electron selected the insecure basic_text storage backend'
+    }
+    return null
   }
 
   /** Wrap with the OS, or refuse. A refusal is reported to the caller by `hasKey`. */
   private wrap(value: string): string | null {
-    if (!safeStorage.isEncryptionAvailable()) {
+    const reason = this.unavailableReason()
+    if (reason !== null) {
       // Fixed text, no value. The caller learns only that the key was not saved.
-      console.warn('[freya] the provider credential was not saved: no OS secure storage')
+      console.warn(`[freya] the provider credential was not saved: ${reason}`)
       return null
     }
     try {
@@ -158,7 +202,7 @@ export class ProviderConfigStore {
   /** Unwrap one stored key, with every failure reported as absence. */
   private unwrap(wrappedKey: string | null): string | null {
     if (wrappedKey === null) return null
-    if (!safeStorage.isEncryptionAvailable()) return null
+    if (this.unavailableReason() !== null) return null
     try {
       const value = safeStorage.decryptString(Buffer.from(wrappedKey, 'base64'))
       return value.length > 0 ? value : null

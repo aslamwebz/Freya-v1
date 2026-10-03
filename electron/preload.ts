@@ -674,7 +674,6 @@ const MAX_PROVIDER_MODEL_CHARS = 256
 /** A provider credential, with generous headroom over any real key. */
 const MAX_PROVIDER_KEY_CHARS = 4_096
 
-
 /**
  * The provider settings a window may set, rebuilt from named fields.
  *

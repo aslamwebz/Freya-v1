@@ -20,6 +20,11 @@ const DEV_SERVER = process.env.FREYA_DEV_SERVER
 const WORKSPACE_FILE = 'workspace.json'
 const CORE_LOG_FILE = 'core-events.jsonl'
 
+// Captured before the `.env` loader runs. A stored provider setting is applied
+// beneath this snapshot at startup, so an explicit launch always wins over both a
+// `.env` file and the app's saved settings. Never logged or forwarded.
+const EXPLICIT_ENV: NodeJS.ProcessEnv = { ...process.env }
+
 // Local `.env` first, in the main process, before anything reads configuration.
 // Real environment variables win over the file; values are never logged, and
 // nothing here is forwarded to a window — the preload bridge carries named
@@ -693,7 +698,7 @@ function registerIpc(): void {
   })
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (!ownsProfile) return
   workspace = new WorkspaceFile({
     path: join(app.getPath('userData'), WORKSPACE_FILE),
@@ -701,6 +706,10 @@ app.whenReady().then(() => {
   // Created beside the workspace, and created before Core so the stored provider
   // values can be applied to the process environment Core is then built from.
   providerStore = new ProviderConfigStore(join(app.getPath('userData'), 'provider.json'))
+  // A credential saved through the Settings surface must be usable on the next
+  // launch, so it is applied here — before Core reads `process.env.NANOGPT_*`.
+  // A real launch environment still wins; the `.env` file does not.
+  await providerStore.applyToEnv(process.env, EXPLICIT_ENV)
   // The keys are fetched before the Core is constructed, and they are the only
   // secrets this process handles. A machine with no OS secure storage gets `null`
   // for both, which makes Core fall back to ephemeral stores that label themselves —

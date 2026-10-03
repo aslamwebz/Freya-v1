@@ -327,6 +327,13 @@ export function admitCapabilityAction(input: SensesAdmissionInput): SensesAdmiss
   // 10. Admitted: a typed pending decision and nothing more.
   const timeoutMs = effectiveTimeout(request.timeoutMs, action.timeoutMs)
   const admittedAt = input.now
+  const deadlineMs = (instantMs(admittedAt) ?? 0) + timeoutMs
+  // An instant at the very edge of the representable range cannot carry a
+  // deadline. Admission is total, so refuse with a code rather than throw from
+  // `toISOString` or clamp a deadline that did not happen.
+  if (!Number.isFinite(deadlineMs) || deadlineMs > MAX_INSTANT_MS) {
+    return refuse('invalid_context', 'the action deadline is not a representable instant')
+  }
   const admitted: SensesAdmittedAction = {
     decision: 'admitted',
     status: 'pending',
@@ -336,7 +343,7 @@ export function admitCapabilityAction(input: SensesAdmissionInput): SensesAdmiss
     input: Object.freeze({ ...request.input }),
     admittedAt,
     timeoutMs,
-    deadlineAt: new Date((instantMs(admittedAt) ?? 0) + timeoutMs).toISOString(),
+    deadlineAt: new Date(deadlineMs).toISOString(),
     risk: action.risk,
     requiresApproval: action.requiresApproval,
     correlationId: request.correlationId ?? null,
@@ -345,6 +352,15 @@ export function admitCapabilityAction(input: SensesAdmissionInput): SensesAdmiss
 }
 
 /* ------------------------------------------------------------ internals */
+
+/**
+ * The largest instant a JavaScript `Date` can represent, in milliseconds.
+ *
+ * `Date.parse('+275760-09-13T00:00:00.000Z')` is a *valid* instant that lands
+ * exactly here, so `now + timeoutMs` can leave the representable range and make
+ * `toISOString` throw. Admission must stay total, so the overflow is refused.
+ */
+const MAX_INSTANT_MS = 8_640_000_000_000_000
 
 function readKind(request: unknown): Phase25CapabilityKind | null {
   if (typeof request !== 'object' || request === null) return null

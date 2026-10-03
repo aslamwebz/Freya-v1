@@ -43,3 +43,34 @@
 .l-glance-ring { display: grid; place-items: center; width: 72px; height: 72px; border-radius: 50%; border: 2px solid var(--f-action); }
 .l-glance-ring b { font-size: 1.3rem; }
 .l-glance-ring span { font-size: .62rem; color: var(--f-muted); }
+
+/* Workforce */
+.wf-view { display: grid; grid-template-rows: auto 1fr; gap: var(--a-gap); min-height: 0; }
+.wf-tabs { justify-content: center; }
+.wf-grid { display: grid; grid-template-columns: 12rem 1fr 24rem; gap: var(--a-gap); min-height: 0; }
+.wf-left { display: grid; align-content: center; }
+.wf-left h1 { font-family: var(--f-narrative); font-weight: 400; font-size: 1.7rem; letter-spacing: .18em; text-transform: uppercase; color: var(--f-muted); line-height: 1.35; margin: 0; }
+.wf-office { position: relative; border-radius: 18px; overflow: hidden; border: 1px solid var(--f-line); min-height: 34rem; background: var(--f-panel); }
+.wf-office-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .7; }
+.wf-freya { position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); width: 11rem; border-radius: 14px; opacity: .92; }
+.wf-agent { position: absolute; width: 11.5rem; padding: .5rem .6rem; border-radius: 12px; border: 1px solid var(--f-line); background: var(--f-dialog); backdrop-filter: blur(10px); display: grid; gap: .12rem; box-shadow: var(--f-shadow); }
+.wf-agent b { font-size: .8rem; }
+.wf-agent small { font-size: .66rem; color: var(--f-heading); }
+.wf-agent p { margin: 0; font-size: .66rem; color: var(--f-muted); }
+.wf-agent-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--f-action); }
+.wf-agent[data-tone='cognition'] .wf-agent-dot { background: var(--f-cognition); }
+.wf-agent[data-tone='positive'] .wf-agent-dot { background: var(--f-positive); }
+.wf-agent[data-tone='attention'] .wf-agent-dot { background: var(--f-attention); }
+.wf-right { display: flex; flex-direction: column; gap: var(--a-gap); overflow-y: auto; }
+.wf-summary { display: grid; grid-template-columns: auto 1fr; gap: .8rem; align-items: center; }
+.wf-summary .c-bars { grid-column: auto; }
+.wf-ring { position: relative; display: grid; place-items: center; width: 84px; height: 84px; border-radius: 50%; background: conic-gradient(var(--f-positive) 0 67%, var(--f-cognition) 67% 84%, var(--f-attention) 84% 92%, color-mix(in srgb, var(--f-muted) 42%, transparent) 92% 100%); }
+.wf-ring-core { display: grid; place-items: center; width: 62px; height: 62px; border-radius: 50%; background: var(--f-panel); }
+.wf-ring-core b { font-size: 1.15rem; }
+.wf-ring-core span { font-size: .6rem; color: var(--f-muted); }
+.wf-stats { display: flex; gap: 1.2rem; color: var(--f-muted); font-size: .8rem; }
+.wf-stats b { color: var(--f-ink); font-size: 1.05rem; }
+.wf-status[data-tone='intelligence'] { color: var(--f-action); }
+.wf-status[data-tone='cognition'] { color: var(--f-cognition); }
+.wf-status[data-tone='positive'] { color: var(--f-positive); }
+.wf-status[data-tone='attention'] { color: var(--f-attention); }

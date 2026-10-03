@@ -14,6 +14,7 @@ import { Home, type ScreenSlots } from './screens/Home'
 import { Mind } from './screens/Mind'
 import { World } from './screens/World'
 import { Life } from './screens/Life'
+import { Workforce } from './screens/Workforce'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
@@ -113,7 +114,9 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
         ? World()
         : current.id === 'life'
           ? Life()
-          : placeholder(current.label, current.symbol, 'This screen is next in the build.')
+          : current.id === 'workforce'
+            ? Workforce()
+            : placeholder(current.label, current.symbol, 'This screen is next in the build.')
   const cycleTheme = () => preferences.update({ theme: THEMES[(themeIndex + 1) % THEMES.length]! })
 
   const send = () => {

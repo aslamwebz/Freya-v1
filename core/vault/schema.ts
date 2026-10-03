@@ -14,7 +14,7 @@ import type { NativeConnection } from './binding'
  * with no extra table to bootstrap.
  */
 
-export const VAULT_SCHEMA_VERSION = 1
+export const VAULT_SCHEMA_VERSION = 2
 
 export interface VaultMigrationContext {
   exec(sql: string): void
@@ -141,6 +141,68 @@ export const VAULT_MIGRATIONS: readonly VaultMigration[] = Object.freeze([
       context.run('INSERT OR IGNORE INTO vault_meta (key, value) VALUES (?, ?)', [
         'created_at',
         context.now().toISOString(),
+      ])
+    },
+  },
+  {
+    version: 2,
+    name: 'world-evidence',
+    up: (context) => {
+      // Phase 22's evidence ledger, in the same encrypted database.
+      //
+      // One row per admitted piece of evidence, in its own table rather than in a
+      // `vault_kv` blob, because this domain's durable shape *is* relational: replay
+      // order is a column, a withdrawal is a row that names an older row, and a
+      // revision names the record it replaces. All three are properties the fold and
+      // the withdrawal path depend on, and none of them survive being packed into one
+      // opaque body.
+      //
+      // Every scalar the fold and the codec need is a real column so a query never has
+      // to parse JSON to decide whether a record is legal. Only the three genuinely
+      // nested claims — the entity, the relation and the withdrawal — are stored as
+      // canonical JSON, because they are optional sub-documents of a record rather
+      // than fields of a row. They are re-validated on read exactly like everything
+      // else, so a stored sub-document is never trusted because it parsed.
+      //
+      // There is deliberately no `authority`, `capability`, `permission`, `grant` or
+      // `trust` column here, and the evidence `source` column records *evidential*
+      // provenance only. Nothing in this schema can express permission, so no row
+      // written through it can widen what Freya may do.
+      context.exec(
+        `CREATE TABLE IF NOT EXISTS world_evidence (
+           evidence_id      TEXT PRIMARY KEY,
+           sequence         INTEGER NOT NULL,
+           kind             TEXT NOT NULL,
+           channel          TEXT NOT NULL,
+           recorded_at      TEXT NOT NULL,
+           observed_at      TEXT NOT NULL,
+           source           TEXT NOT NULL,
+           actor            TEXT NOT NULL,
+           source_ref       TEXT,
+           sensitivity      TEXT NOT NULL,
+           epistemic        TEXT NOT NULL,
+           confidence       TEXT NOT NULL,
+           evidence_summary TEXT,
+           supersedes       TEXT,
+           entity           TEXT,
+           relation         TEXT,
+           withdrawal       TEXT
+         )`,
+      )
+      // Replay order. `evidence_id` is the tie-break so that an ordering is total even
+      // if a hand-edited row ever claimed a sequence another row already holds.
+      context.exec(
+        'CREATE INDEX IF NOT EXISTS world_evidence_sequence ON world_evidence (sequence, evidence_id)',
+      )
+      // Withdrawals and revisions are looked up by what they name, not by scanning.
+      context.exec('CREATE INDEX IF NOT EXISTS world_evidence_supersedes ON world_evidence (supersedes)')
+      // Non-secret bookkeeping for this domain: the highest evidence counter the Core
+      // had issued when the ledger was last committed, so a restart re-seeds exactly
+      // rather than from whatever the retained rows happen to say.
+      context.exec('CREATE TABLE IF NOT EXISTS world_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+      context.run('INSERT OR IGNORE INTO world_meta (key, value) VALUES (?, ?)', [
+        'evidence_sequence',
+        '0',
       ])
     },
   },

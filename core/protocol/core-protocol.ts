@@ -17,6 +17,7 @@ import type { FoundryCommandOutcome } from './foundry'
 import type { RelayCommandOutcome } from './relay'
 import type { SkillCommandOutcome } from './skills'
 import type { LifeCommandOutcome } from './life'
+import type { WorldCommandOutcome } from './world'
 
 /* ------------------------------------------------------------ identity */
 
@@ -173,6 +174,20 @@ export const CAPABILITIES = [
   'relay.github.pr.create',
   'relay.external.invoke',
   'relay.approval.decide',
+
+  // World & self (Phase 22). Two, and the split is the same one `work.*`,
+  // `mission.*` and `skill.*` make: reading what Freya thinks she knows is a
+  // different privilege from being able to tell her something.
+  //
+  // Neither appears in `WORKER_CAPABILITIES`, so a worker principal can neither read
+  // nor write the world model. A worker is `trusted: false`, and Guard refuses on
+  // `trusted` before it looks at capabilities at all.
+  //
+  // Holding either of these is *not* evidence. A capability name cannot be expressed
+  // as an entity or as a relation in the world model at all, so there is nothing a
+  // claim could contain that would widen what these two permit.
+  'world.status.read',
+  'world.statement.submit',
 ] as const
 
 export type Capability = (typeof CAPABILITIES)[number]
@@ -662,6 +677,32 @@ export type CoreCommandName =
   | 'skill.select'
   | 'skill.detail.read'
 
+  /* --------------------------------------------------------- world & self */
+  /**
+   * Phase 22. Five reads and two owner acts, and the shape of the group is the whole
+   * argument: a window may *ask* what Freya believes about the world and about
+   * herself, and the owner may add or withdraw a claim. Nothing else.
+   *
+   * It may **not**: invent an entity, invent a relationship, state its own source or
+   * certainty, name a capability as a fact, promote a claim to verified, resolve a
+   * conflict, or touch Freya's identity. There is deliberately no
+   * `world.entity.create`, no `world.relation.assert`, no `world.confidence.set` and
+   * no `world.identity.write`; a window reaching for those finds `unknown command`,
+   * which is the correct answer.
+   *
+   * `world.statement.submit` and `world.statement.withdraw` are owner-only through
+   * Guard and are **not** in the preload command allowlist, so a renderer cannot
+   * reach them at all. Core's own observation seams call the same admission
+   * directly, with a channel Core assigned.
+   */
+  | 'world.summary.read'
+  | 'world.entities.read'
+  | 'world.entity.read'
+  | 'world.relations.read'
+  | 'self.status.read'
+  | 'world.statement.submit'
+  | 'world.statement.withdraw'
+
 export interface CoreCommandEnvelope {
   command: CoreCommandName
   /** Correlates the acknowledgement with the request that caused it. */
@@ -760,6 +801,18 @@ export interface CoreCommandResult {
    * facts.
    */
   workforce?: WorkforceCommandOutcome
+
+  /**
+   * The World & self view of a world command's result.
+   *
+   * Its own slot, and one worth naming: the world model is the first subsystem whose
+   * projection is a *graph* rather than a list, so a window that received it on a
+   * shared channel would receive every node and edge of the owner's world at once.
+   * The outcome carries exactly one operation's bounded view instead, and both
+   * mutating operations answer with the evidence id they produced, so a caller can
+   * withdraw that claim later by id rather than by guessing at it.
+   */
+  world?: WorldCommandOutcome
 
   /**
    * The Context view of a Context command's result.

@@ -493,6 +493,23 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:skills', projection)
   })
 
+  /**
+   * World & self: a thirteenth channel, and the narrowest one in this file.
+   *
+   * Only the *summary* is pushed, and the only command-free read is the summary too.
+   * The graph, the entity list, the inspector and the self status are all reached
+   * through `freya:core:submit` with a read command, which Core Guard-evaluates.
+   *
+   * There is deliberately no `freya:core:world:write` channel and no preload method
+   * that accepts a claim. The two owner-facing world commands exist in Core, are
+   * owner-only through Guard, and are absent from the preload command allowlist — so
+   * a renderer cannot create an entity, a relation, a trust level or a confidence
+   * even if it can reach this bridge.
+   */
+  const detachWorld = coreHost?.onWorld((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:world', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -508,6 +525,7 @@ function createWindow(): BrowserWindow {
     detachOffice?.()
     detachRelay?.()
     detachSkills?.()
+    detachWorld?.()
   })
 
   if (DEV_SERVER) {
@@ -641,6 +659,9 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:relay', () => requireCore().relay())
   // The Skills projection is read-only; mutation remains Core-command-only.
   ipcMain.handle('freya:core:skills', () => requireCore().skills())
+  // The World & self summary is read-only, and it is counts only. The graph, the
+  // entity list, the inspector and the self status are Core commands, not a channel.
+  ipcMain.handle('freya:core:world', () => requireCore().world())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

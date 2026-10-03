@@ -24,3 +24,4 @@ export {
   type VaultPaths,
 } from './path-policy'
 export { VaultMissionStore, MAX_VAULT_MISSION_BYTES } from './repositories/mission-store'
+export { VaultWorldStore } from './repositories/world-store'

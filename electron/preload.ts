@@ -29,6 +29,7 @@ import { RELAY_NO_PAYLOAD } from '../core/protocol/relay'
 import { RELAY_LIMITS } from '../core/relay/types'
 import type { OfficeProjection } from '../core/office/projection'
 import type { SkillProjection } from '../core/protocol/skills'
+import type { WorldSummaryView } from '../core/protocol/world'
 import { SKILL_NO_PAYLOAD } from '../core/protocol/skills'
 import { SKILL_LIMITS } from '../core/skills/types'
 import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
@@ -430,6 +431,22 @@ const api = {
   },
 
   /**
+   * The World & self **summary**: counts, claim kinds, freshness, conflicts. Not the
+   * graph — that is `coreSubmit('world.relations.read')`, which Core bounds and
+   * Guard-evaluates. No method here creates anything: the two owner-facing world
+   * commands are absent from `CORE_COMMANDS`.
+   */
+  coreWorld: (): Promise<WorldSummaryView | null> => ipcRenderer.invoke('freya:core:world'),
+
+  onCoreWorld: (handler: (projection: WorldSummaryView) => void): (() => void) => {
+    const listener = (_event: unknown, projection: WorldSummaryView): void => handler(projection)
+    ipcRenderer.on('freya:core:world', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:world', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -615,6 +632,16 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'life.timeline.read',
   'life.entry.read',
 
+  // World & self: five **reads**. `world.statement.submit` and `.withdraw` are
+  // deliberately absent — owner-only in Core, whose own seams call the same admission
+  // directly. Leaving them off is what makes "a renderer cannot invent an entity, a
+  // relation, a trust level or a confidence" true of the bridge, not just its code.
+  'world.summary.read',
+  'world.entities.read',
+  'world.entity.read',
+  'world.relations.read',
+  'self.status.read',
+
   // Office. A window may read the Office projection and ask for an agent to
   // join the desktop Presence. Note what it may *not* do: it cannot invent a
   // station, inflate a count, fabricate a percentage, name a principal, assert
@@ -667,6 +694,50 @@ function carriesNothing(payload: unknown): boolean {
   if (typeof payload !== 'object') return false
   if (Array.isArray(payload)) return false
   return Object.keys(payload as Record<string, unknown>).length === 0
+}
+
+/**
+ * The world protocol's refusal sentence, restated rather than imported: importing it
+ * would pull `core/protocol/world.ts` and every frozen absent projection into a preload
+ * script every window parses at startup, and Phase 18 measures exactly that. A red-team
+ * test asserts the two copies are the same string, so they cannot drift silently.
+ */
+const WORLD_NO_PAYLOAD = 'this world command takes no payload'
+
+/**
+ * Entity kinds a world read may name, written out rather than imported from
+ * `core/world` for the same budget reason. Core re-checks every kind on arrival, so this
+ * is a convenience, not a boundary.
+ */
+const WORLD_READ_KINDS: ReadonlySet<string> = new Set([
+  'person', 'project', 'organisation', 'place', 'mission', 'run',
+  'task', 'worker', 'team', 'skill', 'artifact', 'self',
+])
+
+/**
+ * Narrow a world read to a closed field list plus a per-field check. One shape for all
+ * three: one place to refuse is one place to audit, and an unlisted field is refused
+ * whole rather than ignored.
+ */
+function narrowWorldRead(
+  payload: unknown,
+  fields: readonly string[],
+  check: (body: Record<string, unknown>) => string | null,
+): { ok: true } | { ok: false; reason: string } {
+  if (payload !== undefined && (typeof payload !== 'object' || payload === null || Array.isArray(payload))) {
+    return { ok: false, reason: 'this world read takes an object' }
+  }
+  const body = (payload ?? {}) as Record<string, unknown>
+  if (Object.keys(body).some((key) => !fields.includes(key))) {
+    return { ok: false, reason: `this world read accepts only ${fields.join(', ')}` }
+  }
+  const refusal = check(body)
+  return refusal === null ? { ok: true } : { ok: false, reason: refusal }
+}
+
+/** A usable, bounded id. */
+function isBoundedId(value: unknown): boolean {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256
 }
 
 const MAX_ID_CHARS = 256
@@ -1390,6 +1461,51 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       if (!carriesNothing(payload)) return { ok: false, reason: SKILL_NO_PAYLOAD }
       return { ok: true }
     }
+
+    case 'world.summary.read':
+    case 'self.status.read':
+      // Payloadless: a filter here is how a bounded read becomes a query.
+      if (!carriesNothing(payload)) return { ok: false, reason: WORLD_NO_PAYLOAD }
+      return { ok: true }
+
+    case 'world.entities.read':
+      return narrowWorldRead(payload, ['kind', 'includeWithdrawn'], (body) => {
+        if (body.kind != null && !WORLD_READ_KINDS.has(String(body.kind))) {
+          return 'that is not an entity kind this Core knows'
+        }
+        if (body.includeWithdrawn !== undefined && typeof body.includeWithdrawn !== 'boolean') {
+          return 'includeWithdrawn is true or false'
+        }
+        return null
+      })
+
+    case 'world.entity.read':
+      // One id and nothing else: there is no "list every claim's text" form.
+      return narrowWorldRead(payload, ['entityId'], (body) =>
+        isBoundedId(body.entityId) ? null : 'entityId is not a usable id',
+      )
+
+    case 'world.relations.read':
+      // `maxDepth` caps at 2 so a window cannot ask for the whole world by walking.
+      return narrowWorldRead(payload, ['focusEntityId', 'kinds', 'maxDepth'], (body) => {
+        if (body.focusEntityId != null && !isBoundedId(body.focusEntityId)) {
+          return 'focusEntityId is not a usable entity id'
+        }
+        if (body.kinds != null) {
+          const list = body.kinds as unknown[]
+          if (!Array.isArray(list) || list.length === 0 || list.length > 12) {
+            return 'kinds must be a short list of entity kinds'
+          }
+          if (list.some((kind) => typeof kind !== 'string' || !WORLD_READ_KINDS.has(kind))) {
+            return 'kinds must contain only entity kinds'
+          }
+        }
+        const depth = body.maxDepth
+        if (depth != null && (typeof depth !== 'number' || !Number.isInteger(depth) || depth < 0 || depth > 2)) {
+          return 'maxDepth is 0, 1 or 2'
+        }
+        return null
+      })
 
     case 'skill.admit':
     case 'skill.revise': {

@@ -11,6 +11,7 @@ import type { AttentionProjection } from '../core/protocol/attention'
 import type { SkillProjection } from '../core/protocol/skills'
 import type { LifeProjection } from '../core/protocol/life'
 import type { WorldSummaryView } from '../core/protocol/world'
+import type { ConsciousContextProjection } from '../core/protocol/consciousness'
 import type { FoundryProjection } from '../core/protocol/foundry'
 import type { RelayProjection } from '../core/protocol/relay'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
@@ -377,6 +378,26 @@ export interface CoreHost {
   onWorld(send: (projection: WorldSummaryView) => void): () => void
   world(): WorldSummaryView | null
   /**
+   * Attach to the unified conscious context, pushed immediately.
+   *
+   * A read and a follow, like every other lane here and nothing more: there is no
+   * `consciousness.set`, no `consciousness.refresh`, and no method on this class
+   * that rebuilds, corrects or requests a snapshot on a window's say-so. A
+   * surface that wanted a fresher picture than Core last pushed would need a
+   * command Core does not have.
+   */
+  onConsciousness(send: (projection: ConsciousContextProjection) => void): () => void
+  /**
+   * The unified conscious context, or `null` before Core has started.
+   *
+   * `null` rather than the frozen absent snapshot, following the same rule as
+   * every other pull on this class: a host with nothing to report says nothing,
+   * and the renderer turns `null` into the protocol's own absent value. A Core
+   * that *is* running returns a snapshot whose sections say which subsystems are
+   * missing, so the two absences stay distinguishable all the way to the surface.
+   */
+  consciousness(): ConsciousContextProjection | null
+  /**
    * Attach to the Office projection. Returns a disposer.
    *
    * Its own channel like every subsystem's, and the note that matters is what
@@ -551,6 +572,16 @@ export class ElectronCoreHost implements CoreHost {
   private readonly officeWindows = new Set<(projection: OfficeProjection) => void>()
   private readonly relayWindows = new Set<(projection: RelayProjection) => void>()
   /**
+   * Windows following the unified conscious context.
+   *
+   * Its own set rather than a reuse of an existing one, so detaching this lane
+   * cannot detach a board or an office floor by accident - the subsystems it
+   * reads keep their own subscribers, and this one carries a snapshot.
+   */
+  private readonly consciousnessWindows = new Set<
+    (projection: ConsciousContextProjection) => void
+  >()
+  /**
    * The Context transport box. Binds structurally to a reporting Core, holds a
    * window set, and can write nothing — see `ContextChannel`. Deliberately not
    * a field on Core's construction arguments: Core builds its own Context
@@ -639,6 +670,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onSkills((projection) => this.broadcastSkills(projection))
       core.onLife((projection) => this.broadcastLife(projection))
       core.onWorld((projection) => this.broadcastWorld(projection))
+      core.onConsciousness((projection) => this.broadcastConsciousness(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -1063,6 +1095,29 @@ export class ElectronCoreHost implements CoreHost {
     return this.core?.life() ?? null
   }
 
+  onConsciousness(send: (projection: ConsciousContextProjection) => void): () => void {
+    this.consciousnessWindows.add(send)
+    // Pushed immediately when Core is already up, and silent when it is not: the
+    // same null-before-Core rule as every other lane here, so an early-attaching
+    // window is not handed a manufactured empty mind.
+    const projection = this.consciousness()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window conscious context push threw', error)
+        this.consciousnessWindows.delete(send)
+      }
+    }
+    return () => {
+      this.consciousnessWindows.delete(send)
+    }
+  }
+
+  consciousness(): ConsciousContextProjection | null {
+    return this.core?.consciousness() ?? null
+  }
+
   async attentionTick(): Promise<number> {
     return (await this.core?.attentionTick()) ?? 0
   }
@@ -1153,6 +1208,17 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window World push threw', error)
         this.worldWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastConsciousness(projection: ConsciousContextProjection): void {
+    for (const send of [...this.consciousnessWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window conscious context push threw', error)
+        this.consciousnessWindows.delete(send)
       }
     }
   }

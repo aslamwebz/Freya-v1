@@ -30,6 +30,7 @@ import { RELAY_LIMITS } from '../core/relay/types'
 import type { OfficeProjection } from '../core/office/projection'
 import type { SkillProjection } from '../core/protocol/skills'
 import type { WorldSummaryView } from '../core/protocol/world'
+import type { ConsciousContextProjection } from '../core/protocol/consciousness'
 import { SKILL_NO_PAYLOAD } from '../core/protocol/skills'
 import { SKILL_LIMITS } from '../core/skills/types'
 import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
@@ -397,6 +398,36 @@ const api = {
    * narrow payload contract per command, and Core's own admission, evaluation and
    * promotion tables sit behind them.
    */
+  /**
+   * The unified conscious context: one coherent account of what Freya currently
+   * understands about herself and her situation, derived from the projections this
+   * window could otherwise have to assemble itself.
+   *
+   * A read and a follow, and **nothing else**. There is deliberately no
+   * `consciousness.*` name in `CORE_COMMANDS` below, so `coreSubmit` cannot reach
+   * this lane at all - the absence of a write verb is the property, and it is
+   * asserted against this file's source in
+   * `tests/host/consciousnessBridge.test.ts` rather than left to this comment.
+   *
+   * Note what this lane reports on this build: Phase 21 Life and Phase 22
+   * Self/World are not integrated yet, so the snapshot arrives `degraded` and
+   * names `life` in its reason. That is the truthful reading, not a defect to be
+   * smoothed over here.
+   */
+  coreConsciousness: (): Promise<ConsciousContextProjection | null> =>
+    ipcRenderer.invoke('freya:core:consciousness'),
+
+  onCoreConsciousness: (
+    handler: (projection: ConsciousContextProjection) => void,
+  ): (() => void) => {
+    const listener = (_event: unknown, projection: ConsciousContextProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:consciousness', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:consciousness', listener)
+    }
+  },
+
   coreSkills: (): Promise<SkillProjection | null> =>
     ipcRenderer.invoke('freya:core:skills'),
 

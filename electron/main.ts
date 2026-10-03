@@ -489,6 +489,21 @@ function createWindow(): BrowserWindow {
    * deliberately no `freya:core:skills:write` channel and no preload method that
    * accepts a skill body, so the bridge cannot become a second admission door.
    */
+  /**
+   * The unified conscious context: the one lane a future surface can read instead
+   * of assembling eleven projections itself.
+   *
+   * Push-only, like every other Core projection channel here, and for the same
+   * reason: the renderer holds what Core last derived and cannot write a field of
+   * it. There is deliberately no `freya:core:consciousness:write`, `:submit` or
+   * `:refresh` channel and no preload method that accepts a correction - a window
+   * that could ask Core to rebuild a snapshot on demand is a window that could ask
+   * Core to rebuild one at the wrong moment.
+   */
+  const detachConsciousness = coreHost?.onConsciousness((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:consciousness', projection)
+  })
+
   const detachSkills = coreHost?.onSkills((projection) => {
     if (!window.isDestroyed()) window.webContents.send('freya:core:skills', projection)
   })
@@ -526,6 +541,7 @@ function createWindow(): BrowserWindow {
     detachRelay?.()
     detachSkills?.()
     detachWorld?.()
+    detachConsciousness?.()
   })
 
   if (DEV_SERVER) {
@@ -662,6 +678,11 @@ function registerIpc(): void {
   // The World & self summary is read-only, and it is counts only. The graph, the
   // entity list, the inspector and the self status are Core commands, not a channel.
   ipcMain.handle('freya:core:world', () => requireCore().world())
+  // The unified conscious context: one `handle`, no `on`. There is deliberately no
+  // write channel for this lane - no `consciousness:set`, `:submit`, `:refresh` -
+  // because a snapshot a window could ask Core to rebuild is a snapshot a window
+  // could ask Core to build wrongly, and there is no command behind it to refuse.
+  ipcMain.handle('freya:core:consciousness', () => requireCore().consciousness())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

@@ -155,6 +155,16 @@ import {
   type LifeProjection,
   type LifeTimelineView,
 } from './protocol/life'
+import {
+  ABSENT_CONSCIOUS_CONTEXT_PROJECTION,
+  NO_CONSCIOUS_CONTEXT_REASON,
+  type ConsciousContextProjection,
+} from './protocol/consciousness'
+import { projectConsciousContext } from './consciousness/projection'
+import { continuityFromBrain } from './consciousness/adapters/brain'
+import { lifeFrom } from './consciousness/adapters/life'
+import { selfFromWorld } from './consciousness/adapters/self'
+import { worldFromWorld } from './consciousness/adapters/world'
 import { FoundryEngine } from './foundry/engine'
 import { registerFoundryWorkCapabilities } from './foundry/work'
 import {
@@ -800,6 +810,48 @@ export interface Core {
    */
   world(): WorldSummaryView
   onWorld(listener: (projection: WorldSummaryView) => void): () => void
+  /**
+   * Core's one coherent account of what it currently understands about itself and
+   * its situation.
+   *
+   * Read-only, derived, and stored nowhere. There is no table, no key, no store,
+   * no cache and no journal entry behind it: every value in it is a function of a
+   * projection this Core already builds — Work, Mission, Workforce, Skills,
+   * Personality, Attention, Context, Office, Relay, the Brain, Life, Self/World and
+   * `CoreStatus` — so a surface can read the whole situation from one object
+   * instead of reconstructing the subsystems and getting a different answer each
+   * time. Holding no state is what makes it unable to become a second source of
+   * truth or to drift from the subsystems it describes.
+   *
+   * The shape of the read is the whole policy. There is no field for memory
+   * content *or* a memory's subject, a Mission's title or intent, a Context
+   * item's content or label or uri, a relationship item's text, an Attention
+   * event's text, a Workforce message body, a Work approval's justification or
+   * proposal, a connector payload, a credential, a raw prompt, a life entry's
+   * narrative, or an activity row's sentence — each is replaced by an id, a closed
+   * code or a measured length, and each omission is listed at the top of
+   * `core/consciousness/projection.ts`.
+   *
+   * Every section states whether it could be built (`state`) and why not (`note`),
+   * and `provenance` states per source whether it is `authoritative` or `derived`
+   * and whether it is `fresh`, `stale`, `absent` or `unknown`. A subsystem that is
+   * not present is reported as absent — never as an empty list, which would read
+   * as "there is nothing".
+   *
+   * `PLAN.md` §6 requires Life (Phase 21) and Self/World (Phase 22) as
+   * contributors, and both have now landed: `life` reads the real Life History
+   * projection, and `self`, `world` and `continuity` are read through the narrow
+   * input ports in `core/consciousness/ports.ts`, satisfied by the real Phase 21/22
+   * domains rather than by the Brain. The integration steps are documented in
+   * `docs/PHASE-20.md`.
+   *
+   * There is deliberately no `consciousness.*` command anywhere in the Core
+   * vocabulary. A pull channel and a push channel are enough for a read, and the
+   * absence of a write verb is the property rather than an omission.
+   */
+  consciousness(now?: Date): ConsciousContextProjection
+  /** Subscribe to the conscious context. Same mirror semantics as the others. */
+  onConsciousness(listener: (projection: ConsciousContextProjection) => void): () => void
   readonly lifecycle: CoreLifecycle
 }
 
@@ -898,6 +950,20 @@ class FreyaCore implements Core {
    * evidence.
    */
   private lifeEngine: LifeEngine | undefined
+  /**
+   * Subscribers to the unified conscious context.
+   *
+   * A single set rather than one per contributing subsystem, because there is one
+   * object to push: the whole point of Phase 20 is that a surface reads one
+   * snapshot instead of reconstructing eleven projections, and eleven
+   * subscriptions would hand that convenience straight back.
+   *
+   * It is a notification list and nothing more. The snapshot itself is recomputed
+   * per read and held nowhere, so this set cannot become a cache of it.
+   */
+  private readonly consciousnessListeners = new Set<
+    (projection: ConsciousContextProjection) => void
+  >()
   /**
    * Core's own Personality & Relationship integration, built at `start()`.
    *
@@ -2149,6 +2215,11 @@ class FreyaCore implements Core {
 
   /** Re-publish the Brain mirror. Called when the Brain's own state changes. */
   private publishBrain(): void {
+    // Every subsystem that can move the snapshot does, through this one call.
+    // The conscious context is derived from all of them, so a change to any one
+    // is a change to it - and hooking each publisher is what keeps that true
+    // without adding an event type a subsystem could forget to append.
+    this.publishConsciousness()
     if (this.brainListeners.size === 0) return
     const projection = this.brain()
     for (const listener of [...this.brainListeners]) {
@@ -2227,6 +2298,11 @@ class FreyaCore implements Core {
   }
 
   private publishWorkforce(): void {
+    // Every subsystem that can move the snapshot does, through this one call.
+    // The conscious context is derived from all of them, so a change to any one
+    // is a change to it - and hooking each publisher is what keeps that true
+    // without adding an event type a subsystem could forget to append.
+    this.publishConsciousness()
     if (this.workforceListeners.size === 0) return
     const projection = this.workforce()
     for (const listener of [...this.workforceListeners]) {
@@ -2312,6 +2388,11 @@ class FreyaCore implements Core {
   }
 
   private publishPersonality(): void {
+    // Every subsystem that can move the snapshot does, through this one call.
+    // The conscious context is derived from all of them, so a change to any one
+    // is a change to it - and hooking each publisher is what keeps that true
+    // without adding an event type a subsystem could forget to append.
+    this.publishConsciousness()
     if (this.personalityListeners.size === 0) return
     const projection = this.personality()
     for (const listener of [...this.personalityListeners]) {
@@ -2375,6 +2456,258 @@ class FreyaCore implements Core {
     }
   }
 
+  /**
+   * The unified conscious context.
+   *
+   * Never null, and never a partial object: a Core that has not started, or one
+   * built without some subsystem, returns a snapshot whose sections say which of
+   * those it is. "Freya knows who she is but has no Workforce" and "there is no
+   * conscious context" are different facts, and a surface must not have to guess
+   * which one it is looking at.
+   *
+   * Recomputed rather than cached, and that is the design rather than an
+   * inefficiency: it holds no state that could disagree with the subsystems it
+   * reads, so it cannot go stale relative to the situation it claims to describe
+   * and cannot become a second source of truth. The work is bounded by
+   * `CONSCIOUS_CONTEXT_LIMITS`, so a journal with a million events costs the same
+   * as one with ten.
+   *
+   * Each contributing accessor is called exactly once and its result reused, so a
+   * snapshot is a single consistent read rather than eleven reads that could
+   * straddle an event. Nothing here is permitted to throw: a subsystem that cannot
+   * be read becomes a stated absence, because a snapshot that threw would leave the
+   * surface with nothing at all in exactly the moment something was already wrong.
+   *
+   * `now` is an argument rather than an internal clock read, for the same reason
+   * `attentionTick` takes one: it is what makes "the same durable state gives the
+   * same snapshot" a statement a test can check. Two runs over one journal at one
+   * instant produce deep-equal snapshots; at two different instants they differ
+   * only in `asOf` and in the durations derived from it, which is the honest amount
+   * of difference.
+   *
+   * ## The port wiring
+   *
+   * Four sections arrive through narrow ports rather than from a domain
+   * projection. Each port gets exactly one producer, chosen here and nowhere
+   * else, so two subsystems can never both believe they own the same answer:
+   *
+   * - `life` comes from Phase 21's Life History projection, via
+   *   `adapters/life.ts`.
+   * - `self` and `world` come from Phase 22's self model and summary, via
+   *   `adapters/self.ts` and `adapters/world.ts`.
+   * - `continuity` still comes from the Brain, via `adapters/brain.ts`: the
+   *   world domain owns entities, facts and relations, not memories, so the
+   *   Brain remains the authority for recently admitted memories.
+   *
+   * `brain` itself is still read directly, for the one thing only it can answer:
+   * whether the Brain is readable, which is a `provenance` fact rather than a
+   * section.
+   */
+  consciousness(now?: Date): ConsciousContextProjection {
+    if (this.currentLifecycle === 'booting' || this.fabric === undefined) {
+      return {
+        ...ABSENT_CONSCIOUS_CONTEXT_PROJECTION,
+        reason: NO_CONSCIOUS_CONTEXT_REASON,
+        provenance: { ...ABSENT_CONSCIOUS_CONTEXT_PROJECTION.provenance },
+        limits: { ...ABSENT_CONSCIOUS_CONTEXT_PROJECTION.limits },
+      }
+    }
+
+    const brain = this.safeBrain()
+    const work = this.safeWork()
+    const mission = this.safeMission()
+    const workforce = this.safeWorkforce()
+    const skills = this.safeSkills()
+    const personality = this.safePersonality()
+    const attention = this.safeAttention()
+    const context = this.safeContext()
+    const office = this.safeOffice()
+    const relay = this.safeRelay()
+    // One read of the world summary, shared by the two world-domain ports below so
+    // a snapshot cannot contain a self-account from one fold and a world count
+    // from another.
+    const worldSummary = this.world()
+
+    try {
+      return projectConsciousContext(
+        {
+          status: this.status(),
+          stopAll: this.state.stopAll,
+          brain,
+          // One producer per port, chosen here and nowhere else. Phase 21 and
+          // Phase 22 have landed, so `life`, `self` and `world` are answered by
+          // their owning domains through the adapters in `consciousness/adapters`.
+          // The Brain remains the producer for `continuity` — recently admitted
+          // *memories* — because the world domain owns entities, facts and
+          // relations, not memories, and mapping its evidence records onto the
+          // Brain's memory unions would invent a vocabulary the port deliberately
+          // shares with the Brain.
+          self: selfFromWorld(this.worldEngine?.self() ?? null, worldSummary),
+          world: worldFromWorld(worldSummary),
+          continuity: continuityFromBrain(brain),
+          life: lifeFrom(this.life()),
+          work,
+          mission,
+          workforce,
+          skills,
+          personality,
+          attention,
+          context,
+          office,
+          relay,
+          activity: this.activity(),
+          presenceRequests: [...this.state.office.requests.values()],
+          pendingRequests: this.state.pendingRequests,
+          faults: this.state.faults,
+        },
+        now ?? this.options.now?.() ?? new Date(),
+      )
+    } catch (error) {
+      // A snapshot that throws is a surface with nothing to show, at the moment the
+      // situation is already degraded. So the failure is reported *as* the
+      // situation, in the shape a consumer already knows how to read.
+      return {
+        ...ABSENT_CONSCIOUS_CONTEXT_PROJECTION,
+        health: 'degraded',
+        reason: `the conscious context could not be derived: ${describe(error)}`,
+        stopAll: { ...this.state.stopAll },
+        provenance: { ...ABSENT_CONSCIOUS_CONTEXT_PROJECTION.provenance },
+        limits: { ...ABSENT_CONSCIOUS_CONTEXT_PROJECTION.limits },
+      }
+    }
+  }
+
+  /**
+   * Every contributing accessor, guarded.
+   *
+   * Each subsystem's own accessor already answers with an absent projection rather
+   * than throwing when it is missing, but "already answers" is a property of those
+   * methods rather than a guarantee this one gets to rely on - a subsystem that
+   * throws would otherwise take the whole snapshot down, and a snapshot that cannot
+   * be built is strictly less useful than a partial one.
+   *
+   * The guard is also what keeps the projection honest about a subsystem it cannot
+   * see: `null` becomes a stated absence rather than a silently empty section.
+   */
+  private safeBrain(): BrainProjection | null {
+    try {
+      return this.brain()
+    } catch (error) {
+      console.error('[freya.core] Brain read for the conscious context threw', error)
+      return null
+    }
+  }
+
+  private safeWork(): WorkProjection | null {
+    try {
+      return this.work()
+    } catch (error) {
+      console.error('[freya.core] Work read for the conscious context threw', error)
+      return null
+    }
+  }
+
+  private safeMission(): MissionProjection | null {
+    try {
+      return this.mission()
+    } catch (error) {
+      console.error('[freya.core] Mission read for the conscious context threw', error)
+      return null
+    }
+  }
+
+  private safeWorkforce(): WorkforceProjection | null {
+    try {
+      return this.workforce()
+    } catch (error) {
+      console.error('[freya.core] Workforce read for the conscious context threw', error)
+      return null
+    }
+  }
+
+  private safeSkills(): SkillProjection | null {
+    try {
+      return this.skills()
+    } catch (error) {
+      console.error('[freya.core] Skills read for the conscious context threw', error)
+      return null
+    }
+  }
+
+  private safePersonality(): PersonalityProjection | null {
+    try {
+      return this.personality()
+    } catch (error) {
+      console.error('[freya.core] Personality read for the conscious context threw', error)
+      return null
+    }
+  }
+
+  private safeAttention(): AttentionProjection | null {
+    try {
+      return this.attention()
+    } catch (error) {
+      console.error('[freya.core] Attention read for the conscious context threw', error)
+      return null
+    }
+  }
+
+  private safeContext(): ContextProjectionView | null {
+    try {
+      return this.context()
+    } catch (error) {
+      console.error('[freya.core] Context read for the conscious context threw', error)
+      return null
+    }
+  }
+
+  private safeOffice(): OfficeProjection | null {
+    try {
+      return this.office()
+    } catch (error) {
+      console.error('[freya.core] Office read for the conscious context threw', error)
+      return null
+    }
+  }
+
+  private safeRelay(): RelayProjection | null {
+    try {
+      return this.relay()
+    } catch (error) {
+      console.error('[freya.core] Relay read for the conscious context threw', error)
+      return null
+    }
+  }
+
+  onConsciousness(listener: (projection: ConsciousContextProjection) => void): () => void {
+    this.consciousnessListeners.add(listener)
+    // Delivered immediately, like every other subscription here, so a window that
+    // attaches late agrees with one that never left.
+    try {
+      listener(this.consciousness())
+    } catch (error) {
+      console.error('[freya.core] conscious context subscriber threw', error)
+      this.consciousnessListeners.delete(listener)
+    }
+    return () => {
+      this.consciousnessListeners.delete(listener)
+    }
+  }
+
+  private publishConsciousness(): void {
+    if (this.consciousnessListeners.size === 0) return
+    const projection = this.consciousness()
+    for (const listener of [...this.consciousnessListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] conscious context listener threw', error)
+        this.consciousnessListeners.delete(listener)
+      }
+    }
+  }
+
+
   onSkills(listener: (projection: SkillProjection) => void): () => void {
     this.skillListeners.add(listener)
     try {
@@ -2389,6 +2722,11 @@ class FreyaCore implements Core {
   }
 
   private publishSkills(): void {
+    // Every subsystem that can move the snapshot does, through this one call.
+    // The conscious context is derived from all of them, so a change to any one
+    // is a change to it - and hooking each publisher is what keeps that true
+    // without adding an event type a subsystem could forget to append.
+    this.publishConsciousness()
     if (this.skillListeners.size === 0) return
     const projection = this.skills()
     for (const listener of [...this.skillListeners]) {
@@ -2499,6 +2837,11 @@ class FreyaCore implements Core {
   }
 
   private publishAttention(): void {
+    // Every subsystem that can move the snapshot does, through this one call.
+    // The conscious context is derived from all of them, so a change to any one
+    // is a change to it - and hooking each publisher is what keeps that true
+    // without adding an event type a subsystem could forget to append.
+    this.publishConsciousness()
     if (this.attentionListeners.size === 0) return
     const projection = this.attention()
     for (const listener of [...this.attentionListeners]) {
@@ -2556,6 +2899,11 @@ class FreyaCore implements Core {
   }
 
   private publishOffice(): void {
+    // Every subsystem that can move the snapshot does, through this one call.
+    // The conscious context is derived from all of them, so a change to any one
+    // is a change to it - and hooking each publisher is what keeps that true
+    // without adding an event type a subsystem could forget to append.
+    this.publishConsciousness()
     if (this.officeListeners.size === 0) return
     const projection = this.office()
     for (const listener of [...this.officeListeners]) {
@@ -2595,6 +2943,11 @@ class FreyaCore implements Core {
   }
 
   private publishFoundry(): void {
+    // Deliberately NOT a conscious-context publisher. Foundry is not one of the
+    // twelve rows in CONSCIOUS_SOURCES and the projection never reads it, so a
+    // Foundry change cannot move the snapshot; recomputing and pushing it here would
+    // be publishing a value that did not change, which is how a mirror starts
+    // looking alive when it is not.
     if (this.foundryListeners.size === 0) return
     const projection = this.foundry()
     for (const listener of [...this.foundryListeners]) {
@@ -2642,6 +2995,11 @@ class FreyaCore implements Core {
   }
 
   private publishRelay(): void {
+    // Every subsystem that can move the snapshot does, through this one call.
+    // The conscious context is derived from all of them, so a change to any one
+    // is a change to it - and hooking each publisher is what keeps that true
+    // without adding an event type a subsystem could forget to append.
+    this.publishConsciousness()
     if (this.relayListeners.size === 0) return
     const projection = this.relay()
     for (const listener of [...this.relayListeners]) {
@@ -2851,6 +3209,11 @@ class FreyaCore implements Core {
 
   /** Re-publish the Work mirror. Called when Work's own state changes. */
   private publishWork(): void {
+    // Every subsystem that can move the snapshot does, through this one call.
+    // The conscious context is derived from all of them, so a change to any one
+    // is a change to it - and hooking each publisher is what keeps that true
+    // without adding an event type a subsystem could forget to append.
+    this.publishConsciousness()
     if (this.workListeners.size === 0) return
     const projection = this.work()
     for (const listener of [...this.workListeners]) {
@@ -2922,6 +3285,11 @@ class FreyaCore implements Core {
   }
 
   private publishMission(): void {
+    // Every subsystem that can move the snapshot does, through this one call.
+    // The conscious context is derived from all of them, so a change to any one
+    // is a change to it - and hooking each publisher is what keeps that true
+    // without adding an event type a subsystem could forget to append.
+    this.publishConsciousness()
     if (this.missionListeners.size === 0) return
     const projection = this.mission()
     for (const listener of [...this.missionListeners]) {
@@ -3022,6 +3390,11 @@ class FreyaCore implements Core {
    * change — observability must not become a resource owner.
    */
   private publishContext(): void {
+    // Every subsystem that can move the snapshot does, through this one call.
+    // The conscious context is derived from all of them, so a change to any one
+    // is a change to it - and hooking each publisher is what keeps that true
+    // without adding an event type a subsystem could forget to append.
+    this.publishConsciousness()
     if (this.contextListeners.size === 0) return
     const projection = this.context()
     for (const listener of [...this.contextListeners]) {

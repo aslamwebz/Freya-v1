@@ -67,7 +67,7 @@ export function App({ preferences, windows, adapter }: { preferences: Preference
           <span className="f-preview-label">{preview ? 'Design preview · Sample data' : 'Live'}</span></div>
         <div className="f-mode-controls" aria-label="Workspace mode"><Button aria-label="App mode" aria-pressed={settings.mode === 'app'} onClick={() => mode('app')}>App</Button>
           <Button aria-label="Immersive mode" aria-pressed={settings.mode === 'immersive'} onClick={() => mode('immersive')}>Immersive</Button></div>
-        <div className="f-top-right"><div className="f-manifesto"><blockquote>“More clarity.<br />A kinder, smarter tomorrow.”</blockquote><small>PERSISTENT · EVOLVING · ALIGNED</small></div>
+        <div className="f-top-right">{preview && <div className="f-manifesto"><blockquote>“More clarity.<br />A kinder, smarter tomorrow.”</blockquote><small>PERSISTENT · EVOLVING · ALIGNED</small></div>}
           <Clock /></div>
       </header>
       <div className="f-section-heading"><div><p className="f-eyebrow">Same mind. A brighter tomorrow.</p><h1>{workspaceLabel(current)}</h1><p>{meta.description}</p></div>

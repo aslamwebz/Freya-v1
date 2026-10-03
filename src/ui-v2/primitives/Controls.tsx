@@ -36,6 +36,8 @@ export function Progress({ label, value }: { label: string; value: number | null
   return <div className="f-progress" role="progressbar" aria-label={label}
     aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}
     aria-valuetext={known ? undefined : 'Progress unavailable'}>
-    <span style={{ width: progress === undefined ? '25%' : `${progress}%` }} data-known={known} />
+    {/* An unknown value renders an empty track, not a fake 25% bar that reads as a
+        real measurement. */}
+    <span style={{ width: progress === undefined ? '0%' : `${progress}%` }} data-known={known} />
   </div>
 }

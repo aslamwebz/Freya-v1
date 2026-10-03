@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import portrait from '../assets/freya-portrait.webp'
 
-export type PresenceMode = 'attentive' | 'planning' | 'creating' | 'searching'
+export type PresenceMode = 'attentive' | 'planning' | 'creating' | 'searching' | 'unknown'
 export function Compass({ compact = false, title = 'Phase 19', caption = 'Same mind. A brighter tomorrow.', presence = 'attentive', onFocus }:
   { compact?: boolean; title?: string; caption?: string; presence?: PresenceMode; onFocus?: (focus: string) => void }) {
   const stage = useRef<HTMLDivElement>(null)

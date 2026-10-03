@@ -4,7 +4,7 @@ import { App } from './App'
 import { PreferencesStore, type PreferenceStorage } from './theme/preferences'
 import { WindowsStore } from './windows/model'
 import { createPreviewAdapter } from './state/preview'
-import { createLiveAdapter, liveAvailable } from './state/live'
+import { createLiveAdapter, isElectron } from './state/live'
 import type { UiAdapter } from './state/contract'
 import './theme/tokens.css'
 import './primitives/controls.css'
@@ -19,13 +19,19 @@ const preferences = new PreferencesStore(storage)
 const windows = new WindowsStore({ width: Math.max(320, window.innerWidth - 180), height: Math.max(400, window.innerHeight - 240) }, storage)
 
 /**
- * A window with a Core bridge projects the real thing; a browser does not.
+ * Which adapter this window gets, decided by *where* it runs — not by whether a bridge
+ * happens to be present.
  *
- * `npm run dev`, a test and a build preview have no bridge, so asking Core there would
- * leave the UI loading forever and read as broken. The preview fixtures exist for
- * exactly those cases, and they are labelled as sample data everywhere they appear.
+ * A browser (`npm run dev`, a test, a build preview) has no Core and never will, so it
+ * uses the preview fixtures, which are labelled as sample data everywhere they appear.
+ *
+ * An Electron `file://` window is a real desktop window. If its preload injected a
+ * bridge, it projects Core; if the preload is missing or the bridge is absent, it still
+ * uses the *live* adapter, which reports every resource `unavailable` with the reason
+ * rather than silently falling back to sample data. A desktop window that showed preview
+ * fixtures would be the exact lie this phase exists to prevent.
  */
-const live = liveAvailable() ? createLiveAdapter() : null
+const live = isElectron() ? createLiveAdapter() : null
 const adapter: UiAdapter = live ?? createPreviewAdapter()
 // Attaching is idempotent and window-scoped: the mirrors keep Core's subscription, and
 // the first status arrives through them rather than being fetched here.

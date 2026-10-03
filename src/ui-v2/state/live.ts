@@ -275,15 +275,18 @@ export function createLiveAdapter(): LiveAdapter {
       // Replacing rather than stacking: a second attach must not leave a live
       // subscription with nothing holding its disposer.
       for (const dispose of disposers.splice(0)) dispose()
+      // Every subscription this adapter opens is retained, the `subscribe` disposers
+      // included. A re-attach used to drop those, so the old derive listener stayed
+      // registered and each Core push ran derive twice — a slow leak that only showed
+      // up over a long session.
       disposers.push(await core.attach(), await core.attachActivity())
-      core.subscribe(derive)
-      core.subscribeActivity(derive)
+      disposers.push(core.subscribe(derive), core.subscribeActivity(derive))
       disposers.push(await missions.attach())
-      missions.subscribe(derive)
+      disposers.push(missions.subscribe(derive))
       disposers.push(await workforce.attach())
-      workforce.subscribe(derive)
+      disposers.push(workforce.subscribe(derive))
       disposers.push(await attention.attach())
-      attention.subscribe(derive)
+      disposers.push(attention.subscribe(derive))
       derive()
       return () => {
         for (const dispose of disposers.splice(0)) dispose()
@@ -306,4 +309,21 @@ function shallowEqual(left: UiSnapshot, right: UiSnapshot): boolean {
  */
 export function liveAvailable(): boolean {
   return hostBridge() !== undefined
+}
+
+/**
+ * Whether this window is an Electron renderer, regardless of whether a bridge is present.
+ *
+ * `entry` uses this to choose the adapter, and the distinction matters: a browser has
+ * no Core and never will, so it gets the labelled preview fixtures; an Electron
+ * `file://` window is a real desktop window, and even when its preload is missing it
+ * must use the live adapter so the absence is reported as `unavailable` rather than
+ * silently falling back to sample data.
+ *
+ * The user agent is the signal because it is the one thing a renderer can read that a
+ * browser cannot fake without also being Electron. It is a environment check, not a
+ * security boundary — the bridge's own authority is unchanged.
+ */
+export function isElectron(): boolean {
+  return typeof navigator !== 'undefined' && /Electron\//.test(navigator.userAgent)
 }

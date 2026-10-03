@@ -6,6 +6,14 @@ import { DataView, isLiveMode, type WorkspaceProps } from './shared'
 import type { WorkspaceId } from './catalog'
 import { useState } from 'react'
 
+/** Neutral initials for a live worker id — never a photographic reference person. */
+function initialsFor(id: string): string {
+  const words = id.split(/[-_\s]+/).filter(Boolean)
+  const first = words[0]?.[0] ?? '?'
+  const second = words[1]?.[0] ?? ''
+  return (first + second).toUpperCase()
+}
+
 export function Home({ snapshot, view, update, open, panels }: WorkspaceProps & { open: (id: WorkspaceId) => void; panels: readonly string[] }) {
   const [draggedPanel, setDraggedPanel] = useState<string | null>(null)
   const [dragOverPanel, setDragOverPanel] = useState<string | null>(null)
@@ -34,7 +42,9 @@ export function Home({ snapshot, view, update, open, panels }: WorkspaceProps & 
   }
 
   return <DataView resource={snapshot.home} empty="Home unavailable">{home => {
-    const mode = home.attention.profiles.find(profile => profile.id === view.filter) ?? home.attention.profiles.find(profile => profile.id === 'Product') ?? home.attention.profiles[0] ?? { id: '', label: 'No focus selected', presence: 'attentive' as const, focused: home.attention.focused, distribution: [] as readonly number[] }
+    // In live mode there are no focus profiles, so the Compass must not default to an
+    // invented 'attentive' state. It reports 'unknown' until Core/Attention says otherwise.
+    const mode = home.attention.profiles.find(profile => profile.id === view.filter) ?? home.attention.profiles.find(profile => profile.id === 'Product') ?? home.attention.profiles[0] ?? { id: '', label: 'No focus selected', presence: (liveMode ? 'unknown' : 'attentive') as 'unknown' | 'attentive', focused: home.attention.focused, distribution: [] as readonly number[] }
 
     return <div className="f-home-grid">
     <div className="f-home-left">
@@ -49,7 +59,7 @@ export function Home({ snapshot, view, update, open, panels }: WorkspaceProps & 
         {home.attention.profiles.length > 0 && <div className="f-tags">{home.attention.profiles.map(profile => <Button key={profile.id} aria-pressed={mode.id === profile.id} onClick={() => selectFocus(profile.id)}>{profile.id}</Button>)}
           <Button className="f-circle-button" aria-label="Open roadmap" onClick={() => open('mission')}>+</Button></div>}
       </Panel>}
-      {panelOrder.includes('mission') && <Panel title="Mission" className="f-home-mission" meta={home.goals ? <Badge>{home.goals.filter(goal => view.checked.includes(goal.id)).length}/{home.goals.length}</Badge> : <Badge tone="cognition">Preview</Badge>} draggable onDragStart={() => handleDragStart('mission')} onDragOver={(e) => handleDragOver(e, 'mission')} onDragEnd={handleDragEnd} style={{ opacity: draggedPanel === 'mission' ? 0.5 : 1 }}>
+      {panelOrder.includes('mission') && <Panel title="Mission" className="f-home-mission" meta={home.goals ? <Badge>{home.goals.filter(goal => view.checked.includes(goal.id)).length}/{home.goals.length}</Badge> : liveMode ? undefined : <Badge tone="cognition">Preview</Badge>} draggable onDragStart={() => handleDragStart('mission')} onDragOver={(e) => handleDragOver(e, 'mission')} onDragEnd={handleDragEnd} style={{ opacity: draggedPanel === 'mission' ? 0.5 : 1 }}>
         {home.mission ? <h3 className="f-narrative">{home.mission}</h3> : <EmptyState title="No Missions yet" detail="A Mission records what Freya is trying to accomplish." />}
         {/* Only shown when titles exist. Live projections carry no Mission titles. */}
         {home.goals && <div className="f-mission-checklist">{home.goals.map(goal => <label key={goal.id}>
@@ -84,7 +94,8 @@ export function Home({ snapshot, view, update, open, panels }: WorkspaceProps & 
         <DataView resource={snapshot.workforce} empty="Workforce unavailable">{data => data.rows.length ? <div className="f-workforce-rows">{data.rows.map((row, index) =>
           <Button className="f-worker-row" key={row.id} onClick={() => open('workforce')}>
             <span className={`f-worker-ring f-worker-ring--${index % 4}`} data-state={row.state} aria-hidden="true" /><span><strong>{row.specialization ?? row.id}</strong><small>{row.state}</small></span>
-            <span className="f-worker-avatars"><Avatar index={index} size={25} /><Avatar index={index + 1} size={25} /></span><Glyph name="arrow" size={15} />
+            {/* Live rows use neutral initials, never photographic reference people. */}
+            {liveMode ? <span className="f-worker-avatars" aria-hidden="true"><span className="f-worker-initials">{initialsFor(row.id)}</span></span> : <span className="f-worker-avatars"><Avatar index={index} size={25} /><Avatar index={index + 1} size={25} /></span>}<Glyph name="arrow" size={15} />
           </Button>)}</div> : <EmptyState title="No active team" detail="Your agents will appear here." />}</DataView>
       </Panel>}
     </div>

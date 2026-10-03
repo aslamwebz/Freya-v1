@@ -1,9 +1,9 @@
 import { THEMES, type ThemeId } from './tokens'
 export { THEMES, type ThemeId }
-export type Theme = ThemeId | 'aurora' | 'pearl' | 'midnight'
+export type Theme = ThemeId
 export interface Preferences {
   readonly version: 1
-  readonly theme: Theme
+  readonly theme: ThemeId
   readonly mode: 'app' | 'immersive'
   readonly density: 'comfortable' | 'compact'
   readonly textScale: 1 | 1.125 | 1.25

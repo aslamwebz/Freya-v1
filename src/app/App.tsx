@@ -7,6 +7,8 @@ import { Clock } from '../ui-v2/primitives/Clock'
 import { Glyph } from '../ui-v2/primitives/Glyph'
 import { conversationMirror, ensureConversationAttached } from '../platform/conversationClient'
 import { sendMessage } from '../ui-v2/chat/sendMessage'
+import { Brain } from './presence/Brain'
+import { brainState } from './presence/state'
 
 /**
  * Freya App Mode — the shell.
@@ -74,6 +76,14 @@ export function App({ preferences, adapter }: { preferences: PreferencesStore; a
   }, [])
 
   const current = RAIL.find((item) => item.id === screen) ?? RAIL[0]!
+  const core = snapshot.core.status === 'ready' || snapshot.core.status === 'stale' ? snapshot.core.data : null
+  const workforce = snapshot.workforce.status === 'ready' || snapshot.workforce.status === 'stale' ? snapshot.workforce.data : null
+  const cognition = brainState({
+    activeRequests: core?.activeRequests ?? 0,
+    working: workforce?.working ?? 0,
+    faultCount: core?.faultCount ?? 0,
+    lifecycle: core?.lifecycle ?? 'booting',
+  })
   const themeIndex = THEMES.indexOf(settings.theme)
   const cycleTheme = () => preferences.update({ theme: THEMES[(themeIndex + 1) % THEMES.length]! })
 
@@ -125,10 +135,9 @@ export function App({ preferences, adapter }: { preferences: PreferencesStore; a
       <main id="a-main" tabIndex={-1} className="a-body">
         <section className="a-col a-col-left" aria-label="Left panels" />
         <section className="a-centre" aria-label="Freya centre">
-          {/* The Brain mounts here. It is the one constant of every screen. */}
+          {/* The Brain: the one constant of every screen. */}
           <div className="a-centre-stage" data-screen={current.id}>
-            <canvas className="a-centre-canvas" aria-hidden="true" />
-            <span className="a-centre-fallback">The Brain — coming in the next slice.</span>
+            <Brain state={cognition} />
           </div>
           <div className="a-centre-caption"><b>FREYA</b><span>PHASE 19</span><small>SAME MIND. A BRIGHTER TOMORROW.</small></div>
         </section>

@@ -13,7 +13,7 @@ import { BrainCore } from './BrainCore'
 export function Workspace({ id, open, panels, ...props }: WorkspaceProps & { id: WorkspaceId; open: (id: WorkspaceId) => void; panels: readonly string[] }) {
   switch (id) {
     case 'home': return <Home {...props} open={open} panels={panels} />
-    case 'mind': return <Mind />
+    case 'mind': return <Mind {...props} />
     case 'mission': return <Mission {...props} />
     case 'forge': return <Forge {...props} />
     case 'world': return <World {...props} />

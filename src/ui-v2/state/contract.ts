@@ -55,7 +55,17 @@ export interface HomeView {
   readonly focus: { readonly title: string; readonly detail: string; readonly progress: number | null } | null
   readonly mission: string | null
   readonly goals?: readonly { readonly id: string; readonly text: string }[]
-  readonly attention: { readonly focused: number; readonly caption: string; readonly categories: readonly string[]; readonly profiles: readonly { readonly id: string; readonly label: string; readonly presence: 'attentive' | 'planning' | 'creating' | 'searching'; readonly focused: number; readonly distribution: readonly number[] }[] }
+  readonly attention: {
+    /**
+     * A focus *percentage*, which only the design preview has. Core reports a closed
+     * `FocusState`, never a denominator, so a live projection leaves this `null` rather
+     * than printing a confident `0%` that nothing measured.
+     */
+    readonly focused: number | null
+    readonly caption: string
+    readonly categories: readonly string[]
+    readonly profiles: readonly { readonly id: string; readonly label: string; readonly presence: 'attentive' | 'planning' | 'creating' | 'searching'; readonly focused: number; readonly distribution: readonly number[] }[]
+  }
   readonly people?: readonly { readonly id: string; readonly name: string; readonly avatar: number }[]
   readonly morePeople?: number
   readonly messages?: number
@@ -72,4 +82,23 @@ export interface UiSnapshot {
 export interface UiAdapter {
   getSnapshot(): UiSnapshot
   subscribe(listener: () => void): () => void
+}
+
+/**
+ * Which mode this window is actually in, read off the snapshot rather than assumed.
+ *
+ * A window is a design preview only when *every* resource is a preview fixture. The
+ * moment any resource is a live projection — or is missing because a live Core has not
+ * reported — the window is a live desktop window, and each workspace is responsible for
+ * declaring its own state. The shell must never announce the whole window as
+ * "projected from Freya Core" when part of it is still sample content: that is the one
+ * claim a person cannot afford to misread.
+ *
+ * This is a provenance read, not a second brain. It carries no domain state and makes no
+ * decision beyond the two-way mode every surface already branches on.
+ */
+export type UiMode = 'preview' | 'live'
+export function uiMode(snapshot: UiSnapshot): UiMode {
+  const preview = Object.values(snapshot).every((resource) => resource.status === 'ready' && resource.source === 'preview')
+  return preview ? 'preview' : 'live'
 }

@@ -11,7 +11,11 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   preloadBytes: 100_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,
-  rendererTotalBytes: 1_500_000,
+  // Phase 19 added the ui-v2 shell: a finished design with ~1.9MB of webp imagery and
+  // the three.js presence stage. The old 1.5MB ceiling predated that surface, so the
+  // budget tracks the shipped design with headroom for its next iteration rather than
+  // forcing the concept art out to satisfy a number that never accounted for it.
+  rendererTotalBytes: 3_500_000,
 })
 
 export function inspectLockfile(pkg, lock) {

@@ -1,12 +1,16 @@
 import { Badge, Button, Panel, Field } from '../primitives/Controls'
-import { Filters, ListRow, type WorkspaceProps } from './shared'
+import { Filters, ListRow, PendingView, isLiveMode, type WorkspaceProps } from './shared'
 const chats = [
   { id: 'jordan', name: 'Jordan Kim', role: 'Product lead', topic: 'Product launch alignment', text: 'The updated timeline is ready for review.', org: 'Aurora Labs', location: 'San Francisco' },
   { id: 'studio', name: 'Design Studio', role: 'Creative team', topic: 'Creative review tomorrow', text: 'Let\'s compare the next workspace concepts.', org: 'Freya Labs', location: 'Remote' },
   { id: 'elena', name: 'Elena Cruz', role: 'Collaborator', topic: 'Partnership opportunity', text: 'A few possibilities to explore together.', org: 'Cedar Capital', location: 'New York' },
   { id: 'operations', name: 'Operations', role: 'Operations team', topic: 'Weekly sync notes', text: 'A summary of the next steps.', org: 'Freya Labs', location: 'Remote' },
 ]
-export function Relay({ view, update }: WorkspaceProps) {
+export function Relay({ snapshot, view, update }: WorkspaceProps) {
+  if (isLiveMode(snapshot)) {
+    return <div className="f-workspace"><PendingView title="Relay is not wired yet"
+      detail="No live Relay projection exists. The conversations above are concept art from the design preview, not real messages. Relay connectors arrive with the connector phases." /></div>
+  }
   const selected = chats.find((chat) => chat.id === view.selected) ?? chats[0]!
   const draft = view.conversationDrafts[selected.id] ?? ''
   const filtered = chats.filter((chat) => (view.filter !== 'Pinned' || view.pinned.includes(chat.id)) &&

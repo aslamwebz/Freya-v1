@@ -1,6 +1,10 @@
 import { Panel } from '../primitives/Controls'
-import { Compass, ListRow } from './shared'
-export function Mind() {
+import { Compass, ListRow, PendingView, isLiveMode, type WorkspaceProps } from './shared'
+export function Mind({ snapshot }: WorkspaceProps) {
+  if (isLiveMode(snapshot)) {
+    return <div className="f-workspace"><PendingView title="Mind is not wired yet"
+      detail="No live Mind projection exists. The panels above are concept art from the design preview, not Freya's current context. Phase 20 wires this to the Unified Conscious Context." /></div>
+  }
   return <div className="f-mind-grid">
     <Panel title="Self · Who I am now">
       <ListRow icon="mind" title="Curious" detail="Always learning, always connecting." />

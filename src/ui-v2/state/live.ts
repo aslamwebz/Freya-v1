@@ -230,7 +230,11 @@ export function createLiveAdapter(): LiveAdapter {
               missionData.hidden > 0 ? `${missionData.hidden} not listed` : null,
             ].filter(Boolean).join(' · '),
         attention: {
-          focused: 0,
+          // No percentage. Core's `FocusState` is a closed union with no denominator, so
+          // a live Home reports the state as words and leaves the figure absent. `null`
+          // is the honest value; `0` would read as "Freya is 0% focused", which is a
+          // measurement nothing took.
+          focused: null,
           caption: attentionData
             ? `Core reports ${attentionData.focus}`
             : 'Attention is not reporting, so nothing is being watched.',

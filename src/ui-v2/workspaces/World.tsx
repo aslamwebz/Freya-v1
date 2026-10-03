@@ -1,6 +1,6 @@
 import { useId } from 'react'
 import { Badge, Button, Panel, Field, EmptyState } from '../primitives/Controls'
-import { Filters, ListRow, type WorkspaceProps } from './shared'
+import { Filters, ListRow, PendingView, isLiveMode, type WorkspaceProps } from './shared'
 const entities = [
   { id: 'sarah', name: 'Sarah Chen', kind: 'People', detail: 'Product lead · Key collaborator', x: 23, y: 24, role: 'Product Lead', org: 'Freya Labs', location: 'San Francisco, CA' },
   { id: 'alex', name: 'Alex Morgan', kind: 'People', detail: 'Research collaborator', x: 16, y: 58, role: 'Research Lead', org: 'Freya Labs', location: 'London, UK' },
@@ -9,7 +9,11 @@ const entities = [
   { id: 'lisbon', name: 'Lisbon', kind: 'Places', detail: 'Place · Shared context', x: 30, y: 83, type: 'Office' },
   { id: 'mission', name: 'A connected future', kind: 'Missions', detail: 'Outcome · Shared intention', x: 68, y: 83, status: 'On track' },
 ]
-export function World({ view, update }: WorkspaceProps) {
+export function World({ snapshot, view, update }: WorkspaceProps) {
+  if (isLiveMode(snapshot)) {
+    return <div className="f-workspace"><PendingView title="World is not wired yet"
+      detail="No live World projection exists. The connections above are concept art from the design preview, not Freya's real world. Phase 22 wires this to the Self & World model." /></div>
+  }
   const id = useId()
   const visible = entities.filter((entity) => (view.filter === 'All' || view.filter === entity.kind) && entity.name.toLowerCase().includes(view.query.toLowerCase()))
   const selected = entities.find((entity) => entity.id === view.selected)

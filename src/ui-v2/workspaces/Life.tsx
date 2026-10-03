@@ -1,5 +1,5 @@
 import { Badge, Panel } from '../primitives/Controls'
-import { Filters, ListRow, type WorkspaceProps } from './shared'
+import { Filters, ListRow, PendingView, isLiveMode, type WorkspaceProps } from './shared'
 const moments = [
   { time: 'Earlier', title: 'A first conversation', detail: 'Ideas, foundations and becoming.', icon: 'relay', kind: 'Conversation' },
   { time: 'Yesterday', title: 'A new connection', detail: 'A project takes shape.', icon: 'world', kind: 'Connection' },
@@ -7,7 +7,11 @@ const moments = [
   { time: 'Tomorrow', title: 'Room for possibility', detail: 'A plan waiting to be explored.', icon: 'mission', kind: 'Intention' },
   { time: 'Further ahead', title: 'A brighter tomorrow', detail: 'A future we can build toward.', icon: 'forge', kind: 'Possibility' },
 ]
-export function Life({ view, update }: WorkspaceProps) {
+export function Life({ snapshot, view, update }: WorkspaceProps) {
+  if (isLiveMode(snapshot)) {
+    return <div className="f-workspace"><PendingView title="Life is not wired yet"
+      detail="No live Life History projection exists. The timeline above is concept art from the design preview, not Freya's autobiography. Phase 21 wires this to durable Life History." /></div>
+  }
   return <div className="f-workspace"><div className="f-toolbar">
     <Filters options={['All', 'Conversation', 'Connection', 'Reflection', 'Intention', 'Possibility']} selected={view.filter} onSelect={(filter) => update({ filter })} />
     <Badge>Timeline</Badge></div>

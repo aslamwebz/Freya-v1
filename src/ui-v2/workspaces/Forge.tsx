@@ -1,6 +1,6 @@
 import { Badge, Button, Field, Panel } from '../primitives/Controls'
 import { Glyph } from '../primitives/Glyph'
-import { Filters, type WorkspaceProps } from './shared'
+import { Filters, PendingView, isLiveMode, type WorkspaceProps } from './shared'
 const stages = [
   ['Idea', 'Capture the opportunity.', 'mind'], ['Specification', 'Define the goal and constraints.', 'relay'],
   ['Prototype', 'Make the idea tangible.', 'core'], ['Evaluation', 'Test, verify and refine.', 'life'], ['Capability', 'Review before release.', 'forge'],
@@ -12,7 +12,11 @@ const creations = [
   { name: 'Strategic planning', type: 'Skills', status: 'Deployed', icon: 'mission', version: 'v1.0' },
   { name: 'Content studio', type: 'Workflows', status: 'In Build', icon: 'forge', version: 'v0.4' },
 ]
-export function Forge({ view, update }: WorkspaceProps) {
+export function Forge({ snapshot, view, update }: WorkspaceProps) {
+  if (isLiveMode(snapshot)) {
+    return <div className="f-workspace"><PendingView title="Forge is not wired yet"
+      detail="No live Foundry projection exists. The creations above are concept art from the design preview, not verified capabilities. The Foundry domain wires into a later phase." /></div>
+  }
   const all = [...creations, ...view.concepts.map((name) => ({ name, type: 'Ideas', status: 'Concept', icon: 'forge', version: 'v0.1' }))]
   const filtered = all.filter((item) => (view.filter === 'All' || view.filter === item.type) && item.name.toLowerCase().includes(view.query.toLowerCase()))
   return <div className="f-workspace"><div className="f-forge-intro"><div><p className="f-eyebrow">Your creation partner</p>

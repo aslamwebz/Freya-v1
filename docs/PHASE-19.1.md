@@ -20,7 +20,7 @@ state: it subscribes to the mirrors the renderer already had and projects them.
 | Mission | `MissionProjection` | `missionMirror()` |
 | Workforce | `WorkforceProjection` | `workforceMirror()` |
 | Attention | `AttentionProjection` | `attentionMirror()` |
-| Recent memory | `CoreActivityEvent[]` | `coreMirror().activity` |
+| Recent activity | `CoreActivityEvent[]` | `coreMirror().activity` |
 
 Every field is copied out of a Core projection. The adapter invents nothing, smooths
 nothing and defaults nothing into confidence. It is read-only by construction: it
@@ -34,11 +34,13 @@ filling the gap:
 
 - **No focus percentage.** `FocusState` is a closed union — `focused`, `available`,
   `away`, `unknown` — with no denominator anywhere. The "88% focused" ring was art.
-  Live Home renders the state and Core's counts; there is no ring.
+  Live Home renders the state and Core's counts; there is no ring. The live adapter
+  carries `focused: null`, never a synthetic `0`.
 - **No Mission titles.** Mission content lives in its own encrypted store under its
   own key, and `coreMissionDetail` is not on `FreyaHostBridge`. The projection carries
   ids, statuses, counts and deadlines. So the Home checklist is omitted and Mission
-  cards are identified by status, not by a title the renderer cannot have.
+  cards are identified by their real id, not by a title the renderer cannot have. The
+  concept-art name map and the "completed steps" percentage are preview-only.
 - **No People and no World.** No projection exists for either. Those Home panels
   disappear rather than rendering fixture data next to live data, which would be the
   worst of both.
@@ -58,9 +60,12 @@ mattered was already there and was being misused:
 - `unavailable` — nothing will arrive, with the reason.
 - `ready`/`stale` — the data, carrying `source: 'live' | 'preview'`.
 
-The shell reads provenance off the snapshot rather than assuming it, so a live window
-labels itself `Live · projected from Freya Core` instead of announcing sample data —
-the one claim a person cannot afford to misread.
+The shell reads provenance off the snapshot through `uiMode` rather than assuming it,
+so a live window labels itself `Live` instead of announcing sample data — the one claim
+a person cannot afford to misread. The live label is deliberately **not**
+`Live · projected from Freya Core` for the whole shell: several workspaces are not
+wired to a live Core yet, and each of those declares its own pending state. The shell
+only claims the mode it is in.
 
 Two bugs this phase's own tests caught, both of them the same shape of lie:
 
@@ -75,6 +80,21 @@ Two bugs this phase's own tests caught, both of them the same shape of lie:
 
 `npm run dev` has no bridge, so `entry.tsx` uses the preview fixtures there. They
 remain labelled as sample data everywhere they appear.
+
+## Static workspaces declare their own pending state
+
+Five workspaces shipped as finished *concept art* with no domain behind them: World,
+Life, Forge, Relay and Mind. In a browser that is correct — it is the Phase 19 design
+preview, labelled as such. In a live desktop window it would be a lie, because the owner
+would read sample people, conversations and history as Freya's real world.
+
+So a live window replaces each of those surfaces with a truthful `PendingView` that
+says the domain is not wired yet and names the phase that will wire it, while a preview
+window keeps the finished concept design untouched. The same rule applies inside the
+wired workspaces: Brain / Core drops the Freya portrait (it is cognition telemetry, not
+Adult Freya's face or body) and reports Memory as not wired rather than sample counts,
+and the Home activity feed is labelled `Recent activity`, not autobiographical `memory`,
+because Core activity is not Freya's life history.
 
 ## Integration
 
@@ -108,6 +128,9 @@ them.
 ## Not in this phase
 
 Chat, Memory, Approvals and Settings as surfaces; Chibi Freya; the desktop widget
-system; Brain/Core on real telemetry; any 3D character work. Nine of ten workspaces
-still have preview data behind them, and the remaining four surfaces named in the
-product brief do not exist yet.
+system; any 3D character work. World, Life, Forge, Relay and Mind still have only the
+concept design behind them in a live window — each declares its own pending state until
+its domain lands (Phase 20 Mind, Phase 21 Life, Phase 22 World, the connector phases
+Relay and Foundry). The broad wiring the product brief describes is deliberately
+deferred until after the SQLCipher correction and the adapted Phases 21/22/20, per the
+master plan.

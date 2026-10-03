@@ -30,10 +30,15 @@ describe('Home presentation state', () => {
     expect(screen.getByRole('region', { name: 'Attention' })).toHaveTextContent('Strategic work')
     expect(screen.getByLabelText('Freya workspace identity')).toHaveAttribute('data-presence', 'planning')
   })
-  it('shows unavailable memory instead of fabricated entries', () => {
+  it('shows unavailable activity instead of fabricated entries', () => {
     const publish = mount()
-    publish({ activity: { status: 'unavailable', reason: 'No memories available' } })
-    expect(screen.getByRole('region', { name: 'Recent memory' })).toHaveTextContent('No memories available')
+    // A live window reports Core activity, not autobiographical memory, so an
+    // unavailable feed is labelled as activity and shows the reason Core gave.
+    publish({
+      home: { status: 'ready', source: 'live', data: { focus: null, mission: null, attention: { focused: null, caption: 'Core reports unknown', categories: [], profiles: [] } } },
+      activity: { status: 'unavailable', reason: 'No activity available' },
+    })
+    expect(screen.getByRole('region', { name: 'Recent activity' })).toHaveTextContent('No activity available')
   })
   it('keeps the rest of Home visible when no focus profiles are configured', () => {
     const publish = mount(), home = createPreviewAdapter().getSnapshot().home

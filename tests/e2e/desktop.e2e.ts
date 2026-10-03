@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 
 /**
  * End-to-end check of the real desktop app.
@@ -108,6 +109,11 @@ async function launch(
     },
   })
   const page = await app.firstWindow()
+  // The Phase 19 shell is the default renderer now. This suite drives the legacy UI,
+  // so it requests that entry point explicitly — otherwise it waits on selectors only
+  // the legacy shell has. The query is part of the loaded URL, not a persisted
+  // setting, so every launch asks for it.
+  await page.goto(`${pathToFileURL(join(ROOT, 'dist', 'index.html')).href}?ui=legacy`)
   const diagnostics: string[] = []
   page.on('pageerror', (error) => diagnostics.push(`pageerror: ${error.message}`))
   page.on('console', (message) => {

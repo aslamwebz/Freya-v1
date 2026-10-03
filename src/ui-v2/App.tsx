@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import type { UiAdapter } from './state/contract'
+import { uiMode, type UiAdapter } from './state/contract'
 import { useUiState } from './state/useUiState'
 import { type PreferencesStore, THEMES, type Preferences } from './theme/preferences'
 import type { WindowsStore } from './windows/model'
@@ -19,10 +19,15 @@ export function App({ preferences, windows, adapter }: { preferences: Preference
    * What this window is actually showing, read off the snapshot rather than assumed.
    *
    * The label used to be hardcoded, which meant a live window would have announced
-   * itself as sample data — the one claim a person cannot afford to misread. Every
-   * resource carries its own provenance, so the shell reads them all.
+   * itself as sample data — the one claim a person cannot afford to misread. Provenance
+   * is read off every resource through `uiMode`, so a live window never announces
+   * itself as a design preview.
+   *
+   * The live label is deliberately *not* "projected from Freya Core" for the whole
+   * shell: several workspaces are not wired to a live Core yet, and each of those
+   * declares its own pending state. The shell only claims the mode it is in.
    */
-  const preview = Object.values(snapshot).every(resource => resource.status === 'ready' && resource.source === 'preview')
+  const preview = uiMode(snapshot) === 'preview'
   const [selected, select] = useState<WorkspaceId>('home')
   const current = settings.mode === 'immersive' ? windowState.active ?? selected : selected
   const [views, setViews] = useState(createViews)
@@ -54,12 +59,12 @@ export function App({ preferences, windows, adapter }: { preferences: Preference
         aria-label={space.label} title={space.label} aria-current={current === space.id ? 'page' : undefined} onClick={() => open(space.id)}>
         <Glyph name={space.symbol} /><span>{space.label}</span></Button>)}</nav>
       <Button className="f-customize-button" aria-label="Customize" onClick={() => customize(!customizing)} aria-expanded={customizing}><Glyph name="settings" /><span>Customize</span></Button>
-      <div className="f-sidebar-foot"><span className="f-preview-dot" /><b>{preview ? 'Design preview' : 'Live'}</b><small>{preview ? 'Phase 19 · UI foundation' : 'Phase 19.1 · Core projection'}</small></div>
+      <div className="f-sidebar-foot"><span className="f-preview-dot" /><b>{preview ? 'Design preview' : 'Live'}</b><small>{preview ? 'Phase 19 · UI foundation' : 'Phase 19.1 · Live desktop'}</small></div>
     </aside>
     <div className="f-main">
       <header className="f-top">
         <div className="f-wordmark"><b>FREYA</b><span>Phase 19</span><small>A persistent intelligence for a brighter tomorrow</small>
-          <span className="f-preview-label">{preview ? 'Design preview · Sample data' : 'Live · projected from Freya Core'}</span></div>
+          <span className="f-preview-label">{preview ? 'Design preview · Sample data' : 'Live'}</span></div>
         <div className="f-mode-controls" aria-label="Workspace mode"><Button aria-label="App mode" aria-pressed={settings.mode === 'app'} onClick={() => mode('app')}>App</Button>
           <Button aria-label="Immersive mode" aria-pressed={settings.mode === 'immersive'} onClick={() => mode('immersive')}>Immersive</Button></div>
         <div className="f-top-right"><div className="f-manifesto"><blockquote>“More clarity.<br />A kinder, smarter tomorrow.”</blockquote><small>PERSISTENT · EVOLVING · ALIGNED</small></div>

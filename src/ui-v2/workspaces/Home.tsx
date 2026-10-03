@@ -2,7 +2,7 @@ import { Badge, Panel, Progress, Button, EmptyState } from '../primitives/Contro
 import { Avatar } from '../primitives/Avatar'
 import { Glyph } from '../primitives/Glyph'
 import { Compass, AttentionRing } from './Presence'
-import { DataView, type WorkspaceProps } from './shared'
+import { DataView, isLiveMode, type WorkspaceProps } from './shared'
 import type { WorkspaceId } from './catalog'
 import { useState } from 'react'
 
@@ -12,6 +12,7 @@ export function Home({ snapshot, view, update, open, panels }: WorkspaceProps & 
   const selectFocus = (value: string) => update({ filter: value })
   const attention = snapshot.attention
   const live = attention.status === 'ready' || attention.status === 'stale' ? attention.data : null
+  const liveMode = isLiveMode(snapshot)
   const panelOrder = view.panelOrder.length > 0 ? view.panelOrder : panels
 
   const handleDragStart = (panelId: string) => setDraggedPanel(panelId)
@@ -94,10 +95,10 @@ export function Home({ snapshot, view, update, open, panels }: WorkspaceProps & 
             <circle className="f-world-node" cx="80" cy="110" r="3" /><circle className="f-world-node" cx="180" cy="100" r="3" /><circle className="f-world-node" cx="140" cy="45" r="2" /></svg>
         </div><div className="f-world-updates">{home.world.map(item => <Button key={item.id} onClick={() => open('world')}><Glyph name={item.icon} size={15} /><span><b>{item.title}</b><small>{item.detail}</small></span><span aria-hidden="true">›</span></Button>)}</div></div>
       </Panel>}
-      {panelOrder.includes('memory') && <Panel title="Recent memory" className="f-home-memory" meta={<Button className="f-panel-action" aria-label="Open memory timeline" onClick={() => open('life')}>•••</Button>} draggable onDragStart={() => handleDragStart('memory')} onDragOver={(e) => handleDragOver(e, 'memory')} onDragEnd={handleDragEnd} style={{ opacity: draggedPanel === 'memory' ? 0.5 : 1 }}>
-        <DataView resource={snapshot.activity} empty="Memory unavailable">{memories => memories.length ? <div className="f-memory-list">{[...memories].sort((left, right) => right.at - left.at).slice(0, 5).map((memory, index) =>
-          <Button className="f-memory-row" key={memory.id} onClick={() => open('life')}><span className={`f-memory-icon f-memory-icon--${index}`}><Glyph name={['memory', 'mission', 'relay', 'world', 'create'][index]!} size={15} /></span>
-            <span>{memory.text}</span><small>{new Date(memory.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</small></Button>)}</div> : <EmptyState title="No memories yet" detail="Your recent activity will appear here." />}</DataView>
+      {panelOrder.includes('memory') && <Panel title={liveMode ? 'Recent activity' : 'Recent memory'} className="f-home-memory" meta={<Button className="f-panel-action" aria-label={liveMode ? 'Open activity timeline' : 'Open memory timeline'} onClick={() => open('life')}>•••</Button>} draggable onDragStart={() => handleDragStart('memory')} onDragOver={(e) => handleDragOver(e, 'memory')} onDragEnd={handleDragEnd} style={{ opacity: draggedPanel === 'memory' ? 0.5 : 1 }}>
+        <DataView resource={snapshot.activity} empty={liveMode ? 'Activity unavailable' : 'Memory unavailable'}>{events => events.length ? <div className="f-memory-list">{[...events].sort((left, right) => right.at - left.at).slice(0, 5).map((event, index) =>
+          <Button className="f-memory-row" key={event.id} onClick={() => open('life')}><span className={`f-memory-icon f-memory-icon--${index}`}><Glyph name={['memory', 'mission', 'relay', 'world', 'create'][index]!} size={15} /></span>
+            <span>{event.text}</span><small>{new Date(event.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</small></Button>)}</div> : <EmptyState title={liveMode ? 'No activity yet' : 'No memories yet'} detail={liveMode ? 'Core activity will appear here.' : 'Your recent activity will appear here.'} />}</DataView>
       </Panel>}
     </div>
     {!panels.length && <EmptyState title="Your Home, your choice." detail="Use Customize to bring back the panels you want." />}

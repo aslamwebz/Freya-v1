@@ -40,10 +40,12 @@ export function Compass({ compact = false, title = 'Phase 19', caption = 'Same m
     <span className="f-compass-label f-compass-label--bottom">Remember · Connect · Act</span>
   </div>
 }
-export function AttentionRing({ value }: { value: number }) {
-  const percent = Math.min(100, Math.max(0, value))
-  return <div className="f-attention-ring" style={{ '--attention-value': percent } as CSSProperties} role="meter" aria-label="Focused attention" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-    <svg viewBox="0 0 100 100" aria-hidden="true"><circle className="f-attention-track" cx="50" cy="50" r="44" /><circle className="f-attention-value" cx="50" cy="50" r="44" pathLength="100" strokeDasharray={`${percent} 100`} /></svg>
-    <b>{percent}<span>%</span></b>
+export function AttentionRing({ value }: { value: number | null }) {
+  // A live Core reports a closed `FocusState`, not a percentage, so `null` means "no
+  // figure exists" and renders as such rather than as a confident 0%.
+  const percent = value === null ? null : Math.min(100, Math.max(0, value))
+  return <div className="f-attention-ring" style={{ '--attention-value': percent ?? 0 } as CSSProperties} role="meter" aria-label="Focused attention" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined} aria-valuetext={percent === null ? 'No focus percentage' : undefined}>
+    <svg viewBox="0 0 100 100" aria-hidden="true"><circle className="f-attention-track" cx="50" cy="50" r="44" /><circle className="f-attention-value" cx="50" cy="50" r="44" pathLength="100" strokeDasharray={`${percent ?? 0} 100`} /></svg>
+    <b>{percent === null ? '—' : percent}<span>{percent === null ? '' : '%'}</span></b>
   </div>
 }

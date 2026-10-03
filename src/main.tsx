@@ -1,8 +1,7 @@
-// Legacy UI is the default. Phase 19 ui-v2 is opt-in via ?ui=phase19, because the
-// real Core wiring it needs is deferred until after the Vault correction and the
-// adapted Phases 21/22/20 (PLAN Step G).
-if (new URLSearchParams(window.location.search).get('ui') === 'phase19') {
-  void import('./ui-v2/entry')
-} else {
+// Phase 19 ui-v2 is the default UI now that the owner alpha is testing it.
+// The Phase ≤18 UI remains reachable via ?ui=legacy for comparison and rollback.
+if (new URLSearchParams(window.location.search).get('ui') === 'legacy') {
   void import('./legacyEntry')
+} else {
+  void import('./ui-v2/entry')
 }

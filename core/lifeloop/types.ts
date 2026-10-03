@@ -595,6 +595,8 @@ export const LIFE_LOOP_EVENT_TYPES = [
   'lifeloop.verification.passed',
   'lifeloop.verification.failed',
   'lifeloop.continuation.decided',
+  'lifeloop.reconciled',
+  'lifeloop.unstopped',
   'lifeloop.reset',
   'lifeloop.stopped',
 ] as const
@@ -602,6 +604,138 @@ export const LIFE_LOOP_EVENT_TYPES = [
 export type LifeLoopEventType = (typeof LIFE_LOOP_EVENT_TYPES)[number]
 
 export const LIFE_LOOP_EVENT_TYPE_SET: ReadonlySet<string> = new Set<string>(LIFE_LOOP_EVENT_TYPES)
+
+/**
+ * The closed reasons a life-loop stop can exist.
+ *
+ * Four, and the distinction between them is not cosmetic: three of them end in the
+ * same terminal state the ordinary table reaches on `loop-complete` and are cleared
+ * by the close-out that follows, while `stop-all-latched` is the owner's own
+ * decision and is cleared by nothing but the owner. A reader of the journal has to
+ * be able to tell "Freya finished and is parked" from "Freya is stopped", and a
+ * single word in the payload is what lets them.
+ */
+export const LIFE_LOOP_STOP_CODES = [
+  'stop-all-latched',
+  'loop-complete',
+  'interrupted-action-stopped',
+  'interrupted-verification-stopped',
+] as const
+
+export type LifeLoopStopCode = (typeof LIFE_LOOP_STOP_CODES)[number]
+
+/** The one stop code the owner alone may lift. */
+export const LATCHED_STOP_CODE = 'stop-all-latched'
+
+/**
+ * The stops a close-out may clear.
+ *
+ * Everything else is the owner's. The check is written as a *whitelist of the
+ * clearable* rather than a blacklist of the latched, because that is the direction
+ * that fails safe: a stop whose code is missing, misspelled or invented by a future
+ * lane is unreadable as clearable, so it stays latched, and the cost of a mistake is
+ * that somebody has to press resume again. The cost of the other direction would be
+ * a panic button that un-presses itself.
+ */
+export const CLEARABLE_STOP_CODES = [
+  'loop-complete',
+  'interrupted-action-stopped',
+  'interrupted-verification-stopped',
+] as const
+
+export type ClearableStopCode = (typeof CLEARABLE_STOP_CODES)[number]
+
+export function isLifeLoopStopCode(value: unknown): value is LifeLoopStopCode {
+  return typeof value === 'string' && (LIFE_LOOP_STOP_CODES as readonly string[]).includes(value)
+}
+
+export function isClearableStopCode(value: unknown): value is ClearableStopCode {
+  return typeof value === 'string' && (CLEARABLE_STOP_CODES as readonly string[]).includes(value)
+}
+
+/**
+ * The closed reasons a loop was closed out.
+ *
+ * A close-out is bookkeeping: the loop stops holding a wake and returns to being
+ * idle. It is journaled rather than inferred because "nothing is in flight" and
+ * "something was in flight and was given up on" are different facts, and a system
+ * that cannot distinguish them eventually reports a clean idle over lost work.
+ */
+export const LIFE_LOOP_CLOSE_OUT_CODES = [
+  'closed-out',
+  'retry',
+  'awaiting-approval',
+  'limit-reached',
+] as const
+
+export type LifeLoopCloseOutCode = (typeof LIFE_LOOP_CLOSE_OUT_CODES)[number]
+
+/**
+ * The closed outcomes of the continuation decision.
+ *
+ * Journalled separately from the move that follows it, so a reader can see what was
+ * decided before seeing where it went — and so a decision to go round again is
+ * recorded even if the process died between deciding and moving.
+ */
+export const LIFE_LOOP_DECISIONS = [
+  'closed-out',
+  'goal-still-open',
+  'approval-granted',
+  'awaiting-approval',
+  'retry-scheduled',
+  'limit-reached',
+  'preempted-by-owner',
+] as const
+
+export type LifeLoopDecision = (typeof LIFE_LOOP_DECISIONS)[number]
+
+/**
+ * The closed waits the loop can be holding, and the deadline kind each arms.
+ *
+ * `cooldown` and `retry-backoff` are the two short holds, and they are the reason
+ * `deadlineExpiresAt` is journaled: a two-second backoff re-derived from a
+ * thirty-day default would survive a restart as a month of not trying.
+ */
+export const LIFE_LOOP_WAIT_CODES = [
+  'cooldown-active',
+  'retry-backoff',
+  'schedule-not-due',
+  'schedule-condition-unmet',
+  'awaiting-approval',
+] as const
+
+export type LifeLoopWaitCode = (typeof LIFE_LOOP_WAIT_CODES)[number]
+
+/**
+ * Why the loop's position was reconciled to what the journal actually proves.
+ *
+ * A reconciliation is not a step in the continuation: it is the *absence* of one,
+ * forced by something outside the loop. There are exactly three producers, and
+ * the list is closed so a reader can tell a restart from an owner taking
+ * precedence from the owner's own act of clearing a stop.
+ *
+ * It exists because the ordinary transition table cannot express these moves, and
+ * refusing to express them is worse than expressing them honestly. A process that
+ * died in `ACTING` cannot be resumed — the plan was in memory — so it has to be
+ * reconciled to `IDLE`, and no signal in `CONTINUATION_SIGNALS` means that. Adding
+ * one would put a fake continuation step in a table whose whole value is that
+ * every entry is a real move. So the loop's two genuine reconciliations are
+ * journaled as themselves.
+ */
+export const RECONCILIATION_CODES = [
+  /** A previous process ended mid-continuation and the journal was re-read. */
+  'restart-recovery',
+  /** The owner spoke, and the owner comes first. */
+  'owner-preempted',
+  /** The owner explicitly cleared STOP ALL. The only lift that exists. */
+  'stop-latch-cleared',
+] as const
+
+export type ReconciliationCode = (typeof RECONCILIATION_CODES)[number]
+
+export function isReconciliationCode(value: unknown): value is ReconciliationCode {
+  return typeof value === 'string' && (RECONCILIATION_CODES as readonly string[]).includes(value)
+}
 
 /**
  * The closed payload vocabulary, per event type.
@@ -626,23 +760,74 @@ export const LIFE_LOOP_PAYLOAD_KEYS: Readonly<Record<LifeLoopEventType, readonly
     ],
     'lifeloop.wake.denied': ['wakeId', 'source', 'code', 'iteration'],
     'lifeloop.filter.passed': ['wakeId', 'wakeKey', 'code', 'iteration'],
-    'lifeloop.filter.denied': ['wakeId', 'wakeKey', 'outcome', 'code', 'deadlineType', 'iteration'],
+    // `deadlineExpiresAt` is the *absolute* instant, journaled rather than derived.
+    // It has to be here: a wait armed by a cooldown or a retry backoff is minutes
+    // long, and re-deriving `recordedAt + DEADLINE_DEFAULT_MS` for it would
+    // silently widen every short hold into the thirty-day `wait` default — so a
+    // backoff would survive a restart as a month of not trying. Absolute in the
+    // journal, and a restart cannot move it. The same key is on the two entries
+    // that *arm* a deadline, for the same reason: an action that may run for a
+    // quarter of an hour has to expire at the quarter of an hour it was given, not
+    // at the one its kind defaults to.
+    'lifeloop.filter.denied': [
+      'wakeId',
+      'wakeKey',
+      'outcome',
+      'code',
+      'deadlineType',
+      'deadlineExpiresAt',
+      'iteration',
+    ],
+    'lifeloop.action.started': [
+      'wakeId',
+      'iteration',
+      'actionIndex',
+      'deadlineType',
+      'deadlineExpiresAt',
+    ],
     'lifeloop.cognition.requested': ['wakeId', 'wakeKey', 'iteration', 'cognitionRequest'],
     'lifeloop.cognition.denied': ['wakeId', 'wakeKey', 'code', 'iteration'],
-    'lifeloop.action.started': ['wakeId', 'iteration', 'actionIndex', 'deadlineType'],
     'lifeloop.action.completed': ['wakeId', 'iteration', 'actionIndex'],
     'lifeloop.action.failed': ['wakeId', 'iteration', 'actionIndex', 'code'],
-    'lifeloop.verification.started': ['wakeId', 'iteration', 'verificationIndex', 'deadlineType'],
+    'lifeloop.verification.started': [
+      'wakeId',
+      'iteration',
+      'verificationIndex',
+      'deadlineType',
+      'deadlineExpiresAt',
+    ],
     'lifeloop.verification.passed': ['wakeId', 'iteration', 'verificationIndex'],
     'lifeloop.verification.failed': ['wakeId', 'iteration', 'verificationIndex', 'code'],
     'lifeloop.continuation.decided': [
       'wakeId',
       'iteration',
       'decision',
+      // What the loop concluded and what it resolved that down to. Both are here so
+      // the gap between them — the whole of the loop's restraint — is readable off
+      // the journal rather than reconstructed from the absence of a cue.
+      'outcome',
+      'escalation',
+      'attentionSuppressed',
       'actionCount',
       'verificationCount',
     ],
     'lifeloop.stopped': ['wakeId', 'iteration', 'code'],
+    // The two reconciliations. `from` is the state the journal had recorded and
+    // `code` is from `RECONCILIATION_CODES`, so a reader can tell a restart from
+    // the owner taking precedence. `deadlineType`/`deadlineExpiresAt` are present
+    // only when the reconciliation preserved a wait that has not expired — which
+    // is the one reconciliation that does not land on `IDLE`.
+    'lifeloop.reconciled': [
+      'code',
+      'from',
+      'deadlineType',
+      'deadlineExpiresAt',
+      'wakeId',
+      'iteration',
+    ],
+    // One key, and deliberately. A lift of STOP ALL is the owner's act and
+    // nothing else in the system may write this event; see the fold.
+    'lifeloop.unstopped': ['code'],
     // The close-out. Without it a denied loop stays denied in the journal for
     // ever and the loop is single-shot: one wake, one refusal, silence. `code`
     // says why the wake is over — 'closed-out', 'retry', 'awaiting-approval'.
@@ -698,6 +883,14 @@ export interface LifeLoopStatus {
   readonly retriesExhausted: boolean
   readonly currentWake: WakeEvent | null
   readonly currentDeadline: Deadline | null
+  /** The most recent refusal the registry made, or null. Code and instant only. */
+  readonly lastRefusal: { readonly code: string; readonly at: string } | null
+  /** What the loop concluded last, and how loudly it was allowed to say so. */
+  readonly conclusion: {
+    readonly outcome: DecideOutcome
+    readonly escalation: OwnerEscalation
+    readonly attentionSuppressed: boolean
+  } | null
   readonly isIdle: boolean
   readonly isStopped: boolean
 }

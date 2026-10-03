@@ -174,6 +174,29 @@ import {
   type FoundryProjection,
 } from './protocol/foundry'
 import { projectOffice, ABSENT_OFFICE_PROJECTION, type OfficeProjection } from './office/projection'
+import {
+  LifeLoopRuntime,
+  projectLifeLoop,
+  type LifeLoopPorts,
+  type LifeLoopSnapshot,
+  type LifeLoopWakeRequest,
+} from './lifeloop'
+import { LIFE_LOOP_LIMITS } from './lifeloop'
+import type { LifeLoopJournalEntry } from './lifeloop'
+import { pendingSchedules } from './attention/state'
+import {
+  checkGrant,
+  isGrantActive,
+  type CognitionGrant,
+  type GrantContext,
+} from './cognition/grants'
+import {
+  ABSENT_LIFE_LOOP_PROJECTION,
+  NO_LIFE_LOOP_DOMAIN_REASON,
+  type LifeLoopProjection,
+} from './protocol/lifeloop'
+import { DECIDE_OUTCOMES, type DecideOutcome, type LifeLoopLimitRequest, type PendingSchedule, type WakeKind } from './lifeloop'
+import type { AttentionEventKind } from './attention/types'
 import { RelayEngine, type RelayReadResult } from './relay/engine'
 import type { RelayAdapterSet } from './relay/adapters'
 import { projectRelay } from './relay/projection'
@@ -556,6 +579,37 @@ export interface CoreOptions {
      */
     allowlistedRepos?: readonly string[]
   }
+  /**
+   * The Phase 23 Continuous Life Loop.
+   *
+   * Composition, like `research`, `workforceSource` and `attentionObserveSources`:
+   * the production host turns it on and a test that does not care about it leaves
+   * it off, so a completed Run does not silently add `lifeloop.*` lines to a
+   * journal it is asserting on.
+   *
+   * **Absent is not "off".** An absent option builds the loop with its wake sources
+   * unconnected, so nothing can wake it and it can spend nothing; it is a real
+   * domain reporting `unavailable`, not a missing subsystem. That is the same
+   * distinction every other seam in this interface draws, and it is why the option
+   * carries no `disabled` flag: there is nothing here a host could set that would
+   * make the loop cheaper, only quieter.
+   *
+   * Nothing in this option can widen a bound. `limits` is clamped down to the
+   * frozen ceilings and a raise is ignored rather than applied, so a
+   * misconfigured host gets the tighter of the two behaviours.
+   */
+  lifeLoop?: {
+    /**
+     * Whether Core's own subsystems wake the loop on their terminal events.
+     *
+     * Off by default for the same reason `attentionObserveSources` is: a test that
+     * does not care about the loop should not have its journal perturbed by it.
+     * The production host turns this on.
+     */
+    observeSubsystemEvents?: boolean
+    /** Narrowed ceilings. Can only *lower* the code-owned limits. */
+    limits?: LifeLoopLimitRequest
+  }
 }
 
 /**
@@ -753,7 +807,32 @@ export interface Core {
    * provider contact and no network access; it fires only schedules already due
    * whose condition holds against state Core already has.
    */
-  attentionTick(now?: Date): Promise<number>
+attentionTick(now?: Date): Promise<number>
+  /**
+   * Core's account of the Continuous Life Loop: where the loop is, what woke it,
+   * what it concluded and how loudly it was allowed to say so, whether it is
+   * waiting on something and until when, and the eight zero-idle-inference
+   * assertions by name.
+   *
+   * Read-only, and the shape of the read is the whole policy. There is no field
+   * for a prompt, a provider's answer, the text of the event that woke the loop,
+   * or a refusal's free-form reason — each is replaced by a closed code, a counter
+   * or an id, for the reason the journal holds metadata too: the least protected
+   * file in the system must not become a transcript of what Freya was thinking.
+   *
+   * **There is deliberately no `lifeloop.*` command anywhere in the Core
+   * vocabulary.** A window may see that Freya is waiting; it cannot wake her, make
+   * her think, spend on her, lift a stop or shorten a deadline. The absence of a
+   * write verb is the property rather than an omission — the same argument that
+   * keeps `consciousness.*` out of the vocabulary.
+   *
+   * Never null: a Core that has not started, or was built without the loop, reports
+   * `unavailable` with a stated reason, because "Freya is idle" and "there is no
+   * continuous life loop" are different facts.
+   */
+  lifeLoop(): LifeLoopProjection
+  /** Subscribe to the life-loop projection. Same mirror semantics as the others. */
+  onLifeLoop(listener: (projection: LifeLoopProjection) => void): () => void
   /**
    * Core's account of context: what is held, in which scope, and what state.
    *
@@ -978,6 +1057,26 @@ class FreyaCore implements Core {
   /** Health already reported to the journal, so degradation is announced once. */
   private personalityDegradedReported = false
   private readonly attentionListeners = new Set<(projection: AttentionProjection) => void>()
+  private readonly lifeLoopListeners = new Set<(projection: LifeLoopProjection) => void>()
+  /**
+   * The Phase 23 Continuous Life Loop, built and owned by Core.
+   *
+   * Built last, because everything it reads is already built by then: Attention for
+   * the schedules and the focus reading, the Cognition service for the only route to
+   * a model it has, Mission and Work for what it verifies, and the fabric for the
+   * journal its entire state is folded from.
+   *
+   * The runtime holds no gateway, no provider, no principal and no capability
+   * object. Every one of those is reached through a port Core fills here, and the
+   * one that can spend is filled with the Governor, the Gateway and an
+   * owner-created grant — machinery that already existed. That is the whole of the
+   * phase's safety claim: the loop cannot reach around a gate, because it has no
+   * handle on any of them.
+   *
+   * Optional rather than definite so `lifeLoop()` can report `unavailable` during
+   * startup instead of throwing, the same way `brain()` does.
+   */
+  private lifeLoopRuntime: LifeLoopRuntime | undefined
   private readonly officeListeners = new Set<(projection: OfficeProjection) => void>()
   /**
    * The Phase 12 Attention engine, or undefined before `start()`.
@@ -1341,6 +1440,13 @@ class FreyaCore implements Core {
       this.foundryEngine?.replay(event)
       this.recordActivity(event)
       this.observeAttentionSource(event)
+      // The life loop watches the same authoritative stream Attention does, and is
+      // deliberately fed from *this* subscription rather than from
+      // `observeAttentionSource`: the wake source and the actor are chosen from the
+      // event's type, so the loop is woken by what happened rather than by whatever
+      // another subsystem decided to forward it. Fire-and-forget, for the same
+      // ordering reason as every other line here.
+      this.observeLifeLoopSource(event)
       // Life History derives from authoritative events live. The engine is
       // idempotent, so a replayed event cannot duplicate an entry.
       if (!event.type.startsWith('life.')) void this.lifeEngine?.observe(event)
@@ -1759,6 +1865,15 @@ class FreyaCore implements Core {
     // gateway because the self model reports which provider *would* answer.
     await this.buildWorld()
 
+    // The Phase 23 life loop, constructed after every subsystem whose state it
+    // reads and before anything that could raise a wake. Construction is free: it
+    // opens no store, starts no timer, contacts no provider and schedules nothing,
+    // so the only thing it costs at boot is an object that can say "no".
+    this.lifeLoopRuntime = new LifeLoopRuntime({
+      ports: this.lifeLoopPorts(),
+      limits: this.options.lifeLoop?.limits,
+    })
+
     const recoveredSequence = this.fabric.lastSequence
     this.startedAt = (this.options.now ?? (() => new Date()))().toISOString()
 
@@ -1813,6 +1928,15 @@ class FreyaCore implements Core {
     // execution.
     this.publishWorkforce()
 
+    // And the life loop reconciles last of all, because its reconciliation is the
+    // only one that *spends* nothing but *keeps* something: an action the journal
+    // says started cannot be continued, because its plan was in memory, and a wait
+    // whose absolute deadline has not passed is preserved rather than restarted.
+    // Reconciled before `core.ready` so a window attaching to a ready Core is never
+    // shown a loop that believes it is mid-action when it is not.
+    await this.lifeLoopRuntime?.open()
+    this.publishLifeLoop()
+
     if (this.currentLifecycle === 'ready') {
       await this.fabric.append('core.ready', {}, { actor: 'system' })
     } else {
@@ -1862,6 +1986,16 @@ class FreyaCore implements Core {
       // connector action is an external request, and one that had already
       // passed Guard when the shutdown began must not reach an adapter after.
       this.closeRelay(`core stopping: ${reason}`)
+      // And the life loop stops taking new work in the same synchronous turn, so a
+      // wake that arrives during the drain is refused rather than half-run.
+      //
+      // Deliberately *not* a latch: nothing here asks the loop to record a stop,
+      // because the process is ending rather than the owner pressing a button. A
+      // latch the owner never set must not survive into the next launch, and a
+      // close-out written here would say the loop finished something rather than
+      // that it never will. What the next `start()` finds in the journal is the
+      // honest answer, and the recovery reconciler turns it into a position.
+      await this.lifeLoopRuntime?.close()
       if (this.fabric) {
         // A microphone must not outlive the Core that opened it.
         await this.voiceService?.abandon('the application is shutting down')
@@ -2962,7 +3096,39 @@ class FreyaCore implements Core {
 
   async attentionTick(now?: Date): Promise<number> {
     if (this.attentionEngine === undefined) return 0
+    // The life loop goes **first**, and the order is load-bearing rather than
+    // incidental. A schedule the loop is going to be offered must still be pending,
+    // and `AttentionEngine.tick` settles every due schedule as it fires — so a loop
+    // that looked afterwards would find an empty list and its heartbeat would be
+    // dead code that still looked wired.
+    //
+    // Running it here rather than on a second host timer is also why this phase adds
+    // no timer at all: a second interval would be a second thing to clear on
+    // shutdown, a second thing to forget when the window closes, and the shape a
+    // runaway loop takes.
+    //
+    // Its count is deliberately **not** added to the return value. That number is the
+    // number of Attention schedules that fired, it is what the host and three existing
+    // tests both read, and folding a different subsystem's count into it would make
+    // one number mean two things.
+    await this.lifeLoopTick()
     return await this.attentionEngine.tick(now)
+  }
+
+  /**
+   * The bounded heartbeat, on its own.
+   *
+   * Expire one deadline that has passed, and offer at most one due schedule to the
+   * registry. No model call, no provider contact, and nothing appended for a
+   * schedule that is not due.
+   *
+   * Main-process composition only, and reachable from nowhere else — there is
+   * deliberately no `lifeloop.tick` command, so a renderer cannot drive the clock.
+   */
+  private async lifeLoopTick(): Promise<number> {
+    const runtime = this.lifeLoopRuntime
+    if (runtime === undefined) return 0
+    return await runtime.tick()
   }
 
   /**
@@ -3024,6 +3190,426 @@ class FreyaCore implements Core {
       throw new Error('the Attention engine is not available')
     }
     return this.attentionEngine
+  }
+
+  /**
+   * The Continuous Life Loop's ports.
+   *
+   * This method is the whole of the integration, and its shape is the argument:
+   * every line is either a read of state Core already holds, a narrow write of
+   * loop-owned metadata, or one of the two decision delegations. There is no line
+   * that hands the loop a gateway, a provider, a permit, a principal, a capability
+   * or a grant store — so there is nothing for the loop to reach authority through,
+   * at compile time rather than by convention.
+   *
+   * The three that are *callbacks* rather than values (`stopAllActive`,
+   * `journalTrustworthy`, `focus`) are callbacks on purpose. A latch or a focus
+   * reading copied into the loop would let the loop act on a stale one, which is
+   * the same class of bug as a STOP ALL checked before an `await`.
+   */
+  private lifeLoopPorts(): LifeLoopPorts {
+    return {
+      now: () => this.lifeLoopNow().toISOString(),
+      newId: () => this.newId(),
+      append: async (type, payload) => {
+        // Durable before it resolves. The loop's state is derived from these and
+        // from nothing else, so a refusal has to fail loudly rather than be
+        // swallowed — there is no in-memory copy that would not be lost anyway.
+        await this.fabric.append(type as never, payload as never, {
+          actor: 'system',
+          correlationId: typeof payload.wakeId === 'string' && payload.wakeId.length > 0
+            ? payload.wakeId
+            : this.newId(),
+        })
+      },
+      replay: async () => {
+        const events = await this.fabric.readAll()
+        return events.map(
+          (event): LifeLoopJournalEntry => ({
+            type: event.type,
+            // The envelope's instant is named `occurredAt`; the loop's fold asks for
+            // `recordedAt` because it also folds journals written by other means.
+            // The two are the same instant and the mapping lives here, once.
+            recordedAt: event.occurredAt,
+            payload: event.payload,
+          }),
+        )
+      },
+      stopAllActive: () => this.state.stopAll.active || this.gateway?.gateStatus().open === false,
+      journalTrustworthy: () => this.integrity.integrity !== 'corrupt',
+      // The loop is always built and always reports; whether its subsystems are
+      // connected is the option, and the option is checked at the point a wake
+      // would be raised rather than here, so `isEnabled` in the projection means
+      // "this Core wired it", which is the fact a surface can act on.
+      enabled: () => true,
+      schedules: () => this.lifeLoopSchedules(),
+      conditionHolds: (scheduleId) => this.lifeLoopConditionHolds(scheduleId),
+      focus: () => this.lifeLoopFocus(),
+      grantAvailable: (now) => this.lifeLoopGrant(now) !== null,
+      budgetRemainingCalls: (now) => this.lifeLoopBudgetRemaining(now),
+      requestCognition: (request) => this.lifeLoopRequestCognition(request),
+      verify: (request) => this.lifeLoopVerify(request),
+      raiseEscalation: async (escalation) => this.lifeLoopRaise(escalation),
+      goalOpen: (goalRef) => this.attentionGoalOpen(goalRef),
+      escalationApprovalRequired: () => false,
+      onChange: () => this.publishLifeLoop(),
+    }
+  }
+
+  /**
+   * One clock, read the same way everywhere.
+   *
+   * The loop never reads `Date.now()` itself — that is what makes "the same journal
+   * at the same instant gives the same answer" testable — so every instant it sees
+   * comes from the injected Core clock.
+   */
+  private lifeLoopNow(): Date {
+    return (this.options.now ?? (() => new Date()))()
+  }
+
+  /**
+   * The schedules a heartbeat may fire, as the closed shape the registry validates.
+   *
+   * Attention owns the truth; this is a read of it and never a second copy. A
+   * schedule the loop cannot see is a schedule it cannot fire, which is exactly the
+   * bound that keeps a heartbeat from becoming a poll.
+   */
+  private lifeLoopSchedules(): readonly PendingSchedule[] {
+    if (this.attentionEngine === undefined) return []
+    return pendingSchedules(this.state.attention).map((schedule) => ({
+      scheduleId: schedule.scheduleId,
+      dueAt: schedule.dueAt,
+    }))
+  }
+
+  /**
+   * The three closed conditions Attention already implements.
+   *
+   * Re-derived here rather than reaching into the engine, because the loop needs a
+   * boolean and the engine's own `conditionHolds` is private to a decision it makes
+   * inside `tick`. Both read the same three conditions from the same journal fold,
+   * so they cannot disagree about whether a schedule is eligible — and if this
+   * table ever drifted from the engine's, the registry would refuse the wake with
+   * `heartbeat-condition-unmet` and journal the disagreement rather than firing.
+   */
+  private lifeLoopConditionHolds(scheduleId: string): boolean {
+    const schedule = this.state.attention.schedules.find(
+      (candidate) => candidate.scheduleId === scheduleId,
+    )
+    if (schedule === undefined || schedule.status !== 'pending') return false
+    switch (schedule.condition) {
+      case 'always':
+        return true
+      case 'focus-available':
+        return this.attentionFocus() !== 'focused'
+      case 'goal-open':
+        return schedule.goalRef !== null && this.attentionGoalOpen(schedule.goalRef)
+      default:
+        return false
+    }
+  }
+
+  /**
+   * What the owner is focused on, in the loop's own two-field shape.
+   *
+   * Derived from the *same* reading Attention decides with, one function call apart,
+   * so the loop and the attention engine cannot hold two opinions about whether the
+   * owner is mid-task. `focusRef` is null because Core's reading is "is a provider
+   * call in flight or a Run executing" and has no id for it — a made-up identifier
+   * would be worse than admitting there is not one.
+   */
+  private lifeLoopFocus(): { readonly focused: boolean; readonly focusRef: string | null } {
+    return { focused: this.attentionFocus() === 'focused', focusRef: null }
+  }
+
+  /**
+   * The grant that could pay for one background thought, or null.
+   *
+   * *Selection*, never minting: this walks the owner's existing grants in creation
+   * order and returns the first one `checkGrant` accepts for a background call of
+   * this shape. The Governor still verifies it, still enforces its own ceilings, and
+   * still refuses anything that does not match — so a grant named here is a
+   * candidate to be judged, not an authorisation. There is no code path here that
+   * widens one, invents one, or returns null as a failure the caller could work
+   * around.
+   */
+  private lifeLoopGrant(now: string): CognitionGrant | null {
+    if (this.service === undefined) return null
+    return this.lifeLoopSelectGrant(now)
+  }
+
+  /**
+   * Calls still available under the grant that could pay for a thought.
+   *
+   * Zero is the honest answer whenever no grant qualifies, which is what makes
+   * "an idle Freya spends nothing" fall out of the prefilter rather than out of a
+   * hopeful default. It is a count, never an estimate: the figure comes from the
+   * durable reservation the Cognition service already records before a provider is
+   * contacted, so it survives a restart.
+   */
+  private lifeLoopBudgetRemaining(now: string): number {
+    const grant = this.lifeLoopGrant(now)
+    // With no qualifying grant this reports the loop's *own* per-wake ceiling rather
+    // than zero, and the distinction is deliberate rather than cosmetic.
+    //
+    // Budget and grant are two different questions: budget is how much this loop may
+    // still spend on this wake, grant is whether anything has authorised it. The
+    // prefilter asks budget first because an exhausted budget is the more specific
+    // answer when both apply — but on a Core where no owner has ever created a
+    // background grant, reporting zero here would answer "budget-exhausted" for a
+    // Freya that has never been given a coin. The truthful reading of "no grant" is
+    // "nothing has authorised this", so the gate that says so is the one that fires.
+    if (grant === null) return LIFE_LOOP_LIMITS.maxCognitionRequestsPerWake
+    // And when there is a grant, this is a durable count rather than an estimate: the
+    // figure comes from the reservation the Cognition service records before a
+    // provider is contacted, so it survives a restart.
+    return Math.max(0, grant.maxCalls - grant.usage.calls)
+  }
+
+  private lifeLoopSelectGrant(now: string): CognitionGrant | null {
+    const at = new Date(now)
+    const grants = this.ownerAuthority.grants()
+    for (const grant of grants) {
+      if (!isGrantActive(grant, at)) continue
+      // The narrowest context that could still pay for one background thought. A
+      // grant scoped to a goal or an origin the loop cannot produce is skipped
+      // here rather than discovered as a refusal after the fact.
+      const context: GrantContext = {
+        origin: 'system',
+        cause: 'scheduled_grant',
+        goalId: null,
+        runId: null,
+        actor: this.owner.id,
+        background: true,
+        maxOutputTokens: 0,
+      }
+      if (checkGrant(grant, context, at).ok) return grant
+    }
+    return null
+  }
+
+  /**
+   * The loop's only route to a model.
+   *
+   * Three properties, in order, and each one is the reason this is a method on Core
+   * rather than something the loop could have done itself:
+   *
+   *   1. **No principal is named by the caller.** The intent kind is
+   *      `scheduled_task`, and Core derives the origin, the cause and the background
+   *      flag from that closed category. The loop cannot compose a shape that means
+   *      more than the category does.
+   *   2. **The Governor still decides.** A grant is *selected* here and *judged*
+   *      there, so naming one buys nothing: a grant that does not cover background
+   *      system work, or that has spent its calls, is refused before a provider is
+   *      contacted, and a refusal costs nothing because nothing was contacted.
+   *   3. **The answer is a closed outcome.** Whatever the provider said is parsed
+   *      into one of five words or it is discarded, so no downstream branch can be
+   *      driven by prose a model produced — and an unparseable answer is
+   *      `do-nothing`, never an escalation.
+   */
+  private async lifeLoopRequestCognition(
+    request: Parameters<LifeLoopPorts['requestCognition']>[0],
+  ): ReturnType<LifeLoopPorts['requestCognition']> extends Promise<infer T> ? Promise<T> : never {
+    const now = new Date(this.lifeLoopNow())
+    const grant = this.lifeLoopSelectGrant(now.toISOString())
+    if (grant === null) {
+      return { status: 'refused', code: 'no-active-grant' }
+    }
+    const outcome = await this.ownerAuthority.request({
+      kind: 'scheduled_task',
+      prompt: request.prompt,
+      maxOutputTokens: request.maxOutputTokens,
+      grantId: grant.id,
+      goalId: null,
+      correlationId: request.wakeKey,
+      cognitionRequestId: request.wakeId,
+    })
+    if (outcome.status === 'denied') return { status: 'refused', code: 'governor-refused' }
+    if (outcome.status === 'cancelled') return { status: 'refused', code: 'cancelled' }
+    if (outcome.status === 'failed') {
+      return outcome.providerContacted
+        ? { status: 'failed', code: 'provider-failed' }
+        : { status: 'refused', code: 'no-provider-contacted' }
+    }
+    return {
+      status: 'decided',
+      outcome: readDecideOutcome(outcome.text),
+      providerId: outcome.providerId,
+      model: outcome.model,
+    }
+  }
+
+  /**
+   * Did what the wake said actually happen?
+   *
+   * A read of Core's own projections, never a second thought: "is the thing that
+   * just finished still open?" is a question about state the loop's host already
+   * holds, and answering it with inference would make the loop's honesty depend on
+   * its provider being honest. A reference Core does not recognise is reported as
+   * satisfied, because "nothing is known to still be running" is the true statement
+   * and a fabricated doubt would burn a retry for no reason.
+   */
+  private async lifeLoopVerify(
+    request: Parameters<LifeLoopPorts['verify']>[0],
+  ): Promise<{ readonly holds: boolean; readonly code: string }> {
+    if (request.kind === 'escalation-delivered') {
+      // Attention records every decision it makes, including the ones that say
+      // nothing should reach the owner. The claim being verified is "Attention
+      // considered it", and that is answered by a decision existing — not by the
+      // decision being loud, because being loud was never the loop's to decide.
+      const decisions = this.state.attention.decisions
+      return {
+        holds: decisions.length > 0,
+        code: decisions.length > 0 ? 'attention-decided' : 'attention-decided-nothing',
+      }
+    }
+    const stillOpen = this.attentionGoalOpen(request.reference)
+    return { holds: !stillOpen, code: stillOpen ? 'reference-still-open' : 'reference-settled' }
+  }
+
+  /**
+   * Ask Attention to consider something. It decides, not this loop.
+   *
+   * Two authorities over one human's attention is how a system ends up interrupting
+   * somebody twice, so the loop's role here is to *ask* and Attention's role is to
+   * answer with its own budget, cooldown and focus rule. The text is a fixed
+   * sentence this code wrote — never anything a model returned — and the source is
+   * the wake's own domain, so the loop cannot borrow the `system` source's higher
+   * importance cap to make itself louder.
+   *
+   * Returns whether Attention escalated or suppressed, which is what the loop
+   * records as `attentionSuppressed`. It has no way to make Attention do either.
+   */
+  private async lifeLoopRaise(
+    escalation: Parameters<LifeLoopPorts['raiseEscalation']>[0],
+  ): Promise<'escalated' | 'suppressed'> {
+    if (this.attentionEngine === undefined || this.options.lifeLoop?.observeSubsystemEvents !== true) {
+      return 'suppressed'
+    }
+    const source = lifeLoopAttentionSource(escalation.kind)
+    const result = await this.attentionEngine.ingestInternal(source, {
+      kind: lifeLoopAttentionKind(escalation.kind),
+      // A fixed sentence. The loop has no access to the model's words here, and that
+      // is deliberate: Attention retains event text in process memory for an
+      // explicit owner read, and it must never receive a model's prose to do it.
+      text: lifeLoopAttentionText(escalation.kind),
+      goalRef: escalation.goalRef,
+      sourceRef: escalation.reference === null ? escalation.wakeKey : escalation.reference,
+    })
+    return result.ok && result.decision.outcome !== 'do-nothing' ? 'escalated' : 'suppressed'
+  }
+
+  /**
+   * Deliver a Core-owned subsystem's terminal event to the life loop, when composed
+   * on.
+   *
+   * Fire-and-forget, for the fabric's ordering rule: a subscriber must not `await`
+   * an append or it waits behind itself. The source and the kind are chosen here
+   * from the event's *type* — never read from a payload — and the actor is
+   * `core-subsystem`, which is the only actor the closed registry accepts for a
+   * mission or work transition. A renderer cannot reach this method, and even if a
+   * payload claimed to be one of these kinds the pairing table would refuse it.
+   *
+   * `mission-activated` and `run-started` are here on purpose even though the filter
+   * will deterministically refuse them a thought: they are the four cases a
+   * plausible implementation would get wrong by treating "something happened" as
+   * "Freya should think about it", and having them actually arrive is what makes
+   * the refusal observable rather than theoretical.
+   */
+  private observeLifeLoopSource(event: AnyCoreEvent): void {
+    if (this.lifeLoopRuntime === undefined) return
+    if (this.options.lifeLoop?.observeSubsystemEvents !== true) return
+    const request = lifeLoopWakeFor(event)
+    if (request === null) return
+    this.raiseLifeLoopWake(request)
+  }
+
+  /** Enqueue a wake. Never awaited, and never allowed to reject into the fabric. */
+  private raiseLifeLoopWake(request: LifeLoopWakeRequest): void {
+    const runtime = this.lifeLoopRuntime
+    if (runtime === undefined) return
+    void runtime.considerWake(request).catch((error: unknown) => {
+      // The runtime already records a thrown step as an anomaly and reconciles
+      // itself; this is the outer belt for a bug in the wiring rather than in the
+      // loop, and it must never propagate into a fabric subscriber.
+      console.error('[freya.core] life loop wake failed', error)
+    })
+  }
+
+  /**
+   * Core's account of the life loop. Never null, and it never throws.
+   */
+  lifeLoop(): LifeLoopProjection {
+    if (this.lifeLoopRuntime === undefined || this.fabric === undefined) {
+      return { ...ABSENT_LIFE_LOOP_PROJECTION, reason: NO_LIFE_LOOP_DOMAIN_REASON }
+    }
+    return this.lifeLoopProjection(this.lifeLoopSnapshot())
+  }
+
+  onLifeLoop(listener: (projection: LifeLoopProjection) => void): () => void {
+    this.lifeLoopListeners.add(listener)
+    // Delivered immediately, like every subscription here, so a window that
+    // attaches late agrees with one that never left.
+    try {
+      listener(this.lifeLoop())
+    } catch (error) {
+      console.error('[freya.core] Life Loop subscriber threw', error)
+    }
+    return () => {
+      this.lifeLoopListeners.delete(listener)
+    }
+  }
+
+  private lifeLoopSnapshot(): LifeLoopSnapshot | null {
+    return this.lifeLoopRuntime?.snapshot() ?? null
+  }
+
+  private lifeLoopProjection(snapshot: LifeLoopSnapshot | null): LifeLoopProjection {
+    if (snapshot === null || this.fabric === undefined) {
+      return { ...ABSENT_LIFE_LOOP_PROJECTION, reason: NO_LIFE_LOOP_DOMAIN_REASON }
+    }
+    try {
+      const projected = projectLifeLoop({
+        sequence: this.fabric.lastSequence,
+        snapshot,
+        now: this.lifeLoopNow().toISOString(),
+      })
+      // Degradation is layered *on top of* the real reading rather than replacing it.
+      // A stopped Freya is still idle, still holds the wake it was refused and still
+      // has a state a surface can name; substituting the absent projection here would
+      // report every one of those as zero, and "nothing is known" and "nothing is
+      // happening" are exactly the two claims a stopped system must not blur.
+      if (this.state.stopAll.active || this.gateway?.gateStatus().open === false) {
+        return {
+          ...projected,
+          health: 'degraded',
+          reason: 'Freya is stopped, so the life loop is holding rather than thinking',
+        }
+      }
+      return projected
+    } catch (error) {
+      // A projection that threw would leave the surface with nothing at all in
+      // exactly the moment something was already wrong, so a read that cannot be
+      // built becomes a stated degradation instead.
+      return {
+        ...ABSENT_LIFE_LOOP_PROJECTION,
+        health: 'degraded',
+        reason: `the life loop could not be read: ${describe(error)}`,
+      }
+    }
+  }
+
+  private publishLifeLoop(): void {
+    if (this.lifeLoopListeners.size === 0) return
+    const projection = this.lifeLoop()
+    for (const listener of [...this.lifeLoopListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Life Loop listener threw', error)
+        this.lifeLoopListeners.delete(listener)
+      }
+    }
   }
 
   private requireFoundry(): FoundryEngine {
@@ -4306,6 +4892,24 @@ class FreyaCore implements Core {
           // each decision, so this is belt-and-braces ??? but the property being
           // defended is that no external action can *begin* after a stop.
           this.closeRelay(`STOP ALL: ${reason}`)
+          // And the life loop, in the same synchronous turn. Its gate is the
+          // prefilter's STOP ALL check and the journal latch this very command is
+          // about to write, so a loop that reconciled only after the await could
+          // start a fresh thought in the window between the two — and that window is
+          // exactly the race this exists to make impossible.
+          //
+          // So the *call* happens here and the *record* is awaited immediately,
+          // before the latch below. Two reasons for that order: a caller told
+          // "Freya is stopped" should never be holding that answer while the journal
+          // does not contain it, and a journal whose newest line is
+          // `security.stop_all.activated` is one a reader — and the conscious
+          // context's recent-changes list — reads correctly, rather than showing a
+          // line of loop bookkeeping as the most recent thing that happened.
+          await (this.lifeLoopRuntime?.stop() ?? Promise.resolve()).catch(
+            (error: unknown) => {
+              console.error('[freya.core] the life loop could not record the stop', error)
+            },
+          )
 
           try {
             const event = await this.fabric.append(
@@ -4363,6 +4967,13 @@ class FreyaCore implements Core {
             { actor: this.owner.id, correlationId: requestId },
           )
           this.gateway?.resume()
+          // And the life loop's own latch. This is the *only* place a `lifeloop.unstopped`
+          // is written from, and it is written from here because here is where the
+          // owner cleared the stop behind `security.resume` — the fold insists there
+          // was a stop to lift, so a stray entry anywhere else moves nothing, and
+          // there is deliberately no wake, deadline, retry or failure that can reach
+          // this call.
+          await this.lifeLoopRuntime?.lift()
           // Same for the workforce: only this path reopens it, and it changes nothing
           // but whether a *new* assignment or message may begin. It restarts no work and
           // returns nothing, so a worker stopped by a panic button stays stopped until
@@ -4389,9 +5000,22 @@ class FreyaCore implements Core {
             await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
             return { requestId, ok: false, refusal: { reason: decision.reason } }
           }
+          // Owner pre-emption, in the same synchronous turn as the decision to
+          // accept the act. A background loop mid-thought is abandoned rather than
+          // finished: the owner is present and the owner comes first, and letting
+          // the in-flight work complete first would mean telling them Freya was busy
+          // for a few seconds after they had already started talking to her.
+          //
+          // Awaited before the command answers, for the reason the STOP handler waits
+          // on the loop's stop: a caller told the conversation exists should not be
+          // holding that answer while the journal does not yet record the pre-emption.
+          const preemption = this.lifeLoopRuntime?.preemptByOwner() ?? Promise.resolve()
           const result = await this.conversations.create(
             readString(envelope.payload, 'title') ?? undefined,
           )
+          await preemption.catch((error: unknown) => {
+            console.error('[freya.core] the life loop could not record the pre-emption', error)
+          })
           if (!result.ok) {
             return {
               requestId,
@@ -7468,6 +8092,140 @@ function readString(payload: unknown, key: string): string | null {
   if (typeof payload !== 'object' || payload === null) return null
   const value = (payload as Record<string, unknown>)[key]
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+/**
+ * Parse a provider's answer into one of the loop's five closed outcomes.
+ *
+ * Deliberately brutal, and deliberately one-directional. The whole word has to
+ * appear, and the first one that does wins — so "I will not interrupt you" reads as
+ * `interrupt`, which is the *safe* direction, and anything unrecognised reads as
+ * `do-nothing`, which is the quiet one. Neither default can turn a confused answer
+ * into something that reaches for a human being's attention, and that is the only
+ * property this function has to have: the loop's authority to speak comes from the
+ * wake and the filter, never from what a model typed.
+ */
+function readDecideOutcome(text: string): DecideOutcome {
+  const lower = text.toLowerCase()
+  for (const outcome of DECIDE_OUTCOMES) {
+    if (lower.includes(outcome)) return outcome
+  }
+  return 'do-nothing'
+}
+
+/**
+ * Which Attention source a life-loop escalation is raised under.
+ *
+ * Mapped from the wake's kind rather than from a `system` default, and that is the
+ * whole point: `system` carries the highest importance cap in the attention policy,
+ * so a loop that raised its own escalations as `system` could buy itself an
+ * importance it never earned. A Mission's escalation is raised as a Mission's.
+ */
+function lifeLoopAttentionSource(kind: WakeKind): AttentionSource {
+  if (kind.startsWith('mission-')) return 'mission'
+  if (kind.startsWith('run-') || kind === 'step-verified') return 'work'
+  if (kind === 'research-completed') return 'research'
+  if (kind === 'schedule-due') return 'system'
+  return 'context'
+}
+
+/**
+ * The closed attention kind for one life-loop kind.
+ *
+ * Fixed sentences and a fixed kind. No model prose crosses into Attention, because
+ * Attention holds event text in process memory for an explicit owner read and that
+ * store must never become a place a provider's sentence is kept.
+ */
+function lifeLoopAttentionKind(kind: WakeKind): AttentionEventKind {
+  if (kind === 'mission-completed') return 'mission-finished'
+  if (kind === 'mission-failed') return 'mission-failed'
+  if (kind === 'run-completed') return 'work-finished'
+  if (kind === 'run-failed') return 'work-failed'
+  if (kind === 'research-completed') return 'research-finished'
+  if (kind === 'system-health') return 'system-health'
+  // `needs-attention` is not in the closed vocabulary, so the fallback is the kind
+  // that exists for exactly this case: something Freya was waiting for. Naming a
+  // kind that does not exist would be refused by the policy rather than recorded.
+  return 'deadline'
+}
+
+function lifeLoopAttentionText(kind: WakeKind): string {
+  switch (kind) {
+    case 'mission-completed':
+      return 'A mission finished and Freya has something to say about it.'
+    case 'mission-failed':
+      return 'A mission did not finish, and Freya has something to say about it.'
+    case 'run-completed':
+      return 'A run finished and Freya has something to say about it.'
+    case 'run-failed':
+      return 'A run did not finish, and Freya has something to say about it.'
+    case 'research-completed':
+      return 'Research finished and Freya has something to say about it.'
+    case 'system-health':
+      return 'Something about Freya herself needs attention.'
+    default:
+      return 'Something Freya was waiting for happened.'
+  }
+}
+
+/**
+ * Which life-loop wake an authoritative Core event raises, if any.
+ *
+ * A pure table over event *types*. Nothing is read from a payload, so an event
+ * cannot describe itself as a louder wake than it is, and the source and kind that
+ * come back are a matched pair from the closed registry — `run-completed` arrives
+ * as `work-transition`/`run-completed` and never as `authorized-event`.
+ *
+ * The actor is fixed here rather than derived, because attribution is Core's job:
+ * the loop's job is to check it, and `WAKE_SOURCE_ACTOR` says `core-subsystem` is
+ * the only actor permitted to raise a mission or work transition.
+ */
+function lifeLoopWakeFor(event: AnyCoreEvent): LifeLoopWakeRequest | null {
+  const occurredAt = event.occurredAt
+  switch (event.type) {
+    case 'mission.activated':
+      return wakeFor('mission-transition', 'mission-activated', event.payload.missionId, occurredAt)
+    case 'mission.completed':
+      return wakeFor('mission-transition', 'mission-completed', event.payload.missionId, occurredAt)
+    case 'mission.failed':
+      return wakeFor('mission-transition', 'mission-failed', event.payload.missionId, occurredAt)
+    case 'work.run.started':
+      return wakeFor('work-transition', 'run-started', event.payload.runId, occurredAt)
+    case 'work.run.completed':
+      return wakeFor('work-transition', 'run-completed', event.payload.runId, occurredAt)
+    case 'work.run.failed':
+      return wakeFor('work-transition', 'run-failed', event.payload.runId, occurredAt)
+    case 'research.completed':
+      return wakeFor('authorized-event', 'research-completed', event.payload.operationId, occurredAt)
+    // Deliberately **no** mapping for `research.failed`. The wake vocabulary is
+    // closed and has no `research-failed` kind, and `system-health` would be a lie:
+    // an operation that did not complete says nothing about Freya's own health. A
+    // failed research therefore does not wake the loop at all — which is the correct
+    // reading, because the event it did write is already visible to the owner and
+    // inventing a louder wake for it is how a routine failure becomes an
+    // interruption.
+    default:
+      return null
+  }
+}
+
+function wakeFor(
+  source: LifeLoopWakeRequest['source'],
+  kind: WakeKind,
+  reference: string,
+  occurredAt: string,
+): LifeLoopWakeRequest {
+  return {
+    source,
+    kind,
+    actor: source === 'scheduled-heartbeat' ? 'host-heartbeat' : 'core-subsystem',
+    // The reference is also the goal: a run id *is* how Core's own `attentionGoalOpen`
+    // addresses an open run, and inventing a second addressing scheme here would
+    // create a way for the loop to hold a goal nothing else can be asked about.
+    goalRef: reference,
+    sourceRef: reference,
+    occurredAt,
+  }
 }
 
 function reject(envelope: CoreCommandEnvelope, reason: string): CoreCommandResult {

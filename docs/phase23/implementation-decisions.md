@@ -1,6 +1,10 @@
 # Phase 23 — Implementation Decisions
 
-**Status:** PREPARATION ONLY — NOT PRODUCTION
+**Status:** INTEGRATED — the domain below is wired into Core on
+`integration/phase23-runtime`. See `runtime-integration.md` for the wiring, the
+nine places the journal vocabulary had to be extended to make it expressible, and
+what is deliberately left unwired. This file records the decisions that were made
+*inside* the domain, which the wiring did not revisit.
 
 Every place where the preparation documents and the implementation disagreed, and
 which one won. Written down because a silent resolution is indistinguishable from

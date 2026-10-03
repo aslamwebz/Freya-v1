@@ -12,6 +12,7 @@ import type { SkillProjection } from '../core/protocol/skills'
 import type { LifeProjection } from '../core/protocol/life'
 import type { WorldSummaryView } from '../core/protocol/world'
 import type { ConsciousContextProjection } from '../core/protocol/consciousness'
+import type { LifeLoopProjection } from '../core/protocol/lifeloop'
 import type { FoundryProjection } from '../core/protocol/foundry'
 import type { RelayProjection } from '../core/protocol/relay'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
@@ -396,7 +397,20 @@ export interface CoreHost {
    * that *is* running returns a snapshot whose sections say which subsystems are
    * missing, so the two absences stay distinguishable all the way to the surface.
    */
-  consciousness(): ConsciousContextProjection | null
+consciousness(): ConsciousContextProjection | null
+  /**
+   * Attach to the Continuous Life Loop, pushed immediately. Returns a disposer.
+   *
+   * A forwarding box and nothing more. There is no `lifeLoopTick`, no
+   * `lifeLoopWake` and no `lifeLoopStop` on this interface, and that omission is
+   * the security property: the host can read where the loop is, and cannot make it
+   * wake, make it think, spend on it, lift a stop or shorten a deadline. The
+   * heartbeat the loop rides is the *existing* attention tick above, so there is
+   * also no second timer for a window or a plugin to schedule.
+   */
+  onLifeLoop(send: (projection: LifeLoopProjection) => void): () => void
+  /** Null before the Core has started. Never a manufactured idle loop. */
+  lifeLoop(): LifeLoopProjection | null
   /**
    * Attach to the Office projection. Returns a disposer.
    *
@@ -582,6 +596,16 @@ export class ElectronCoreHost implements CoreHost {
     (projection: ConsciousContextProjection) => void
   >()
   /**
+   * Windows watching the Continuous Life Loop.
+   *
+   * A notification list like every other one here, and equally unable to become a
+   * second source of truth: it carries a projection Core built, and a window holds
+   * what it was last sent. Nothing in this set can write a field, wake the loop,
+   * spend on it, lift a stop or shorten a deadline — the lane has no write verb at
+   * all, which is the property rather than an omission.
+   */
+  private readonly lifeLoopWindows = new Set<(projection: LifeLoopProjection) => void>()
+  /**
    * The Context transport box. Binds structurally to a reporting Core, holds a
    * window set, and can write nothing — see `ContextChannel`. Deliberately not
    * a field on Core's construction arguments: Core builds its own Context
@@ -636,6 +660,15 @@ export class ElectronCoreHost implements CoreHost {
         // still decides, and a delivered event cannot mint a capability or reach a
         // model. On in production so a finished Run or Mission becomes attention.
         attentionObserveSources: this.options.attentionObserveSources ?? true,
+        // And the life loop's own wake sources, on the same reasoning and the same
+        // default: composition, not authority. A terminal Run or Mission reaches the
+        // loop the same way it reaches Attention, the registry still decides whether
+        // the wake is authorized, and the prefilter still decides whether it is worth
+        // a model call. Nothing here can mint a capability or widen a bound — the
+        // loop's only route to a provider is a grant the owner created.
+        lifeLoop: {
+          observeSubsystemEvents: this.options.attentionObserveSources ?? true,
+        },
         // The Relay seam, forwarded whole for the same reason. It is a set of
         // adapters, not a door: the option reaches Core, not a window, and a
         // renderer has no name for it ??? so nothing a window can send arrives
@@ -671,6 +704,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onLife((projection) => this.broadcastLife(projection))
       core.onWorld((projection) => this.broadcastWorld(projection))
       core.onConsciousness((projection) => this.broadcastConsciousness(projection))
+    core.onLifeLoop((projection) => this.broadcastLifeLoop(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -878,6 +912,8 @@ export class ElectronCoreHost implements CoreHost {
     this.relayWindows.clear()
     this.skillWindows.clear()
     this.lifeWindows.clear()
+    this.consciousnessWindows.clear()
+    this.lifeLoopWindows.clear()
     this.contextChannel.close()
     await core?.stop(reason)
   }
@@ -1118,6 +1154,34 @@ export class ElectronCoreHost implements CoreHost {
     return this.core?.consciousness() ?? null
   }
 
+  /**
+   * Attach to the Continuous Life Loop, pushed immediately.
+   *
+   * Null before the Core has started, so an early-attaching window is handed
+   * nothing rather than a manufactured idle loop: "Freya is idle" and "there is no
+   * continuous life loop" are different facts, and a surface must not have to guess
+   * which one it is looking at.
+   */
+  onLifeLoop(send: (projection: LifeLoopProjection) => void): () => void {
+    this.lifeLoopWindows.add(send)
+    const projection = this.lifeLoop()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window life loop push threw', error)
+        this.lifeLoopWindows.delete(send)
+      }
+    }
+    return () => {
+      this.lifeLoopWindows.delete(send)
+    }
+  }
+
+  lifeLoop(): LifeLoopProjection | null {
+    return this.core?.lifeLoop() ?? null
+  }
+
   async attentionTick(): Promise<number> {
     return (await this.core?.attentionTick()) ?? 0
   }
@@ -1219,6 +1283,17 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window conscious context push threw', error)
         this.consciousnessWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastLifeLoop(projection: LifeLoopProjection): void {
+    for (const send of [...this.lifeLoopWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window life loop push threw', error)
+        this.lifeLoopWindows.delete(send)
       }
     }
   }

@@ -1,22 +1,29 @@
 import {
+  DECIDE_OUTCOMES,
   LIFE_LOOP_EVENT_TYPES,
   LIFE_LOOP_EVENT_TYPE_SET,
   LIFE_LOOP_PAYLOAD_KEYS,
   FORBIDDEN_PAYLOAD_KEYS,
   LIFE_LOOP_LIMITS,
+  LATCHED_STOP_CODE,
+  OWNER_ESCALATIONS,
+  isClearableStopCode,
   isContinuationState,
+  isReconciliationCode,
   isWakeKind,
   isWakeSource,
   type ContinuationSignal,
   type ContinuationState,
   type Deadline,
   type DeadlineType,
+  type DecideOutcome,
   type LifeLoopEventType,
   type LifeLoopLimits,
+  type OwnerEscalation,
   type RetryCeiling,
   type WakeEvent,
 } from './types'
-import { transition } from './machine'
+import { interrupt, transition } from './machine'
 
 import {
   DEADLINE_DEFAULT_MS,
@@ -94,12 +101,67 @@ export interface LifeLoopState {
   readonly processedWakeKeys: readonly string[]
   readonly stopCode: string | null
   readonly lastReason: string | null
+  /**
+   * The code from the most recent wake the registry refused, or null.
+   *
+   * Folded rather than held, because "why did Freya not look at that?" is a
+   * question a person asks after the fact and there is nowhere else for the answer
+   * to live. A refused wake does not move the loop, so this is the only trace it
+   * leaves — which is exactly why it has to be in the journal rather than in a log
+   * line that a restart would lose.
+   */
+  readonly lastRefusalCode: string | null
+  /** When that refusal was recorded, so a stale answer is visibly stale. */
+  readonly lastRefusalAt: string | null
+  /**
+   * What the loop concluded last, and what it resolved that down to.
+   *
+   * Folded rather than held for the same reason the refusal is: the gap between a
+   * conclusion and the escalation it was allowed to carry is the only visible
+   * evidence that focus suppressed an interrupt rather than the loop never having
+   * wanted one. Those are very different things to have happened.
+   */
+  readonly conclusion: LifeLoopConclusion | null
+}
+
+export interface LifeLoopConclusion {
+  readonly outcome: DecideOutcome
+  readonly escalation: OwnerEscalation
+  /** True when Attention — which owns the owner's attention — suppressed or demoted it. */
+  readonly attentionSuppressed: boolean
 }
 
 export interface FoldResult {
   readonly state: LifeLoopState
   readonly anomalies: readonly FoldAnomaly[]
 }
+
+/**
+ * Facts the single-entry fold cannot see for itself.
+ *
+ * Present because one of them decides whether a stop may be lifted, and a fold that
+ * could not see it would let a hand-edited journal line self-clear a panic button.
+ * `reduceLifeLoopState` derives both of them from the entries it is folding;
+ * `reduceLifeLoopEntry` takes them from the caller, which is the running Core and
+ * knows the latch because it is the thing that sets it.
+ *
+ * Defaulting to `false` is the direction that fails closed: a caller who knows
+ * nothing about the latch cannot lift one.
+ */
+export interface FoldContext {
+  /**
+   * Whether the owner has cleared STOP ALL, evidenced by a
+   * `security.stop_all.cleared` in the durable record or by the Core latch being
+   * open.
+   *
+   * Required, and not inferred from "the loop is stopped": the loop's own terminal
+   * state is reached by ordinary completion as well as by a stop, so it cannot tell
+   * the two apart, and mistaking one for the other is exactly the bug this closes.
+   */
+  readonly ownerClearedStop: boolean
+}
+
+export const FOLD_CONTEXT_CLOSED: FoldContext = Object.freeze({ ownerClearedStop: false })
 
 /** How many dedupe keys are retained. A bound, like everything else here. */
 const MAX_PROCESSED_WAKE_KEYS = 256
@@ -122,6 +184,9 @@ export function initialLifeLoopState(): LifeLoopState {
     processedWakeKeys: [],
     stopCode: null,
     lastReason: null,
+    lastRefusalCode: null,
+    lastRefusalAt: null,
+    conclusion: null,
   }
 }
 
@@ -145,8 +210,39 @@ function readDeadlineType(payload: Record<string, unknown>): DeadlineType | null
   return null
 }
 
-function buildDeadline(type: DeadlineType | null, recordedAt: string | null): Deadline | null {
+function readDecideOutcome(value: unknown): DecideOutcome | null {
+  return typeof value === 'string' && (DECIDE_OUTCOMES as readonly string[]).includes(value)
+    ? (value as DecideOutcome)
+    : null
+}
+
+function readOwnerEscalation(value: unknown): OwnerEscalation | null {
+  return typeof value === 'string' && (OWNER_ESCALATIONS as readonly string[]).includes(value)
+    ? (value as OwnerEscalation)
+    : null
+}
+
+/**
+ * Rebuild a deadline from a journal entry.
+ *
+ * The absolute instant the writer recorded wins, and only falls back to
+ * `recordedAt + the code-owned default` when the entry did not carry one.
+ *
+ * That ordering is load-bearing. A wait the loop armed itself — a cooldown or a
+ * retry backoff — is minutes long, and deriving its deadline from the default
+ * would silently widen it to the thirty-day `wait` ceiling, so a two-second
+ * backoff would survive a restart as a month of not trying. The absolute instant
+ * is journaled precisely so a restart cannot move it.
+ */
+function buildDeadline(
+  type: DeadlineType | null,
+  recordedAt: string | null,
+  absolute?: unknown,
+): Deadline | null {
   if (type === null) return null
+  if (typeof absolute === 'string' && Number.isFinite(Date.parse(absolute))) {
+    return { type, expiresAt: new Date(Date.parse(absolute)).toISOString(), reason: `${type} deadline` }
+  }
   const base = Date.parse(recordedAt ?? '')
   const start = Number.isFinite(base) ? base : 0
   return {
@@ -207,6 +303,7 @@ function withState(state: LifeLoopState, patch: Partial<LifeLoopState>): LifeLoo
 function applyEntry(
   state: LifeLoopState,
   entry: LifeLoopJournalEntry,
+  context: FoldContext = FOLD_CONTEXT_CLOSED,
 ): { readonly state: LifeLoopState; readonly anomalies: readonly FoldAnomaly[] } {
   if (!entry.type.startsWith('lifeloop.')) return { state, anomalies: [] }
   if (!LIFE_LOOP_EVENT_TYPE_SET.has(entry.type)) {
@@ -292,14 +389,23 @@ function applyEntry(
     }
 
     case 'lifeloop.wake.denied': {
-      const illegal = move('filter-denied')
-      if (illegal.length > 0) return { state, anomalies: [...anomalies, ...illegal] }
+      // Bookkeeping, and deliberately *not* a move.
+      //
+      // A wake the registry refused never entered the continuation, so the loop is
+      // exactly where it was: still `IDLE`, or still `WAIT` on whatever it was
+      // waiting for. Consulting the table here would be wrong twice over — there
+      // is no `IDLE -> DENY` edge, so a refused wake arriving at an idle loop
+      // would be folded as tampering and silently dropped, and the refusal would
+      // leave no trace in the journal at all.
+      //
+      // That trace is the whole point. A refusal is the one life-loop outcome the
+      // owner cannot otherwise learn about, so it is recorded here; the dedupe key
+      // is deliberately *not* consumed, because a wake that was never processed
+      // may legitimately arrive again with the same reference.
       return {
         state: withState(state, {
-          state: 'DENY',
-          wake: readFlatWake(payload) ?? state.wake,
-          deadline: null,
-          stopCode: readString(payload, 'code'),
+          lastRefusalCode: readString(payload, 'code'),
+          lastRefusalAt: recordedAt,
           lastReason: type,
         }),
         anomalies,
@@ -320,8 +426,56 @@ function applyEntry(
       // are the same record with different payloads, so a reader can never be
       // left wondering whether a wait was a refusal.
       const outcome = payload.outcome === 'wait' ? 'wait' : 'deny'
-      const deadline = buildDeadline(readDeadlineType(payload), recordedAt)
-      const illegal = move(outcome === 'wait' ? 'condition-not-met' : 'filter-denied')
+      const held = readDeadlineType(payload)
+      const deadline = buildDeadline(held, recordedAt, payload.deadlineExpiresAt)
+
+      // Approval parking is the one wait that is not the ordinary table's business.
+      // `ALLOW -> WAIT` does not exist in that table and must not: it is not a
+      // continuation step, it is an interruption, and the interruption table is
+      // exactly the table that is allowed to override the ordinary one. So a wait
+      // holding an `approval` deadline is settled by `interrupt` and by nothing
+      // else, and an approval-parked entry arriving anywhere the interruption
+      // table refuses it is recorded as tampering rather than quietly accepted.
+      if (outcome === 'wait' && held === 'approval') {
+        const pre = interrupt(state.state, 'approval-required')
+        if (!pre.applied || !pre.awaitingApproval) {
+          return {
+            state,
+            anomalies: [
+              ...anomalies,
+              {
+                code: 'illegal-transition' as const,
+                eventType: type,
+                detail: `an approval was parked while the loop was ${state.state}`,
+              },
+            ],
+          }
+        }
+        return {
+          state: withState(state, {
+            state: 'WAIT',
+            deadline: deadline ?? state.deadline,
+            stopCode: 'awaiting-approval',
+            lastReason: type,
+          }),
+          anomalies,
+        }
+      }
+
+      // Which signal carries a denial depends on where the loop is, and the table
+      // says so: `WAKING` is denied by the filter, while `WAIT` has exactly one way
+      // out and it is `deadline-expired` — a wait does not get refused, it runs out.
+      // Choosing `filter-denied` unconditionally would be the same bug as before:
+      // the fold would refuse its own runtime's legitimate entry and record it as
+      // tampering, and the loop would sit in a wait whose deadline has already
+      // passed for ever.
+      const signal: ContinuationSignal =
+        outcome === 'wait'
+          ? 'condition-not-met'
+          : state.state === 'WAIT'
+            ? 'deadline-expired'
+            : 'filter-denied'
+      const illegal = move(signal)
       if (illegal.length > 0) return { state, anomalies: [...anomalies, ...illegal] }
       return {
         state: withState(state, {
@@ -366,7 +520,7 @@ function applyEntry(
       return {
         state: withState(state, {
           state: 'ACTING',
-          deadline: buildDeadline(readDeadlineType(payload), recordedAt),
+          deadline: buildDeadline(readDeadlineType(payload), recordedAt, payload.deadlineExpiresAt),
           actionCount: state.actionCount + 1,
           lastReason: type,
         }),
@@ -428,7 +582,9 @@ function applyEntry(
           // A payload that names no deadline type does not *remove* the deadline
           // the loop is already holding. Clearing it would leave a verifying loop
           // unbounded just because one entry was terse.
-          deadline: buildDeadline(readDeadlineType(payload), recordedAt) ?? state.deadline,
+          deadline:
+            buildDeadline(readDeadlineType(payload), recordedAt, payload.deadlineExpiresAt) ??
+            state.deadline,
           verificationCount: state.verificationCount + 1,
           lastReason: type,
         }),
@@ -467,11 +623,140 @@ function applyEntry(
     case 'lifeloop.continuation.decided': {
       // Also bookkeeping: the decision is *about* the next move, which is
       // journaled by the event for that move. Counting here keeps the
-      // continuation decision auditable without making it a state change.
+      // continuation decision auditable without making it a state change — and the
+      // conclusion it carries is what lets a reader see afterwards how loud the
+      // loop wanted to be and how quiet it was allowed to be.
+      const outcome = readDecideOutcome(payload.outcome)
+      const escalation = readOwnerEscalation(payload.escalation)
       return {
         state: withState(state, {
           actionCount: readInteger(payload, 'actionCount') ?? state.actionCount,
           verificationCount: readInteger(payload, 'verificationCount') ?? state.verificationCount,
+          conclusion:
+            outcome === null || escalation === null
+              ? state.conclusion
+              : {
+                  outcome,
+                  escalation,
+                  attentionSuppressed: payload.attentionSuppressed === true,
+                },
+          lastReason: type,
+        }),
+        anomalies,
+      }
+    }
+
+    case 'lifeloop.reconciled': {
+      // Not a continuation, and not in the ordinary table on purpose.
+      //
+      // Three producers — a restart, the owner pre-empting, the owner clearing
+      // STOP ALL — and every one of them lands somewhere no signal in
+      // `CONTINUATION_SIGNALS` points. A process that died in `ACTING` cannot be
+      // resumed because the plan was in memory, so it has to be reconciled to
+      // `IDLE`; adding a fake signal for that would put a step in the table that
+      // is not a step, and the table's whole value is that every entry is one.
+      //
+      // The one thing it will not do is lift a stop. A stopped loop stays stopped
+      // until `lifeloop.unstopped`, which the owner alone can cause.
+      const code = readString(payload, 'code')
+      if (code === null || !isReconciliationCode(code)) {
+        return {
+          state,
+          anomalies: [
+            ...anomalies,
+            {
+              code: 'malformed-payload' as const,
+              eventType: type,
+              detail: `${type} carried no reconciliation code from the closed list`,
+            },
+          ],
+        }
+      }
+      if (state.state === 'STOP') {
+        return {
+          state,
+          anomalies: [
+            ...anomalies,
+            {
+              code: 'illegal-transition' as const,
+              eventType: type,
+              detail: 'lifeloop.reconciled arrived while STOP was latched; only the owner clears that',
+            },
+          ],
+        }
+      }
+      const preserved = buildDeadline(readDeadlineType(payload), recordedAt, payload.deadlineExpiresAt)
+      // Per-wake counters go. The dedupe keys, the attempt count and the unit of
+      // work it belongs to do not, because a retry budget belongs to the work and
+      // not to the wake that noticed it — and pre-emption must not be a way to
+      // buy a fresh retry allowance.
+      return {
+        state: withState(state, {
+          state: preserved === null ? 'IDLE' : 'WAIT',
+          // A preserved wait keeps what it was waiting for; a reconciliation to
+          // idle has nothing outstanding, so the wake goes with it.
+          wake: preserved === null ? null : state.wake,
+          wakeKey: preserved === null ? null : state.wakeKey,
+          iterationCount: 0,
+          actionCount: 0,
+          verificationCount: 0,
+          cognitionRequestCount: 0,
+          deadline: preserved,
+          stopCode: null,
+          lastReason: type,
+        }),
+        anomalies,
+      }
+    }
+
+    case 'lifeloop.unstopped': {
+      // The only lift of STOP ALL that exists, and it needs two independent facts.
+      //
+      // The obvious one is that the loop was stopped. The one that matters is that
+      // the *owner* cleared it — evidenced by a `security.stop_all.cleared` in the
+      // record. Without the second, a single line written into the journal lifts the
+      // panic button, which turns "Freya can be stopped" into "Freya can be un-stopped
+      // by whoever has write access to a text file". And the loop's own terminal state
+      // cannot stand in for it: `CONTINUE --loop-complete--> STOP` reaches the same
+      // state, so "the loop is in STOP" does not mean "the owner pressed stop".
+      if (state.state !== 'STOP') {
+        return {
+          state,
+          anomalies: [
+            ...anomalies,
+            {
+              code: 'illegal-transition' as const,
+              eventType: type,
+              detail: `lifeloop.unstopped arrived while the loop was ${state.state}, not STOP`,
+            },
+          ],
+        }
+      }
+      if (!context.ownerClearedStop) {
+        return {
+          state,
+          anomalies: [
+            ...anomalies,
+            {
+              code: 'illegal-transition' as const,
+              eventType: type,
+              detail:
+                'lifeloop.unstopped arrived with no cleared stop behind it; only the owner lifts that',
+            },
+          ],
+        }
+      }
+      return {
+        state: withState(state, {
+          state: 'IDLE',
+          wake: null,
+          wakeKey: null,
+          iterationCount: 0,
+          actionCount: 0,
+          verificationCount: 0,
+          cognitionRequestCount: 0,
+          deadline: null,
+          stopCode: null,
           lastReason: type,
         }),
         anomalies,
@@ -490,7 +775,14 @@ function applyEntry(
       // journaled by whoever performs it; a life-loop lifecycle entry must never be
       // the thing that unfreightens a stop, or the latch would be one event away
       // from self-clearing.
-      if (state.state === 'STOP') {
+      //
+      // Which stop it is matters, and the journal says. `loop-complete` is an
+      // ordinary close-out that happens to end in the terminal state the table
+      // reaches on `loop-complete`, and `interrupted-*` is a restart's honest
+      // verdict; both are clearable by the close-out that follows them. A stop the
+      // owner asked for is not, and the one word that distinguishes them is the
+      // `stopCode` the entry carried.
+      if (state.state === 'STOP' && !isClearableStopCode(state.stopCode)) {
         return {
           state,
           anomalies: [
@@ -498,7 +790,10 @@ function applyEntry(
             {
               code: 'illegal-transition',
               eventType: type,
-              detail: 'lifeloop.reset arrived while STOP was latched; only the owner clears that',
+              detail:
+                'lifeloop.reset arrived while a stop only the owner may lift was in force (' +
+                String(state.stopCode) +
+                ')',
             },
           ],
         }
@@ -524,8 +819,38 @@ function applyEntry(
       // STOP ALL reaches every state, including a terminal one, so this entry
       // does not consult the ordinary table. It is the one event that can
       // override terminality, and it can only ever move *to* STOP.
-      const reachedFromTerminal = state.state === 'STOP' || state.state === 'DENY'
+      //
+      // Re-asserting an existing stop is normally an anomaly — a second
+      // `lifeloop.stopped` says somebody reached for the panic button twice. But
+      // one re-assertion is not an anomaly and refusing it would be a real hole:
+      // a loop that had *completed* (and so sits in STOP with a clearable
+      // `stopCode`) must become latched when the owner presses STOP ALL during the
+      // same tick, or the next close-out would quietly unfreighten the latch. The
+      // upgrade is strictly one-directional — it can only turn a clearable stop
+      // into an uncleared one — so accepting it cannot be used to release anything.
+      const code = readString(payload, 'code')
+      // Whether a close-out may lift this stop is decided by whether its code is one
+      // of the clearable ones, never by whether it happens to be STOP. So an absent
+      // code, a misspelt code and a code invented by a future lane are all latched,
+      // and the recorded code itself is kept verbatim so a reader can see what was
+      // written.
+      //
+      // One arrival while already stopped is legitimate and is *not* an anomaly: a
+      // loop that had completed sits in STOP with a clearable code, and the owner
+      // pressing the panic button during the same tick has to leave a latch behind.
+      // Refusing it would be a real hole — the next close-out would then quietly
+      // unfreighten a stop the owner had just asked for. The upgrade is strictly
+      // one-directional, turning a clearable stop into an uncleared one, so
+      // accepting it cannot be used to release anything. A second arrival while
+      // *already latched* is still reported, because that is somebody reaching for
+      // the button twice.
       if (state.state === 'STOP') {
+        if (isClearableStopCode(state.stopCode)) {
+          return {
+            state: withState(state, { stopCode: LATCHED_STOP_CODE, lastReason: type }),
+            anomalies,
+          }
+        }
         return {
           state,
           anomalies: [
@@ -541,7 +866,7 @@ function applyEntry(
         state: withState(state, {
           state: 'STOP',
           deadline: null,
-          stopCode: readString(payload, 'code') ?? (reachedFromTerminal ? 'stop-all-latched' : null),
+          stopCode: code,
           lastReason: type,
         }),
         anomalies,
@@ -616,12 +941,42 @@ function dedupeAppend(keys: readonly string[], key: string): readonly string[] {
 export function reduceLifeLoopState(entries: readonly LifeLoopJournalEntry[]): FoldResult {
   let state = initialLifeLoopState()
   const anomalies: FoldAnomaly[] = []
+  // Whether the owner has cleared a stop, tracked from the *security* events rather
+  // than from the loop's own. It has to be: the loop's terminal state is reached by
+  // ordinary completion too, so it cannot tell a completion from a panic button, and
+  // treating them alike is what would let one line in the log lift a stop.
+  let ownerClearedStop = false
   for (const entry of entries) {
-    const result = applyEntry(state, entry)
+    if (entry.type === 'security.stop_all.cleared') ownerClearedStop = true
+    if (entry.type === 'security.stop_all.activated') ownerClearedStop = false
+    const result = reduceLifeLoopEntry(state, entry, { ownerClearedStop })
     state = result.state
     anomalies.push(...result.anomalies)
   }
   return { state, anomalies }
+}
+
+/**
+ * Fold exactly one entry onto a state already derived from the journal.
+ *
+ * The single-entry form of {@link reduceLifeLoopState}, and it exists so the
+ * runtime does not have to re-read the whole log after every append. It is the
+ * same code path — `reduceLifeLoopState` calls it — so the live loop and a later
+ * replay cannot disagree about what an event means, which is the property that
+ * makes the loop's own state "no hidden durable state": whatever a reader gets by
+ * replaying, the running process got by folding incrementally.
+ *
+ * `context` is required to be *stated*. A caller that omits it gets
+ * `FOLD_CONTEXT_CLOSED`, which cannot lift a stop — so forgetting to pass the latch
+ * fails closed rather than quietly granting the only transition in this module that
+ * an outside party would want.
+ */
+export function reduceLifeLoopEntry(
+  state: LifeLoopState,
+  entry: LifeLoopJournalEntry,
+  context: FoldContext = FOLD_CONTEXT_CLOSED,
+): FoldResult {
+  return applyEntry(state, entry, context)
 }
 
 /**
@@ -654,6 +1009,8 @@ export function projectLifeLoopStatus(state: LifeLoopState): {
   readonly retriesExhausted: boolean
   readonly currentWake: WakeEvent | null
   readonly currentDeadline: Deadline | null
+  readonly lastRefusal: { readonly code: string; readonly at: string } | null
+  readonly conclusion: LifeLoopConclusion | null
   readonly isIdle: boolean
   readonly isStopped: boolean
 } {
@@ -667,6 +1024,13 @@ export function projectLifeLoopStatus(state: LifeLoopState): {
     retriesExhausted: retryCeilingReached(retryCeilingFor(state)),
     currentWake: state.wake,
     currentDeadline: state.deadline,
+    // Absent rather than empty-stringed, so "nothing was refused" and "something
+    // was refused with no code" cannot be rendered the same way.
+    lastRefusal:
+      state.lastRefusalCode === null
+        ? null
+        : { code: state.lastRefusalCode, at: state.lastRefusalAt ?? '' },
+    conclusion: state.conclusion,
     isIdle: state.state === 'IDLE',
     isStopped: state.state === 'STOP',
   }
@@ -696,3 +1060,5 @@ export function retryCeilingFor(
 
 /** The event types this fold understands, for a caller that wants to filter. */
 export { LIFE_LOOP_EVENT_TYPES, isContinuationState }
+
+

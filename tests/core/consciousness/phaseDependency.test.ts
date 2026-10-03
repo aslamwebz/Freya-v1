@@ -11,7 +11,6 @@ import {
   CONSCIOUS_SOURCES,
 } from '../../../core/consciousness/types'
 import { continuityFromBrain } from '../../../core/consciousness/adapters/brain'
-import { lifeFrom } from '../../../core/consciousness/adapters/life'
 import { selfFromWorld } from '../../../core/consciousness/adapters/self'
 import { worldFromWorld } from '../../../core/consciousness/adapters/world'
 import type { ConsciousLifeReading } from '../../../core/consciousness/ports'

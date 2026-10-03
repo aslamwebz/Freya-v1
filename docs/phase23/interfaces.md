@@ -1,7 +1,8 @@
 /**
  * Phase 23 — Compile-Time Types and Interfaces
  *
- * **Status:** PREPARATION ONLY — NOT PRODUCTION
+ * **Status:** INTEGRATED — these are the types Core actually builds against, and
+ * the runtime that fills them lives in `core/lifeloop/runtime.ts`.
  *
  * These types and interfaces are compile-time only. They cannot activate
  * runtime behavior. They define the shape of Phase 23's components.
@@ -13,11 +14,19 @@
  *
  * ## Reconciled with the implementation
  *
- * The definitions below now match `core/lifeloop/types.ts` exactly, and that
- * module is the single source of truth. Where the preparation documents and the
- * implementation disagreed, the decision is recorded in
+ * The definitions below match `core/lifeloop/types.ts`, and that module is the
+ * single source of truth. Where the preparation documents and the implementation
+ * disagreed, the decision is recorded in
  * `docs/phase23/implementation-decisions.md` rather than silently resolved
  * here — a reviewer needs to see which document lost and why.
+ *
+ * The wiring added nine closed-vocabulary extensions to `types.ts` — two event
+ * types, a payload key, a fold context and four code lists — because the journal
+ * could not otherwise express a restart, an owner pre-emption, an owner clearing a
+ * stop, a refused wake or an absolute short deadline. Each is listed in
+ * `docs/phase23/runtime-integration.md` §3 with the reason it was necessary. This
+ * file mirrors the pre-integration shape; where the two differ, the implementation
+ * is the truth.
  */
 
 import {

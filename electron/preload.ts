@@ -31,6 +31,7 @@ import type { OfficeProjection } from '../core/office/projection'
 import type { SkillProjection } from '../core/protocol/skills'
 import type { WorldSummaryView } from '../core/protocol/world'
 import type { ConsciousContextProjection } from '../core/protocol/consciousness'
+import type { LifeLoopProjection } from '../core/protocol/lifeloop'
 import { SKILL_NO_PAYLOAD } from '../core/protocol/skills'
 import { SKILL_LIMITS } from '../core/skills/types'
 import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
@@ -425,6 +426,33 @@ const api = {
     ipcRenderer.on('freya:core:consciousness', listener)
     return () => {
       ipcRenderer.removeListener('freya:core:consciousness', listener)
+    }
+  },
+
+  /**
+   * The Continuous Life Loop: where it is, what woke it, what it concluded and how
+   * loudly it was allowed to say so, whether it is waiting and until when.
+   *
+   * A read and a follow, and **nothing else** — the same rule as the conscious
+   * context above, for a much sharper reason. A window that could wake the loop
+   * could make Freya think; a window that could tick it could drive the clock; and
+   * a window that could lift a stop could undo the owner's panic button. None of
+   * those names exists in `CORE_COMMANDS` below and none exists on this bridge.
+   *
+   * The heartbeat the loop rides is the main process's existing attention timer,
+   * not a channel, so there is no renderer-reachable way to drive the clock at all.
+   */
+  coreLifeLoop: (): Promise<LifeLoopProjection | null> =>
+    ipcRenderer.invoke('freya:core:lifeloop'),
+
+  onCoreLifeLoop: (
+    handler: (projection: LifeLoopProjection) => void,
+  ): (() => void) => {
+    const listener = (_event: unknown, projection: LifeLoopProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:lifeloop', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:lifeloop', listener)
     }
   },
 

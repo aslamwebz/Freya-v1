@@ -5,6 +5,27 @@ import {
   type CoreEventType,
 } from './envelope'
 import { isCapability, isPrincipalId } from '../security/guard'
+import {
+  DECIDE_OUTCOMES,
+  FORBIDDEN_PAYLOAD_KEYS,
+  LIFE_LOOP_CLOSE_OUT_CODES,
+  LIFE_LOOP_DECISIONS,
+  LIFE_LOOP_LIMITS,
+  LIFE_LOOP_STOP_CODES,
+  LIFE_LOOP_WAIT_CODES,
+  OWNER_ESCALATIONS,
+  WAKE_KIND_SOURCE,
+  isContinuationState,
+  isReconciliationCode,
+  isWakeKind,
+  isWakeSource,
+} from '../lifeloop/types'
+
+function isDeadlineType(value: unknown): boolean {
+  return (
+    value === 'verification' || value === 'approval' || value === 'wait' || value === 'action'
+  )
+}
 import { DEFAULT_MISSION_LIMITS } from '../missions/types'
 import {
   DEFAULT_WORKER_BUDGET,
@@ -211,6 +232,25 @@ function isBoundedText(value: unknown, max: number): value is string {
 /** A goal reference: null, or an id. */
 function isNullableRef(value: unknown): value is string | null {
   return value === null || isEventId(value)
+}
+
+/**
+ * A life-loop wake reference, which may legitimately be *absent*.
+ *
+ * Three of the loop's seventeen events describe something that happened to the loop
+ * rather than to a wake: a restart, the owner taking precedence, the owner clearing a
+ * stop. Those are exactly the events where there is no wake to name, and the
+ * alternative — requiring a non-empty id — would mean inventing one.
+ *
+ * An empty string therefore means "no wake was held", and it is the honest encoding:
+ * a lifecycle entry that carried a fabricated wake id would put an invented
+ * reference into the durable record and could be mistaken later for a wake that
+ * actually happened. The ceiling is still the life loop's 200-character payload
+ * limit, enforced by `lifeLoopRule` on every value, so nothing here widens what a
+ * payload may contain.
+ */
+function isOptionalWakeRef(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= LIFE_LOOP_LIMITS.maxPayloadTextLength
 }
 
 function isNullablePositiveInt(value: unknown): value is number | null {
@@ -1337,6 +1377,182 @@ const PAYLOAD_RULES: {
     (p) => isEventId(p.scheduleId) && isAttentionScheduleCancelReason(p.reason),
   ),
 
+  /* ------------------------------------------------- continuous life loop */
+
+  /**
+   * Life-loop payloads are validated against the loop's *own* published vocabulary,
+   * not against a hand-copied list here.
+   *
+   * That is the whole reason the rule is `isLifeLoopPayload`. A validator that
+   * enumerated the seventeen payload shapes separately from
+   * `core/lifeloop/types.ts` would be a second source of truth that could fall out
+   * of step with the first, and the failure would be silent: an unknown key would
+   * be *accepted* by the journal and then *refused* by the fold as an anomaly, so
+   * the log would contain an entry the loop itself considers tampering. Importing
+   * the table means the journal can only ever accept what the loop declared.
+   *
+   * The closed-vocabulary check is therefore mandatory rather than advisory: an
+   * entry carrying a key outside `LIFE_LOOP_PAYLOAD_KEYS`, or a key in
+   * `FORBIDDEN_PAYLOAD_KEYS` — anything shaped like a capability, a grant, a
+   * verdict or a budget — is corruption, because authority is minted by the Guard
+   * and the Governor and never by an event.
+   */
+  'lifeloop.wake.received': lifeLoopRule(
+    ['wakeId', 'source', 'kind', 'wakeKey', 'iteration', 'goalRef', 'sourceRef', 'occurredAt', 'observedAt'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) &&
+      isWakeSource(p.source) &&
+      isWakeKind(p.kind) &&
+      WAKE_KIND_SOURCE[p.kind as never] === p.source &&
+      isOptionalWakeRef(p.wakeKey) &&
+      // Zero-based, because the prefilter refuses once `iterationCount` has reached
+      // the ceiling: a one-based counter would refuse the last permitted iteration
+      // and quietly make `maxLoopIterations` one smaller than it says. A negative
+      // value is still refused — a journal that counts backwards is not a journal
+      // this fold can reason about.
+      isNonNegativeInt(p.iteration) &&
+      isNullableRef(p.goalRef) &&
+      isNullableRef(p.sourceRef) &&
+      isInstant(p.occurredAt) &&
+      isInstant(p.observedAt),
+  ),
+
+  'lifeloop.wake.denied': lifeLoopRule(
+    ['wakeId', 'source', 'code', 'iteration'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) &&
+      isWakeSource(p.source) &&
+      isNonEmptyString(p.code) &&
+      isNonNegativeInt(p.iteration),
+  ),
+
+  'lifeloop.filter.passed': lifeLoopRule(
+    ['wakeId', 'wakeKey', 'code', 'iteration'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) && isOptionalWakeRef(p.wakeKey) && isNonEmptyString(p.code) && isNonNegativeInt(p.iteration),
+  ),
+
+  'lifeloop.filter.denied': lifeLoopRule(
+    ['wakeId', 'wakeKey', 'outcome', 'code', 'deadlineType', 'deadlineExpiresAt', 'iteration'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) &&
+      isNonEmptyString(p.wakeKey) &&
+      (p.outcome === 'deny' || p.outcome === 'wait') &&
+      // A `wait`'s code is a **closed list**, and this is the one place in the
+      // journal where that matters most: it is the only thing standing between
+      // "Freya is holding something" and "Freya is holding something for ever". A
+      // free-text code here would let a future writer name a hold the loop has no
+      // ceiling for. A `deny`'s code is left open, because the filter's denial
+      // vocabulary is published separately and is expected to grow with it.
+      (p.outcome === 'wait' ? isClosedValue(p.code, LIFE_LOOP_WAIT_CODES) : isNonEmptyString(p.code)) &&
+      (p.deadlineType === null || isDeadlineType(p.deadlineType)) &&
+      (p.deadlineExpiresAt === null || isInstant(p.deadlineExpiresAt)) &&
+      isNonNegativeInt(p.iteration),
+  ),
+
+  'lifeloop.cognition.requested': lifeLoopRule(
+    ['wakeId', 'wakeKey', 'iteration', 'cognitionRequest'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) && isOptionalWakeRef(p.wakeKey) && isNonNegativeInt(p.iteration) && isNonEmptyString(p.cognitionRequest),
+  ),
+
+  'lifeloop.cognition.denied': lifeLoopRule(
+    ['wakeId', 'wakeKey', 'code', 'iteration'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) && isOptionalWakeRef(p.wakeKey) && isNonEmptyString(p.code) && isNonNegativeInt(p.iteration),
+  ),
+
+  'lifeloop.action.started': lifeLoopRule(
+    ['wakeId', 'iteration', 'actionIndex', 'deadlineType', 'deadlineExpiresAt'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) &&
+      isNonNegativeInt(p.iteration) &&
+      isPositiveInt(p.actionIndex) &&
+      (p.deadlineType === null || isDeadlineType(p.deadlineType)) &&
+      (p.deadlineExpiresAt === null || isInstant(p.deadlineExpiresAt)),
+  ),
+
+  'lifeloop.action.completed': lifeLoopRule(
+    ['wakeId', 'iteration', 'actionIndex'],
+    (p) => isOptionalWakeRef(p.wakeId) && isNonNegativeInt(p.iteration) && isPositiveInt(p.actionIndex),
+  ),
+
+  'lifeloop.action.failed': lifeLoopRule(
+    ['wakeId', 'iteration', 'actionIndex', 'code'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) && isNonNegativeInt(p.iteration) && isPositiveInt(p.actionIndex) && isNonEmptyString(p.code),
+  ),
+
+  'lifeloop.verification.started': lifeLoopRule(
+    ['wakeId', 'iteration', 'verificationIndex', 'deadlineType', 'deadlineExpiresAt'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) &&
+      isNonNegativeInt(p.iteration) &&
+      isPositiveInt(p.verificationIndex) &&
+      (p.deadlineType === null || isDeadlineType(p.deadlineType)) &&
+      (p.deadlineExpiresAt === null || isInstant(p.deadlineExpiresAt)),
+  ),
+
+  'lifeloop.verification.passed': lifeLoopRule(
+    ['wakeId', 'iteration', 'verificationIndex'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) && isNonNegativeInt(p.iteration) && isPositiveInt(p.verificationIndex),
+  ),
+
+  'lifeloop.verification.failed': lifeLoopRule(
+    ['wakeId', 'iteration', 'verificationIndex', 'code'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) &&
+      isNonNegativeInt(p.iteration) &&
+      isPositiveInt(p.verificationIndex) &&
+      isNonEmptyString(p.code),
+  ),
+
+  'lifeloop.continuation.decided': lifeLoopRule(
+    ['wakeId', 'iteration', 'decision', 'outcome', 'escalation', 'attentionSuppressed', 'actionCount', 'verificationCount'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) &&
+      isNonNegativeInt(p.iteration) &&
+      // Closed, and checked rather than merely declared: a `decision` free-text field
+      // in a durable record is a place a caller could eventually write a sentence, and
+      // `LIFE_LOOP_DECISIONS` is the whole vocabulary of what the loop may have decided.
+      isClosedValue(p.decision, LIFE_LOOP_DECISIONS) &&
+      (p.outcome === null || isClosedValue(p.outcome, DECIDE_OUTCOMES)) &&
+      (p.escalation === null || isClosedValue(p.escalation, OWNER_ESCALATIONS)) &&
+      typeof p.attentionSuppressed === 'boolean' &&
+      isNonNegativeInt(p.actionCount) &&
+      isNonNegativeInt(p.verificationCount),
+  ),
+
+  'lifeloop.reconciled': lifeLoopRule(
+    ['code', 'from', 'deadlineType', 'deadlineExpiresAt', 'wakeId', 'iteration'],
+    (p) =>
+      isReconciliationCode(p.code) &&
+      isContinuationState(p.from) &&
+      (p.deadlineType === null || isDeadlineType(p.deadlineType)) &&
+      (p.deadlineExpiresAt === null || isInstant(p.deadlineExpiresAt)) &&
+      isOptionalWakeRef(p.wakeId) &&
+      isNonNegativeInt(p.iteration),
+  ),
+
+  'lifeloop.unstopped': lifeLoopRule(
+    ['code'],
+    (p) => isReconciliationCode(p.code),
+  ),
+
+  'lifeloop.reset': lifeLoopRule(
+    ['wakeId', 'iteration', 'code'],
+    (p) => isOptionalWakeRef(p.wakeId) && isNonNegativeInt(p.iteration) && isClosedValue(p.code, LIFE_LOOP_CLOSE_OUT_CODES),
+  ),
+
+  'lifeloop.stopped': lifeLoopRule(
+    ['wakeId', 'iteration', 'code'],
+    (p) =>
+      isOptionalWakeRef(p.wakeId) &&
+      isNonNegativeInt(p.iteration) &&
+      (p.code === null || isClosedValue(p.code, LIFE_LOOP_STOP_CODES)),
+  ),
+
   'office.presence.requested': workRule(
     ['workerId'],
     (p) => isEventId(p.workerId),
@@ -1880,6 +2096,38 @@ function workRule(
 }
 
 /**
+ * Wrap a life-loop payload rule with the loop's own closed vocabulary.
+ *
+ * `allowed` is the per-event key list, and it is checked *against* the published
+ * table rather than in place of it, so a validator can be neither wider nor narrower
+ * than `core/lifeloop/types.ts` — the two cannot fall out of step because the rule
+ * refuses any divergence in either direction. On top of that, a payload carrying a
+ * key from `FORBIDDEN_PAYLOAD_KEYS` is refused outright: authority is minted by the
+ * Guard and the Governor and never by an event, so a payload shaped like a
+ * capability, a grant, a verdict or a budget is not a new field, it is an
+ * escalation attempt, and the journal is the last place it should be able to appear.
+ *
+ * The text ceiling is enforced on the value as well as the key, for the reason the
+ * limits table gives: a long string in a life-loop entry is how the journal quietly
+ * becomes a transcript of what Freya was thinking.
+ */
+function lifeLoopRule(
+  allowed: readonly string[],
+  rule: (payload: Record<string, unknown>) => boolean,
+): (payload: Record<string, unknown>) => boolean {
+  return (payload) => {
+    if (!onlyNamedKeys(payload, allowed)) return false
+    for (const key of Object.keys(payload)) {
+      if (FORBIDDEN_PAYLOAD_KEYS.has(key)) return false
+    }
+    for (const value of Object.values(payload)) {
+      if (typeof value === 'string' && value.length > LIFE_LOOP_LIMITS.maxPayloadTextLength) return false
+    }
+    return rule(payload)
+  }
+}
+
+/**
  * A Run's resolved ceilings.
  *
  * Positive integers, because a zero or negative ceiling in a durable record would
@@ -1895,3 +2143,5 @@ function isRunLimits(value: unknown): boolean {
     isPositiveInt(limits.maxAttemptsPerStep)
   )
 }
+
+

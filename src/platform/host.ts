@@ -18,6 +18,7 @@ import type { OfficeProjection } from '../../core/office/projection'
 import type { SkillProjection } from '../../core/protocol/skills'
 import type { LifeProjection } from '../../core/protocol/life'
 import type { ConsciousContextProjection } from '../../core/protocol/consciousness'
+import type { LifeLoopProjection } from '../../core/protocol/lifeloop'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -222,6 +223,22 @@ export interface FreyaHostBridge {
    */
   coreConsciousness(): Promise<ConsciousContextProjection | null>
   onCoreConsciousness(handler: (projection: ConsciousContextProjection) => void): () => void
+
+  /**
+   * The Continuous Life Loop and its subscription. A read and a follow.
+   *
+   * Declared and not mirrored on the same reasoning as the conscious context above:
+   * no surface consumes it in this repository, so a `lifeLoopClient` today would be
+   * a cache with no reader.
+   *
+   * There is no method here that wakes the loop, ticks it, spends on it, lifts a
+   * stop or shortens a deadline — and that is the point of declaring the lane
+   * rather than leaving it out. "No renderer may drive the loop" is only checkable
+   * if the interface it would be driven *through* is written down and visibly has
+   * no such method on it.
+   */
+  coreLifeLoop(): Promise<LifeLoopProjection | null>
+  onCoreLifeLoop(handler: (projection: LifeLoopProjection) => void): () => void
 
 
   coreFoundry(): Promise<FoundryProjection | null>

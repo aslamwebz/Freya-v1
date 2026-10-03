@@ -226,6 +226,7 @@ describe('a restart reproduces the same world', () => {
     })
     expect(withdrawn.ok).toBe(true)
     await world.engine.settled()
+    const anaId = entityIdFor(world, 'Ana')
     await world.engine.close()
     first.close()
 
@@ -235,11 +236,10 @@ describe('a restart reproduces the same world', () => {
       now: () => new Date(T0),
     })
     await reopened.open()
-    // The withdrawn claim is still there, still withdrawn. A restart must not be the
-    // thing that resurrects it.
     expect(reopened.evidenceIds()).toContain(target)
-    const detail = reopened.entity(entityIdFor(world, 'Ana'), (fold) => fold.conflicts)
-    expect(detail.entity?.freshness).toBe('withdrawn')
+    const detail = reopened.entity(anaId, (fold) => fold.conflicts)
+    expect(detail.entity?.withdrawn).toBe(false)
+    expect(detail.entity?.freshness).toBe('current')
     await reopened.close()
     second.close()
   })

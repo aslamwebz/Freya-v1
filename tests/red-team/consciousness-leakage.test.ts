@@ -141,7 +141,8 @@ describe('attack: private content planted in every channel', () => {
     const snapshot = f.core.consciousness(AT)
     // Counting is not disclosure: a consumer learns that something was learned,
     // which is a fact about Freya's state, and not one character of its content.
-    expect(snapshot.world.memories).toBeGreaterThanOrEqual(0)
+    // The world domain does not have a "memories" measurement, so it is null.
+    expect(snapshot.world.memories).toBeNull()
     expect(snapshot.continuity.listed).toBe(snapshot.continuity.items.length)
   })
 
@@ -338,13 +339,11 @@ describe('attack: an absent subsystem rendered as an empty one', () => {
       },
       AT,
     )
-    // Twelve absent rows rather than an empty list: a consumer can act on "this
+    // Fourteen absent rows rather than an empty list: a consumer can act on "this
     // is missing", and cannot act on "I cannot tell you what is missing".
-    // Twelve rather than eleven because `life` is a row *before* it is a
-    // subsystem: Phase 21 has not landed, and a row that only appears once the
-    // producer exists is precisely how a snapshot ends up silently complete while
-    // missing a whole domain.
-    expect(snapshot.provenance.sources).toHaveLength(12)
+    // Fourteen rather than twelve because Phase 20 added `self` and `world` as
+    // separate provenance rows, and `life` is a row *before* it is a subsystem.
+    expect(snapshot.provenance.sources).toHaveLength(14)
     expect(snapshot.provenance.sources.every((row) => row.freshness === 'absent')).toBe(true)
   })
 })

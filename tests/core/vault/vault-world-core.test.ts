@@ -162,12 +162,10 @@ describe.skipIf(!bindingAvailable)('Core Self & World slice on the encrypted Vau
     const second = await startVaultCore(vaultPath, new StaticVaultKeyProvider(testVaultKey()))
     const detail = (await send(second, 'world.entity.read', {
       entityId: await entityIdOf(second, 'Ana'),
-    })) as { world?: { entity?: { entity: { evidenceIds: string[]; attributeKeys: { key: string; valueLength: number }[] } } } }
-    const node = detail.world?.entity?.entity
+    })) as { world?: { entity?: { evidenceIds: string[]; entity: { attributeKeys: { key: string; valueLength: number }[] } } } }
+    const node = detail.world?.entity
     expect(node?.evidenceIds).toEqual([originalId, revision.world?.evidenceId].sort())
-    // The correction wins and the superseded claim's own value is gone, while the fact
-    // that it was ever said stays — a revision, not a silent overwrite.
-    expect(node?.attributeKeys).toEqual([{ key: 'city', valueLength: 'Oporto'.length }])
+    expect(node?.entity.attributeKeys).toEqual([{ key: 'city', valueLength: 'Oporto'.length }])
   })
 
   it('keeps a Mission and world evidence in one database under one key', async () => {

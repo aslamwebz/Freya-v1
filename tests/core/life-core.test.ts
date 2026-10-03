@@ -226,7 +226,12 @@ describe('life history in Core', () => {
     await fixture.core.stop('restart for withdrawal test')
 
     const fake = new FakeModelProvider()
-    const reopened = createCore({ dataPath, providers: [fake], attentionObserveSources: false })
+    const reopened = createCore({
+      dataPath,
+      providers: [fake],
+      attentionObserveSources: false,
+      vault: { path: join(dir, 'freya.db'), keyProvider: new StaticVaultKeyProvider(testVaultKey()), binding: await loadTestBinding() },
+    })
     await reopened.start()
     try {
       const projection = reopened.life()

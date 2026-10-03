@@ -130,6 +130,9 @@ export const CORE_EVENT_TYPES = [
   // stop, and it does not lose authority either. It is a statement about a derived
   // layer, so Core keeps running and the surface says Life is degraded with a
   // reason. The event carries that reason and nothing else.
+  'life.entry.recorded',
+  'life.entry.withdrawn',
+  'life.conflict.detected',
   'life.degraded',
 
   // Personality & Relationship — metadata only, on the Brain's terms.
@@ -785,6 +788,23 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
    * in the security stream would let a disk error masquerade as a safety posture.
    */
   'brain.degraded': { reason: string }
+  'life.entry.recorded': {
+    entryId: string
+    kind: string
+    derivation: string
+    confidence: string
+    salience: string
+    status: string
+    revision: number
+    sourceDomain: string
+    sourceId: string | null
+    occurredAtKnown: boolean
+    titleLength: number
+    summaryLength: number
+    bodyLength: number
+  }
+  'life.entry.withdrawn': { entryId: string; revision: number; reason: string }
+  'life.conflict.detected': { conflictId: string; entryA: string; entryB: string }
   'life.degraded': { reason: string }
 
   // Personality & Relationship. Metadata only, and the exact-key check in

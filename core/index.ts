@@ -6441,7 +6441,7 @@ class FreyaCore implements Core {
    * a second encrypted file.
    */
   private async buildLifeStore(): Promise<LifeStore> {
-    const vault = this.vault
+    const vault = await this.ensureVault()
     if (this.options.vault && vault !== null) {
       try {
         const store = new VaultLifeStore(vault)

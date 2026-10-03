@@ -18,7 +18,7 @@ describe('Settings appearance', () => {
   it('offers exactly the three themes and writes a change to the store', () => {
     const preferences = mount()
     const theme = screen.getByLabelText('Theme')
-    expect(within(theme).getAllByRole('option')).toHaveLength(3)
+    expect(within(theme).getAllByRole('option')).toHaveLength(4)
     fireEvent.change(theme, { target: { value: 'dawn' } })
     expect(preferences.getSnapshot().theme).toBe('dawn')
   })

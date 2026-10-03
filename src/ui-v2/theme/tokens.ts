@@ -1,4 +1,4 @@
-export const THEMES = ['abyss', 'dawn', 'vessel'] as const
+export const THEMES = ['abyss', 'dawn', 'violet', 'vessel'] as const
 export type ThemeId = (typeof THEMES)[number]
 
 export interface ThemeTokens {
@@ -50,6 +50,19 @@ const REGISTRY: Record<ThemeId, ThemeTokens> = {
     dock: 'linear-gradient(120deg,#18272ae6,#111518ea 65%,#2c3539de)',
     dialog: '#191f24f5', input: '#12171b78', button: '#161c2085',
     scrim: '#12181cea', shadow: '0 12px 35px #0007', colorScheme: 'dark',
+  },
+  violet: {
+    bg: '#07050f', panel: '#120b21', panelRaised: '#2c1d48',
+    ink: '#f1ecfb', muted: '#c2b4de', heading: '#dcc2ff',
+    line: '#b79cf045', glass: 'linear-gradient(135deg,#3a2a5b66,#0d0818b3 46%,#1e16388a)',
+    glassEdge: '#cbb4f0ab',
+    intelligence: '#b79cf0', cognition: '#e0a9ff', positive: '#6fe3c4',
+    attention: '#f0b45c', danger: '#ff8aa0', glow: '0 0 16px #b79cf033',
+    onIntelligence: '#1a0f2b',
+    sidebar: 'linear-gradient(180deg,#07050fea,#110b1fbd)',
+    dock: 'linear-gradient(120deg,#1c1330e6,#0b0717ea 65%,#2a2044de)',
+    dialog: '#130e20f5', input: '#0c081778', button: '#110c2185',
+    scrim: '#0d091aea', shadow: '0 12px 35px #0007', colorScheme: 'dark',
   },
 }
 

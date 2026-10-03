@@ -138,6 +138,10 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
         <div className="a-brand"><b>FREYA</b><i>|</i><span>PHASE 19</span>
           <small>A persistent intelligence for a brighter tomorrow</small></div>
         <div className="a-head-right">
+          <div className="a-look" role="group" aria-label="Look">
+            <Button aria-pressed={settings.theme === 'abyss'} onClick={() => preferences.update({ theme: 'abyss' })}>Home</Button>
+            <Button aria-pressed={settings.theme === 'violet'} onClick={() => preferences.update({ theme: 'violet' })}>Mind</Button>
+          </div>
           <blockquote><span>{QUOTES[quote]![0]}</span><em>{QUOTES[quote]![1]}</em></blockquote>
           <Clock />
           <Button className="a-theme" aria-label="Change theme" onClick={cycleTheme}><Glyph name="settings" /></Button>

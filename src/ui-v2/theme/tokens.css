@@ -94,3 +94,17 @@
 .freya-v2 button { cursor: pointer; }.freya-v2 button:disabled { cursor: not-allowed; }
 .freya-v2 a { color: var(--f-action); }
 @media(prefers-reduced-motion:reduce) { .freya-v2 { --f-duration: 0ms; }.freya-v2 *, .freya-v2 *::before, .freya-v2 *::after { animation: none !important; transition: none !important; } }
+.freya-v2[data-theme='violet'] {
+  --f-bg: #07050f; --f-panel: #120b21; --f-panel-raised: #2c1d48;
+  --f-ink: #f1ecfb; --f-muted: #c2b4de; --f-heading: #dcc2ff;
+  --f-line: #b79cf045; --f-action: #b79cf0; --f-cognition: #e0a9ff;
+  --f-positive: #6fe3c4; --f-attention: #f0b45c; --f-danger: #ff8aa0;
+  --f-glow: 0 0 16px #b79cf033; --f-on-action: #1a0f2b;
+  --f-glass: linear-gradient(135deg,#3a2a5b66,#0d0818b3 46%,#1e16388a);
+  --f-glass-edge: #cbb4f0ab;
+  --f-sidebar: linear-gradient(180deg,#07050fea,#110b1fbd);
+  --f-dock: linear-gradient(120deg,#1c1330e6,#0b0717ea 65%,#2a2044de);
+  --f-dialog: #130e20f5; --f-input: #0c081778; --f-button: #110c2185;
+  --f-scrim: #0d091aea; --f-shadow: 0 12px 35px #0007;
+  color-scheme: dark;
+}

@@ -199,3 +199,8 @@
 .freya-app[data-rail='collapsed'] .a-online b,
 .freya-app[data-rail='collapsed'] .a-online small { display: none; }
 .freya-app[data-rail='collapsed'] .a-rail-toggle { justify-content: center; }
+
+/* The two looks: Home (blue) and Mind (violet). */
+.a-look { display: flex; gap: .25rem; padding: .2rem; border: 1px solid var(--f-line); border-radius: 999px; }
+.a-look .f-button { border-radius: 999px; padding: .28rem .8rem; color: var(--f-muted); }
+.a-look .f-button[aria-pressed='true'] { color: var(--f-heading); background: color-mix(in srgb, var(--f-action) 14%, transparent); }

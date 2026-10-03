@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { THEMES, themeCss, themeTokens, allThemeCss } from '../../../src/ui-v2/theme/tokens'
 
 describe('theme tokens', () => {
-  it('defines exactly abyss, dawn and vessel', () => {
-    expect(THEMES).toEqual(['abyss', 'dawn', 'vessel'])
+  it('defines abyss, dawn, violet and vessel', () => {
+    expect(THEMES).toEqual(['abyss', 'dawn', 'violet', 'vessel'])
   })
   it('abyss uses the plan identity palette (no gold)', () => {
     const t = themeTokens('abyss')
@@ -18,7 +18,7 @@ describe('theme tokens', () => {
     expect(themeCss('abyss')).toContain("[data-theme='abyss']")
     expect(themeCss('vessel')).toContain('--f-action:')
     const all = allThemeCss()
-    expect(all.match(/data-theme=/g)?.length).toBe(3)
+    expect(all.match(/data-theme=/g)?.length).toBe(THEMES.length)
   })
   it('fully populates every role for every theme without placeholders', () => {
     for (const id of THEMES) {

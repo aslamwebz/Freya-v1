@@ -1,0 +1,81 @@
+import { Card, Meter, Row } from '../cards/Card'
+import type { ScreenSlots } from './Home'
+
+/**
+ * Life — render #4, 1:1.
+ *
+ * A continuous timeline with a glance, recent entries, themes and metrics.
+ */
+
+const TABS = ['Life / Timeline', 'Reflections', 'Milestones', 'Patterns', 'Growth']
+const RANGES = ['Minute', 'Day', 'Week', 'Month', 'Year']
+
+interface Event { readonly when: string; readonly date: string; readonly icon: string; readonly title: string; readonly detail: string }
+const EVENTS: readonly Event[] = [
+  { when: 'Earlier', date: 'Mar 12', icon: 'memory', title: 'Memory formed', detail: 'Early conversation about purpose.' },
+  { when: 'Earlier', date: 'Apr 3', icon: 'mission', title: 'Mission', detail: 'Global beta research phase.' },
+  { when: 'Yesterday', date: 'Jan 26', icon: 'relay', title: 'Conversation', detail: 'Deep talk with Alex about creativity.' },
+  { when: 'Yesterday', date: 'Jan 27', icon: 'world', title: 'Agent work', detail: 'Market analysis agent update.' },
+  { when: 'Today', date: '08:14', icon: 'positive', title: 'Approval', detail: 'Workspace design plan approved.' },
+  { when: 'Today', date: '11:42', icon: 'mission', title: 'Mission', detail: 'Built sustainable revenue model draft.' },
+  { when: 'Today', date: '15:23', icon: 'memory', title: 'Memory formed', detail: 'Noted insight about team collaboration.' },
+  { when: 'Tomorrow', date: '18:50', icon: 'create', title: 'Important event', detail: 'Reached 5,000 active users.' },
+  { when: 'Further ahead', date: 'Feb 2', icon: 'relay', title: 'Conversation', detail: 'Planning the next chapter together.' },
+]
+
+const GLANCE = [['Missions', 2], ['Conversations', 3], ['Agent Work', 2], ['Memories', 2], ['Approvals', 1], ['Important', 2]] as const
+const THEMES = [['Growth', 92], ['Connection', 88], ['Impact', 76], ['Learning', 69], ['Creativity', 64]] as const
+const METRICS = [['Conversations', '1,248'], ['Missions completed', '342'], ['Memories formed', '186'], ['Approvals', '92'], ['Major milestones', '17']] as const
+
+export function Life(): ScreenSlots {
+  return {
+    left: null,
+    right: null,
+    layout: 'wide',
+    centre: (
+      <div className="l-view">
+        <div className="l-toolbar">
+          <div className="w-filters">{TABS.map((tab, index) => <button key={tab} type="button" className="w-filter" aria-pressed={index === 0}>{tab}</button>)}</div>
+          <div className="w-filters">{RANGES.map((range) => <button key={range} type="button" className="w-filter" aria-pressed={range === 'Day'}>{range}</button>)}<button type="button" className="w-filter">Jump to…</button></div>
+        </div>
+        <div className="l-title"><h1>My Life</h1><p className="c-sub">A continuous timeline of experiences, work, relationships, memories, and growth. Every moment shapes a brighter tomorrow.</p></div>
+        <div className="l-timeline">
+          <span className="l-line" aria-hidden="true" />
+          <span className="l-today" aria-hidden="true">TODAY · Living and creating together</span>
+          {EVENTS.map((event, index) => (
+            <article key={`${event.date}-${index}`} className="l-event">
+              <small>{event.when}</small>
+              <div className="l-card"><span className="l-date">{event.date}</span><h4>{event.title}</h4><p>{event.detail}</p></div>
+            </article>
+          ))}
+        </div>
+      </div>
+    ),
+    bottom: (
+      <>
+        <Card title="Today at a glance" icon="life" className="c-bottom-card">
+          <div className="l-glance"><div className="l-glance-ring"><b>12</b><span>Entries</span></div>
+            <div className="c-rows">{GLANCE.map(([label, value]) => <div key={label} className="c-mini-row"><span className="c-mini-dot" /><span className="c-row-text"><b>{label}</b></span><span className="c-row-end">{value}</span></div>)}</div>
+          </div>
+        </Card>
+        <Card title="Recent timeline entries" icon="memory" className="c-bottom-card">
+          <div className="c-rows">
+            <Row icon="create" title="Important event" detail="Reached 5,000 active users." end="18:50" />
+            <Row icon="memory" title="Memory formed" detail="Noted insight about team collaboration." end="15:23" />
+            <Row icon="mission" title="Mission" detail="Built sustainable revenue model draft." end="11:42" />
+            <Row icon="positive" title="Approval" detail="Workspace design plan approved." end="08:14" />
+          </div>
+        </Card>
+        <Card title="A day of momentum" icon="core" className="c-bottom-card">
+          <p className="c-sub">Progress on the roadmap, meaningful conversations, and a growing community. Steady steps toward a brighter tomorrow.</p>
+        </Card>
+        <Card title="Key themes today" icon="create" className="c-bottom-card">
+          <div className="c-bars">{THEMES.map(([label, value]) => <div key={label} className="c-bar"><span>{label}</span><Meter value={value} /><small>{value}%</small></div>)}</div>
+        </Card>
+        <Card title="Life metrics" icon="world" className="c-bottom-card">
+          <div className="c-rows">{METRICS.map(([label, value]) => <div key={label} className="c-mini-row"><span className="c-mini-dot" /><span className="c-row-text"><b>{value}</b><small>{label}</small></span></div>)}</div>
+        </Card>
+      </>
+    ),
+  }
+}

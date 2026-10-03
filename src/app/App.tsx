@@ -13,6 +13,7 @@ import { brainState } from './presence/state'
 import { Home, type ScreenSlots } from './screens/Home'
 import { Mind } from './screens/Mind'
 import { World } from './screens/World'
+import { Life } from './screens/Life'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
@@ -110,7 +111,9 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
       ? Mind()
       : current.id === 'world'
         ? World()
-        : placeholder(current.label, current.symbol, 'This screen is next in the build.')
+        : current.id === 'life'
+          ? Life()
+          : placeholder(current.label, current.symbol, 'This screen is next in the build.')
   const cycleTheme = () => preferences.update({ theme: THEMES[(themeIndex + 1) % THEMES.length]! })
 
   const send = () => {

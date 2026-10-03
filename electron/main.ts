@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
 import { ElectronCoreHost } from './coreHost'
 import { loadKeyring } from './keyring'
+import { createFreyaVaultBinding } from './vaultBinding'
 import { loadLocalEnv } from './localEnv'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
@@ -102,6 +103,7 @@ function e2eKeys(): {
   context: Uint8Array
   personality: Uint8Array
   skill: Uint8Array
+  vault: Uint8Array
 } | null {
   const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
   const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
@@ -109,6 +111,7 @@ function e2eKeys(): {
   const context = e2eKey('FREYA_E2E_CONTEXT_KEY')
   const skill = e2eKey('FREYA_E2E_SKILL_KEY')
   const personality = e2eKey('FREYA_E2E_PERSONALITY_KEY')
+  const vault = e2eKey('FREYA_E2E_VAULT_KEY')
   // All six or none, so a partial fixture cannot quietly run with a real keyring for
   // the domain it forgot.
   if (
@@ -117,11 +120,12 @@ function e2eKeys(): {
     mission === null ||
     context === null ||
     personality === null ||
-    skill === null
+    skill === null ||
+    vault === null
   ) {
     return null
   }
-  return { conversation, brain, mission, context, personality, skill }
+  return { conversation, brain, mission, context, personality, skill, vault }
 }
 
 /**
@@ -679,6 +683,7 @@ app.whenReady().then(() => {
         context: { key: testKeys.context, reason: null as string | null },
         personality: { key: testKeys.personality, reason: null as string | null },
         skill: { key: testKeys.skill, reason: null as string | null },
+        vault: { key: testKeys.vault, reason: null as string | null },
       })
     : loadKeyring(dataPath)
   void keyResult.then((result) => {
@@ -703,6 +708,9 @@ app.whenReady().then(() => {
     if (result.skill.key === null) {
       console.warn(`[freya] Skills are not being saved — ${result.skill.reason}`)
     }
+    if (result.vault.key === null) {
+      console.warn(`[freya] encrypted Vault is unavailable — ${result.vault.reason}`)
+    }
     if (result.personality.key === null) {
       // The one domain whose absence changes behaviour and not only durability.
       // Without a durable store the cue ledger cannot be trusted, so Core refuses
@@ -713,6 +721,10 @@ app.whenReady().then(() => {
       )
     }
     const fixtureProvider = e2eResearchFixtureProvider(process.env)
+    const vaultPath = join(app.getPath('userData'), 'vault', 'freya.db')
+    const vaultBinding = process.platform === 'win32'
+      ? createFreyaVaultBinding(join(ROOT, 'native', 'sqlcipher', 'win32-x64', 'better_sqlite3-electron44.node'))
+      : undefined
     coreHost = new ElectronCoreHost(
       dataPath,
       {
@@ -738,6 +750,11 @@ app.whenReady().then(() => {
         contextKey: result.context.key,
         personalityKey: result.personality.key,
         skillKey: result.skill.key,
+        vault: {
+          path: vaultPath,
+          keyProvider: { load: async () => ({ key: result.vault.key, reason: result.vault.reason }) },
+          ...(vaultBinding ? { binding: vaultBinding } : {}),
+        },
         // Explicit host setting; own-app sees only Freya. System is honestly unsupported.
         ...(['own-app', 'system'].includes(process.env.FREYA_CONTEXT_WINDOW_OBSERVATION ?? '') ? {
           windowObservation: {

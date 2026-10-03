@@ -32,5 +32,5 @@ await build({
   ...shared,
   entryPoints: ['electron/main.ts'],
   outfile: 'dist-electron/main.cjs',
-  external: ['electron'],
+  external: ['electron', 'better-sqlite3'],
 })

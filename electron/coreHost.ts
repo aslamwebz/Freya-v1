@@ -1,4 +1,4 @@
-import { createCore, type Core } from '../core/index'
+import { createCore, type Core, type CoreOptions } from '../core/index'
 import type { CoreCommandEnvelope, CoreCommandResult, CoreStatus } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
@@ -429,6 +429,8 @@ export interface CoreHostOptions {
   personalityKey?: Uint8Array | null
   /** Skills' independent encrypted persistence key. */
   skillKey?: Uint8Array | null
+  /** Canonical Core-private SQLCipher Vault. Never accepted from a renderer. */
+  vault?: CoreOptions['vault']
   /** Explicit main-process opt-in; never accepted from a renderer. */
   windowObservation?: {
     enabled: boolean
@@ -559,6 +561,7 @@ export class ElectronCoreHost implements CoreHost {
         contextKey: this.options.contextKey ?? null,
         personalityKey: this.options.personalityKey ?? null,
         skillKey: this.options.skillKey ?? null,
+        ...(this.options.vault ? { vault: this.options.vault } : {}),
         // The Workforce seam, forwarded whole. Nothing is derived from it here:
         // the host neither reads nor interprets a workforce, it only hands Core
         // the reader it was given and mirrors what Core reports.

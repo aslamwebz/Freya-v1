@@ -1,30 +1,39 @@
+import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { resolve } from 'node:path'
 import type { VaultBinding } from '../../../core/vault'
+import { createFreyaVaultBinding } from '../../../electron/vaultBinding'
 
 /**
  * The test binding adapter.
  *
- * Binding selection is deliberately blocked pending an isolated permissive (non-
- * copyleft) Windows audit, so no binding is named in committed source and no binding
- * is a dependency. The encryption proof tests run only when a binding module is
- * supplied through the environment, and then they exercise the binding-agnostic
- * Vault API against whatever the audit selects.
- *
- *   FREYA_VAULT_BINDING_MODULE=<package> npx vitest run tests/core/vault
- *
- * The adapter expects a module exporting a `Database` constructor (default or named)
- * that answers SQLCipher's `PRAGMA cipher_version`. Any SQLCipher-capable binding
- * that meets that contract can be dropped in without touching the Vault.
+ * The canonical Windows test path uses Freya's pinned Node 24 native binary,
+ * built from SQLCipher 4.19.0 + OpenSSL 3.5.9. An explicit environment module
+ * remains available for portability experiments on other platforms.
  */
 export const VAULT_BINDING_ENV = 'FREYA_VAULT_BINDING_MODULE'
 
 const require = createRequire(import.meta.url)
 const moduleName = process.env[VAULT_BINDING_ENV] ?? null
+const canonicalWindowsBinding = resolve(
+  process.cwd(),
+  'native',
+  'sqlcipher',
+  'win32-x64',
+  'better_sqlite3-node24.node',
+)
 
-export const bindingAvailable = moduleName !== null
+export const bindingAvailable = moduleName !== null ||
+  (process.platform === 'win32' && existsSync(canonicalWindowsBinding))
 
 export async function loadTestBinding(): Promise<VaultBinding> {
-  if (moduleName === null) throw new Error(`no binding module was supplied via ${VAULT_BINDING_ENV}`)
+  if (moduleName === null) {
+    if (process.platform === 'win32' && existsSync(canonicalWindowsBinding)) {
+      return createFreyaVaultBinding(canonicalWindowsBinding)
+    }
+    throw new Error(`no binding module was supplied via ${VAULT_BINDING_ENV}`)
+  }
+
   let module: Record<string, unknown>
   try {
     module = require(moduleName) as Record<string, unknown>

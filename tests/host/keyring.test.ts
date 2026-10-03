@@ -201,6 +201,7 @@ describe('one secret per domain', () => {
       'mission',
       'personality',
       'skill',
+      'vault',
     ])
     // Separate wrapped blobs: recovering one domain never unwraps another.
     expect(file.keys.brain).not.toBe(file.keys.conversation)
@@ -294,6 +295,7 @@ describe('the Mission domain, and the migration that introduces it', () => {
       'mission',
       'personality',
       'skill',
+      'vault',
     ])
   })
 

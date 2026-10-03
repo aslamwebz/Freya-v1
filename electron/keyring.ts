@@ -87,7 +87,7 @@ export const KEYRING_VERSION = 1
  * Closed, and the union is the point: adding a domain that quietly reused an
  * existing key would be a much worse mistake than not having the domain.
  */
-export const KEY_DOMAINS = ['conversation', 'brain', 'mission', 'context', 'personality', 'skill'] as const
+export const KEY_DOMAINS = ['conversation', 'brain', 'mission', 'context', 'personality', 'skill', 'vault'] as const
 
 export type KeyDomain = (typeof KEY_DOMAINS)[number]
 
@@ -119,6 +119,8 @@ export interface Keyring {
   brain: DomainKeyResult
   mission: DomainKeyResult
   context: DomainKeyResult
+  /** Canonical SQLCipher Vault key. Independent from every legacy domain key. */
+  vault: DomainKeyResult
   /** Phase 17's independent secret for stored skill bodies. */
   skill: DomainKeyResult
   /**
@@ -158,6 +160,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       brain: { key: null, reason },
       mission: { key: null, reason },
       context: { key: null, reason },
+      vault: { key: null, reason },
       personality: { key: null, reason },
       skill: { key: null, reason },
     }
@@ -178,6 +181,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       ['brain', randomBytes(KEY_BYTES)],
       ['mission', randomBytes(KEY_BYTES)],
       ['context', randomBytes(KEY_BYTES)],
+      ['vault', randomBytes(KEY_BYTES)],
       ['personality', randomBytes(KEY_BYTES)],
       ['skill', randomBytes(KEY_BYTES)],
     ])
@@ -189,6 +193,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       brain: resultFor(generated.get('brain')!),
       mission: resultFor(generated.get('mission')!),
       context: resultFor(generated.get('context')!),
+      vault: resultFor(generated.get('vault')!),
       personality: resultFor(generated.get('personality')!),
       skill: resultFor(generated.get('skill')!),
     }
@@ -202,6 +207,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       brain: { key: null, reason },
       mission: { key: null, reason },
       context: { key: null, reason },
+      vault: { key: null, reason },
       personality: { key: null, reason },
       skill: { key: null, reason },
     }
@@ -224,7 +230,8 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
  */
 function keyringResult(path: string, read: (domain: KeyDomain) => DomainKeyResult): Keyring {
   return { keyringPath: path, conversation: read('conversation'), brain: read('brain'),
-    mission: read('mission'), context: read('context'), personality: read('personality'), skill: read('skill') }
+    mission: read('mission'), context: read('context'), vault: read('vault'),
+    personality: read('personality'), skill: read('skill') }
 }
 
 async function withMissingDomains(path: string, file: KeyringFile): Promise<Keyring> {
@@ -403,5 +410,6 @@ function describeDomain(domain: KeyDomain): string {
   if (domain === 'context') return 'Context'
   if (domain === 'personality') return 'what Freya has recorded about you'
   if (domain === 'skill') return 'stored skill procedures'
+  if (domain === 'vault') return 'the encrypted Vault'
   return 'conversation history'
 }

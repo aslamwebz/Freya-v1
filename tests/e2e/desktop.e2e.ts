@@ -50,6 +50,8 @@ const E2E_CONTEXT_KEY = Buffer.alloc(32, 0x47).toString('base64')
  * than as a harness that only half injected.
  */
 const E2E_PERSONALITY_KEY = Buffer.alloc(32, 0x7e).toString('base64')
+const E2E_SKILL_KEY = Buffer.alloc(32, 0x39).toString('base64')
+const E2E_VAULT_KEY = Buffer.alloc(32, 0x61).toString('base64')
 /**
  * Which monitor the suite drives Freya on.
  *
@@ -103,6 +105,8 @@ async function launch(
       FREYA_E2E_MISSION_KEY: E2E_MISSION_KEY,
       FREYA_E2E_CONTEXT_KEY: E2E_CONTEXT_KEY,
       FREYA_E2E_PERSONALITY_KEY: E2E_PERSONALITY_KEY,
+      FREYA_E2E_SKILL_KEY: E2E_SKILL_KEY,
+      FREYA_E2E_VAULT_KEY: E2E_VAULT_KEY,
       FREYA_CONTEXT_WINDOW_OBSERVATION: '',
       ...env,
     },

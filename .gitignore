@@ -16,3 +16,6 @@ release/
 *.env
 .env.local
 !.env.example
+
+# Local design/source references. Keep on the developer machine; never commit.
+References/

@@ -116,6 +116,12 @@ function installFakeBridge() {
     onCoreFoundry: () => () => {},
     coreOffice: async () => null,
     onCoreOffice: () => () => {},
+    // The conscious-context lane, declared on the bridge and deliberately unused by
+    // any surface yet. Answering `null` here is the honest fake: this build reports
+    // the lane but no surface reads it, and a fake that invented a snapshot would
+    // make the absence look tested.
+    coreConsciousness: async () => null,
+    onCoreConsciousness: () => () => {},
   }
   window.freyaHost = bridge
 }

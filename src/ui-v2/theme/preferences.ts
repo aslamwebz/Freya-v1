@@ -1,5 +1,6 @@
-export const THEMES = ['aurora', 'pearl', 'midnight'] as const
-export type Theme = (typeof THEMES)[number]
+import { THEMES, type ThemeId } from './tokens'
+export { THEMES, type ThemeId }
+export type Theme = ThemeId | 'aurora' | 'pearl' | 'midnight'
 export interface Preferences {
   readonly version: 1
   readonly theme: Theme
@@ -12,20 +13,22 @@ export interface Preferences {
 }
 export const PREFERENCES_KEY = 'freya.ui-v2.preferences.v1'
 export const DEFAULT_PREFERENCES: Preferences = Object.freeze({
-  version: 1, theme: 'aurora', mode: 'app', density: 'comfortable',
+  version: 1, theme: 'abyss', mode: 'app', density: 'comfortable',
   textScale: 1, backdrop: 'cosmos', reducedEffects: false, homePanels: Object.freeze(['focus', 'mission', 'attention', 'people', 'world', 'memory', 'workforce']),
 })
 export interface PreferenceStorage {
   getItem(key: string): string | null
   setItem(key: string, value: string): void
 }
+const LEGACY_THEMES: Record<string, ThemeId> = { aurora: 'abyss', pearl: 'dawn', midnight: 'abyss' }
 export function parsePreferences(input: unknown): Preferences {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return DEFAULT_PREFERENCES
   const value = input as Record<string, unknown>
   if (value.version !== 1) return DEFAULT_PREFERENCES
+  const theme = typeof value.theme === 'string' ? LEGACY_THEMES[value.theme] ?? value.theme : value.theme
   return Object.freeze({
     version: 1,
-    theme: THEMES.includes(value.theme as Theme) ? value.theme as Theme : 'aurora',
+    theme: THEMES.includes(theme as ThemeId) ? theme as ThemeId : 'abyss',
     mode: value.mode === 'immersive' ? 'immersive' : 'app',
     density: value.density === 'compact' ? 'compact' : 'comfortable',
     textScale: value.textScale === 1.125 || value.textScale === 1.25 ? value.textScale : 1,

@@ -9,6 +9,7 @@ import type { WorkforceProjection, WorkforceSource } from '../core/protocol/work
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import type { SkillProjection } from '../core/protocol/skills'
+import type { WorldSummaryView } from '../core/protocol/world'
 import type { FoundryProjection } from '../core/protocol/foundry'
 import type { RelayProjection } from '../core/protocol/relay'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
@@ -353,6 +354,15 @@ export interface CoreHost {
   onSkills(send: (projection: SkillProjection) => void): () => void
   skills(): SkillProjection | null
   /**
+   * The World & self summary, pushed immediately.
+   *
+   * The *summary* and not the graph: a standing push of every node and edge of the
+   * owner's world would hand a window the whole map without it asking. The graph is
+   * there, read on demand and bounded, through `world.relations.read`.
+   */
+  onWorld(send: (projection: WorldSummaryView) => void): () => void
+  world(): WorldSummaryView | null
+  /**
    * Attach to the Office projection. Returns a disposer.
    *
    * Its own channel like every subsystem's, and the note that matters is what
@@ -519,6 +529,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly personalityWindows = new Set<(projection: PersonalityProjection) => void>()
   private readonly attentionWindows = new Set<(projection: AttentionProjection) => void>()
   private readonly skillWindows = new Set<(projection: SkillProjection) => void>()
+  private readonly worldWindows = new Set<(projection: WorldSummaryView) => void>()
   private readonly foundryWindows = new Set<(projection: FoundryProjection) => void>()
   private readonly officeWindows = new Set<(projection: OfficeProjection) => void>()
   private readonly relayWindows = new Set<(projection: RelayProjection) => void>()
@@ -608,6 +619,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onOffice((projection) => this.broadcastOffice(projection))
       core.onRelay((projection) => this.broadcastRelay(projection))
       core.onSkills((projection) => this.broadcastSkills(projection))
+      core.onWorld((projection) => this.broadcastWorld(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -1063,6 +1075,37 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window Office push threw', error)
         this.officeWindows.delete(send)
+      }
+    }
+  }
+
+  onWorld(send: (projection: WorldSummaryView) => void): () => void {
+    this.worldWindows.add(send)
+    const projection = this.world()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window World push threw', error)
+        this.worldWindows.delete(send)
+      }
+    }
+    return () => {
+      this.worldWindows.delete(send)
+    }
+  }
+
+  world(): WorldSummaryView | null {
+    return this.core?.world() ?? null
+  }
+
+  private broadcastWorld(projection: WorldSummaryView): void {
+    for (const send of [...this.worldWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window World push threw', error)
+        this.worldWindows.delete(send)
       }
     }
   }

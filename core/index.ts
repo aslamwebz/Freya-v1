@@ -40,11 +40,13 @@ import type { WorkforceProjection, WorkforceWorkerDetail } from './workforce/typ
 import { MissionEngine, type WorkPort } from './missions/engine'
 import { ABSENT_MISSION_PROJECTION } from './missions/projection'
 import type { MissionCommandOutcome, MissionDetail, MissionProjection } from './missions/types'
+import { isTerminalMissionStatus } from './missions/types'
 import type { CoreCommandName, MissionCommandOutcomeView } from './protocol/core-protocol'
+import { ALL_CAPABILITIES } from './protocol/core-protocol'
 import type { MissionStore } from './missions/store'
 import { EncryptedMissionStore } from './missions/encrypted-store'
 import { MemoryMissionStore } from './missions/memory-store'
-import { Vault, VaultMissionStore, type VaultBinding, type VaultKeyProvider } from './vault'
+import { Vault, VaultMissionStore, VaultWorldStore, type VaultBinding, type VaultKeyProvider } from './vault'
 import { WorkEngine, type WorkCommandOutcome } from './work/engine'
 import { ABSENT_WORK_PROJECTION, type WorkProjection } from './work/projection'
 import {
@@ -113,6 +115,25 @@ import {
   type SkillCommandOutcome,
   type SkillProjection,
 } from './protocol/skills'
+import {
+  ABSENT_WORLD_SUMMARY,
+  WORLD_NO_PAYLOAD,
+  type WorldCommandOutcome,
+  type WorldSummaryView,
+} from './protocol/world'
+import {
+  EphemeralWorldStore,
+  WorldEngine,
+  WORLD_FORBIDDEN_REQUEST_KEYS,
+  WORLD_REFUSAL_REASONS,
+  type WorldAdmissionRequest,
+  type WorldEntityKind,
+  type WorldEvidenceRequest,
+  type WorldGraphOptions,
+  type WorldPersistencePort,
+  type WorldReferenceRecord,
+  type WorldSelfSource,
+} from './world'
 import { SkillEngine, type SkillOwnerScope } from './skills/engine'
 import { SkillPersistenceRuntime } from './skillsPersistence'
 import type { SkillExecutionPort } from './skills/execution'
@@ -377,6 +398,23 @@ export interface CoreOptions {
     /** The selected SQLCipher-capable binding, injected by the host. */
     binding?: VaultBinding
   }
+  /**
+   * Overrides the world model's evidence store wholesale. For tests.
+   *
+   * There is deliberately **no `worldKey`**. Phase 22 used to take a key of its own and
+   * write a bespoke encrypted file with it; `PLAN.md` §4 makes the one Vault the only
+   * encrypted structured store, so a second key for a second file is exactly what this
+   * lane must not reintroduce. World evidence now shares the Vault's key and its
+   * database, which is also why it is not one key-compromise away from Mission content
+   * any more — a consequence of one store, stated rather than hidden.
+   *
+   * With no Vault configured and no store supplied, the world falls back to an
+   * explicitly ephemeral store that reports `durable: false` with a sentence saying
+   * so. It never writes a second file and never writes plaintext.
+   */
+  worldStore?: WorldPersistencePort
+  /** Narrows the world model's bounds. Can only lower the code ceilings. */
+  worldLimits?: Partial<Record<string, number>>
   /**
    * Narrowed Workforce ceilings. Can only *lower* the code-owned limits.
    *
@@ -717,6 +755,15 @@ export interface Core {
   skills(): SkillProjection
   /** Subscribe to the Skills projection. Same mirror semantics as the others. */
   onSkills(listener: (projection: SkillProjection) => void): () => void
+  /**
+   * The World & self summary and its subscription.
+   *
+   * A summary rather than the graph, on purpose: the graph is available on demand and
+   * bounded, and a standing push of every node and edge would hand a window the whole
+   * map of the owner's world without it asking for one.
+   */
+  world(): WorldSummaryView
+  onWorld(listener: (projection: WorldSummaryView) => void): () => void
   readonly lifecycle: CoreLifecycle
 }
 
@@ -832,6 +879,17 @@ class FreyaCore implements Core {
    */
   private skillEngine: SkillEngine | undefined
   private skillPersistence: SkillPersistenceRuntime | undefined
+  /**
+   * The Phase 22 Self & World engine, built and owned by Core.
+   *
+   * It holds no model gateway, no provider and no authority object, so it cannot spend
+   * a call, mint a capability or clear STOP ALL — and because it holds none, there is
+   * nothing in it for STOP ALL to have to stop. It reads Mission, Work, Workforce,
+   * Skills, Foundry, the Brain and Guard through narrow ports, and stores only its own
+   * evidence: nothing here duplicates another domain's state.
+   */
+  private worldEngine: WorldEngine | undefined
+  private readonly worldListeners = new Set<(projection: WorldSummaryView) => void>()
   private readonly foundryListeners = new Set<(projection: FoundryProjection) => void>()
   /** The Phase 15 Foundry domain, owned by Core and replayed from the durable journal. */
   private foundryEngine: FoundryEngine | undefined
@@ -895,6 +953,13 @@ class FreyaCore implements Core {
    * connection; nothing on the `Core` interface can reach it.
    */
   private vault: Vault | null = null
+  /**
+   * Why the Vault could not be opened, once it has been tried and failed.
+   *
+   * Latched so every domain that wanted the Vault reports the same sentence instead of
+   * each retrying and each inventing its own wording. Null means "not tried, or fine".
+   */
+  private vaultFault: string | null = null
   /**
    * The Workforce engine, or undefined before it is built.
    *
@@ -1520,6 +1585,11 @@ class FreyaCore implements Core {
       stopAll: () => this.state.stopAll.active,
     })
     await this.skillEngine.open(recoveredSkills)
+
+    // The Phase 22 world. Built after the domains it reads, because it borrows a
+    // narrow port from each of them rather than a copy of any of them, and after the
+    // gateway because the self model reports which provider *would* answer.
+    await this.buildWorld()
 
     const recoveredSequence = this.fabric.lastSequence
     this.startedAt = (this.options.now ?? (() => new Date()))().toISOString()
@@ -2966,6 +3036,468 @@ class FreyaCore implements Core {
       console.error('[freya.core] encrypted Skill store unavailable', describe(error))
       this.skillPersistence = undefined
       return []
+    }
+  }
+
+  /* ------------------------------------------------------- world & self */
+  //
+  // Phase 22. Everything below is Core-owned, reads other domains through narrow
+  // ports, and writes only the world model's own evidence. The three properties that
+  // matter, and how each is obtained rather than promised:
+  //
+  // 1. **It cannot spend anything.** The engine holds no gateway and no provider, so
+  //    there is no code path from a projection to a paid call. Asserted by a
+  //    red-team test that counts provider calls around a full read.
+  // 2. **It cannot widen anything.** It holds no authority object and no `Principal`.
+  //    The only capabilities in Phase 22 are Guard-evaluated on the owner principal,
+  //    and `self.assignedCapabilities` *asks* Guard rather than recording an answer.
+  // 3. **It does not copy anything.** Reference nodes are rebuilt from the owning
+  //    domain on every projection, so there is no second copy of Mission, Work,
+  //    Workforce, Skills or Foundry state to fall out of date.
+
+  /**
+   * Build the world engine and recover its durable evidence.
+   *
+   * The store is chosen in one place, and there are exactly two answers:
+   *
+   *  - a Vault that opened, so `VaultWorldStore` over versioned tables in the one
+   *    encrypted database. This is the only durable path. There is no second database,
+   *    no JSONL file, no per-domain encrypted file and no dual write.
+   *  - no Vault, so `EphemeralWorldStore`: real records, no durability, and
+   *    `durable: false` with a sentence saying so.
+   *
+   * A store that cannot be believed leaves the world **empty and saying so** rather
+   * than half-populated: a world rebuilt from part of a history would be a world whose
+   * shape depends on what was damaged.
+   */
+  private async buildWorld(): Promise<void> {
+    const persistence = this.options.worldStore ?? (await this.buildWorldStore())
+    this.worldEngine = new WorldEngine({
+      persistence,
+      now: this.options.now,
+      limits: this.options.worldLimits,
+      references: () => this.worldReferences(),
+      self: this.worldSelfSource(),
+      // Reads are never gated on STOP ALL — asking what Freya believes costs nothing —
+      // but admission is. A stopped Core must not accumulate claims it is not allowed
+      // to act on, and then be one resume away from being confidently wrong about all
+      // of them.
+      stopAll: () => this.state.stopAll.active,
+      onChange: () => this.publishWorld(),
+    })
+    const opened = await this.worldEngine.open()
+    if (!opened.ok && opened.degradedReason !== null) {
+      console.error('[freya.core] world evidence could not be believed', opened.degradedReason)
+    }
+    this.publishWorld()
+  }
+
+  /**
+   * The world model's evidence store: the Vault, or nothing durable.
+   *
+   * Deliberately never throws. A world-model storage fault must not be able to take
+   * down cognition, conversation or STOP ALL — it is a fact about long-term knowledge,
+   * not about whether Freya may act. The Vault's own refusal reason is already logged
+   * and latched by `ensureVault`, so what is left to report is the honest one: this run
+   * of Core will not remember her world.
+   */
+  private async buildWorldStore(): Promise<WorldPersistencePort> {
+    const vault = await this.ensureVault()
+    if (vault !== null) return new VaultWorldStore(vault)
+    return new EphemeralWorldStore()
+  }
+
+  /**
+   * The live records of the domains that own them, in the world's narrow shape.
+   *
+   * Read fresh on every projection and never stored, which is the whole reason a
+   * cancelled Mission is cancelled in the graph immediately: there is no copy to
+   * reconcile. Statuses are passed through in the owning domain's own words, because
+   * a closed vocabulary written here would be this lane guessing at internals it does
+   * not own.
+   */
+  private worldReferences(): readonly WorldReferenceRecord[] {
+    const references: WorldReferenceRecord[] = []
+
+    for (const mission of this.missionEngine?.projection().missions ?? []) {
+      references.push({
+        kind: 'mission',
+        id: mission.missionId,
+        // Deliberately no title: `MissionSummaryView` does not carry one and this
+        // phase has no business going looking for the Mission's private content.
+        label: null,
+        status: mission.status,
+        terminal: isTerminalMissionStatus(mission.status),
+        observedAt: mission.settledAt ?? mission.createdAt,
+      })
+    }
+
+    const work = this.workEngine?.projection()
+    for (const run of work?.runs ?? []) {
+      references.push({
+        kind: 'run',
+        id: run.runId,
+        label: null,
+        status: run.status,
+        terminal: isTerminalRunStatus(run.status),
+        observedAt: run.completedAt ?? run.cancelledAt ?? run.createdAt,
+        parentKind: run.parentKind,
+        parentId: run.parentId,
+      })
+    }
+    for (const task of work?.tasks ?? []) {
+      references.push({
+        kind: 'task',
+        id: task.taskId,
+        // `WorkTaskView.title` exists only while this process still holds it, and it
+        // is the owner's own words, so it is deliberately not read here.
+        label: null,
+        status: task.status,
+        terminal: task.status === 'done' || task.status === 'cancelled',
+        observedAt: task.updatedAt,
+      })
+    }
+
+    // Core's own Workforce vocabulary, which is the domain's closed tables rather than
+    // the protocol mirror's looser words. Statuses are passed through untouched: a
+    // closed vocabulary written here would be this lane guessing at internals it does
+    // not own.
+    const workforce = this.workforceEngine?.projection()
+    for (const worker of workforce?.workers ?? []) {
+      const assignment =
+        worker.assignments.find((entry) => entry.status === 'open') ??
+        worker.assignments[0] ??
+        null
+      references.push({
+        kind: 'worker',
+        id: worker.workerId,
+        // Core gave the worker this name. It is Core's word, not the worker's.
+        label: worker.name,
+        status: worker.status,
+        terminal: worker.status === 'retired',
+        observedAt: worker.settledAt ?? worker.createdAt,
+        // `teams[0]`, because `member_of` is single-valued: two teams is a
+        // disagreement the domain resolves and this layer must not invent.
+        teamId: worker.teams[0] ?? null,
+        assignment:
+          assignment === null || assignment.missionId === null
+            ? null
+            : { kind: 'mission', id: assignment.missionId },
+      })
+    }
+    for (const team of workforce?.teams ?? []) {
+      references.push({
+        kind: 'team',
+        id: team.teamId,
+        label: team.name,
+        status: team.status,
+        terminal: team.status === 'disbanded',
+        observedAt: team.settledAt ?? team.createdAt,
+      })
+    }
+
+    for (const skill of this.skillEngine?.projection().skills ?? []) {
+      references.push({
+        kind: 'skill',
+        id: skill.skillId,
+        // The normalised slug, which is what selection matches on. Never the summary:
+        // a skill summary is the owner's own prose about their own procedure.
+        label: skill.name,
+        status: skill.status,
+        terminal: skill.status === 'retired' || skill.status === 'blocked',
+        observedAt: skill.updatedAt,
+      })
+    }
+
+    for (const artifact of this.foundryEngine?.projection().artifacts ?? []) {
+      references.push({
+        kind: 'artifact',
+        id: artifact.hash,
+        label: artifact.kind,
+        status: artifact.status,
+        terminal: artifact.status === 'archived',
+        observedAt: artifact.updatedAt,
+        // An artifact records the Run that produced it, so the graph can show what
+        // made what without the world remembering a single step.
+        parentKind: 'run',
+        parentId: artifact.runId.length > 0 ? artifact.runId : null,
+      })
+    }
+
+    return references
+  }
+
+  /**
+   * The self model's read surface: seven compartments, each supplied by the domain
+   * that owns it.
+   *
+   * The two that matter most are `capabilities` and `workerClaims`, because they are
+   * where a world model would be most tempted to lie. Capabilities are `guard.holds`
+   * evaluated *now* for the owner principal — never a stored answer — and every worker
+   * claim is reported with the value the worker asserted and nothing else, because
+   * the Workforce claim ledger has already refused it.
+   */
+  private worldSelfSource(): WorldSelfSource {
+    return {
+      identity: () => {
+        const identity = this.brainService?.identity() ?? null
+        if (identity === null) return null
+        return {
+          name: identity.name,
+          role: identity.role,
+          purpose: identity.purpose,
+          stableTraits: [...identity.stableTraits],
+          communicationPrinciples: [...identity.communicationPrinciples],
+          continuityPrinciples: [...identity.continuityPrinciples],
+          claims: identity.claims.map((claim) => ({ claimId: claim.claimId, statement: claim.statement })),
+        }
+      },
+      limitations: () =>
+        (this.brainService?.self()?.limitations ?? []).map((limitation) => ({
+          limitationId: limitation.limitationId,
+          statement: limitation.statement,
+        })),
+      // The one place a capability answer enters this subsystem, and it is Guard's
+      // answer rather than the world's. Nothing here can add to it.
+      capabilities: () => ALL_CAPABILITIES.map((capability) => ({
+        capability,
+        held: this.guard.holds(this.owner, capability),
+      })),
+      skills: () =>
+        (this.skillEngine?.projection().skills ?? []).map((skill) => ({
+          skillId: skill.skillId,
+          name: skill.name,
+          status: skill.status,
+          version: skill.version,
+          verification: skill.verification,
+        })),
+      // Which provider would answer. Never who may ask: `cognition.allowed` names no
+      // provider precisely because authorisation happens before one is chosen.
+      models: () =>
+        (this.gateway?.statuses() ?? []).map((status) => ({
+          providerId: status.id,
+          kind: status.kind,
+          live: status.liveEnabled,
+        })),
+      // Claims, reported as claims.
+      //
+      // The **value** a worker asserted is deliberately not projected: it is
+      // untrusted text from an agent, and putting it in front of a person unchanged is
+      // how injected text becomes an instruction (C9). What is reported is which
+      // worker, what kind of claim, and the decision the Workforce ledger recorded
+      // beside it — which today is always a refusal, because Core refuses every claim
+      // a worker makes about its own authority.
+      workerClaims: () => {
+        const collected: {
+          workerId: string
+          principalId: string
+          claimKind: string
+          decision: string
+          count: number
+        }[] = []
+
+        // When a `WorkforceSource` seam is filled, it reports claims one by one.
+        const mirrored = this.workforceSource === null ? null : safeWorkforceMirror(this.workforce())
+        for (const worker of mirrored?.workers ?? []) {
+          if (worker.claims.length === 0) continue
+          for (const claim of worker.claims) {
+            collected.push({
+              workerId: worker.workerId,
+              principalId: `agent:${worker.workerId}`,
+              claimKind: claim.kind,
+              decision: 'refused',
+              count: 1,
+            })
+          }
+        }
+        if (collected.length > 0) return collected
+
+        // When Core owns the Workforce, the domain keeps a count of refused claims
+        // rather than their bodies — which is the correct amount of detail, and the
+        // world model reports exactly that count.
+        for (const worker of this.workforceEngine?.projection().workers ?? []) {
+          if (worker.refusedClaims < 1) continue
+          collected.push({
+            workerId: worker.workerId,
+            principalId: `agent:${worker.workerId}`,
+            claimKind: 'workforce_claim',
+            decision: 'refused',
+            count: worker.refusedClaims,
+          })
+        }
+        return collected
+      },
+    }
+  }
+
+  /** The world summary, or an explicit absent projection. Never throws. */
+  world(): WorldSummaryView {
+    if (this.worldEngine === undefined) {
+      return { ...ABSENT_WORLD_SUMMARY, reason: 'Core has not reported a world model yet' }
+    }
+    try {
+      return this.worldEngine.summary()
+    } catch (error) {
+      return {
+        ...ABSENT_WORLD_SUMMARY,
+        reason: `the world model could not be read: ${describe(error)}`,
+        persistence: { ...ABSENT_WORLD_SUMMARY.persistence, reason: 'the world model could not be read' },
+      }
+    }
+  }
+
+  onWorld(listener: (projection: WorldSummaryView) => void): () => void {
+    this.worldListeners.add(listener)
+    // Delivered immediately, like `onWorkforce` and `onRelay`: a window that attaches
+    // late must agree with one that never left, and the summary is small enough that
+    // there is nothing to be stingy about.
+    try {
+      listener(this.world())
+    } catch (error) {
+      console.error('[freya.core] world listener threw', error)
+      this.worldListeners.delete(listener)
+    }
+    return () => {
+      this.worldListeners.delete(listener)
+    }
+  }
+
+  private publishWorld(): void {
+    if (this.worldListeners.size === 0) return
+    const projection = this.world()
+    for (const listener of [...this.worldListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] world listener threw', error)
+        this.worldListeners.delete(listener)
+      }
+    }
+  }
+
+  /** The world engine, or a closed refusal. Never a half-built one. */
+  private requireWorld(): WorldEngine {
+    if (this.worldEngine === undefined) {
+      throw new Error('the world model is not available in this Core')
+    }
+    return this.worldEngine
+  }
+
+  /**
+   * Evaluate a world capability for the owner and record the decision, or answer the
+   * refusal.
+   *
+   * Guard runs before any world code and the decision is journalled like every other
+   * capability evaluation, so a refused world command appears in the audit stream
+   * rather than only in the caller's return value.
+   */
+  private async guardWorld(requestId: string, capability: 'world.status.read' | 'world.statement.submit'): Promise<CoreCommandResult | null> {
+    const decision = this.guard.evaluate(this.owner, capability)
+    if (decision.allowed) return null
+    await this.recordGuard(decision, this.owner.id, capability, requestId)
+    return this.worldRefusal(requestId, 'store-unavailable', decision.reason)
+  }
+
+  /** A world command's answer, in the one shape a surface has to render. */
+  private worldResult(requestId: string, outcome: WorldCommandOutcome): CoreCommandResult {
+    return {
+      requestId,
+      ok: outcome.ok,
+      status: outcome.ok ? this.status() : undefined,
+      refusal: outcome.ok ? undefined : { reason: outcome.reason },
+      world: outcome,
+    }
+  }
+
+  /** A refusal Core produced itself, with no engine round trip. */
+  private worldRefusal(requestId: string, code: string, reason: string): CoreCommandResult {
+    return {
+      requestId,
+      ok: false,
+      refusal: { reason },
+      world: { operation: 'refused', ok: false, code, reason },
+    }
+  }
+
+  /**
+   * Turn a raw renderer payload into a typed world admission request.
+   *
+   * Refuse rather than coerce, and refuse the whole payload when it carries a
+   * claim-shaped or authority-shaped field. A payload that arrived with
+   * `confidence: 'verified'` in it is not a payload whose confidence happens to be
+   * ignored: treating it as one would make the attempt invisible, and the attempt is
+   * the thing worth seeing.
+   */
+  private worldRequestFrom(raw: unknown): WorldEvidenceRequest | { refusal: string } {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      return { refusal: 'a world statement is not an object' }
+    }
+    const keys = Object.keys(raw as Record<string, unknown>)
+    if (keys.some((key) => WORLD_FORBIDDEN_REQUEST_KEYS.includes(key))) {
+      return { refusal: WORLD_REFUSAL_REASONS.claim_fields_not_admissible }
+    }
+    return raw as WorldEvidenceRequest
+  }
+
+  /** Read the closed `kind` filter off a payload, refusing anything else. */
+  private worldKindFrom(raw: unknown): WorldEntityKind | null | undefined {
+    if (raw === undefined || raw === null) return null
+    if (typeof raw !== 'string') return undefined
+    const kinds = [
+      'person',
+      'project',
+      'organisation',
+      'place',
+      'mission',
+      'run',
+      'task',
+      'worker',
+      'team',
+      'skill',
+      'artifact',
+      'self',
+    ] as const
+    return (kinds as readonly string[]).includes(raw) ? (raw as WorldEntityKind) : undefined
+  }
+
+  /** Build the graph read's bounded options, refusing anything unbounded. */
+  private worldGraphOptionsFrom(raw: unknown): WorldGraphOptions | { refusal: string } {
+    if (raw === undefined || raw === null) {
+      return { focusEntityId: null, kinds: null, maxDepth: 1 }
+    }
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      return { refusal: 'a graph read takes an object' }
+    }
+    const payload = raw as Record<string, unknown>
+    const allowed = ['focusEntityId', 'kinds', 'maxDepth']
+    for (const key of Object.keys(payload)) {
+      if (!allowed.includes(key)) return { refusal: 'a graph read accepts only focusEntityId, kinds and maxDepth' }
+    }
+    const focus = payload.focusEntityId
+    if (focus !== undefined && focus !== null && (typeof focus !== 'string' || focus.length > 128)) {
+      return { refusal: 'focusEntityId is not a usable entity id' }
+    }
+    let kinds: readonly WorldEntityKind[] | null = null
+    if (payload.kinds !== undefined && payload.kinds !== null) {
+      if (!Array.isArray(payload.kinds) || payload.kinds.length > 12) {
+        return { refusal: 'kinds must be a short list of entity kinds' }
+      }
+      const resolved: WorldEntityKind[] = []
+      for (const entry of payload.kinds) {
+        const kind = this.worldKindFrom(entry)
+        if (kind === undefined || kind === null) return { refusal: 'kinds must contain only entity kinds' }
+        resolved.push(kind)
+      }
+      kinds = resolved
+    }
+    const maxDepth = payload.maxDepth === undefined || payload.maxDepth === null ? 1 : payload.maxDepth
+    if (typeof maxDepth !== 'number' || !Number.isInteger(maxDepth) || maxDepth < 0 || maxDepth > 2) {
+      return { refusal: 'maxDepth is 0, 1 or 2' }
+    }
+    return {
+      focusEntityId: (focus as string | null | undefined) ?? null,
+      kinds,
+      maxDepth,
     }
   }
 
@@ -4974,6 +5506,175 @@ class FreyaCore implements Core {
           return { requestId, ok: true, status: this.status(), skill: { operation: 'detail', ok: true, detail } }
         }
 
+        /* ------------------------------------------------------ world & self */
+        //
+        // Phase 22. Five reads and two owner acts.
+        //
+        // The reads are argument-free or take a single closed filter, because a graph
+        // surface that could ask "everything, unfiltered" is a database explorer and
+        // this is not one. The two writes are owner-only through Guard, are absent from
+        // the renderer command allowlist, and route into Core's own admission — which
+        // is what assigns the source, the epistemic ceiling and the confidence ceiling
+        // from the channel. A window cannot state any of those, and asking to is a
+        // refusal rather than a stripped field.
+
+        case 'world.summary.read': {
+          const guarded = await this.guardWorld(requestId, 'world.status.read')
+          if (guarded !== null) return guarded
+          // Counts only, and no payload: a summary that could be filtered or paged is a
+          // query surface, and this one answers exactly one question.
+          if (carriesFields(envelope.payload)) {
+            const refusal = WORLD_NO_PAYLOAD
+            return this.worldRefusal(requestId, 'no-payload', refusal)
+          }
+          return this.worldResult(requestId, {
+            operation: 'summary',
+            ok: true,
+            summary: this.requireWorld().summary(),
+          })
+        }
+
+        case 'world.entities.read': {
+          const guarded = await this.guardWorld(requestId, 'world.status.read')
+          if (guarded !== null) return guarded
+          const payload = (envelope.payload ?? {}) as Record<string, unknown>
+          const allowed = ['kind', 'includeWithdrawn']
+          for (const key of Object.keys(payload)) {
+            if (!allowed.includes(key)) {
+              return this.worldRefusal(requestId, 'unknown-field', 'the entity list accepts only kind and includeWithdrawn')
+            }
+          }
+          const kind = this.worldKindFrom(payload.kind)
+          if (kind === undefined) {
+            return this.worldRefusal(requestId, 'unknown-kind', 'that is not an entity kind this Core knows')
+          }
+          const list = this.requireWorld().entities({
+            kind,
+            includeWithdrawn: payload.includeWithdrawn === true,
+          })
+          return this.worldResult(requestId, { operation: 'entities', ok: true, entities: list })
+        }
+
+        case 'world.entity.read': {
+          const guarded = await this.guardWorld(requestId, 'world.status.read')
+          if (guarded !== null) return guarded
+          const payload = (envelope.payload ?? {}) as Record<string, unknown>
+          for (const key of Object.keys(payload)) {
+            if (key !== 'entityId') {
+              return this.worldRefusal(requestId, 'unknown-field', 'the entity read accepts only entityId')
+            }
+          }
+          const entityId = readString(envelope.payload, 'entityId')
+          if (entityId === null) {
+            return this.worldRefusal(requestId, 'no-entity-id', 'the entity read needs an entityId')
+          }
+          const engine = this.requireWorld()
+          // The engine folds again for conflicts rather than the caller passing them
+          // in, so a detail read cannot be answered with a conflicts list somebody else
+          // chose.
+          const detail = engine.entity(entityId, (fold) => fold.conflicts)
+          return this.worldResult(requestId, {
+            operation: 'entity',
+            ok: true,
+            entity: detail,
+            found: detail.entity !== null,
+          })
+        }
+
+        case 'world.relations.read': {
+          const guarded = await this.guardWorld(requestId, 'world.status.read')
+          if (guarded !== null) return guarded
+          const options = this.worldGraphOptionsFrom(envelope.payload)
+          if ('refusal' in options) {
+            return this.worldRefusal(requestId, 'invalid-graph-read', options.refusal)
+          }
+          return this.worldResult(requestId, {
+            operation: 'relations',
+            ok: true,
+            relations: this.requireWorld().relations(options),
+          })
+        }
+
+        case 'self.status.read': {
+          const guarded = await this.guardWorld(requestId, 'world.status.read')
+          if (guarded !== null) return guarded
+          if (carriesFields(envelope.payload)) {
+            const refusal = WORLD_NO_PAYLOAD
+            return this.worldRefusal(requestId, 'no-payload', refusal)
+          }
+          return this.worldResult(requestId, { operation: 'self', ok: true, self: this.requireWorld().self() })
+        }
+
+        case 'world.statement.submit': {
+          const guarded = await this.guardWorld(requestId, 'world.statement.submit')
+          if (guarded !== null) return guarded
+          const request = this.worldRequestFrom(envelope.payload)
+          if ('refusal' in request) {
+            // A claim-shaped field is named as itself rather than as a malformed
+            // request, because "you tried to state your own certainty" is the honest
+            // answer and "bad payload" is not.
+            const code = request.refusal === WORLD_REFUSAL_REASONS.claim_fields_not_admissible
+              ? 'claim_fields_not_admissible'
+              : 'invalid-statement'
+            return this.worldRefusal(requestId, code, request.refusal)
+          }
+          // The channel is Core's, not the payload's: an owner statement arrives on the
+          // owner's channel because the owner principal sent it, and there is no field
+          // a payload could carry to say otherwise.
+          const admission: WorldAdmissionRequest = {
+            request,
+            channel: 'owner_statement',
+            actor: this.owner.id,
+            sensitivity: 'personal',
+          }
+          const outcome = this.requireWorld().admit(admission)
+          if (!outcome.ok) {
+            return this.worldResult(requestId, {
+              operation: 'refused',
+              ok: false,
+              code: outcome.code,
+              reason: outcome.reason,
+            })
+          }
+          this.publishWorld()
+          return this.worldResult(requestId, {
+            operation: 'submitted',
+            ok: true,
+            evidenceId: outcome.evidenceId,
+            summary: this.requireWorld().summary(),
+          })
+        }
+
+        case 'world.statement.withdraw': {
+          const guarded = await this.guardWorld(requestId, 'world.statement.submit')
+          if (guarded !== null) return guarded
+          const targetEvidenceId = readString(envelope.payload, 'targetEvidenceId')
+          if (targetEvidenceId === null) {
+            return this.worldRefusal(requestId, 'no-evidence-id', 'a withdrawal needs a targetEvidenceId')
+          }
+          const reason = readString(envelope.payload, 'reason') ?? 'the owner withdrew this claim'
+          const outcome = this.requireWorld().withdraw(targetEvidenceId, reason, {
+            channel: 'owner_statement',
+            actor: this.owner.id,
+            sensitivity: 'personal',
+          })
+          if (!outcome.ok) {
+            return this.worldResult(requestId, {
+              operation: 'refused',
+              ok: false,
+              code: outcome.code,
+              reason: outcome.reason,
+            })
+          }
+          this.publishWorld()
+          return this.worldResult(requestId, {
+            operation: 'withdrawn',
+            ok: true,
+            evidenceId: outcome.evidenceId,
+            summary: this.requireWorld().summary(),
+          })
+        }
+
         default:
           return reject(envelope, `unknown command: ${String(command)}`)
       }
@@ -5019,6 +5720,40 @@ class FreyaCore implements Core {
    * A Brain fault also never changes any authority. See `brain/store.ts`.
    */
   /**
+   * Open the one encrypted Vault, once.
+   *
+   * Every domain that has migrated onto it calls this, so there is a single owner of
+   * the connection and a single place a refusal can come from. The result is cached:
+   * a second caller gets the same `Vault` rather than a second connection to the same
+   * database, which is how a single-writer store quietly becomes a two-writer one.
+   *
+   * Fail-closed, once, with the reason latched. There is no retry and no second
+   * attempt with different parameters: a Vault that could not be opened is a fact this
+   * run of Core reports, and every domain that wanted it then takes its own explicitly
+   * ephemeral path *saying so*. Never a different durable store, never plaintext.
+   */
+  private async ensureVault(): Promise<Vault | null> {
+    if (this.vault !== null) return this.vault
+    if (this.vaultFault !== null) return null
+    const options = this.options.vault
+    if (options === undefined) return null
+    try {
+      this.vault = await Vault.open({
+        path: options.path,
+        keyProvider: options.keyProvider,
+        ...(options.binding ? { binding: options.binding } : {}),
+        ...(this.options.now ? { now: this.options.now } : {}),
+      })
+      return this.vault
+    } catch (error) {
+      this.vault = null
+      this.vaultFault = 'the encrypted Vault could not be opened'
+      console.error('[freya.core] encrypted Vault unavailable', describe(error))
+      return null
+    }
+  }
+
+  /**
    * Build the Mission content store.
    *
    * The rule is the Brain's, for the same reason: a store that cannot encrypt is
@@ -5029,28 +5764,15 @@ class FreyaCore implements Core {
    */
   private async buildMissionStore(): Promise<MissionStore> {
     if (this.options.missionStore) return this.options.missionStore
-    // The bounded first migration slice: when a Vault is configured, Mission content
-    // lives in the one encrypted SQLCipher database. There is no dual write — the
-    // bespoke per-domain file is not opened at all on this path.
-    if (this.options.vault) {
-      try {
-        this.vault = await Vault.open({
-          path: this.options.vault.path,
-          keyProvider: this.options.vault.keyProvider,
-          ...(this.options.vault.binding ? { binding: this.options.vault.binding } : {}),
-          ...(this.options.now ? { now: this.options.now } : {}),
-        })
-        return new VaultMissionStore(this.vault)
-      } catch (error) {
-        // Fail closed: an unavailable Vault yields an explicitly ephemeral Mission
-        // store, never a different durable store and never plaintext.
-        this.vault = null
-        console.error('[freya.core] encrypted Vault unavailable', describe(error))
-        return new MemoryMissionStore({
-          faultReason:
-            'Mission content is held in memory only: the encrypted Vault could not be opened',
-        })
-      }
+    // When a Vault is configured, Mission content lives in the one encrypted SQLCipher
+    // database. There is no dual write — the bespoke per-domain file is not opened at
+    // all on this path.
+    const vault = await this.ensureVault()
+    if (vault !== null) return new VaultMissionStore(vault)
+    if (this.options.vault !== undefined) {
+      return new MemoryMissionStore({
+        faultReason: `Mission content is held in memory only: ${this.vaultFault ?? 'the encrypted Vault is not configured'}`,
+      })
     }
     if (this.options.missionKey) {
       const path = `${this.options.dataPath}.missions`
@@ -5671,6 +6393,43 @@ function carriesFields(payload: unknown): boolean {
   if (typeof payload !== 'object') return true
   if (Array.isArray(payload)) return true
   return Object.keys(payload as Record<string, unknown>).length > 0
+}
+
+/**
+ * Read the Workforce mirror without letting a throwing source take the world down.
+ *
+ * The mirror can come from a `WorkforceSource` seam, which is code this Core does not
+ * own. One that throws must not be able to fail a *world* read, because a world read
+ * is about what Freya believes and a broken Workforce seam is about something else
+ * entirely. Only the fields the self model reports are read, and every one of them is
+ * checked, because a seam that returns something else in `claims` must not be able to
+ * put that into a projection.
+ */
+function safeWorkforceMirror(mirror: unknown): { workers: readonly {
+  workerId: string
+  claims: readonly { kind: string }[]
+}[] } | null {
+  if (typeof mirror !== 'object' || mirror === null) return null
+  const workers = (mirror as { workers?: unknown }).workers
+  if (!Array.isArray(workers)) return null
+  return {
+    workers: workers.flatMap((entry) => {
+      if (typeof entry !== 'object' || entry === null) return []
+      const worker = entry as { workerId?: unknown; claims?: unknown }
+      if (typeof worker.workerId !== 'string') return []
+      const claims = Array.isArray(worker.claims) ? worker.claims : []
+      return [
+        {
+          workerId: worker.workerId,
+          claims: claims.flatMap((claim) => {
+            if (typeof claim !== 'object' || claim === null) return []
+            const kind = (claim as { kind?: unknown }).kind
+            return typeof kind === 'string' ? [{ kind }] : []
+          }),
+        },
+      ]
+    }),
+  }
 }
 
 function degradedStatus(

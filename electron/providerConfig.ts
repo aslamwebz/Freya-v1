@@ -118,23 +118,24 @@ export class ProviderConfigStore {
   }
 
   /**
-   * Apply the stored provider values to `env` in the exact names Core reads.
+   * Overlay the stored provider config onto `env`, in the exact names Core reads.
+   *
+   * Precedence, decided: **explicit launch environment > stored app setting >
+   * `.env`.** `explicit` is the process launch environment captured before the
+   * `.env` loader ran; any value in it is written back last. The stored app
+   * setting is the user's explicit in-app choice, so it may override a `.env`
+   * value — but only where it actually provides one.
+   *
+   * Overlays only the names the stored config provides, and never deletes a
+   * variable. A store with no openable key leaves `NANOGPT_API_KEY` and
+   * `FREYA_ALLOW_LIVE_MODEL` exactly as `.env`/the process set them, so a `.env`
+   * credential and its live flag survive a store that has no credential of its
+   * own. When no config has been stored at all, this does nothing.
    *
    * One file read, not two: the same record supplies both the non-secret view and
    * the wrapped key, so a concurrent write between the two cannot produce a view
-   * and a key that disagree.
-   *
-   * When no config has been stored this does nothing at all. An absent store must
-   * not delete a credential that came from the real environment or `.env`, nor
-   * force live inference off for a launch that never configured the app setting.
-   *
-   * When a key is stored it is decrypted into `env`; when the store exists but has
-   * no key, `NANOGPT_API_KEY` is deleted so a cleared credential cannot linger.
-   * `explicit` is the process launch environment captured before the `.env`
-   * loader ran: any value in it is written back last, so an explicit launch always
-   * wins over both a `.env` file and the stored app setting. Only the raw key
-   * bytes reach `env`, and `env` is main-process memory — never a window, a log or
-   * a journal.
+   * and a key that disagree. Only the raw key bytes reach `env`, and `env` is
+   * main-process memory — never a window, a log or a journal.
    */
   async applyToEnv(
     env: NodeJS.ProcessEnv,
@@ -153,7 +154,6 @@ export class ProviderConfigStore {
     for (const [name, value] of Object.entries(resolved)) {
       if (value !== undefined) env[name] = value
     }
-    if (key === null) delete env.NANOGPT_API_KEY
     for (const name of PROVIDER_ENV_NAMES) {
       if (explicit[name] !== undefined) env[name] = explicit[name]
     }
@@ -240,18 +240,25 @@ export class ProviderConfigStore {
  *
  * Names come from `core/model/nanogpt-provider.ts`: `NANOGPT_API_KEY`,
  * `NANOGPT_BASE_URL`, `NANOGPT_MODEL`, and `FREYA_ALLOW_LIVE_MODEL` where the
- * literal `'1'` is the explicit decision to spend inference. The key is present
- * only when one was stored; the other three are overlays on `base`.
+ * literal `'1'` is the explicit decision to spend inference.
+ *
+ * `base` seeds the result. Each name is overlaid only when the stored config
+ * actually provides it, and `FREYA_ALLOW_LIVE_MODEL` is treated as provided only
+ * alongside a credential: a store with no openable key must not force live
+ * inference on or off, because that would silently overwrite a `.env` decision.
  */
 export function resolveProviderEnv(
   base: Record<string, string | undefined>,
   stored: { apiKey: string | null; baseUrl: string; model: string; liveEnabled: boolean },
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...base }
-  if (stored.apiKey !== null && stored.apiKey.length > 0) env.NANOGPT_API_KEY = stored.apiKey
+  const hasKey = stored.apiKey !== null && stored.apiKey.length > 0
+  if (hasKey) {
+    env.NANOGPT_API_KEY = stored.apiKey as string
+    env.FREYA_ALLOW_LIVE_MODEL = stored.liveEnabled ? '1' : '0'
+  }
   if (stored.baseUrl.length > 0) env.NANOGPT_BASE_URL = stored.baseUrl
   if (stored.model.length > 0) env.NANOGPT_MODEL = stored.model
-  env.FREYA_ALLOW_LIVE_MODEL = stored.liveEnabled ? '1' : '0'
   return env
 }
 

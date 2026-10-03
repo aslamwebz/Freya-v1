@@ -113,6 +113,17 @@ describe('provider config', () => {
     expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
   })
 
+  it('omits the live flag but keeps base values when no key is stored', () => {
+    const env = resolveProviderEnv(
+      { FREYA_ALLOW_LIVE_MODEL: '1' },
+      { apiKey: null, baseUrl: 'https://x/v1', model: 'm', liveEnabled: true },
+    )
+    expect(env.NANOGPT_API_KEY).toBeUndefined()
+    expect(env.NANOGPT_BASE_URL).toBe('https://x/v1')
+    expect(env.NANOGPT_MODEL).toBe('m')
+    expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
+  })
+
   it('degrades to hasKey false with no key when the OS has no secure storage', async () => {
     secure.available = false
     const saved = await store().write({
@@ -126,7 +137,8 @@ describe('provider config', () => {
     await store().applyToEnv(env)
     expect(env.NANOGPT_API_KEY).toBeUndefined()
     expect(env.NANOGPT_BASE_URL).toBe('https://x/v1')
-    expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
+    // No openable key means the store does not own the live decision.
+    expect(env.FREYA_ALLOW_LIVE_MODEL).toBeUndefined()
   })
 
   it('refuses the key on the insecure basic_text backend', async () => {
@@ -177,10 +189,44 @@ describe('provider config', () => {
     expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('0')
   })
 
-  it('does nothing when no config has been stored', async () => {
-    const env: NodeJS.ProcessEnv = { NANOGPT_API_KEY: 'sk-env', NANOGPT_MODEL: 'env-model' }
-    await store().applyToEnv(env, { NANOGPT_API_KEY: 'sk-env', NANOGPT_MODEL: 'env-model' })
+  it('preserves a base environment credential and live flag when the store has no key', async () => {
+    await store().write({ baseUrl: 'https://stored/v1', model: 'stored-model', liveEnabled: true })
+    const env: NodeJS.ProcessEnv = {
+      NANOGPT_API_KEY: 'sk-env',
+      FREYA_ALLOW_LIVE_MODEL: '1',
+    }
+    await store().applyToEnv(env)
     expect(env.NANOGPT_API_KEY).toBe('sk-env')
+    expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
+    // The non-secret names the store does provide are still overlaid.
+    expect(env.NANOGPT_BASE_URL).toBe('https://stored/v1')
+    expect(env.NANOGPT_MODEL).toBe('stored-model')
+  })
+
+  it('overlays the stored key and live flag when the store has a key', async () => {
+    await store().write({
+      baseUrl: 'https://stored/v1',
+      model: 'stored-model',
+      liveEnabled: false,
+      apiKey: 'sk-stored',
+    })
+    const env: NodeJS.ProcessEnv = { NANOGPT_API_KEY: 'sk-env', FREYA_ALLOW_LIVE_MODEL: '1' }
+    await store().applyToEnv(env)
+    expect(env.NANOGPT_API_KEY).toBe('sk-stored')
+    expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('0')
+  })
+
+  it('leaves the environment untouched when no config has been stored', async () => {
+    const env: NodeJS.ProcessEnv = {
+      NANOGPT_API_KEY: 'sk-env',
+      NANOGPT_BASE_URL: 'https://env/v1',
+      NANOGPT_MODEL: 'env-model',
+      FREYA_ALLOW_LIVE_MODEL: '1',
+    }
+    await store().applyToEnv(env)
+    expect(env.NANOGPT_API_KEY).toBe('sk-env')
+    expect(env.NANOGPT_BASE_URL).toBe('https://env/v1')
     expect(env.NANOGPT_MODEL).toBe('env-model')
+    expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
   })
 })

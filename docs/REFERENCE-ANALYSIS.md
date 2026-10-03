@@ -1,5 +1,11 @@
 # Reference analysis — `References/`
 
+> **Authoritative source.** `References/uiplan.md` is the product and visual plan
+> and wins wherever this document disagrees with it. In particular, `uiplan.md`
+> §Visual Language (lines 185–209) **avoids heavy gold** and makes light blue/aqua
+> the identity with soft lilac for cognition. The gold-centric guidance in earlier
+> versions of this file is superseded; see the revised §2.
+
 Scope: `References/index.html` (HTML/Three.js prototype), `References/*.png` (two
 design renders), `References/assets/*` (atmosphere photo, agent avatars, earth texture).
 
@@ -32,39 +38,42 @@ Everything else is furniture.
 
 ---
 
-## 2. Design language (authoritative values)
+## 2. Design language (plan-first, authoritative)
 
-Taken from the prototype's `:root` and reused in `src/styles/tokens.css`.
+`References/uiplan.md` §Visual Language is authoritative. The prototype's gold
+`:root` is no longer the identity: Freya avoids heavy gold. The roles below are the
+ones implemented in the typed manifest `src/ui-v2/theme/tokens.ts`, which generates
+`src/ui-v2/theme/tokens.css`.
 
-| Token | Value | Meaning |
-| --- | --- | --- |
-| `--bg` | `#050608` | near-black, slightly blue |
-| `--ink` / `--ink-2` / `--ink-3` | `#f3ede4` / `#b9b2a7` / `#7d776e` | warm bone-white, three levels |
-| `--gold` | `#e2ac5c` | **primary accent** — identity, active state, focus |
-| `--gold-hi` | `#ffd08a` | accent hover / active emphasis |
-| `--gold-line` | `rgba(226,172,92,.30)` | hairline borders everywhere |
-| `--ink` type | Inter 300/400/500 | body |
-| display type | Montserrat 300, `letter-spacing: .32em`, uppercase | wordmark only |
-| section labels | 12.5px, 500, `letter-spacing: .16em`, uppercase | hierarchy device |
-| `--radius` | `14px` (panels), `16px` (command bar) | consistent radii |
-| spacing | 22px gutters, 12px intra-column | dense but breathable |
+| Role | Meaning |
+| --- | --- |
+| ground (`bg`, `panel`, `panelRaised`) | obsidian / graphite / deep-navy near-black |
+| text (`ink`, `muted`, `heading`) | three readable levels on the ground |
+| `line`, `glass`, `glassEdge` | hairlines + the dark smoked-glass recipe |
+| `intelligence` — blue/aqua | data, telemetry, presence; the identity light |
+| `cognition` — soft lilac/aurora | thought and creativity |
+| `positive` — mint | healthy / trusted / success |
+| `attention` — amber | rare and functional only; never a brand colour |
+| `danger` — red | errors and destructive state |
+| `glow` | activity emission; none when idle |
+| type | Inter for body; Montserrat for the wordmark, uppercase, tracked |
+| shape | consistent radii; dense but breathable spacing |
 
-**The two-accent rule.** Gold is *Freya*. Blue (`#3f96ff` / `#7fdcff` / `#9fe4ff`)
-is *intelligence / data / telemetry*. Amber never means "error"; errors are
-`#ff5a52`, waiting is `#f2b441`, healthy is `#3fd07a`. Mixing gold and blue in
-one element is what makes the render read as "lab equipment" rather than
-"neon dashboard".
+**One accent, rarely.** Gold is gone. Aqua is the identity light, lilac is
+cognition, mint is healthy, and amber appears only for attention. Colour carries
+meaning rather than decorating every object, and mixing accents in one element is
+what the plan warns against.
 
-**Glass.** `linear-gradient(180deg, rgba(26,23,20,.66), rgba(10,10,13,.58))` +
-`backdrop-filter: blur(18px) saturate(140%)` + a 1px gold hairline + an inset
-top highlight. Panels read as *dark smoked glass*, never as 30%-opacity white.
-Text contrast is preserved by keeping the panel body dark and the text opaque.
+**Glass.** Dark smoked glass — a dark gradient body, a subtle *luminous* hairline
+and an inset top highlight. Panels read as *dark smoked glass*, never as
+30%-opacity white. Panel bodies stay dark and text stays opaque so contrast survives.
 
-**Depth.** Panels cast a large soft shadow (`0 18px 40px rgba(0,0,0,.45)`).
-Nothing else does. The presence is the only other depth cue.
+**Depth.** Panels cast a large soft shadow. Nothing else does; the presence is the
+only other depth cue.
 
-**The active item.** Gold gradient wash + gold hairline + a solid 3px gold inset
-bar on the leading edge. Used for nav, dock, and dock buttons alike.
+**The active item.** An accent gradient wash + a luminous hairline + a solid inset
+bar on the leading edge. Used for nav, dock, and dock buttons alike — in the theme's
+`intelligence` accent, not gold.
 
 ---
 
@@ -72,8 +81,8 @@ bar on the leading edge. Used for nav, dock, and dock buttons alike.
 
 The reference renders one of five WebGL centrepieces. The render references
 (`ChatGPT Image…png`, `Screenshot…png`) show a **luminous neural sphere**: a
-dense point lattice with visible edges, a warm gold core, blue/cyan structure,
-a few gold vertices, and *two or three thin instrument rings* around it with
+dense point lattice with visible edges, a warm core, blue/cyan structure,
+a few bright vertices, and *two or three thin instrument rings* around it with
 short tick marks, plus a small **wireframe globe** on the right.
 
 A second reference (`Screenshot…png`) shows a sparser, colder variant: a force
@@ -114,7 +123,7 @@ What to keep:
   and activity.
 - **Attention rows** that switch accent by severity (red / amber), each with a
   circular icon chip.
-- **Restrained meters**: a 6px rounded bar, gold fill with a soft glow.
+- **Restrained meters**: a 6px rounded bar, accent fill with a soft glow.
 
 What Freya should *not* copy:
 
@@ -131,13 +140,13 @@ What Freya should *not* copy:
 
 The command bar is the primary control, not a search box.
 
-- Round mic button at the left, a 1px gold separator, then a large (16px) input.
+- Round mic button at the left, a 1px accent separator, then a large (16px) input.
 - A **26-bar waveform** on the right, scaled by live level. Idle → bars frozen
-  and dim; listening → bars animate gold. This is the cheapest honest voice
+  and dim; listening → bars animate in the intelligence accent. This is the cheapest honest voice
   affordance: it shows *level*, and idle means *no microphone is being read*.
 - The placeholder text is the state readout: "Tap the mic, or type what you
   want to do." → "I'm listening…". Copy, not colour, tells the user the state.
-- The bar itself gets a stronger gold border and an outer glow when live.
+- The bar itself gets a stronger accent border and an outer glow when live.
 
 **Keep this.** It is the best single idea in the reference.
 
@@ -147,7 +156,7 @@ The command bar is the primary control, not a search box.
 
 - **Left rail**, 176px, no card chrome, 56px rows, 24px stroke icons, 15px labels.
   Collapses to 72px icon-only under 1360px.
-- **Bottom dock**, a glass pill centred under the presence, 96×70 buttons, gold
+- **Bottom dock**, a glass pill centred under the presence, 96×70 buttons, accent
   when pressed. In the reference it is a mode selector; **in Freya it should be
   the surface launcher** — the dock is the visible half of the Surface Manager.
 
@@ -159,7 +168,7 @@ The command bar is the primary control, not a search box.
 | --- | --- |
 | Is the photo background part of the identity or decoration? | Atmosphere, but not as a photograph. All five treatments ship as pure CSS gradient stacks; the city is drawn as light, not captured. Deep space is the default. |
 | Reference shows a sculpted brain mesh and four brain styles. | Used. five centrepieces and four brain styles, ported into `src/presence/pieces/` with three.js rather than copied as one file. |
-| Agent avatars are stock photos of named people. | **No.** Freya's workforce is not five stock humans. Use deterministic monogram discs with the gold ring the reference already uses. |
+| Agent avatars are stock photos of named people. | **No.** Freya's workforce is not five stock humans. Use deterministic monogram discs with the accent ring the reference already uses. |
 | Globe / "World state" card. | Dropped. "World" is a Freya system that does not exist in Phase 0; a spinning globe would be exactly the kind of fake functionality to avoid. |
 | Wordmark is "ATHENA". | Freya gets its own mark — an aperture — and its own wordmark, same typographic treatment. |
 | Reference has no detached windows at all. | The glass panel is Freya's **work surface**. Reuse the panel material verbatim for a real windowing system. |

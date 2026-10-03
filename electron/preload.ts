@@ -31,6 +31,7 @@ import type { OfficeProjection } from '../core/office/projection'
 import type { SkillProjection } from '../core/protocol/skills'
 import { SKILL_NO_PAYLOAD } from '../core/protocol/skills'
 import { SKILL_LIMITS } from '../core/skills/types'
+import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
 
 export interface RuntimeInfo {
   version: string
@@ -408,6 +409,27 @@ const api = {
   },
 
   /**
+   * The Life History projection, read-only.
+   *
+   * The counterpart to the command surface and the reason it is narrow: what
+   * crosses is Core's report — ids, closed labels, dates, statuses and measured
+   * lengths. An entry's own summary and body do not cross here; the one route to
+   * them is the explicit `life.entry.read` for a single entry. There is no
+   * `freya:core:life:write` channel and no bridge method that records, revises or
+   * withdraws an entry.
+   */
+  coreLife: (): Promise<LifeProjection | null> => ipcRenderer.invoke('freya:core:life'),
+
+  onCoreLife: (handler: (projection: LifeProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: LifeProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:life', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:life', listener)
+    }
+  },
+
+  /**
    * Watch Core status. Returns a disposer, which `onCollect` conspicuously
    * lacks: a subscription you cannot cancel is a leak you have to design around,
    * and React effects need one to run cleanup.
@@ -583,6 +605,16 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'relay.approval.decide',
   'foundry.status.read',
 
+  // Life History. Three reads and nothing else: there is no `life.record`,
+  // `life.consolidate`, `life.revise`, `life.withdraw`, `life.confidence.set` or
+  // `life.promote` on the renderer surface, because a window that could write one
+  // would be a second author of Freya's autobiography. The owner scope that
+  // records, revises, consolidates and withdraws is Core-internal and has no
+  // command name a window could reach.
+  'life.status.read',
+  'life.timeline.read',
+  'life.entry.read',
+
   // Office. A window may read the Office projection and ask for an agent to
   // join the desktop Presence. Note what it may *not* do: it cannot invent a
   // station, inflate a count, fabricate a percentage, name a principal, assert
@@ -638,6 +670,7 @@ function carriesNothing(payload: unknown): boolean {
 }
 
 const MAX_ID_CHARS = 256
+const LIFE_TIMELINE_LIMIT = 200
 /** A model id is bounded like an id; the same ceiling Core re-checks inside. */
 const MAX_MODEL_ID_CHARS = 256
 /** Matches the Searcher's own ceiling, so the bridge and Core agree on the limit. */
@@ -1517,6 +1550,67 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
         return { ok: false, reason: 'a detail read needs the skill id' }
       }
       return { ok: true, payload: { skillId } }
+    }
+
+    case 'life.status.read': {
+      // The payloadless read. Anything attached is refused rather than dropped, so
+      // a window cannot accompany "what do you remember" with a status, a
+      // derivation class, a confidence or a date.
+      if (!carriesNothing(payload)) {
+        return { ok: false, reason: LIFE_NO_PAYLOAD }
+      }
+      return { ok: true }
+    }
+
+    case 'life.timeline.read': {
+      if (payload === undefined || payload === null) return { ok: true }
+      if (record === null) {
+        return { ok: false, reason: 'a timeline read takes a bounded limit and known entry kinds' }
+      }
+      for (const key of Object.keys(record)) {
+        if (key !== 'limit' && key !== 'kinds' && key !== 'includeWithdrawn') {
+          return { ok: false, reason: 'a timeline read takes a bounded limit and known entry kinds' }
+        }
+      }
+      const result: Record<string, unknown> = {}
+      const limit = record.limit
+      if (limit !== undefined) {
+        if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 0 || limit > LIFE_TIMELINE_LIMIT) {
+          return { ok: false, reason: 'the timeline limit is invalid' }
+        }
+        result.limit = limit
+      }
+      const kinds = record.kinds
+      if (kinds !== undefined) {
+        if (!Array.isArray(kinds) || kinds.length > 8) {
+          return { ok: false, reason: 'the timeline kinds are invalid' }
+        }
+        const accepted = new Set(['episode', 'milestone', 'period', 'theme'])
+        for (const kind of kinds) {
+          if (typeof kind !== 'string' || !accepted.has(kind)) {
+            return { ok: false, reason: 'the timeline kinds are invalid' }
+          }
+        }
+        result.kinds = [...kinds]
+      }
+      const includeWithdrawn = record.includeWithdrawn
+      if (includeWithdrawn !== undefined) {
+        if (typeof includeWithdrawn !== 'boolean') {
+          return { ok: false, reason: 'the timeline withdrawal flag is invalid' }
+        }
+        result.includeWithdrawn = includeWithdrawn
+      }
+      return { ok: true, payload: result }
+    }
+
+    case 'life.entry.read': {
+      // One id. The one route to an entry's own text, and it carries nothing else:
+      // no confidence, no derivation class, no body.
+      const entryId = string('entryId', MAX_ID_CHARS)
+      if (entryId === null || entryId === undefined) {
+        return { ok: false, reason: 'an entry read needs the entry id' }
+      }
+      return { ok: true, payload: { entryId } }
     }
 
     case 'voice.capture.end': {

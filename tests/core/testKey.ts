@@ -25,3 +25,14 @@ export function testConversationKey(seed = 'freya-test-conversation-key'): Uint8
 export function testBrainKey(seed = 'freya-test-brain-key'): Uint8Array {
   return new Uint8Array(createHash('sha256').update(seed, 'utf8').digest())
 }
+
+/**
+ * A deterministic **Vault** key for tests.
+ *
+ * A separate seed again: the canonical Vault has one key, and a test that reused a
+ * per-domain key would fail to notice the Vault had collapsed the key boundary. The
+ * bytes are a digest of a published sentence, never a production secret.
+ */
+export function testVaultKey(seed = 'freya-test-vault-key'): Uint8Array {
+  return new Uint8Array(createHash('sha256').update(seed, 'utf8').digest())
+}

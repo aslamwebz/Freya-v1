@@ -44,6 +44,7 @@ import type { CoreCommandName, MissionCommandOutcomeView } from './protocol/core
 import type { MissionStore } from './missions/store'
 import { EncryptedMissionStore } from './missions/encrypted-store'
 import { MemoryMissionStore } from './missions/memory-store'
+import { Vault, VaultMissionStore, type VaultBinding, type VaultKeyProvider } from './vault'
 import { WorkEngine, type WorkCommandOutcome } from './work/engine'
 import { ABSENT_WORK_PROJECTION, type WorkProjection } from './work/projection'
 import {
@@ -357,6 +358,25 @@ export interface CoreOptions {
   personalityLimits?: { maxRelationshipItems?: number }
   /** Overrides the Mission content store wholesale. For tests. */
   missionStore?: MissionStore
+  /**
+   * The canonical encrypted Vault, opt-in for the bounded first migration slice.
+   *
+   * When supplied, Core opens the one SQLCipher database at `path` with the key the
+   * injected `keyProvider` returns, and Mission content lives there instead of in
+   * the bespoke per-domain file. The production key provider (Windows DPAPI / OS
+   * keyring) is wired in the main process, never here; this seam exists so the
+   * foundation can be exercised end to end with a repository-local key.
+   *
+   * A Vault that cannot be opened is **fail-closed**: Missions fall back to an
+   * explicitly ephemeral store that says so, never to a different durable store and
+   * never to plaintext. The `Core` interface exposes no Vault handle, path or key.
+   */
+  vault?: {
+    path: string
+    keyProvider: VaultKeyProvider
+    /** The selected SQLCipher-capable binding, injected by the host. */
+    binding?: VaultBinding
+  }
   /**
    * Narrowed Workforce ceilings. Can only *lower* the code-owned limits.
    *
@@ -869,6 +889,12 @@ class FreyaCore implements Core {
    */
   private workEngine: WorkEngine | undefined
   private missionEngine: MissionEngine | undefined
+  /**
+   * The canonical encrypted Vault, or null when the host supplied none or it could
+   * not be opened. Held privately so that Mission content has one owner of the
+   * connection; nothing on the `Core` interface can reach it.
+   */
+  private vault: Vault | null = null
   /**
    * The Workforce engine, or undefined before it is built.
    *
@@ -1637,6 +1663,11 @@ class FreyaCore implements Core {
       // into a closed journal. Closing after Work is deliberate: the Mission may want
       // to consult a Run that Work has just finished recording.
       await this.missionEngine?.close()
+      // The Vault owns the Mission store's connection, so it closes after the engine
+      // has flushed. Closing it here keeps the one encrypted database's lifetime
+      // inside Core's own.
+      this.vault?.close()
+      this.vault = null
       // Workforce closes after Missions and Work for the same ordering reason: a
       // reconciliation that had not finished would otherwise try to append into a
       // journal that is already closed, producing a failure *for having failed to
@@ -4998,6 +5029,29 @@ class FreyaCore implements Core {
    */
   private async buildMissionStore(): Promise<MissionStore> {
     if (this.options.missionStore) return this.options.missionStore
+    // The bounded first migration slice: when a Vault is configured, Mission content
+    // lives in the one encrypted SQLCipher database. There is no dual write — the
+    // bespoke per-domain file is not opened at all on this path.
+    if (this.options.vault) {
+      try {
+        this.vault = await Vault.open({
+          path: this.options.vault.path,
+          keyProvider: this.options.vault.keyProvider,
+          ...(this.options.vault.binding ? { binding: this.options.vault.binding } : {}),
+          ...(this.options.now ? { now: this.options.now } : {}),
+        })
+        return new VaultMissionStore(this.vault)
+      } catch (error) {
+        // Fail closed: an unavailable Vault yields an explicitly ephemeral Mission
+        // store, never a different durable store and never plaintext.
+        this.vault = null
+        console.error('[freya.core] encrypted Vault unavailable', describe(error))
+        return new MemoryMissionStore({
+          faultReason:
+            'Mission content is held in memory only: the encrypted Vault could not be opened',
+        })
+      }
+    }
     if (this.options.missionKey) {
       const path = `${this.options.dataPath}.missions`
       try {

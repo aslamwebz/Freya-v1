@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'
 import { join } from 'node:path'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
-import { ElectronCoreHost } from './coreHost'
+import { ElectronCoreHost, type HostEnv } from './coreHost'
 import { loadKeyring } from './keyring'
 import { ProviderConfigStore } from './providerConfig'
 import { createFreyaVaultBinding } from './vaultBinding'
@@ -239,15 +239,41 @@ function requireProviderConfig(): ProviderConfigStore {
 }
 
 /**
+ * The host environment, rebuilt from the current process environment.
+ *
+ * This is the same named set of values main hands to `new ElectronCoreHost` at
+ * startup, and it is the only shape that may be given to `restartWithEnv`. It
+ * reads `process.env` at call time, so the provider store must have been applied
+ * first. Nothing here is returned to a renderer: these are main-process values,
+ * and the credential among them never crosses the bridge.
+ */
+function currentHostEnv(): HostEnv {
+  return {
+    NANOGPT_API_KEY: process.env.NANOGPT_API_KEY,
+    NANOGPT_BASE_URL: process.env.NANOGPT_BASE_URL,
+    NANOGPT_MODEL: process.env.NANOGPT_MODEL,
+    FREYA_ALLOW_LIVE_MODEL: process.env.FREYA_ALLOW_LIVE_MODEL,
+    BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY,
+    FREYA_ALLOW_WEB_SEARCH: process.env.FREYA_ALLOW_WEB_SEARCH,
+    FREYA_E2E: process.env.FREYA_E2E,
+    FREYA_E2E_RESEARCH: process.env.FREYA_E2E_RESEARCH,
+  }
+}
+
+/**
  * Re-read the provider environment into Core after a settings save.
  *
- * Task 3 owns the store and its bridge; Task 4 owns rebuilding the running Core's
- * provider from the new environment. This is the call site Task 4 fills. It is a
- * no-op today so the save path compiles and stays honest about what it does not
- * yet do — it must never *invent* a reconfigured provider it did not make.
+ * A provider credential and model are read by Core at construction, so a saved
+ * setting only takes effect if the running Core is rebuilt. The stored config is
+ * overlaid onto `process.env` first (the same call the write handler already
+ * makes), then the host env is rebuilt and Core is restarted from it. This is
+ * main-process only: no renderer can name the env or ask for a rebuild, and the
+ * key never leaves this process.
  */
-function reEnvCore(): void {
-  // TODO(Task 4): reconstruct Core's provider from the freshly applied env.
+async function reEnvCore(): Promise<void> {
+  if (!providerStore) return
+  await providerStore.applyToEnv(process.env)
+  await coreHost?.restartWithEnv(currentHostEnv())
 }
 
 /**
@@ -624,8 +650,7 @@ function registerIpc(): void {
   ipcMain.handle('freya:provider:read', () => requireProviderConfig().read())
   ipcMain.handle('freya:provider:write', async (_event, input: ProviderConfigInput) => {
     const saved = await requireProviderConfig().write(input)
-    await requireProviderConfig().applyToEnv(process.env)
-    reEnvCore()
+    await reEnvCore()
     return saved
   })
 

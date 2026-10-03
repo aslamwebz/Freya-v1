@@ -537,9 +537,28 @@ export class ElectronCoreHost implements CoreHost {
 
   constructor(
     private readonly dataPath: string,
-    private readonly env: HostEnv = {},
+    private env: HostEnv = {},
     private readonly options: CoreHostOptions = {},
   ) {}
+
+  /**
+   * Stop the running Core, swap the environment it is built from, and start again.
+   *
+   * Used when the provider configuration changes: the credential and the model
+   * live in the environment Core reads at construction, so a live rebuild is the
+   * only way a saved setting takes effect without a relaunch. The window set is
+   * deliberately *not* cleared — unlike `stop()`, this is a Core swap, not a host
+   * teardown, and every attached renderer must keep receiving status from the
+   * replacement Core without re-attaching. The env is main-process memory only;
+   * no renderer can name or supply it.
+   */
+  async restartWithEnv(env: HostEnv): Promise<void> {
+    const core = this.core
+    this.core = null
+    if (core) await core.stop('provider configuration changed')
+    this.env = env
+    await this.start()
+  }
 
   async start(): Promise<void> {
     if (this.core) return

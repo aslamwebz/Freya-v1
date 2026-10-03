@@ -3,25 +3,19 @@
   position: relative;
   display: flex; flex-direction: column; gap: .7rem;
   padding: .95rem 1.05rem 1.05rem;
-  border-radius: 20px;
-  border: 1px solid color-mix(in srgb, var(--f-glass-edge) 42%, transparent);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--f-ink) 5%, transparent), transparent 24%), var(--f-glass);
-  backdrop-filter: blur(22px) saturate(150%);
-  box-shadow:
-    var(--f-shadow),
-    inset 0 1px 0 color-mix(in srgb, var(--f-ink) 12%, transparent),
-    inset 0 -1px 0 color-mix(in srgb, #000 45%, transparent);
+  border-radius: 18px;
+  background: var(--f-glass);
+  backdrop-filter: blur(20px) saturate(115%);
+  box-shadow: var(--f-shadow);
   overflow: hidden;
 }
+/* A shining hairline: bright at the top-left corner, fading to an accent glint. */
 .c-card::before {
-  content: ''; position: absolute; inset: 0 0 auto 0; height: 1px;
-  background: linear-gradient(90deg, transparent, var(--f-glass-edge), transparent);
-  opacity: .8;
-}
-/* The bent-glass sheen: a soft highlight curving across the top. */
-.c-card::after {
-  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  background: radial-gradient(130% 55% at 50% -8%, color-mix(in srgb, var(--f-glass-edge) 26%, transparent), transparent 62%);
+  content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--f-glass-edge) 95%, transparent), transparent 42%, transparent 62%, color-mix(in srgb, var(--f-action) 42%, transparent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  pointer-events: none;
 }
 .c-head { display: flex; align-items: center; gap: .6rem; }
 .c-icon {

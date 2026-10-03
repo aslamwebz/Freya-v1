@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { uiMode, type UiAdapter } from '../ui-v2/state/contract'
+import { type UiAdapter } from '../ui-v2/state/contract'
 import { useUiState } from '../ui-v2/state/useUiState'
 import { THEMES, type PreferencesStore } from '../ui-v2/theme/preferences'
 import { Button, Field } from '../ui-v2/primitives/Controls'
@@ -15,6 +15,7 @@ import { Mind } from './screens/Mind'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
+import { ChatPanel } from './chat/ChatPanel'
 import portrait from '../ui-v2/assets/freya-portrait.webp'
 
 /**
@@ -69,10 +70,10 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
   const settings = useSyncExternalStore(preferences.subscribe, preferences.getSnapshot, preferences.getSnapshot)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   const snapshot = useUiState(adapter)
-  const preview = uiMode(snapshot) === 'preview'
 
   const [screen, setScreen] = useState('home')
   const [collapsed, setCollapsed] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
   const [quote, setQuote] = useState(0)
   const [draft, setDraft] = useState('')
   const [intent, setIntent] = useState('Think')
@@ -83,8 +84,8 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
   const generating = conversation?.activeTurn != null
 
   useEffect(() => {
-    if (!preview) void ensureConversationAttached()
-  }, [preview])
+    void ensureConversationAttached()
+  }, [])
 
   useEffect(() => {
     const timer = window.setInterval(() => setQuote((value) => (value + 1) % QUOTES.length), 9000)
@@ -112,12 +113,13 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
   const send = () => {
     const text = draft
     if (!text.trim()) return
-    if (preview) {
-      setNotice('Preview only. Your message has not been sent.')
+    if (hostBridge() === null) {
+      setNotice('This window cannot reach Freya Core.')
       return
     }
     setDraft('')
     setNotice('')
+    setChatOpen(true)
     void sendMessage(mirror, conversation?.activeConversationId ?? null, text).then((result) => {
       setNotice(result.ok ? '' : result.notice)
     })
@@ -129,9 +131,9 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
       <div className="a-atmos" aria-hidden="true"><span className="a-stars" /></div>
 
       <aside className="a-rail">
-        <a className="a-mark" href="#a-main" aria-label="Freya Home" onClick={() => setScreen('home')}>
-          <span className="a-orbit" aria-hidden="true" />
-        </a>
+        <Button className="a-rail-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={() => setCollapsed((value) => !value)}>
+          <Glyph name="arrow" size={16} style={{ transform: collapsed ? 'rotate(180deg)' : 'none' }} />
+        </Button>
         <nav aria-label="Freya">
           {RAIL.map((item) => (
             <Button key={item.id} className="a-rail-item" aria-label={item.label} aria-current={current.id === item.id ? 'page' : undefined} onClick={() => setScreen(item.id)}>
@@ -140,14 +142,14 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
           ))}
         </nav>
         <div className="a-online"><span className="a-dot" /><b>Freya Online</b><small>Phase 19 · Build 19.0.1</small></div>
-        <Button className="a-rail-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={() => setCollapsed((value) => !value)}>
-          <Glyph name="arrow" size={16} style={{ transform: collapsed ? 'rotate(180deg)' : 'none' }} /><span>Collapse</span>
-        </Button>
       </aside>
 
       <header className="a-head">
-        <div className="a-brand"><b>FREYA</b><i>|</i><span>PHASE 19</span>
-          <small>A persistent intelligence for a brighter tomorrow</small></div>
+        <div className="a-head-left">
+          <a className="a-mark" href="#a-main" aria-label="Freya Home" onClick={() => setScreen('home')}><span className="a-orbit" aria-hidden="true" /></a>
+          <div className="a-brand"><b>FREYA</b><i>|</i><span>PHASE 19</span>
+            <small>A persistent intelligence for a brighter tomorrow</small></div>
+        </div>
         <div className="a-head-right">
           <div className="a-look" role="group" aria-label="Look">
             <Button aria-pressed={settings.theme === 'abyss'} onClick={() => preferences.update({ theme: 'abyss' })}>Home</Button>
@@ -156,6 +158,7 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
           <blockquote><span>{QUOTES[quote]![0]}</span><em>{QUOTES[quote]![1]}</em></blockquote>
           <Clock />
           <Button className="a-theme" aria-label="Change theme" onClick={cycleTheme}><Glyph name="settings" /></Button>
+          <Button className="a-theme" aria-label="Chat" onClick={() => setChatOpen(true)}><Glyph name="chat" /></Button>
           <div className="a-win" role="group" aria-label="Window">
             <Button className="a-win-btn" aria-label="Minimize" onClick={() => void hostBridge()?.windowMinimize()}><Glyph name="win-min" size={16} /></Button>
             <Button className="a-win-btn" aria-label="Maximize" onClick={() => void hostBridge()?.windowMaximize()}><Glyph name="win-max" size={16} /></Button>
@@ -205,6 +208,7 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
           <span>{design.form}</span>
         </div>
       ) : null}
+      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
       <DressingTable store={dressing} />
     </div>
   )

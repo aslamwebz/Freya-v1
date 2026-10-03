@@ -8,6 +8,7 @@ import type { UiAdapter } from '../ui-v2/state/contract'
 import '../ui-v2/theme/tokens.css'
 import '../ui-v2/primitives/controls.css'
 import './cards/cards.css'
+import './chat/chat.css'
 import './dressing/dressing.css'
 import './app.css'
 

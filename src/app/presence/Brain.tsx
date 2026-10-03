@@ -162,8 +162,21 @@ function build(
     g.setAttribute('position', new THREE.Float32BufferAttribute(points, 3))
     return new THREE.Line(g, lineMat(color, opacity))
   }
+  const circle = (radius: number, color: ThreeTypes.Color, opacity: number) => {
+    const points: number[] = []
+    for (let i = 0; i <= 128; i += 1) {
+      const a = (i / 128) * Math.PI * 2
+      points.push(Math.cos(a) * radius, Math.sin(a) * radius, 0)
+    }
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.Float32BufferAttribute(points, 3))
+    return new THREE.Line(g, lineMat(color, opacity))
+  }
 
   ringGroup.add(tickRing(1.55, 150, 0.045, intelligenceColor, 0.5))
+  // Glass features: a bright rim and a soft sheen, so the centre reads as glass.
+  ringGroup.add(circle(1.04, intelligenceColor, 0.3))
+  ringGroup.add(arc(1.09, 1.85, 0.75, cognitionColor, 0.55))
   if (rings) {
     ringGroup.add(arc(1.8, 0.2, 1.4, cognitionColor, 0.7))
     ringGroup.add(arc(1.8, 2.4, 0.9, cognitionColor, 0.5))

@@ -110,7 +110,7 @@
 .a-col { display: flex; flex-direction: column; gap: var(--a-gap); overflow-y: auto; padding-right: .2rem; }
 .a-col-left { grid-column: 1; grid-row: 1; }
 .a-col-right { grid-column: 3; grid-row: 1 / span 2; }
-.a-bottom { grid-column: 1 / 3; grid-row: 2; display: grid; grid-template-columns: 1fr 1fr; gap: var(--a-gap); align-content: start; }
+.a-bottom { grid-column: 1 / 3; grid-row: 2; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--a-gap); align-content: start; }
 
 /* The constant centre. Fixed size, its own stacking, never reflowed. */
 .a-centre { position: relative; display: grid; align-content: center; justify-items: center; gap: .8rem; min-width: 0; }

@@ -11,6 +11,7 @@ import { sendMessage } from '../ui-v2/chat/sendMessage'
 import { Brain } from './presence/Brain'
 import { brainState } from './presence/state'
 import { Home, type ScreenSlots } from './screens/Home'
+import { Mind } from './screens/Mind'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
@@ -57,6 +58,13 @@ const QUOTES = [
   ['From possibility', 'to capability.'],
 ] as const
 
+/** The arc labels around the centre differ per screen, as the renders show. */
+const ARC_LABELS: Record<string, readonly [string, string, string, string, string]> = {
+  home: ['UNDERSTAND', 'PLAN', 'CREATE', 'REMEMBER', 'ACT'],
+  mind: ['LISTEN', 'UNDERSTAND', 'SYNTHESIZE', 'REMEMBER', 'GUIDE'],
+}
+const DEFAULT_ARC = ['UNDERSTAND', 'PLAN', 'CREATE', 'REMEMBER', 'ACT'] as const
+
 export function App({ preferences, dressing, adapter }: { preferences: PreferencesStore; dressing: DressingStore; adapter: UiAdapter }) {
   const settings = useSyncExternalStore(preferences.subscribe, preferences.getSnapshot, preferences.getSnapshot)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
@@ -84,6 +92,7 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
   }, [])
 
   const current = RAIL.find((item) => item.id === screen) ?? RAIL[0]!
+  const arc = ARC_LABELS[current.id] ?? DEFAULT_ARC
   const core = snapshot.core.status === 'ready' || snapshot.core.status === 'stale' ? snapshot.core.data : null
   const workforce = snapshot.workforce.status === 'ready' || snapshot.workforce.status === 'stale' ? snapshot.workforce.data : null
   const cognition = brainState({
@@ -95,7 +104,9 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
   const themeIndex = THEMES.indexOf(settings.theme)
   const slots: ScreenSlots = current.id === 'home'
     ? Home({ snapshot })
-    : placeholder(current.label, current.symbol, 'This screen is next in the build.')
+    : current.id === 'mind'
+      ? Mind()
+      : placeholder(current.label, current.symbol, 'This screen is next in the build.')
   const cycleTheme = () => preferences.update({ theme: THEMES[(themeIndex + 1) % THEMES.length]! })
 
   const send = () => {
@@ -163,11 +174,11 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
           <div className="a-centre-stage" data-screen={current.id}>
             <Brain state={cognition} motif={design.centre} variant={design.style} rings={design.rings === 'on'} />
             <div className="a-centre-labels" aria-hidden="true">
-              <span className="a-cl a-cl-top">UNDERSTAND</span>
-              <span className="a-cl a-cl-left">PLAN</span>
-              <span className="a-cl a-cl-right">CREATE</span>
-              <span className="a-cl a-cl-bl">REMEMBER</span>
-              <span className="a-cl a-cl-br">ACT</span>
+              <span className="a-cl a-cl-top">{arc[0]}</span>
+              <span className="a-cl a-cl-left">{arc[1]}</span>
+              <span className="a-cl a-cl-right">{arc[2]}</span>
+              <span className="a-cl a-cl-bl">{arc[3]}</span>
+              <span className="a-cl a-cl-br">{arc[4]}</span>
             </div>
           </div>
           <div className="a-centre-caption"><b>FREYA</b><span>PHASE 19</span><small>SAME MIND. A BRIGHTER TOMORROW.</small></div>

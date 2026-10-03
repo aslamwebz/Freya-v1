@@ -16,6 +16,7 @@ import type { AttentionCommandOutcome } from './attention'
 import type { FoundryCommandOutcome } from './foundry'
 import type { RelayCommandOutcome } from './relay'
 import type { SkillCommandOutcome } from './skills'
+import type { LifeCommandOutcome } from './life'
 
 /* ------------------------------------------------------------ identity */
 
@@ -114,6 +115,14 @@ export const CAPABILITIES = [
   'skill.status.read',
   'skill.manage',
 
+  // Life History — Phase 21.
+  //
+  // One read capability, and it is the owner's: what Freya remembers of her own
+  // life is hers. There is no `life.manage` capability because recording,
+  // revising, consolidating and withdrawing are not window commands at all —
+  // they are Core-internal acts the owner scope performs, and no capability
+  // string can reach them. A worker holds none of these.
+  'life.status.read',
 
   // Foundry — Phase 15.
   //
@@ -490,6 +499,22 @@ export type CoreCommandName =
   | 'mission.cancel'
   | 'mission.fail'
   | 'mission.requestCompletion'
+  /* -------------------------------------------------------------- life */
+  /**
+   * Phase 21. Three reads and nothing else.
+   *
+   * `life.status.read` is a payloadless read of the projection. `life.timeline.read`
+   * is a bounded, filtered chronological read. `life.entry.read` is the explicit
+   * single-id read of one entry's own text — the only route to an entry body.
+   *
+   * There is deliberately no `life.record`, `life.revise`, `life.withdraw`,
+   * `life.consolidate`, `life.confidence.set` or `life.promote` here: those are
+   * Core-internal acts the owner scope performs, and a window has no name for any
+   * of them. A window reaching for one finds `unknown command`.
+   */
+  | 'life.status.read'
+  | 'life.timeline.read'
+  | 'life.entry.read'
   /* ------------------------------------------------------------ context */
   /**
    * Phase 9. Context is *held*, not granted.
@@ -792,6 +817,21 @@ export interface CoreCommandResult {
    */
   skill?: SkillCommandOutcome
 
+  /**
+   * The Life History view of a life command's result.
+   *
+   * Its own slot for the same reason every other subsystem's exists: whether Core
+   * answered a life read, or refused it, is a fact about Life History and must
+   * never have to be dug out of a security projection where it would be cached
+   * and copied wherever status is.
+   *
+   * The projection itself arrives on its own channel — see `life.status.read` and
+   * the Life mirror — so this slot carries the *outcome* of one command rather
+   * than a second copy of the history. A refusal lands here with its **closed
+   * code**, so a surface can distinguish "there is no such entry" from "the read
+   * was refused" without parsing a sentence.
+   */
+  life?: LifeCommandOutcome
 
   /** The Foundry outcome for the current command. */
   foundry?: FoundryCommandOutcome

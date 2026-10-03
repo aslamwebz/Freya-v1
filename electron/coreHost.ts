@@ -9,6 +9,7 @@ import type { WorkforceProjection, WorkforceSource } from '../core/protocol/work
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import type { SkillProjection } from '../core/protocol/skills'
+import type { LifeProjection } from '../core/protocol/life'
 import type { FoundryProjection } from '../core/protocol/foundry'
 import type { RelayProjection } from '../core/protocol/relay'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
@@ -353,6 +354,19 @@ export interface CoreHost {
   onSkills(send: (projection: SkillProjection) => void): () => void
   skills(): SkillProjection | null
   /**
+   * Attach to the Life History projection. Returns a disposer.
+   *
+   * Its own channel like every other subsystem's, and the note that matters is
+   * what is *not* here: the host cannot record, revise, consolidate or withdraw
+   * an entry, cannot raise a confidence, cannot set a derivation class and
+   * cannot reach a model. It reads a projection and forwards it. What a window
+   * receives is Core's report — ids, closed labels, dates, statuses, measured
+   * lengths and conflict edges — and this host is a forwarding box, not a
+   * second author of any of it.
+   */
+  onLife(send: (projection: LifeProjection) => void): () => void
+  life(): LifeProjection | null
+  /**
    * Attach to the Office projection. Returns a disposer.
    *
    * Its own channel like every subsystem's, and the note that matters is what
@@ -519,6 +533,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly personalityWindows = new Set<(projection: PersonalityProjection) => void>()
   private readonly attentionWindows = new Set<(projection: AttentionProjection) => void>()
   private readonly skillWindows = new Set<(projection: SkillProjection) => void>()
+  private readonly lifeWindows = new Set<(projection: LifeProjection) => void>()
   private readonly foundryWindows = new Set<(projection: FoundryProjection) => void>()
   private readonly officeWindows = new Set<(projection: OfficeProjection) => void>()
   private readonly relayWindows = new Set<(projection: RelayProjection) => void>()
@@ -608,6 +623,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onOffice((projection) => this.broadcastOffice(projection))
       core.onRelay((projection) => this.broadcastRelay(projection))
       core.onSkills((projection) => this.broadcastSkills(projection))
+      core.onLife((projection) => this.broadcastLife(projection))
       // The Context channel, bound by shape rather than by name: a Core that
       // reports `context()`/`onContext()` is followed and translated into the
       // window's vocabulary, with no edit here and no authority moved into
@@ -814,6 +830,7 @@ export class ElectronCoreHost implements CoreHost {
     this.officeWindows.clear()
     this.relayWindows.clear()
     this.skillWindows.clear()
+    this.lifeWindows.clear()
     this.contextChannel.close()
     await core?.stop(reason)
   }
@@ -1004,6 +1021,33 @@ export class ElectronCoreHost implements CoreHost {
     return this.core?.skills() ?? null
   }
 
+  /**
+   * Attach to the Life History projection, pushed immediately.
+   *
+   * Null before the Core has started, so a host with nothing to report says
+   * nothing rather than manufacturing an empty history — the same rule every
+   * other attach here follows, for the same reason.
+   */
+  onLife(send: (projection: LifeProjection) => void): () => void {
+    this.lifeWindows.add(send)
+    const projection = this.life()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Life History push threw', error)
+        this.lifeWindows.delete(send)
+      }
+    }
+    return () => {
+      this.lifeWindows.delete(send)
+    }
+  }
+
+  life(): LifeProjection | null {
+    return this.core?.life() ?? null
+  }
+
   async attentionTick(): Promise<number> {
     return (await this.core?.attentionTick()) ?? 0
   }
@@ -1074,6 +1118,17 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window Skills push threw', error)
         this.skillWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastLife(projection: LifeProjection): void {
+    for (const send of [...this.lifeWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Life History push threw', error)
+        this.lifeWindows.delete(send)
       }
     }
   }

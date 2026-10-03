@@ -124,6 +124,14 @@ export const CORE_EVENT_TYPES = [
   'brain.experience.recorded',
   'brain.degraded',
 
+  // Life History — metadata only, on the Brain's terms.
+  //
+  // A Life fault is never a security event: it cannot grant cognition or clear a
+  // stop, and it does not lose authority either. It is a statement about a derived
+  // layer, so Core keeps running and the surface says Life is degraded with a
+  // reason. The event carries that reason and nothing else.
+  'life.degraded',
+
   // Personality & Relationship — metadata only, on the Brain's terms.
   //
   // Relationship records are the most personal thing Freya holds: facts about a
@@ -777,6 +785,7 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
    * in the security stream would let a disk error masquerade as a safety posture.
    */
   'brain.degraded': { reason: string }
+  'life.degraded': { reason: string }
 
   // Personality & Relationship. Metadata only, and the exact-key check in
   // `validate.ts` is what keeps it that way: a hand-edited line cannot smuggle a

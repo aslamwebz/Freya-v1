@@ -707,6 +707,7 @@ const PAYLOAD_RULES: {
     (p.turnId === null || isEventId(p.turnId)),
 
   'brain.degraded': (p) => isNonEmptyString(p.reason),
+  'life.degraded': (p) => isNonEmptyString(p.reason),
 
   /* --------------------------------------------------- personality (P11) */
 

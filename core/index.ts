@@ -123,6 +123,17 @@ import {
   isSkillStatus,
   type SkillRecord as SkillRecordShape,
 } from './skills/types'
+import { LifeEngine, type LifeOwnerScope } from './life/engine'
+import { MemoryLifeStore, VaultLifeStore } from './vault/repositories/life-store'
+import type { LifeStore } from './life/store'
+import { isLifeEntryKind, type LifeEntryKind } from './life/types'
+import {
+  ABSENT_LIFE_PROJECTION,
+  LIFE_NO_PAYLOAD,
+  NO_LIFE_DOMAIN_REASON,
+  type LifeProjection,
+  type LifeTimelineView,
+} from './protocol/life'
 import { FoundryEngine } from './foundry/engine'
 import { registerFoundryWorkCapabilities } from './foundry/work'
 import {
@@ -358,6 +369,18 @@ export interface CoreOptions {
   personalityLimits?: { maxRelationshipItems?: number }
   /** Overrides the Mission content store wholesale. For tests. */
   missionStore?: MissionStore
+  /**
+   * Life History's own independent secure key, from the keyring.
+   *
+   * A **separate secret**, not a derivation of any other domain's key: what
+   * Freya remembers of her own life is hers, and recovering another domain's key
+   * must not yield it. Null means Life falls back to an ephemeral store and
+   * reports `durable: false`.
+   *
+   * When a Vault is configured, Life records live in the one encrypted database
+   * instead of a bespoke file, and this key is unused.
+   */
+  lifeKey?: Uint8Array | null
   /**
    * The canonical encrypted Vault, opt-in for the bounded first migration slice.
    *
@@ -717,6 +740,19 @@ export interface Core {
   skills(): SkillProjection
   /** Subscribe to the Skills projection. Same mirror semantics as the others. */
   onSkills(listener: (projection: SkillProjection) => void): () => void
+  /**
+   * Core's account of its own life history: episodes, milestones, periods and
+   * themes as metadata, and whether they survive a restart.
+   *
+   * Read-only, and the shape of the read is the whole policy. An entry's own
+   * summary and body are not fields of the projection: they cross only through
+   * an explicit `life.entry.read` for one entry, to the owner. There is no
+   * method here that records, revises, consolidates or withdraws — every one of
+   * those is an owner-scope act Core handles internally.
+   */
+  life(): LifeProjection
+  /** Subscribe to the Life History projection. Same mirror semantics as the others. */
+  onLife(listener: (projection: LifeProjection) => void): () => void
   readonly lifecycle: CoreLifecycle
 }
 
@@ -803,6 +839,18 @@ class FreyaCore implements Core {
   /** Detaches Core from the Personality source's change channel. Set once, at start. */
   private disposePersonalitySource: () => void = () => {}
   private readonly skillListeners = new Set<(projection: SkillProjection) => void>()
+  private readonly lifeListeners = new Set<(projection: LifeProjection) => void>()
+  /**
+   * The Phase 21 Life History engine, built and owned by Core.
+   *
+   * Built after the Brain because it derives from it and from the journal, and
+   * before the Mind because nothing in the Mind may reach it. It holds the
+   * store, the journal port and the clock, and no gateway, no provider and no
+   * model: its only way to produce an entry is `admitLifeEntry`, which caps
+   * confidence, refuses secret-shaped text and refuses a derived entry with no
+   * evidence.
+   */
+  private lifeEngine: LifeEngine | undefined
   /**
    * Core's own Personality & Relationship integration, built at `start()`.
    *
@@ -1004,6 +1052,23 @@ class FreyaCore implements Core {
     return this.requireSkills().ownerScope(this.owner.id)
   }
 
+  /**
+   * The owner's face of Life History.
+   *
+   * Same shape of decision as `issueSkillOwnerScope`, for the same reason: holding
+   * the object *is* the authority, so there is no capability string a caller could
+   * pass to acquire it, and this method is not on the `Core` interface. It is
+   * reachable from `core/testing.ts` and from inside this module only.
+   *
+   * Recording, consolidation, revision and withdrawal all hang off this one object,
+   * and a *subordinate* scope does not exist: there is no agent route into the Life
+   * lifecycle, because "an agent that can record its own autobiography" is a
+   * self-authored history with a method name instead of a capability string.
+   */
+  issueLifeOwnerScope(): LifeOwnerScope {
+    return this.requireLife().ownerScope()
+  }
+
   async start(): Promise<CoreStatus> {
     if (this.lifecycle !== 'booting') return this.status()
 
@@ -1145,6 +1210,9 @@ class FreyaCore implements Core {
       this.foundryEngine?.replay(event)
       this.recordActivity(event)
       this.observeAttentionSource(event)
+      // Life History derives from authoritative events live. The engine is
+      // idempotent, so a replayed event cannot duplicate an entry.
+      if (!event.type.startsWith('life.')) void this.lifeEngine?.observe(event)
       if (event.type.startsWith('foundry.')) this.publishFoundry()
       this.notify()
     })
@@ -1216,6 +1284,40 @@ class FreyaCore implements Core {
         { actor: 'system' },
       )
     }
+
+    /**
+     * Life History, built after the Brain because it derives from it and from the
+     * journal, and before the Mind because nothing in the Mind may reach it.
+     *
+     * Opening the store is a file read and a key check: no provider call, no
+     * network, no window. `deriveFromJournal` backfills derived entries once,
+     * idempotently, so a restart cannot duplicate history and a crash between an
+     * authoritative event and its derivation is repaired on the next start. It
+     * reads the STOP ALL latch fresh and does no enrichment while it is latched.
+     */
+    this.lifeEngine = new LifeEngine({
+      fabric: this.fabric,
+      store: await this.buildLifeStore(),
+      now: this.options.now,
+      newId: this.options.newId,
+      onChange: () => this.publishLife(),
+      stopped: () => this.state.stopAll.active,
+    })
+    await this.lifeEngine.open()
+    await this.lifeEngine.deriveFromJournal()
+    const lifeHealth = this.lifeEngine.health()
+    if (lifeHealth.health === 'degraded') {
+      this.state = {
+        ...this.state,
+        faults: [...this.state.faults, `Life History is degraded: ${lifeHealth.reason ?? 'unknown reason'}`],
+      }
+      await this.fabric.append(
+        'life.degraded',
+        { reason: lifeHealth.reason ?? 'the Life store is not fully readable' },
+        { actor: 'system' },
+      )
+    }
+
     // Personality is recovered *before* the Mind is built, because the Mind's
     // expression seam is exactly this: a ledger the Mind reads before planning and
     // writes after a turn that actually reached a provider. Building it afterwards
@@ -1654,6 +1756,11 @@ class FreyaCore implements Core {
       // after its own journal event would be a record of something the log says
       // never happened.
       await this.brainService?.close()
+      // Life History closes before the Vault, on the same terms as the Brain: a
+      // record that exists in Core and not in the database is the exact durability
+      // lie this phase refuses to tell, and the projection would have already
+      // claimed `durable: true`.
+      await this.lifeEngine?.close()
       // Work is closed on the same terms, and for the same reason: a capability
       // still executing when the fabric closes would try to record its own outcome
       // into a closed store, producing a failure *for having failed to record*.
@@ -2220,6 +2327,55 @@ class FreyaCore implements Core {
       } catch (error) {
         console.error('[freya.core] Skills listener threw', error)
         this.skillListeners.delete(listener)
+      }
+    }
+  }
+
+  /**
+   * The Life History projection, and its honest readings.
+   *
+   * A Core that has not started reports `unavailable` with
+   * `NO_LIFE_DOMAIN_REASON` — "no history is recorded, and none is simulated" —
+   * rather than an empty history, because the two are different facts. Once
+   * started, the engine is the source of truth and this accessor reads it; there
+   * is no argument here through which a caller could instruct it.
+   */
+  life(): LifeProjection {
+    if (this.lifeEngine === undefined) {
+      return { ...ABSENT_LIFE_PROJECTION, reason: NO_LIFE_DOMAIN_REASON }
+    }
+    try {
+      return this.lifeEngine.projection()
+    } catch (error) {
+      return {
+        ...ABSENT_LIFE_PROJECTION,
+        reason: `the Life History domain could not be read: ${describe(error)}`,
+      }
+    }
+  }
+
+  onLife(listener: (projection: LifeProjection) => void): () => void {
+    this.lifeListeners.add(listener)
+    try {
+      listener(this.life())
+    } catch (error) {
+      console.error('[freya.core] Life History subscriber threw', error)
+      this.lifeListeners.delete(listener)
+    }
+    return () => {
+      this.lifeListeners.delete(listener)
+    }
+  }
+
+  private publishLife(): void {
+    if (this.lifeListeners.size === 0) return
+    const projection = this.life()
+    for (const listener of [...this.lifeListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Life History listener threw', error)
+        this.lifeListeners.delete(listener)
       }
     }
   }
@@ -2940,6 +3096,13 @@ class FreyaCore implements Core {
       throw new Error('the Skill engine is not available')
     }
     return this.skillEngine
+  }
+
+  private requireLife(): LifeEngine {
+    if (this.lifeEngine === undefined) {
+      throw new Error('the Life History engine is not available')
+    }
+    return this.lifeEngine
   }
 
   /**
@@ -4513,6 +4676,110 @@ class FreyaCore implements Core {
           }
         }
 
+        /* --------------------------------------------------------- life */
+
+        case 'life.status.read': {
+          // The payloadless read. Anything attached is refused rather than dropped,
+          // so a window cannot accompany "what do you remember" with a status, a
+          // derivation class, a confidence or a date.
+          if (carriesFields(envelope.payload)) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: LIFE_NO_PAYLOAD },
+              life: { operation: 'refused', ok: false, code: 'malformed-payload', reason: LIFE_NO_PAYLOAD },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            life: { operation: 'status', ok: true, projection: this.life() },
+          }
+        }
+
+        case 'life.timeline.read': {
+          const parsed = readLifeTimelineQuery(envelope.payload)
+          if (parsed === null) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'life.timeline.read accepts only a bounded limit and known entry kinds' },
+              life: {
+                operation: 'refused',
+                ok: false,
+                code: 'malformed-payload',
+                reason: 'life.timeline.read accepts only a bounded limit and known entry kinds',
+              },
+            }
+          }
+          const engine = this.lifeEngine
+          if (engine === undefined) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: NO_LIFE_DOMAIN_REASON },
+              life: { operation: 'refused', ok: false, code: 'no-life-domain', reason: NO_LIFE_DOMAIN_REASON },
+            }
+          }
+          const timeline: LifeTimelineView = engine.timeline(parsed)
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            life: { operation: 'timeline', ok: true, timeline },
+          }
+        }
+
+        case 'life.entry.read': {
+          const entryId = readString(envelope.payload, 'entryId')
+          if (entryId === null) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'life.entry.read needs one entry id' },
+              life: { operation: 'refused', ok: false, code: 'malformed-payload', reason: 'life.entry.read needs one entry id' },
+            }
+          }
+          // The explicit per-entry read is the one route to an entry's own text, so
+          // it is the one Life command Guard evaluates — the owner's own business,
+          // and never a worker's.
+          const decision = this.guard.evaluate(this.owner, 'life.status.read')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'life.status.read', requestId)
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: decision.reason },
+              life: { operation: 'refused', ok: false, code: 'guard-refused', reason: decision.reason },
+            }
+          }
+          const engine = this.lifeEngine
+          if (engine === undefined) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: NO_LIFE_DOMAIN_REASON },
+              life: { operation: 'refused', ok: false, code: 'no-life-domain', reason: NO_LIFE_DOMAIN_REASON },
+            }
+          }
+          const entry = engine.entry(entryId)
+          if (entry === null) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'there is no such Life History entry' },
+              life: { operation: 'refused', ok: false, code: 'unknown-entry', reason: 'there is no such Life History entry' },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            life: { operation: 'entry', ok: true, entry },
+          }
+        }
+
         /* ------------------------------------------------------- workforce */
 
         case 'workforce.status.read': {
@@ -5065,6 +5332,39 @@ class FreyaCore implements Core {
     }
     return new MemoryMissionStore({
       faultReason: 'no secure Mission key is available on this machine',
+    })
+  }
+
+  /**
+   * The Life History store.
+   *
+   * The canonical path is the one encrypted Vault: when a Vault is configured,
+   * Life records live in the one SQLCipher database under `domain = 'life'`,
+   * and there is no bespoke per-domain file and no dual write. When no Vault
+   * is configured, Life falls back to an explicitly ephemeral store that says
+   * so — never to a different durable store, never to plaintext, and never to
+   * a second encrypted file.
+   */
+  private async buildLifeStore(): Promise<LifeStore> {
+    const vault = this.vault
+    if (this.options.vault && vault !== null) {
+      try {
+        const store = new VaultLifeStore(vault)
+        await store.open()
+        return store
+      } catch (error) {
+        console.error('[freya.core] encrypted Vault Life store unavailable', describe(error))
+        return new MemoryLifeStore({
+          mode: 'ephemeral',
+          faultReason: `Life History could not be encrypted: ${describe(error)}`,
+        })
+      }
+    }
+    return new MemoryLifeStore({
+      mode: 'ephemeral',
+      faultReason:
+        'no encrypted Vault is available on this machine, so Freya is keeping her ' +
+        'autobiographical layer in memory only and it will not survive a restart',
     })
   }
 
@@ -5856,6 +6156,43 @@ function relayRefusal(result: { failureCode: RelayFailureCode; reason: string })
     failureCode: result.failureCode,
     reason: result.reason,
   }
+}
+
+/**
+ * Parse a `life.timeline.read` payload.
+ *
+ * A bounded limit, known entry kinds and a withdrawal flag — nothing else. A
+ * field outside this list is refused rather than dropped, so a window still
+ * sending a `status` or a `confidence` is told the read takes none.
+ */
+function readLifeTimelineQuery(
+  payload: unknown,
+): { limit?: number; kinds?: LifeEntryKind[]; includeWithdrawn?: boolean } | null {
+  if (payload === undefined || payload === null) return {}
+  if (typeof payload !== 'object' || Array.isArray(payload)) return null
+  const record = payload as Record<string, unknown>
+  for (const key of Object.keys(record)) {
+    if (key !== 'limit' && key !== 'kinds' && key !== 'includeWithdrawn') return null
+  }
+  const query: { limit?: number; kinds?: LifeEntryKind[]; includeWithdrawn?: boolean } = {}
+  if (record.limit !== undefined) {
+    if (typeof record.limit !== 'number' || !Number.isInteger(record.limit) || record.limit < 0) return null
+    query.limit = record.limit
+  }
+  if (record.kinds !== undefined) {
+    if (!Array.isArray(record.kinds) || record.kinds.length > 8) return null
+    const kinds: LifeEntryKind[] = []
+    for (const kind of record.kinds) {
+      if (!isLifeEntryKind(kind)) return null
+      kinds.push(kind)
+    }
+    query.kinds = kinds
+  }
+  if (record.includeWithdrawn !== undefined) {
+    if (typeof record.includeWithdrawn !== 'boolean') return null
+    query.includeWithdrawn = record.includeWithdrawn
+  }
+  return query
 }
 
 /** The renderer-safe shape of a Mind turn result. */

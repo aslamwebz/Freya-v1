@@ -12,6 +12,9 @@
 
 import {
   PHASE25_CAPABILITY_KINDS,
+  PHASE25_LIMITS,
+  instantMs,
+  isSensesId,
   type CapabilityActionRequest,
   type CapabilityActionResult,
   type CapabilityObservationRecord,
@@ -73,10 +76,21 @@ export function createTestActionRequest(
 /**
  * Run one capability test through the admission pipeline.
  *
- * An admitted action maps to `completed` (there is no executor to fail), a
- * refusal maps to `refused` with its closed code. `failed` is reserved for a
- * future executor and never produced here. `durationMs` is always `0`: a
- * deterministic test has no duration to report.
+ * An admitted action maps to `completed`, a refusal maps to `refused` with its
+ * closed code. `failed` is reserved for a future executor and never produced
+ * here. `durationMs` is always `0`: a deterministic test has no duration to
+ * report.
+ *
+ * ## `completed` here means *admitted*, not *executed*
+ *
+ * The outcome vocabulary overlaps with {@link CapabilityActionResult}'s status
+ * by design, so read it precisely: `completed` says the registry accepted the
+ * action and every gate opened. It does **not** say a browser navigated or a
+ * command ran — this build has no executor, and the admitted action stops at
+ * `pending`. A `CapabilityTestResult` is a verdict about the *registry and the
+ * admission pipeline*; it is never execution evidence, carries no observation
+ * ids and no settle instant, and must not be recorded as an action result or
+ * projected as one.
  */
 export function runCapabilityTest(
   test: CapabilityTestCase,
@@ -154,51 +168,157 @@ export function capabilityMatrix(): readonly CapabilityMatrixRow[] {
 /* ------------------------------------------------------- record factories */
 
 /**
+ * The record factories fail closed.
+ *
+ * These are exported from the domain surface, so they hold the same line as the
+ * admission pipeline: garbage in yields `null` out, never a plausible-looking
+ * record. In particular they never
+ *
+ * - fabricate an instant they were not given,
+ * - report a duration that is `NaN`, infinite, or clamped from a nonsensical
+ *   pair of instants,
+ * - truncate an over-long observation silently, or
+ * - accept an id or status outside its closed vocabulary.
+ *
+ * `null` is the module's own "not known" value (`durationMs`, `settledAt`,
+ * `verdictAt`), so failing closed needs no new vocabulary.
+ */
+
+const RESULT_STATUSES = ['running', 'completed', 'failed', 'cancelled', 'timed_out'] as const
+const OBSERVATION_KINDS = ['result', 'exit', 'change', 'failure', 'input'] as const
+const VERIFICATION_STATUSES = ['requested', 'passed', 'failed'] as const
+
+/** Whether a value is one of a closed string set. */
+function isOneOf<T extends string>(set: readonly T[], value: unknown): value is T {
+  return typeof value === 'string' && (set as readonly string[]).includes(value)
+}
+
+/**
  * Create a bounded action result record.
  *
- * Records what happened; it is not evidence the action worked.
+ * Records what happened; it is not evidence the action worked. Returns `null`
+ * when the inputs cannot produce an honest record:
+ *
+ * - the action id is not a bounded opaque id;
+ * - the status is outside the closed set;
+ * - `startedAt` is not an instant;
+ * - a terminal status carries no valid `settledAt`, or one that precedes the
+ *   start — a negative span is not a zero-length action, so it is refused
+ *   rather than clamped to `0`.
+ *
+ * A `running` action has not settled, so it must arrive with `settledAt: null`
+ * and reports `durationMs: null`.
  */
 export function createActionResult(
   actionId: string,
   status: CapabilityActionResult['status'],
   startedAt: string,
   settledAt: string | null,
-): CapabilityActionResult {
-  return {
+): CapabilityActionResult | null {
+  if (!isSensesId(actionId)) return null
+  if (!isOneOf(RESULT_STATUSES, status)) return null
+  const startedMs = instantMs(startedAt)
+  if (startedMs === null) return null
+
+  if (status === 'running') {
+    if (settledAt !== null) return null
+    return Object.freeze({
+      actionId,
+      status,
+      startedAt,
+      settledAt: null,
+      durationMs: null,
+      reason: null,
+      observationIds: [],
+    })
+  }
+
+  const settledMs = settledAt === null ? null : instantMs(settledAt)
+  if (settledAt === null || settledMs === null) return null
+  const durationMs = settledMs - startedMs
+  if (!Number.isFinite(durationMs) || durationMs < 0) return null
+
+  return Object.freeze({
     actionId,
     status,
     startedAt,
     settledAt,
-    durationMs: settledAt === null ? null : Math.max(0, Date.parse(settledAt) - Date.parse(startedAt)),
+    durationMs,
     reason: null,
     observationIds: [],
-  }
+  })
 }
 
-/** Create a bounded observation record. An observation is not a conclusion. */
+/**
+ * Create a bounded observation record. An observation is not a conclusion.
+ *
+ * Returns `null` when the record would be dishonest or unbounded: a malformed
+ * observation or action id, a `recordedAt` that is not an instant, a `kind`
+ * outside the closed vocabulary, or a `summary` longer than
+ * {@link PHASE25_LIMITS.maxInputBytes}. An over-long summary is refused rather
+ * than truncated, because a silently shortened observation is not the
+ * observation that happened.
+ *
+ * `data` is always empty: this factory attaches no payload, so no private
+ * content can reach a record through it.
+ */
 export function createObservation(
   observationId: string,
   actionId: string,
   kind: CapabilityObservationRecord['kind'],
   summary: string,
   recordedAt: string,
-): CapabilityObservationRecord {
-  return { observationId, actionId, kind, summary, data: {}, recordedAt }
+): CapabilityObservationRecord | null {
+  if (!isSensesId(observationId) || !isSensesId(actionId)) return null
+  if (!isOneOf(OBSERVATION_KINDS, kind)) return null
+  if (typeof summary !== 'string' || summary.length > PHASE25_LIMITS.maxInputBytes) return null
+  if (instantMs(recordedAt) === null) return null
+  return Object.freeze({
+    observationId,
+    actionId,
+    kind,
+    summary,
+    data: {},
+    recordedAt,
+  })
 }
 
-/** Create a verification record. Only this can close an action as verified. */
+/**
+ * Create a bounded verification record. Only this can close an action as verified.
+ *
+ * Returns `null` when the record would be dishonest: a malformed verification or
+ * action id, a status outside the closed vocabulary, a terminal status with no
+ * valid `verdictAt`, or a `requested` status that claims one. The verdict instant
+ * is the caller's to state — this factory never substitutes an instant of its
+ * own, because a stamped verdict time that did not happen is a fabricated
+ * instant.
+ */
 export function createVerification(
   verificationId: string,
   actionId: string,
   status: CapabilityVerificationResult['status'],
-): CapabilityVerificationResult {
-  return {
+  verdictAt: string | null,
+): CapabilityVerificationResult | null {
+  if (!isSensesId(verificationId) || !isSensesId(actionId)) return null
+  if (!isOneOf(VERIFICATION_STATUSES, status)) return null
+  if (status === 'requested') {
+    if (verdictAt !== null) return null
+    return Object.freeze({
+      verificationId,
+      actionId,
+      status,
+      reason: null,
+      verdictAt: null,
+    })
+  }
+  if (verdictAt === null || instantMs(verdictAt) === null) return null
+  return Object.freeze({
     verificationId,
     actionId,
     status,
     reason: null,
-    verdictAt: status === 'requested' ? null : SENSES_TEST_NOW,
-  }
+    verdictAt,
+  })
 }
 
 /** Re-export for callers that validate inputs directly. */

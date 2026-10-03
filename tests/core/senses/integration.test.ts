@@ -58,7 +58,7 @@ describe('integration: action to result', () => {
       'page loaded',
       SENSES_TEST_NOW,
     )
-    const verification = createVerification('ver-1', decision.admitted.actionId, 'passed')
+    const verification = createVerification('ver-1', decision.admitted.actionId, 'passed', SENSES_TEST_NOW)
     const result = createActionResult(
       decision.admitted.actionId,
       'completed',
@@ -66,10 +66,10 @@ describe('integration: action to result', () => {
       SENSES_TEST_NOW,
     )
 
-    expect(observation.kind).toBe('result')
-    expect(verification.status).toBe('passed')
-    expect(result.status).toBe('completed')
-    expect(result.observationIds).toEqual([])
+    expect(observation?.kind).toBe('result')
+    expect(verification?.status).toBe('passed')
+    expect(result?.status).toBe('completed')
+    expect(result?.observationIds).toEqual([])
   })
 
   it('refuses an action with a closed code and no execution fields', () => {
@@ -83,13 +83,13 @@ describe('integration: action to result', () => {
 
   it('records a timed-out result without fabricating a success', () => {
     const result = createActionResult('action-1', 'timed_out', SENSES_TEST_NOW, SENSES_TEST_NOW)
-    expect(result.status).toBe('timed_out')
-    expect(result.settledAt).not.toBeNull()
+    expect(result?.status).toBe('timed_out')
+    expect(result?.settledAt).not.toBeNull()
   })
 
   it('records a cancelled result', () => {
     const result = createActionResult('action-1', 'cancelled', SENSES_TEST_NOW, SENSES_TEST_NOW)
-    expect(result.status).toBe('cancelled')
+    expect(result?.status).toBe('cancelled')
   })
 })
 

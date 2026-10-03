@@ -1,4 +1,4 @@
-import {
+﻿import {
   CORE_EVENT_SCHEMA_VERSION,
   CORE_EVENT_TYPES,
   type AnyCoreEvent,
@@ -26,7 +26,8 @@ function isDeadlineType(value: unknown): boolean {
     value === 'verification' || value === 'approval' || value === 'wait' || value === 'action'
   )
 }
-import { DEFAULT_MISSION_LIMITS } from '../missions/types'
+import { DEFAULT_MISSION_LIMITS, MISSION_REASONS } from '../missions/types'
+import { DEFAULT_GOAL_LIMITS, GOAL_REASONS } from '../longhorizon/types'
 import {
   DEFAULT_WORKER_BUDGET,
   WORKFORCE_LIMITS,
@@ -130,11 +131,11 @@ export interface ValidationFailure {
  *
  * The two cases are genuinely different and must not be reported as one thing:
  *
- * - **torn tail** — the log ends part-way through a line. That is what a crash
+ * - **torn tail** â€” the log ends part-way through a line. That is what a crash
  *   during a write looks like: the bytes after the last complete line were never
  *   committed. The prefix is the whole truth, and recovery is ordinary.
  *
- * - **corruption** — a *complete* line failed validation, or there was more data
+ * - **corruption** â€” a *complete* line failed validation, or there was more data
  *   after the first bad line. A complete line that is wrong is not a crash. It
  *   means the journal contains something that was never written by this code, or
  *   was edited, or arrived out of order.
@@ -240,7 +241,7 @@ function isNullableRef(value: unknown): value is string | null {
  * Three of the loop's seventeen events describe something that happened to the loop
  * rather than to a wake: a restart, the owner taking precedence, the owner clearing a
  * stop. Those are exactly the events where there is no wake to name, and the
- * alternative — requiring a non-empty id — would mean inventing one.
+ * alternative â€” requiring a non-empty id â€” would mean inventing one.
  *
  * An empty string therefore means "no wake was held", and it is the honest encoding:
  * a lifecycle entry that carried a fabricated wake id would put an invented
@@ -272,7 +273,7 @@ function isNullablePositiveInt(value: unknown): value is number | null {
  * a validation rule starts disagreeing with itself.
  *
  * `userMessageId` and `assistantMessageId` are nullable because a denied turn has
- * no stored message and an interrupted turn has no answer — and a schema that
+ * no stored message and an interrupted turn has no answer â€” and a schema that
  * pretended otherwise would push a fabrication into the audit.
  */
 const CONVERSATION_TURN = (p: Record<string, unknown>): boolean =>
@@ -483,6 +484,34 @@ const MISSION_STATUS_SET: ReadonlySet<string> = new Set([
   'cancelled',
 ])
 
+/** Closed reason codes. A goal event cannot carry free text as a reason. */
+const GOAL_REASON_CODES: ReadonlySet<string> = new Set([
+  'owner',
+  'verification_passed',
+  'verification_not_established',
+  'verification_timeout',
+  'deadline_expired',
+  'retry_ceiling_reached',
+  'hard_blocker',
+  'stop_all',
+  'budget_exhausted',
+  'dependency_unmet',
+  'dependency_met',
+  'recovery',
+  'shutdown',
+  'restart_interrupted',
+  'preempted',
+])
+
+const GOAL_STATE_SET: ReadonlySet<string> = new Set([
+  'draft',
+  'active',
+  'paused',
+  'completed',
+  'failed',
+  'cancelled',
+])
+
 /** The name/applicability slug shape, checked identically everywhere. */
 const SKILL_SLUG = /^[a-z0-9][a-z0-9-]*$/
 
@@ -656,7 +685,7 @@ const PAYLOAD_RULES: {
     isNonEmptyString(p.reason),
   // `providerContacted` is checked as a boolean rather than left to a default,
   // because a cancellation with an unknown contact is a cancellation whose
-  // accounting cannot be trusted — and refusing to read the line is the
+  // accounting cannot be trusted â€” and refusing to read the line is the
   // fail-closed answer to that.
   'model.request.cancelled': (p) =>
     isEventId(p.requestId) &&
@@ -670,7 +699,7 @@ const PAYLOAD_RULES: {
     isEventId(p.conversationId) && isNonNegativeInt(p.titleLength),
 
   // One rule for all six turn outcomes, applied to each. A conversation event is
-  // metadata, and this is the list of what "metadata" is allowed to mean — a
+  // metadata, and this is the list of what "metadata" is allowed to mean â€” a
   // hand-edited line cannot smuggle a field the schema does not name, because the
   // rule reads named fields rather than passing the object through.
   'conversation.turn.started': CONVERSATION_TURN,
@@ -697,7 +726,7 @@ const PAYLOAD_RULES: {
 
   // Metadata only, and the rules below are the list of what that means. They read
   // named fields rather than passing the object through, so a hand-edited line
-  // cannot smuggle a field the schema does not name — which for the Brain is the
+  // cannot smuggle a field the schema does not name â€” which for the Brain is the
   // difference between a journal that measures what was learned and one that
   // quietly starts retaining it.
   'brain.seeded': (p) =>
@@ -843,7 +872,7 @@ const PAYLOAD_RULES: {
   /* ----------------------------------------------------------------- work */
 
   // Metadata only. The rules below are the list of what that means for Work, and
-  // they read named fields rather than passing the object through — so a
+  // they read named fields rather than passing the object through â€” so a
   // hand-edited line cannot smuggle in a field the schema does not name, which for
   // Work is the difference between a journal that *measures* what happened and one
   // that quietly starts retaining what every capability returned.
@@ -1172,6 +1201,114 @@ const PAYLOAD_RULES: {
       (p.limit === 'maxChildRuns' || p.limit === 'maxConcurrentChildRuns' || p.limit === 'lifetimeMs'),
   ),
 
+  /* --------------------------------------------------------- long-horizon */
+
+  // The strictest family in the journal after Mission, and for the same reason: a
+  // goal holds what a person is trying to achieve. So every rule below reads named
+  // fields *and* checks the key set exactly, which means a hand-edited line cannot
+  // attach a title, a description or a completion criterion â€” there is no spelling of
+  // these payloads that carries content.
+  'longhorizon.goal.created': workRule(
+    ['goalId', 'state', 'createdAt', 'deadlineAt', 'dependencies', 'limits'],
+    (p) =>
+      isEventId(p.goalId) &&
+      p.state === 'draft' &&
+      isInstant(p.createdAt) &&
+      isInstant(p.deadlineAt) &&
+      isIdList(p.dependencies) &&
+      isGoalLimits(p.limits),
+  ),
+
+  'longhorizon.goal.state-changed': workRule(
+    ['goalId', 'from', 'to', 'reason'],
+    (p) =>
+      isEventId(p.goalId) &&
+      GOAL_STATE_SET.has(p.from as string) &&
+      GOAL_STATE_SET.has(p.to as string) &&
+      (p.reason === null || GOAL_REASON_CODES.has(p.reason as string)),
+  ),
+
+  'longhorizon.goal.completed': workRule(
+    ['goalId', 'verifierId'],
+    (p) => isEventId(p.goalId) && isEventId(p.verifierId),
+  ),
+
+  'longhorizon.goal.failed': workRule(
+    ['goalId', 'reason'],
+    (p) => isEventId(p.goalId) && (p.reason === null || GOAL_REASON_CODES.has(p.reason as string)),
+  ),
+
+  'longhorizon.goal.cancelled': workRule(
+    ['goalId', 'reason'],
+    (p) => isEventId(p.goalId) && (p.reason === null || GOAL_REASON_CODES.has(p.reason as string)),
+  ),
+
+  'longhorizon.checkpoint.started': workRule(
+    ['goalId', 'checkpointId', 'order', 'kind'],
+    (p) =>
+      isEventId(p.goalId) &&
+      isEventId(p.checkpointId) &&
+      isNonNegativeInt(p.order) &&
+      isNonEmptyString(p.kind),
+  ),
+
+  'longhorizon.checkpoint.verified': workRule(
+    ['goalId', 'checkpointId', 'outcome', 'reason'],
+    (p) =>
+      isEventId(p.goalId) &&
+      isEventId(p.checkpointId) &&
+      (p.outcome === 'passed' ||
+        p.outcome === 'not_established' ||
+        p.outcome === 'timeout' ||
+        p.outcome === 'cancelled') &&
+      (p.reason === null || GOAL_REASON_CODES.has(p.reason as string)),
+  ),
+
+  'longhorizon.checkpoint.failed': workRule(
+    ['goalId', 'checkpointId', 'reason', 'attempts'],
+    (p) =>
+      isEventId(p.goalId) &&
+      isEventId(p.checkpointId) &&
+      GOAL_REASON_CODES.has(p.reason as string) &&
+      isPositiveInt(p.attempts),
+  ),
+
+  'longhorizon.continuation.decided': workRule(
+    ['goalId', 'decision', 'reason'],
+    (p) =>
+      isEventId(p.goalId) &&
+      (p.decision === 'continue' ||
+        p.decision === 'pause' ||
+        p.decision === 'complete' ||
+        p.decision === 'fail' ||
+        p.decision === 'wait') &&
+      isNonEmptyString(p.reason),
+  ),
+
+  'longhorizon.schedule.fired': workRule(
+    ['scheduleId', 'goalId', 'wakeId'],
+    (p) => isEventId(p.scheduleId) && isEventId(p.goalId) && isEventId(p.wakeId),
+  ),
+
+  'longhorizon.schedule.expired': workRule(
+    ['scheduleId', 'goalId', 'reason'],
+    (p) => isEventId(p.scheduleId) && isEventId(p.goalId) && isNonEmptyString(p.reason),
+  ),
+
+  'longhorizon.wake.received': workRule(
+    ['wakeId', 'source', 'goalId'],
+    (p) => isEventId(p.wakeId) && isNonEmptyString(p.source) && (p.goalId === null || isEventId(p.goalId)),
+  ),
+
+  'longhorizon.wake.denied': workRule(
+    ['wakeId', 'source', 'goalId', 'reason'],
+    (p) =>
+      isEventId(p.wakeId) &&
+      isNonEmptyString(p.source) &&
+      (p.goalId === null || isEventId(p.goalId)) &&
+      isNonEmptyString(p.reason),
+  ),
+
   /* ------------------------------------------------------------- workforce */
 
   // The strictest family in the journal, and the one with the most to lose.
@@ -1179,7 +1316,7 @@ const PAYLOAD_RULES: {
   // A workforce event describes who Freya's subordinates are and what they were
   // allowed to attempt. So every rule below reads named fields *and* checks the key
   // set exactly, which means a hand-edited line cannot attach a message body, a
-  // context item, a grant, a trust flag or a `decision: 'granted'` — there is no
+  // context item, a grant, a trust flag or a `decision: 'granted'` â€” there is no
   // spelling of these payloads that carries authority.
   'workforce.worker.created': workRule(
     ['workerId', 'name', 'specialisation', 'status', 'createdAt', 'budget'],
@@ -1428,8 +1565,8 @@ const PAYLOAD_RULES: {
    *
    * The closed-vocabulary check is therefore mandatory rather than advisory: an
    * entry carrying a key outside `LIFE_LOOP_PAYLOAD_KEYS`, or a key in
-   * `FORBIDDEN_PAYLOAD_KEYS` — anything shaped like a capability, a grant, a
-   * verdict or a budget — is corruption, because authority is minted by the Guard
+   * `FORBIDDEN_PAYLOAD_KEYS` â€” anything shaped like a capability, a grant, a
+   * verdict or a budget â€” is corruption, because authority is minted by the Guard
    * and the Governor and never by an event.
    */
   'lifeloop.wake.received': lifeLoopRule(
@@ -1443,7 +1580,7 @@ const PAYLOAD_RULES: {
       // Zero-based, because the prefilter refuses once `iterationCount` has reached
       // the ceiling: a one-based counter would refuse the last permitted iteration
       // and quietly make `maxLoopIterations` one smaller than it says. A negative
-      // value is still refused — a journal that counts backwards is not a journal
+      // value is still refused â€” a journal that counts backwards is not a journal
       // this fold can reason about.
       isNonNegativeInt(p.iteration) &&
       isNullableRef(p.goalRef) &&
@@ -1715,7 +1852,7 @@ const PAYLOAD_RULES: {
 
   // Metadata only, and the rule is Work's: an undeclared key is refused rather
   // than ignored. The `summary` field is the only human-readable value in the
-  // family, and it is bounded — a summary that could hold a paragraph would be
+  // family, and it is bounded â€” a summary that could hold a paragraph would be
   // a summary that could hold a message body.
   'relay.action.requested': workRule(
     ['actionId', 'connector', 'action', 'risk', 'idempotencyKey', 'summary'],
@@ -2075,6 +2212,24 @@ function isMissionLimits(value: unknown): boolean {
 }
 
 /**
+ * Goal ceilings as they appear in a durable record.
+ *
+ * Positive integers, re-checked against the code-owned ceilings on read: a
+ * hand-edited `maxCheckpointsPerGoal: 1000000` must not become a real ceiling the
+ * engine enforces, because then the only limit would exist on disk.
+ */
+function isGoalLimits(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const limits = value as Record<string, unknown>
+  if (!onlyNamedKeys(limits, Object.keys(DEFAULT_GOAL_LIMITS))) return false
+  if (!Object.values(limits).every(isPositiveInt)) return false
+  for (const [key, ceiling] of Object.entries(DEFAULT_GOAL_LIMITS)) {
+    if ((limits[key] as number) > ceiling) return false
+  }
+  return true
+}
+
+/**
  * One planned step inside `work.run.created`.
  *
  * Named fields only, exactly like `CONVERSATION_TURN`: a schema that passed the
@@ -2100,7 +2255,7 @@ function isStepSeed(value: unknown): boolean {
  * ## Why only the Work family gets this
  *
  * The other rules read named fields and ignore the rest, which means a hand-edited
- * line *can* carry an extra key past them — it simply has nowhere to be read from,
+ * line *can* carry an extra key past them â€” it simply has nowhere to be read from,
  * so it never reaches a reducer or a projection. That is a real defence, and it is
  * the reason this is not an urgent fix for the existing families.
  *
@@ -2135,7 +2290,7 @@ function workRule(
  *
  * `allowed` is the per-event key list, and it is checked *against* the published
  * table rather than in place of it, so a validator can be neither wider nor narrower
- * than `core/lifeloop/types.ts` — the two cannot fall out of step because the rule
+ * than `core/lifeloop/types.ts` â€” the two cannot fall out of step because the rule
  * refuses any divergence in either direction. On top of that, a payload carrying a
  * key from `FORBIDDEN_PAYLOAD_KEYS` is refused outright: authority is minted by the
  * Guard and the Governor and never by an event, so a payload shaped like a

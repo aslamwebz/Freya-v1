@@ -27,7 +27,6 @@ function presence(over: Partial<Phase26PresenceInput> = {}): Phase26PresenceInpu
     degraded: false,
     synthesisActive: false,
     captureActive: false,
-    cognitionRequested: false,
     providerCallInFlight: false,
     runExecuting: false,
     attentionDirective: null,
@@ -81,15 +80,15 @@ describe('integration: transition flow', () => {
     let history = emptyTransitionHistory()
     const first = applyTransition(history, 'idle', 'listening', 'capture started', NOW, 30)
     if (first.ok) history = first.history
-    const second = applyTransition(history, 'listening', 'thinking', 'cognition requested', NOW, 40)
+    const second = applyTransition(history, 'listening', 'working', 'provider call in flight', NOW, 40)
     if (second.ok) history = second.history
 
     const frame = buildPhase26Frame(
-      frameInput({ transitionHistory: history, presence: presence({ cognitionRequested: true }) }),
+      frameInput({ transitionHistory: history, presence: presence({ providerCallInFlight: true }) }),
     )
-    expect(frame.state).toBe('thinking')
+    expect(frame.state).toBe('working')
     expect(frame.transitionHistory.transitions.length).toBe(2)
-    expect(frame.transitionHistory.transitions[1]?.to).toBe('thinking')
+    expect(frame.transitionHistory.transitions[1]?.to).toBe('working')
   })
 })
 

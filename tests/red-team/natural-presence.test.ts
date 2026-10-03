@@ -38,7 +38,6 @@ function presenceInput(over: Partial<Phase26PresenceInput> = {}): Phase26Presenc
     degraded: false,
     synthesisActive: false,
     captureActive: false,
-    cognitionRequested: false,
     providerCallInFlight: false,
     runExecuting: false,
     attentionDirective: null,
@@ -88,6 +87,18 @@ describe('redteam: no invented internal state', () => {
   it('invent-presence-state: a frame with an unknown state is refused', () => {
     const frame = buildPhase26Frame(frameInput())
     expect(validatePhase26Frame({ ...frame, state: 'elated' })).toBeTypeOf('string')
+  })
+
+  it('invent-thinking: the reserved thinking state cannot be reached from any fact', () => {
+    // Phase 13 parity. A provider call in flight is `working`; there is no live
+    // "cognition requested" Core fact. Inventing one would let a submitted
+    // command make Freya look busy, so no input may produce `thinking`.
+    expect(derivePhase26PresenceState(presenceInput({ providerCallInFlight: true }))).toBe('working')
+    const frame = buildPhase26Frame(
+      frameInput({ presence: presenceInput({ providerCallInFlight: true }) }),
+    )
+    expect(frame.state).toBe('working')
+    expect(frame.animation).toBe('glow')
   })
 
   it('invent-animation: a frame with an unknown animation is refused', () => {

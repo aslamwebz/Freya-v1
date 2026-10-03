@@ -117,6 +117,7 @@ export function minimalPhase26Frame(stateSince: number): Phase26PresenceFrame {
 
 /** Whether a frame is older than the bounded frame age. */
 export function isPhase26FrameExpired(frame: Phase26PresenceFrame, nowMs: number): boolean {
+  if (!Number.isFinite(nowMs) || !Number.isFinite(frame.stateSince)) return true
   return nowMs - frame.stateSince > PHASE26_FRAME_MAX_AGE_MS
 }
 
@@ -309,7 +310,9 @@ function validateTransitionHistory(value: unknown): TransitionHistory | string {
     if (!(PHASE26_PRESENCE_STATES as readonly string[]).includes(entry.to as string)) {
       return 'transition.to is invalid'
     }
-    if (typeof entry.reason !== 'string') return 'transition.reason is invalid'
+    if (!boundedLabel(entry.reason, PHASE26_PRESENCE_LIMITS.maxCueLabelChars)) {
+      return 'transition.reason is invalid'
+    }
     if (!instant(entry.occurredAt)) return 'transition.occurredAt is invalid'
     if (!nonNegativeInt(entry.durationMs)) return 'transition.durationMs is invalid'
     if (typeof entry.timedOut !== 'boolean') return 'transition.timedOut is invalid'
@@ -339,7 +342,9 @@ function validateCueList(value: unknown): EmbodimentCueList | string {
     if (!boundedLabel(entry.label, PHASE26_PRESENCE_LIMITS.maxCueLabelChars)) {
       return 'embodiment cue label is invalid'
     }
-    if (typeof entry.derivedFrom !== 'string') return 'embodiment cue derivedFrom is invalid'
+    if (!boundedLabel(entry.derivedFrom, PHASE26_PRESENCE_LIMITS.maxCueLabelChars)) {
+      return 'embodiment cue derivedFrom is invalid'
+    }
     if (typeof entry.active !== 'boolean') return 'embodiment cue active is invalid'
     if (entry.activatedAt !== null && !instant(entry.activatedAt)) {
       return 'embodiment cue activatedAt is invalid'
@@ -371,8 +376,18 @@ function validateVoiceSessionHistory(value: unknown): VoiceSessionHistory | stri
     }
     if (!instant(entry.startedAt)) return 'voice session startedAt is invalid'
     if (entry.endedAt !== null && !instant(entry.endedAt)) return 'voice session endedAt is invalid'
-    if (!nonNegativeInt(entry.captureCount)) return 'voice session captureCount is invalid'
-    if (!nonNegativeInt(entry.synthesisCount)) return 'voice session synthesisCount is invalid'
+    if (
+      !nonNegativeInt(entry.captureCount) ||
+      (entry.captureCount as number) > PHASE26_PRESENCE_LIMITS.maxCapturesPerSession
+    ) {
+      return 'voice session captureCount is invalid'
+    }
+    if (
+      !nonNegativeInt(entry.synthesisCount) ||
+      (entry.synthesisCount as number) > PHASE26_PRESENCE_LIMITS.maxSynthesesPerSession
+    ) {
+      return 'voice session synthesisCount is invalid'
+    }
     if (!['active', 'completed', 'cancelled', 'failed'].includes(String(entry.status))) {
       return 'voice session status is invalid'
     }

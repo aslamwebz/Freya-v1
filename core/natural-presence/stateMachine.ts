@@ -31,8 +31,6 @@ export interface Phase26PresenceInput {
   readonly synthesisActive: boolean
   /** A microphone is open right now. */
   readonly captureActive: boolean
-  /** Cognition has been requested but its provider call has not started. */
-  readonly cognitionRequested: boolean
   /** A provider call is in flight. */
   readonly providerCallInFlight: boolean
   /** A Run is executing. */
@@ -53,16 +51,17 @@ export interface Phase26PresenceInput {
  *  3. Degraded → `degraded`
  *  4. Synthesis active → `speaking`
  *  5. Capture active → `listening`
- *  6. Cognition requested → `thinking`
- *  7. Provider call in flight → `working`
- *  8. Run executing → `working`
- *  9. Attention directive → `attention`
- * 10. Personality cue → `attention`
- * 11. Nothing → `idle`
+ *  6. Provider call in flight → `working`
+ *  7. Run executing → `working`
+ *  8. Attention directive → `attention`
+ *  9. Personality cue → `attention`
+ * 10. Nothing → `idle`
  *
- * `thinking` is the brief interval after capture ends and cognition is
- * requested, before a provider call is in flight. `working` is the longer
- * interval in which a provider call or a Run is actually executing.
+ * `thinking` stays in the vocabulary but is never derived. The only honest
+ * live signal is `CoreStatus.activeProviderCalls`, and a provider call in
+ * flight is `working`; Core holds no "cognition requested but no provider call
+ * yet" fact. Inventing one would let a submitted command make Freya look busy,
+ * so Phase 26 preserves Phase 13's position: `thinking` has no door.
  */
 export function derivePhase26PresenceState(input: Phase26PresenceInput): Phase26PresenceState {
   if (input.stopAllActive) return 'error'
@@ -70,7 +69,6 @@ export function derivePhase26PresenceState(input: Phase26PresenceInput): Phase26
   if (input.degraded) return 'degraded'
   if (input.synthesisActive) return 'speaking'
   if (input.captureActive) return 'listening'
-  if (input.cognitionRequested) return 'thinking'
   if (input.providerCallInFlight) return 'working'
   if (input.runExecuting) return 'working'
   if (input.attentionDirective !== null) return 'attention'

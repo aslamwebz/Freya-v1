@@ -63,6 +63,20 @@ export type TransitionResult =
   | { readonly ok: false; readonly reason: string }
 
 /**
+ * Bound a transition reason to the label ceiling and strip control characters,
+ * the same text discipline the frame validator enforces on labels.
+ */
+function boundTransitionReason(value: string): string {
+  const cleaned = [...value]
+    .filter((char) => {
+      const code = char.charCodeAt(0)
+      return code > 31 && code !== 127
+    })
+    .join('')
+  return cleaned.slice(0, PHASE26_PRESENCE_LIMITS.maxCueLabelChars)
+}
+
+/**
  * Apply a transition to a history.
  *
  * An illegal edge is refused. A no-op (same state) leaves the history
@@ -84,11 +98,18 @@ export function applyTransition(
   if (from === to) {
     return { ok: true, history, transition: null }
   }
-  const boundedDuration = Math.max(0, Math.min(Math.floor(durationMs), Number.MAX_SAFE_INTEGER))
+  if (!Number.isFinite(durationMs) || durationMs < 0) {
+    return { ok: false, reason: 'transition duration must be a finite non-negative number' }
+  }
+  const boundedReason = boundTransitionReason(reason)
+  if (boundedReason.length === 0) {
+    return { ok: false, reason: 'transition reason must be non-empty bounded text' }
+  }
+  const boundedDuration = Math.min(Math.floor(durationMs), Number.MAX_SAFE_INTEGER)
   const transition: PresenceTransition = {
     from,
     to,
-    reason: reason.slice(0, PHASE26_PRESENCE_LIMITS.maxCueLabelChars),
+    reason: boundedReason,
     occurredAt,
     durationMs: boundedDuration,
     timedOut: transitionTimedOut(boundedDuration),

@@ -79,15 +79,18 @@ The existing 8 presence states are preserved. Phase 26 adds:
 
 **New transitions:**
 - `idle → listening` (voice capture started)
-- `listening → thinking` (capture ended, cognition requested)
-- `thinking → speaking` (synthesis started)
+- `listening → thinking` (reserved edge; legal, never produced)
+- `thinking → speaking` (reserved edge; legal, never produced)
 - `speaking → idle` (synthesis ended)
 - `working → attention` (attention directive received)
 - `attention → idle` (attention directive cleared)
 - `error → idle` (STOP ALL deactivated)
 - `degraded → idle` (fault cleared)
 
-**No new states are added.** The 8 states are canonical.
+**No new states are added.** The 8 states are canonical. `thinking` is
+reserved vocabulary only: it has no live Core fact and is never derived. A
+provider call in flight is `working` (Phase 13 parity), so the `thinking`
+edges are legal in the table but never triggered.
 
 ### 3.2 VoiceInteraction (expanded, Phase 26)
 

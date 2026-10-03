@@ -9,6 +9,8 @@ import {
   emptyEmbodimentCueList,
   emptyVoiceSessionHistory,
   applyTransition,
+  startVoiceSession,
+  appendVoiceSession,
   PHASE26_FRAME_MAX_AGE_MS,
   PHASE26_PRESENCE_LIMITS,
   type Phase26FrameInput,
@@ -25,7 +27,6 @@ function presence(over: Partial<Phase26PresenceInput> = {}): Phase26PresenceInpu
     degraded: false,
     synthesisActive: false,
     captureActive: false,
-    cognitionRequested: false,
     providerCallInFlight: false,
     runExecuting: false,
     attentionDirective: null,
@@ -154,5 +155,101 @@ describe('frame.no-invented-state', () => {
   it('refuses an unknown key on the frame', () => {
     const frame = buildPhase26Frame(frameInput())
     expect(validatePhase26Frame({ ...frame, mood: 'happy' })).toBeTypeOf('string')
+  })
+})
+
+describe('frame.hardening', () => {
+  function validTransition() {
+    const result = applyTransition(emptyTransitionHistory(), 'idle', 'listening', 'capture started', NOW, 10)
+    if (!result.ok) throw new Error('expected transition to apply')
+    return result.history.transitions[0]!
+  }
+
+  function cueList(derivedFrom: string) {
+    return {
+      maxEntries: PHASE26_PRESENCE_LIMITS.maxEmbodimentCues,
+      cues: [{ cueType: 'voice-listening' as const, label: 'Listening', derivedFrom, active: true, activatedAt: NOW }],
+    }
+  }
+
+  it('frame.bound: transition.reason rejects control characters', () => {
+    const frame = buildPhase26Frame(frameInput())
+    const history = {
+      transitions: [{ ...validTransition(), reason: 'bad\u0000reason' }],
+      maxEntries: PHASE26_PRESENCE_LIMITS.maxTransitionHistoryEntries,
+    }
+    expect(validatePhase26Frame({ ...frame, transitionHistory: history })).toBeTypeOf('string')
+  })
+
+  it('frame.bound: transition.reason rejects over-length text and accepts the exact ceiling', () => {
+    const frame = buildPhase26Frame(frameInput())
+    const over = {
+      transitions: [{ ...validTransition(), reason: 'a'.repeat(PHASE26_PRESENCE_LIMITS.maxCueLabelChars + 1) }],
+      maxEntries: PHASE26_PRESENCE_LIMITS.maxTransitionHistoryEntries,
+    }
+    expect(validatePhase26Frame({ ...frame, transitionHistory: over })).toBeTypeOf('string')
+    const exact = {
+      transitions: [{ ...validTransition(), reason: 'a'.repeat(PHASE26_PRESENCE_LIMITS.maxCueLabelChars) }],
+      maxEntries: PHASE26_PRESENCE_LIMITS.maxTransitionHistoryEntries,
+    }
+    expect(validatePhase26Frame({ ...frame, transitionHistory: exact })).not.toBeTypeOf('string')
+  })
+
+  it('frame.bound: embodiment cue derivedFrom rejects control characters and over-length text', () => {
+    const frame = buildPhase26Frame(frameInput())
+    expect(validatePhase26Frame({ ...frame, embodimentCues: cueList('vo\u0000ice') })).toBeTypeOf('string')
+    expect(
+      validatePhase26Frame({
+        ...frame,
+        embodimentCues: cueList('v'.repeat(PHASE26_PRESENCE_LIMITS.maxCueLabelChars + 1)),
+      }),
+    ).toBeTypeOf('string')
+    expect(
+      validatePhase26Frame({
+        ...frame,
+        embodimentCues: cueList('v'.repeat(PHASE26_PRESENCE_LIMITS.maxCueLabelChars)),
+      }),
+    ).not.toBeTypeOf('string')
+  })
+
+  it('frame.bound: voice session counts above the session ceilings are refused', () => {
+    const frame = buildPhase26Frame(frameInput())
+    const session = startVoiceSession('s1', NOW)
+    const history = appendVoiceSession(emptyVoiceSessionHistory(), session)
+    const overCapture = {
+      ...history,
+      sessions: [{ ...session, captureCount: PHASE26_PRESENCE_LIMITS.maxCapturesPerSession + 1 }],
+    }
+    expect(validatePhase26Frame({ ...frame, voiceSessionHistory: overCapture })).toBeTypeOf('string')
+    const overSynthesis = {
+      ...history,
+      sessions: [{ ...session, synthesisCount: PHASE26_PRESENCE_LIMITS.maxSynthesesPerSession + 1 }],
+    }
+    expect(validatePhase26Frame({ ...frame, voiceSessionHistory: overSynthesis })).toBeTypeOf('string')
+  })
+
+  it('frame.bound: voice session counts at the exact ceilings pass', () => {
+    const frame = buildPhase26Frame(frameInput())
+    const session = startVoiceSession('s1', NOW)
+    const history = appendVoiceSession(emptyVoiceSessionHistory(), session)
+    const atCeiling = {
+      ...history,
+      sessions: [
+        {
+          ...session,
+          captureCount: PHASE26_PRESENCE_LIMITS.maxCapturesPerSession,
+          synthesisCount: PHASE26_PRESENCE_LIMITS.maxSynthesesPerSession,
+        },
+      ],
+    }
+    expect(validatePhase26Frame({ ...frame, voiceSessionHistory: atCeiling })).not.toBeTypeOf('string')
+  })
+
+  it('frame.expiry: non-finite nowMs or stateSince fails closed', () => {
+    const frame = buildPhase26Frame(frameInput())
+    expect(isPhase26FrameExpired(frame, Number.NaN)).toBe(true)
+    expect(isPhase26FrameExpired(frame, Number.POSITIVE_INFINITY)).toBe(true)
+    expect(isPhase26FrameExpired({ ...frame, stateSince: Number.NaN }, NOW_MS)).toBe(true)
+    expect(isPhase26FrameExpired({ ...frame, stateSince: Number.POSITIVE_INFINITY }, NOW_MS)).toBe(true)
   })
 })

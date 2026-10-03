@@ -9,7 +9,9 @@ import {
   emptyTransitionHistory,
   transitionTimedOut,
   PHASE26_PRESENCE_LIMITS,
+  PHASE26_PRESENCE_STATES,
   type Phase26PresenceInput,
+  type Phase26PresenceState,
 } from '../../../core/natural-presence'
 
 const NOW = '2026-10-01T12:00:00.000Z'
@@ -21,7 +23,6 @@ function input(over: Partial<Phase26PresenceInput> = {}): Phase26PresenceInput {
     degraded: false,
     synthesisActive: false,
     captureActive: false,
-    cognitionRequested: false,
     providerCallInFlight: false,
     runExecuting: false,
     attentionDirective: null,
@@ -39,8 +40,12 @@ describe('presence.derive', () => {
     expect(derivePhase26PresenceState(input({ captureActive: true }))).toBe('listening')
   })
 
-  it('derive.thinking: cognition requested', () => {
-    expect(derivePhase26PresenceState(input({ cognitionRequested: true }))).toBe('thinking')
+  it('derive.no-thinking: a provider call in flight is working, never thinking', () => {
+    // Phase 13 parity: `thinking` is reserved vocabulary with no door. The only
+    // honest live signal is a provider call in flight, which is `working`.
+    expect(derivePhase26PresenceState(input({ providerCallInFlight: true }))).toBe('working')
+    expect(PHASE26_PRESENCE_STATES).toContain('thinking')
+    expect(phase26Animation('thinking')).toBe('spin')
   })
 
   it('derive.speaking: synthesis active', () => {
@@ -73,6 +78,89 @@ describe('presence.derive', () => {
     expect(state).toBe('error')
   })
 
+  it('precedence: STOP ALL > integrity > degraded > speaking > listening > working > attention > idle', () => {
+    const cases: readonly [Partial<Phase26PresenceInput>, Phase26PresenceState][] = [
+      [
+        {
+          stopAllActive: true,
+          integrityCorrupt: true,
+          degraded: true,
+          synthesisActive: true,
+          captureActive: true,
+          providerCallInFlight: true,
+          runExecuting: true,
+          attentionDirective: {},
+          personalityCue: {},
+        },
+        'error',
+      ],
+      [
+        {
+          integrityCorrupt: true,
+          degraded: true,
+          synthesisActive: true,
+          captureActive: true,
+          providerCallInFlight: true,
+          runExecuting: true,
+          attentionDirective: {},
+          personalityCue: {},
+        },
+        'error',
+      ],
+      [
+        {
+          degraded: true,
+          synthesisActive: true,
+          captureActive: true,
+          providerCallInFlight: true,
+          runExecuting: true,
+          attentionDirective: {},
+          personalityCue: {},
+        },
+        'degraded',
+      ],
+      [
+        { synthesisActive: true, captureActive: true, providerCallInFlight: true, attentionDirective: {}, personalityCue: {} },
+        'speaking',
+      ],
+      [{ captureActive: true, providerCallInFlight: true, attentionDirective: {}, personalityCue: {} }, 'listening'],
+      [{ providerCallInFlight: true, runExecuting: true, attentionDirective: {}, personalityCue: {} }, 'working'],
+      [{ runExecuting: true, attentionDirective: {}, personalityCue: {} }, 'working'],
+      [{ attentionDirective: {}, personalityCue: {} }, 'attention'],
+      [{ personalityCue: {} }, 'attention'],
+      [{}, 'idle'],
+    ]
+    for (const [facts, expected] of cases) {
+      expect(derivePhase26PresenceState(input(facts))).toBe(expected)
+    }
+  })
+
+  it('thinking is unreachable from every combination of real Core facts', () => {
+    const bools = [false, true] as const
+    for (const stopAllActive of bools)
+      for (const integrityCorrupt of bools)
+        for (const degraded of bools)
+          for (const synthesisActive of bools)
+            for (const captureActive of bools)
+              for (const providerCallInFlight of bools)
+                for (const runExecuting of bools)
+                  for (const attentionDirective of [null, {}] as const)
+                    for (const personalityCue of [null, {}] as const) {
+                      const state = derivePhase26PresenceState({
+                        stopAllActive,
+                        integrityCorrupt,
+                        degraded,
+                        synthesisActive,
+                        captureActive,
+                        providerCallInFlight,
+                        runExecuting,
+                        attentionDirective,
+                        personalityCue,
+                      })
+                      expect(state).not.toBe('thinking')
+                    }
+  })
+
   it('animation and detail are fixed per state', () => {
     expect(phase26Animation('idle')).toBe('breathe')
     expect(phase26Animation('speaking')).toBe('wave')
@@ -82,7 +170,7 @@ describe('presence.derive', () => {
 })
 
 describe('presence.transition', () => {
-  it('allows the eight expanded transitions', () => {
+  it('allows the eight expanded transitions (thinking edges stay legal but reserved)', () => {
     const pairs: [string, string][] = [
       ['idle', 'listening'],
       ['listening', 'thinking'],
@@ -96,6 +184,11 @@ describe('presence.transition', () => {
     for (const [from, to] of pairs) {
       expect(canTransitionPresence(from as never, to as never)).toBe(true)
     }
+    // The `thinking` edges are protocol-legal, exactly as in Phase 13, but no
+    // derivation produces `thinking`; the edges are inert until a future phase
+    // introduces a real "turn running, no provider call yet" Core fact.
+    expect(canTransitionPresence('listening', 'thinking')).toBe(true)
+    expect(canTransitionPresence('thinking', 'speaking')).toBe(true)
   })
 
   it('refuses an illegal transition', () => {
@@ -141,5 +234,49 @@ describe('presence.transition', () => {
     if (!result.ok) return
     expect(result.transition).toBeNull()
     expect(result.history.transitions.length).toBe(0)
+  })
+
+  it('transition.duration: non-finite and negative durations are refused fail-closed', () => {
+    for (const durationMs of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, -0.5]) {
+      const result = applyTransition(emptyTransitionHistory(), 'idle', 'listening', 'x', NOW, durationMs)
+      expect(result.ok).toBe(false)
+    }
+  })
+
+  it('transition.duration: a finite upper clamp is preserved and NaN never enters history', () => {
+    const huge = applyTransition(emptyTransitionHistory(), 'idle', 'listening', 'huge', NOW, 1e30)
+    expect(huge.ok).toBe(true)
+    if (huge.ok) {
+      expect(huge.transition?.durationMs).toBe(Number.MAX_SAFE_INTEGER)
+      expect(Number.isFinite(huge.transition?.durationMs ?? Number.NaN)).toBe(true)
+    }
+    const max = applyTransition(
+      emptyTransitionHistory(),
+      'idle',
+      'listening',
+      'max',
+      NOW,
+      Number.MAX_SAFE_INTEGER,
+    )
+    expect(max.ok).toBe(true)
+    if (max.ok) expect(max.transition?.durationMs).toBe(Number.MAX_SAFE_INTEGER)
+    // A NaN duration must never produce a history carrying a non-finite value.
+    const nan = applyTransition(emptyTransitionHistory(), 'idle', 'listening', 'nan', NOW, Number.NaN)
+    expect(nan.ok).toBe(false)
+  })
+
+  it('transition.reason: control characters are stripped and a control-only reason is refused', () => {
+    const stripped = applyTransition(emptyTransitionHistory(), 'idle', 'listening', 'ok\u0000\u001f', NOW, 10)
+    expect(stripped.ok).toBe(true)
+    if (stripped.ok) expect(stripped.transition?.reason).toBe('ok')
+    const controlOnly = applyTransition(
+      emptyTransitionHistory(),
+      'idle',
+      'listening',
+      '\u0000\u001f\u007f',
+      NOW,
+      10,
+    )
+    expect(controlOnly.ok).toBe(false)
   })
 })

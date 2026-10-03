@@ -23,15 +23,15 @@ passes and its invariant holds.
 |---|---|
 | F1: Derive idle state | `presence.derive.idle` |
 | F2: Derive listening state | `presence.derive.listening` |
-| F3: Derive thinking state | `presence.derive.thinking` |
+| F3: Reserved thinking state is never invented | `presence.derive.no-thinking` |
 | F4: Derive speaking state | `presence.derive.speaking` |
 | F5: Derive working state | `presence.derive.working` |
 | F6: Derive attention state | `presence.derive.attention` |
 | F7: Derive error state | `presence.derive.error` |
 | F8: Derive degraded state | `presence.derive.degraded` |
 | F9: Transition idle to listening | `presence.transition.idle-to-listening` |
-| F10: Transition listening to thinking | `presence.transition.listening-to-thinking` |
-| F11: Transition thinking to speaking | `presence.transition.thinking-to-speaking` |
+| F10: Reserved transition listening to thinking is legal (never derived) | `presence.transition.listening-to-thinking` |
+| F11: Reserved transition thinking to speaking is legal (never derived) | `presence.transition.thinking-to-speaking` |
 | F12: Transition speaking to idle | `presence.transition.speaking-to-idle` |
 | F13: Transition working to attention | `presence.transition.working-to-attention` |
 | F14: Transition attention to idle | `presence.transition.attention-to-idle` |

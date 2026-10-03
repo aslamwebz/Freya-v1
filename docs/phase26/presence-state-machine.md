@@ -26,7 +26,7 @@ The 8 presence states are canonical:
 |---|---|
 | `idle` | Nothing is happening |
 | `listening` | A microphone is open |
-| `thinking` | A provider call is in flight |
+| `thinking` | Reserved; never produced (a provider call in flight is `working`) |
 | `speaking` | A synthesis engine is producing audio |
 | `working` | A Run is executing |
 | `attention` | Core chose to cue |
@@ -44,13 +44,20 @@ Phase 26 adds smoother transitions between states:
 | From | To | Reason |
 |---|---|---|
 | `idle` | `listening` | Voice capture started |
-| `listening` | `thinking` | Capture ended, cognition requested |
-| `thinking` | `speaking` | Synthesis started |
+| `listening` | `thinking` | Reserved edge; legal, never produced |
+| `thinking` | `speaking` | Reserved edge; legal, never produced |
 | `speaking` | `idle` | Synthesis ended |
 | `working` | `attention` | Attention directive received |
 | `attention` | `idle` | Attention directive cleared |
 | `error` | `idle` | STOP ALL deactivated |
 | `degraded` | `idle` | Fault cleared |
+
+`thinking` is retained as vocabulary for a future phase in which a turn is
+running but no provider call has been made yet (Phase 13 parity). Phase 26
+never produces it: Core holds no live "cognition requested" fact, and the only
+honest signal is `CoreStatus.activeProviderCalls`, which is `working`. The
+`thinking` edges above are legal in the transition table but are never
+triggered by a derivation.
 
 ### 3.2 Transition constraints
 
@@ -168,8 +175,8 @@ Every transition is tested deterministically:
 | Test | Description |
 |---|---|
 | `transition.idle-to-listening` | Voice capture started |
-| `transition.listening-to-thinking` | Capture ended, cognition requested |
-| `transition.thinking-to-speaking` | Synthesis started |
+| `transition.listening-to-thinking` | Reserved edge; legal, never produced |
+| `transition.thinking-to-speaking` | Reserved edge; legal, never produced |
 | `transition.speaking-to-idle` | Synthesis ended |
 | `transition.working-to-attention` | Attention directive received |
 | `transition.attention-to-idle` | Attention directive cleared |

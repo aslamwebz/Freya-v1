@@ -23,15 +23,15 @@ relies on randomness, wall-clock time, or external services.
 |---|---|
 | `presence.derive.idle` | Nothing happening → idle |
 | `presence.derive.listening` | Voice capture active → listening |
-| `presence.derive.thinking` | Provider call in flight → thinking |
+| `presence.derive.no-thinking` | Provider call in flight → working; thinking is never derived |
 | `presence.derive.speaking` | Synthesis active → speaking |
 | `presence.derive.working` | Run executing → working |
 | `presence.derive.attention` | Attention directive → attention |
 | `presence.derive.error` | STOP ALL → error |
 | `presence.derive.degraded` | Degraded → degraded |
 | `presence.transition.idle-to-listening` | Voice capture started |
-| `presence.transition.listening-to-thinking` | Capture ended, cognition requested |
-| `presence.transition.thinking-to-speaking` | Synthesis started |
+| `presence.transition.listening-to-thinking` | Reserved edge; legal, never produced |
+| `presence.transition.thinking-to-speaking` | Reserved edge; legal, never produced |
 | `presence.transition.speaking-to-idle` | Synthesis ended |
 | `presence.transition.working-to-attention` | Attention directive received |
 | `presence.transition.attention-to-idle` | Attention directive cleared |

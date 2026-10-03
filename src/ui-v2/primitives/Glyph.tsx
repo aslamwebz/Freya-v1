@@ -1,0 +1,26 @@
+import type { CSSProperties } from 'react'
+const paths: Record<string, string> = {
+  focus: 'M20 12a8 8 0 1 1-8-8m0 4a4 4 0 1 0 4 4m-4 0 9-9m-5 0h5v5',
+  people: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-8 9v-2a8 8 0 0 1 16 0v2H4Z',
+  memory: 'M20 6c0 2-16 2-16 0s16-2 16 0ZM4 6v12c0 4 16 4 16 0V6M4 12c0 3 16 3 16 0',
+  create: 'm12 3 2 7 7 2-7 2-2 7-2-7-7-2 7-2 2-7Z',
+  home: 'M3 11 12 3l9 8M5 10v10h5v-6h4v6h5V10',
+  mind: 'M9 18c-5 0-6-7-3-9 0-5 6-6 6-2 0-4 6-3 6 2 3 2 2 9-3 9M12 7v14M7 11l3 2m7-2-3 2',
+  mission: 'M12 3 2 21h20L12 3Zm0 6v5m0 3h.01',
+  forge: 'm12 3 10 6-10 6L2 9l10-6ZM2 13l10 6 10-6M2 17l10 6 10-6',
+  world: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3c-5 5-5 13 0 18 5-5 5-13 0-18Z',
+  life: 'M2 12h4l3-8 5 16 3-8h5',
+  relay: 'M4 5h16v12H9l-5 4V5Zm4 5h8M8 13h5',
+  workforce: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 10v-2a7 7 0 0 1 14 0v2m1-17a4 4 0 0 1 0 7m2 3a6 6 0 0 1 3 5v2',
+  widgets: 'M3 3h7v7H3V3Zm11 0h7v7h-7V3ZM3 14h7v7H3v-7Zm11 0h7v7h-7v-7Z',
+  core: 'M12 3 21 8v9l-9 5-9-5V8l9-5Zm0 5 5 3v5l-5 3-5-3v-5l5-3Z',
+  settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0-5v2m0 14v2M3 12h2m14 0h2M6 6l1 1m10 10 1 1M6 18l1-1m10-10 1-1',
+  search: 'M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0Zm-1 5 6 6',
+  mic: 'M9 4a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0V4Zm-3 7v1a6 6 0 0 0 12 0v-1m-6 7v4m-4 0h8',
+  plus: 'M12 4v16M4 12h16',
+  arrow: 'M4 12h16m-6-6 6 6-6 6',
+}
+export function Glyph({ name, size = 20, style }: { name: string; size?: number; style?: CSSProperties }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"
+    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={style}><path d={paths[name] ?? paths.core} /></svg>
+}

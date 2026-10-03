@@ -1,18 +1,6 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import { App } from './ui/App'
-import './styles/tokens.css'
-import './styles/atmosphere.css'
-import './styles/shell.css'
-import './styles/dashboard.css'
-import './styles/presence.css'
-import './styles/surfaces.css'
-
-const container = document.getElementById('root')
-if (!container) throw new Error('Freya: #root is missing from the document')
-
-createRoot(container).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+// Phase 19 UI is now the default. Legacy UI available via ?ui=legacy.
+if (new URLSearchParams(window.location.search).get('ui') === 'legacy') {
+  void import('./legacyEntry')
+} else {
+  void import('./ui-v2/entry')
+}

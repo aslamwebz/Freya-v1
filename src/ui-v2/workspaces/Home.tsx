@@ -2,8 +2,9 @@ import { Badge, Panel, Progress, Button, EmptyState } from '../primitives/Contro
 import { Avatar } from '../primitives/Avatar'
 import { Glyph } from '../primitives/Glyph'
 import { AttentionRing } from './Presence'
-import { Brain } from '../presence/Brain'
+import { Presence } from '../presence/Presence'
 import { brainState } from '../presence/state'
+import { selectForm } from '../presence/form'
 import { DataView, isLiveMode, type WorkspaceProps } from './shared'
 import type { WorkspaceId } from './catalog'
 import { useState } from 'react'
@@ -34,6 +35,8 @@ export function Home({ snapshot, view, update, open, panels }: WorkspaceProps & 
     faultCount: core?.faultCount ?? 0,
     lifecycle: core?.lifecycle ?? 'booting',
   })
+  // App Mode is always the Brain; the form is chosen here and nowhere else.
+  const form = selectForm({ mode: 'app', hasWork: cognition !== 'calm' })
 
   const handleDragStart = (panelId: string) => setDraggedPanel(panelId)
   const handleDragOver = (e: React.DragEvent<HTMLElement>, panelId: string) => {
@@ -79,7 +82,7 @@ export function Home({ snapshot, view, update, open, panels }: WorkspaceProps & 
           <span>{goal.text}</span></label>)}</div>}
       </Panel>}
     </div>
-    <div className="f-home-centre"><Brain state={cognition} /></div>
+    <div className="f-home-centre"><Presence form={form} state={cognition} /></div>
     <div className="f-home-right">
       {panelOrder.includes('attention') && <Panel title="Attention" className="f-attention-panel" draggable onDragStart={() => handleDragStart('attention')} onDragOver={(e) => handleDragOver(e, 'attention')} onDragEnd={handleDragEnd} style={{ opacity: draggedPanel === 'attention' ? 0.5 : 1 }}>
         {home.attention.profiles.length > 0 ? <div className="f-attention">

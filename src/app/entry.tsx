@@ -7,6 +7,7 @@ import { createLiveAdapter, isElectron } from '../ui-v2/state/live'
 import type { UiAdapter } from '../ui-v2/state/contract'
 import '../ui-v2/theme/tokens.css'
 import '../ui-v2/primitives/controls.css'
+import './cards/cards.css'
 import './app.css'
 
 /**

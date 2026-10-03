@@ -9,6 +9,8 @@ import { conversationMirror, ensureConversationAttached } from '../platform/conv
 import { sendMessage } from '../ui-v2/chat/sendMessage'
 import { Brain } from './presence/Brain'
 import { brainState } from './presence/state'
+import { Home, type ScreenSlots } from './screens/Home'
+import { placeholder } from './screens/Placeholder'
 
 /**
  * Freya App Mode — the shell.
@@ -85,6 +87,9 @@ export function App({ preferences, adapter }: { preferences: PreferencesStore; a
     lifecycle: core?.lifecycle ?? 'booting',
   })
   const themeIndex = THEMES.indexOf(settings.theme)
+  const slots: ScreenSlots = current.id === 'home'
+    ? Home({ snapshot })
+    : placeholder(current.label, current.symbol, 'This screen is next in the build.')
   const cycleTheme = () => preferences.update({ theme: THEMES[(themeIndex + 1) % THEMES.length]! })
 
   const send = () => {
@@ -133,7 +138,7 @@ export function App({ preferences, adapter }: { preferences: PreferencesStore; a
       <div className="a-ticker" aria-hidden="true"><span>PERSISTENT</span><span>·</span><span>EVOLVING</span><span>·</span><span>ALIGNED</span><span>·</span><span>FOR A BRIGHTER TOMORROW</span></div>
 
       <main id="a-main" tabIndex={-1} className="a-body">
-        <section className="a-col a-col-left" aria-label="Left panels" />
+        <section className="a-col a-col-left" aria-label="Left panels">{slots.left}</section>
         <section className="a-centre" aria-label="Freya centre">
           {/* The Brain: the one constant of every screen. */}
           <div className="a-centre-stage" data-screen={current.id}>
@@ -141,7 +146,8 @@ export function App({ preferences, adapter }: { preferences: PreferencesStore; a
           </div>
           <div className="a-centre-caption"><b>FREYA</b><span>PHASE 19</span><small>SAME MIND. A BRIGHTER TOMORROW.</small></div>
         </section>
-        <section className="a-col a-col-right" aria-label="Right panels" />
+        <section className="a-col a-col-right" aria-label="Right panels">{slots.right}</section>
+        {slots.bottom ? <section className="a-bottom" aria-label="Lower panels">{slots.bottom}</section> : null}
       </main>
 
       <div className="a-screen-title" aria-hidden="true"><Glyph name={current.symbol} /><b>{current.label}</b></div>

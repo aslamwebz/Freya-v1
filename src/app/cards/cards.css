@@ -1,0 +1,97 @@
+/* Cards — dark smoked glass instrument panels. */
+.c-card {
+  position: relative;
+  display: flex; flex-direction: column; gap: .7rem;
+  padding: .95rem 1.05rem 1.05rem;
+  border-radius: 16px;
+  border: 1px solid var(--f-line);
+  background: var(--f-glass);
+  backdrop-filter: blur(16px) saturate(130%);
+  box-shadow: var(--f-shadow);
+}
+.c-card::before {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--f-glass-edge), transparent);
+  opacity: .6;
+}
+.c-head { display: flex; align-items: center; gap: .6rem; }
+.c-icon {
+  display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px;
+  color: var(--f-action); border: 1px solid var(--f-line);
+  background: color-mix(in srgb, var(--f-action) 8%, transparent);
+}
+.c-titles { flex: 1; min-width: 0; }
+.c-titles h2 {
+  margin: 0; font-size: .72rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--f-heading);
+}
+.c-titles h2 small { margin-left: .5rem; color: var(--f-muted); font-weight: 400; letter-spacing: .06em; text-transform: none; }
+.c-more { color: var(--f-muted); letter-spacing: .15em; }
+.c-body { display: flex; flex-direction: column; gap: .55rem; }
+
+.c-meter { display: block; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--f-muted) 22%, transparent); overflow: hidden; }
+.c-meter > i { display: block; height: 100%; border-radius: 999px; background: var(--f-action); box-shadow: var(--f-glow); }
+.c-meter[data-tone='cognition'] > i { background: var(--f-cognition); }
+.c-meter[data-tone='positive'] > i { background: var(--f-positive); }
+.c-meter > i[data-known='false'] { background: transparent; box-shadow: none; }
+
+.c-chip {
+  display: inline-flex; align-items: center; padding: .2rem .6rem; border-radius: 999px;
+  border: 1px solid var(--f-line); color: var(--f-muted); font-size: .74rem;
+}
+.c-chip[data-tone='accent'] { color: var(--f-heading); border-color: var(--f-action); background: color-mix(in srgb, var(--f-action) 12%, transparent); }
+
+.c-empty { display: grid; gap: .2rem; color: var(--f-muted); }
+.c-empty b { color: var(--f-ink); font-weight: 600; }
+.c-empty span { font-size: .82rem; }
+
+.c-row { display: flex; align-items: center; gap: .6rem; padding: .35rem 0; border-top: 1px solid color-mix(in srgb, var(--f-line) 60%, transparent); }
+.c-row:first-child { border-top: 0; }
+.c-row-icon { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--f-line); color: var(--f-action); }
+.c-row-icon[data-tone='attention'] { color: var(--f-attention); border-color: color-mix(in srgb, var(--f-attention) 50%, transparent); }
+.c-row-icon[data-tone='danger'] { color: var(--f-danger); border-color: color-mix(in srgb, var(--f-danger) 50%, transparent); }
+.c-row-text { flex: 1; min-width: 0; display: grid; }
+.c-row-text b { font-weight: 500; font-size: .9rem; }
+.c-row-text small { color: var(--f-muted); font-size: .78rem; }
+.c-row-end { color: var(--f-muted); font-size: .78rem; white-space: nowrap; }
+
+/* Card bodies */
+.c-lead { margin: 0; font-family: var(--f-narrative); font-size: 1.15rem; line-height: 1.25; font-weight: 400; color: var(--f-ink); }
+.c-sub { margin: 0; color: var(--f-muted); font-size: .86rem; }
+.c-focus-line { display: flex; align-items: center; gap: .6rem; }
+.c-focus-line .c-meter { flex: 1; }
+.c-focus-line span { color: var(--f-muted); font-size: .8rem; }
+.c-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+.c-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
+.c-checks li { display: flex; align-items: center; gap: .5rem; color: var(--f-muted); font-size: .9rem; }
+.c-check { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: color-mix(in srgb, var(--f-positive) 20%, transparent); color: var(--f-positive); font-size: .7rem; }
+
+.c-attention { display: grid; grid-template-columns: auto 1fr; gap: .8rem; align-items: center; }
+.c-attention-info { display: grid; }
+.c-attention-info b { font-weight: 500; }
+.c-attention-info small { color: var(--f-muted); font-size: .78rem; }
+.c-ring { position: relative; width: 74px; height: 74px; display: grid; place-items: center; }
+.c-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.c-ring-track { fill: none; stroke: color-mix(in srgb, var(--f-muted) 22%, transparent); stroke-width: 6; }
+.c-ring-value { fill: none; stroke: var(--f-action); stroke-width: 6; stroke-linecap: round; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--f-action) 55%, transparent)); }
+.c-ring b { position: relative; font-size: 1.1rem; }
+.c-ring b span { font-size: .6em; }
+.c-bars { grid-column: 1 / -1; display: grid; gap: .4rem; }
+.c-bar { display: grid; grid-template-columns: 1fr 3.4rem 2.6rem; align-items: center; gap: .5rem; font-size: .78rem; color: var(--f-muted); }
+.c-bar small { text-align: right; }
+
+.c-avatars { display: flex; align-items: center; }
+.c-avatar { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; margin-left: -8px; border: 1px solid var(--f-line); background: color-mix(in srgb, var(--f-cognition) 20%, var(--f-panel)); color: var(--f-ink); font-size: .8rem; }
+.c-avatar:first-child { margin-left: 0; }
+.c-avatar-more { background: var(--f-panel); color: var(--f-muted); }
+.c-people-stats { display: grid; gap: .25rem; color: var(--f-muted); font-size: .82rem; }
+
+.c-rows { display: grid; }
+.c-state { text-transform: capitalize; }
+.c-state--working, .c-state--running { color: var(--f-positive); }
+.c-state--waiting, .c-state--blocked { color: var(--f-attention); }
+.c-state--idle { color: var(--f-muted); }
+
+.c-world { display: grid; grid-template-columns: 5.5rem 1fr; gap: .8rem; align-items: start; }
+.c-globe { width: 5.5rem; height: 5.5rem; border-radius: 50%; background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--f-action) 40%, transparent), transparent 60%), radial-gradient(circle at 70% 70%, color-mix(in srgb, var(--f-cognition) 30%, transparent), transparent 60%); border: 1px solid var(--f-line); position: relative; overflow: hidden; }
+.c-globe span { position: absolute; inset: 0; background-image: linear-gradient(0deg, transparent 48%, color-mix(in srgb, var(--f-line) 80%, transparent) 50%, transparent 52%), linear-gradient(90deg, transparent 48%, color-mix(in srgb, var(--f-line) 80%, transparent) 50%, transparent 52%); }

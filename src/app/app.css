@@ -99,13 +99,18 @@
   border-bottom: 1px solid var(--f-line);
 }
 
-/* Body: left · centre · right */
+/* Body: left · centre · right, with a lower row spanning left + centre. */
 .a-body {
   grid-column: 2; grid-row: 3; position: relative; z-index: 1;
-  display: grid; grid-template-columns: minmax(280px, 22rem) 1fr minmax(280px, 23rem);
+  display: grid;
+  grid-template-columns: minmax(280px, 22rem) 1fr minmax(280px, 23rem);
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: var(--a-gap); padding: 1rem 1.6rem; min-height: 0; overflow: hidden;
 }
 .a-col { display: flex; flex-direction: column; gap: var(--a-gap); overflow-y: auto; padding-right: .2rem; }
+.a-col-left { grid-column: 1; grid-row: 1; }
+.a-col-right { grid-column: 3; grid-row: 1 / span 2; }
+.a-bottom { grid-column: 1 / 3; grid-row: 2; display: grid; grid-template-columns: 1fr 1fr; gap: var(--a-gap); align-content: start; }
 
 /* The constant centre. Fixed size, its own stacking, never reflowed. */
 .a-centre { display: grid; align-content: center; justify-items: center; gap: .8rem; min-width: 0; }

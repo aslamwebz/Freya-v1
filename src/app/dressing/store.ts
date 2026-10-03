@@ -33,7 +33,7 @@ export interface DressingState {
 export const DEFAULT_DRESSING: DressingState = Object.freeze({
   centre: 'brain',
   style: 'lattice',
-  background: 'obsidian',
+  background: 'city',
   rings: 'on',
   form: 'brain',
 })

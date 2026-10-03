@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_DRESSING, DRESSING_KEY, DressingStore, parseDressing } from '../../../src/app/dressing/store'
 
 describe('dressing table store', () => {
-  it('defaults to the brain on obsidian, rings on, in app form', () => {
-    expect(DEFAULT_DRESSING).toMatchObject({ centre: 'brain', background: 'obsidian', rings: 'on', form: 'brain' })
+  it('defaults to the brain on the city backdrop, rings on, in app form', () => {
+    expect(DEFAULT_DRESSING).toMatchObject({ centre: 'brain', background: 'city', rings: 'on', form: 'brain' })
   })
 
   it('rejects unknown values and keeps the known ones', () => {

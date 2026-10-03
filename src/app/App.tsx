@@ -144,11 +144,19 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
       <main id="a-main" tabIndex={-1} className="a-body">
         <section className="a-col a-col-left" aria-label="Left panels">{slots.left}</section>
         <section className="a-centre" aria-label="Freya centre">
+          <div className="a-planet" aria-hidden="true" />
           {/* The Brain: the one constant of every screen. */}
           <div className="a-centre-stage" data-screen={current.id}>
             {design.centre === 'brain'
               ? <Brain state={cognition} variant={design.style} rings={design.rings === 'on'} />
               : <p className="a-centre-note">{design.centre[0]?.toUpperCase()}{design.centre.slice(1)} centre — in progress</p>}
+            <div className="a-centre-labels" aria-hidden="true">
+              <span className="a-cl a-cl-top">UNDERSTAND</span>
+              <span className="a-cl a-cl-left">PLAN</span>
+              <span className="a-cl a-cl-right">CREATE</span>
+              <span className="a-cl a-cl-bl">REMEMBER</span>
+              <span className="a-cl a-cl-br">ACT</span>
+            </div>
           </div>
           <div className="a-centre-caption"><b>FREYA</b><span>PHASE 19</span><small>SAME MIND. A BRIGHTER TOMORROW.</small></div>
         </section>

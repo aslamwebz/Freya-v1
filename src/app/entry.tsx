@@ -4,7 +4,6 @@ import { App } from './App'
 import { PreferencesStore, type PreferenceStorage } from '../ui-v2/theme/preferences'
 import { DressingStore } from './dressing/store'
 import { createPreviewAdapter } from '../ui-v2/state/preview'
-import { createLiveAdapter, isElectron } from '../ui-v2/state/live'
 import type { UiAdapter } from '../ui-v2/state/contract'
 import '../ui-v2/theme/tokens.css'
 import '../ui-v2/primitives/controls.css'
@@ -13,11 +12,9 @@ import './dressing/dressing.css'
 import './app.css'
 
 /**
- * The App Mode entry.
- *
- * Same adapter rule as ui-v2: a browser (dev/test) has no Core and uses the
- * labelled preview fixtures; an Electron window uses the live adapter, which
- * reports every resource unavailable rather than falling back to sample data.
+ * Design phase: the App renders the labelled preview fixtures so the composition
+ * matches the reference while each screen is built. The live adapter stays behind
+ * the same seam and is switched back on once the screens are done.
  */
 let storage: PreferenceStorage | undefined
 try {
@@ -29,9 +26,7 @@ const root = document.getElementById('root')
 if (!root) throw new Error('Freya: root element is missing')
 const preferences = new PreferencesStore(storage)
 const dressing = new DressingStore(storage)
-const live = isElectron() ? createLiveAdapter() : null
-const adapter: UiAdapter = live ?? createPreviewAdapter()
-if (live) void live.attach()
+const adapter: UiAdapter = createPreviewAdapter()
 
 createRoot(root).render(
   <StrictMode>

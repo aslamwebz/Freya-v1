@@ -113,12 +113,24 @@
 .a-bottom { grid-column: 1 / 3; grid-row: 2; display: grid; grid-template-columns: 1fr 1fr; gap: var(--a-gap); align-content: start; }
 
 /* The constant centre. Fixed size, its own stacking, never reflowed. */
-.a-centre { display: grid; align-content: center; justify-items: center; gap: .8rem; min-width: 0; }
+.a-centre { position: relative; display: grid; align-content: center; justify-items: center; gap: .8rem; min-width: 0; }
+.a-planet {
+  position: absolute; left: -18%; bottom: -26%; width: 40rem; height: 40rem; border-radius: 50%;
+  background: radial-gradient(circle at 38% 38%, color-mix(in srgb, var(--f-action) 34%, transparent), transparent 60%), radial-gradient(circle at 62% 62%, #0b1c2c, #04080e 72%);
+  opacity: .55; z-index: -1; pointer-events: none;
+}
 .a-centre-stage {
   position: relative; contain: layout size;
   width: min(46vh, 30rem); height: min(46vh, 30rem);
   display: grid; place-items: center;
 }
+.a-centre-labels { position: absolute; inset: 0; pointer-events: none; }
+.a-cl { position: absolute; font-size: .58rem; letter-spacing: .3em; color: var(--f-muted); text-transform: uppercase; }
+.a-cl-top { top: 1%; left: 50%; transform: translateX(-50%); }
+.a-cl-left { top: 45%; left: -6%; }
+.a-cl-right { top: 45%; right: -6%; }
+.a-cl-bl { bottom: 10%; left: -2%; }
+.a-cl-br { bottom: 10%; right: -2%; }
 .a-centre-canvas { width: 100%; height: 100%; }
 .a-brain { position: relative; width: 100%; height: 100%; display: grid; place-items: center; }
 .a-brain-fallback { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; max-width: 15rem; margin: auto; color: var(--f-muted); font-size: .78rem; }

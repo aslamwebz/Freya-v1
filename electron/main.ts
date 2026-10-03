@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
 import { ElectronCoreHost } from './coreHost'
 import { loadKeyring } from './keyring'
+import { ProviderConfigStore } from './providerConfig'
 import { createFreyaVaultBinding } from './vaultBinding'
 import { loadLocalEnv } from './localEnv'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
@@ -10,6 +11,7 @@ import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import { PresenceHost } from './presence/host'
 import { installSingleInstanceGuard } from './startup/singleInstance'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
+import type { ProviderConfigInput } from './providerConfig'
 import type { ModelProvider } from '../core/model/provider'
 
 const HERE = __dirname
@@ -27,6 +29,11 @@ loadLocalEnv(join(ROOT, '.env'))
 let mainWindow: BrowserWindow | null = null
 /** Null until the app is ready; every handler that needs it is registered after. */
 let workspace: WorkspaceFile | null = null
+/**
+ * The provider config, beside the workspace and for the same reason: main-only,
+ * created once the app is ready, reached from a window only through named IPC.
+ */
+let providerStore: ProviderConfigStore | null = null
 /** One Core per process. Survives renderer reloads; dies only with the app. */
 let coreHost: ElectronCoreHost | null = null
 /** The presence host. Owns the presence window and pushes frames to it. */
@@ -219,6 +226,23 @@ function requireWorkspace(): WorkspaceFile {
 function requireCore(): ElectronCoreHost {
   if (!coreHost) throw new Error('core used before the app was ready')
   return coreHost
+}
+
+function requireProviderConfig(): ProviderConfigStore {
+  if (!providerStore) throw new Error('provider config used before the app was ready')
+  return providerStore
+}
+
+/**
+ * Re-read the provider environment into Core after a settings save.
+ *
+ * Task 3 owns the store and its bridge; Task 4 owns rebuilding the running Core's
+ * provider from the new environment. This is the call site Task 4 fills. It is a
+ * no-op today so the save path compiles and stays honest about what it does not
+ * yet do — it must never *invent* a reconfigured provider it did not make.
+ */
+function reEnvCore(): void {
+  // TODO(Task 4): reconstruct Core's provider from the freshly applied env.
 }
 
 /**
@@ -587,6 +611,19 @@ function registerIpc(): void {
     dev: Boolean(DEV_SERVER),
   }))
 
+  // Provider settings. The read returns only the masked view — base URL, model,
+  // the live flag and whether a key exists. The write accepts the four named
+  // fields, stores the key in the OS wrapper and then re-reads the environment
+  // into Core. The raw key never appears in either direction: it goes into the
+  // store and into `process.env`, and nowhere else.
+  ipcMain.handle('freya:provider:read', () => requireProviderConfig().read())
+  ipcMain.handle('freya:provider:write', async (_event, input: ProviderConfigInput) => {
+    const saved = await requireProviderConfig().write(input)
+    await requireProviderConfig().applyToEnv(process.env)
+    reEnvCore()
+    return saved
+  })
+
   ipcMain.handle('freya:workspace:load', () => requireWorkspace().load())
   ipcMain.handle('freya:core:submit', (_event, envelope: CoreCommandEnvelope) => {
     const result = requireCore().submit(envelope)
@@ -661,6 +698,9 @@ app.whenReady().then(() => {
   workspace = new WorkspaceFile({
     path: join(app.getPath('userData'), WORKSPACE_FILE),
   })
+  // Created beside the workspace, and created before Core so the stored provider
+  // values can be applied to the process environment Core is then built from.
+  providerStore = new ProviderConfigStore(join(app.getPath('userData'), 'provider.json'))
   // The keys are fetched before the Core is constructed, and they are the only
   // secrets this process handles. A machine with no OS secure storage gets `null`
   // for both, which makes Core fall back to ephemeral stores that label themselves —

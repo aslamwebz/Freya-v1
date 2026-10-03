@@ -15,6 +15,8 @@ import { Mind } from './screens/Mind'
 import { World } from './screens/World'
 import { Life } from './screens/Life'
 import { Workforce } from './screens/Workforce'
+import { Foundry } from './screens/Foundry'
+import { Relay } from './screens/Relay'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
@@ -48,7 +50,7 @@ const RAIL: readonly RailItem[] = [
   { id: 'world', label: 'World', symbol: 'world' },
   { id: 'memory', label: 'Memory', symbol: 'memory' },
   { id: 'life', label: 'Life', symbol: 'life' },
-  { id: 'create', label: 'Create', symbol: 'create' },
+  { id: 'create', label: 'Foundry', symbol: 'forge' },
   { id: 'relay', label: 'Relay', symbol: 'relay' },
   { id: 'settings', label: 'Settings', symbol: 'settings' },
 ]
@@ -116,7 +118,11 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
           ? Life()
           : current.id === 'workforce'
             ? Workforce()
-            : placeholder(current.label, current.symbol, 'This screen is next in the build.')
+            : current.id === 'create'
+              ? Foundry()
+              : current.id === 'relay'
+                ? Relay()
+                : placeholder(current.label, current.symbol, 'This screen is next in the build.')
   const cycleTheme = () => preferences.update({ theme: THEMES[(themeIndex + 1) % THEMES.length]! })
 
   const send = () => {

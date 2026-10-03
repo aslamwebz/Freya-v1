@@ -747,6 +747,28 @@ const PAYLOAD_RULES: {
     (p.turnId === null || isEventId(p.turnId)),
 
   'brain.degraded': (p) => isNonEmptyString(p.reason),
+  'life.entry.recorded': (p) =>
+    isEventId(p.entryId) &&
+    isNonEmptyString(p.kind) &&
+    isNonEmptyString(p.derivation) &&
+    isNonEmptyString(p.confidence) &&
+    isNonEmptyString(p.salience) &&
+    isNonEmptyString(p.status) &&
+    isPositiveInt(p.revision) &&
+    isNonEmptyString(p.sourceDomain) &&
+    (p.sourceId === null || isEventId(p.sourceId)) &&
+    typeof p.occurredAtKnown === 'boolean' &&
+    isNonNegativeInt(p.titleLength) &&
+    isNonNegativeInt(p.summaryLength) &&
+    isNonNegativeInt(p.bodyLength),
+  'life.entry.withdrawn': (p) =>
+    isEventId(p.entryId) &&
+    isPositiveInt(p.revision) &&
+    isNonEmptyString(p.reason),
+  'life.conflict.detected': (p) =>
+    isEventId(p.conflictId) &&
+    isEventId(p.entryA) &&
+    isEventId(p.entryB),
   'life.degraded': (p) => isNonEmptyString(p.reason),
 
   /* --------------------------------------------------- personality (P11) */

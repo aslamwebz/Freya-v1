@@ -141,13 +141,14 @@ describe('attack: private content planted in every channel', () => {
     const snapshot = f.core.consciousness(AT)
     // Counting is not disclosure: a consumer learns that something was learned,
     // which is a fact about Freya's state, and not one character of its content.
+    // The world domain does not have a "memories" measurement, so it is null.
     //
     // Phase 22 made every one of these figures `number | null`, where null is a
     // *stated absence* rather than a zero — "I cannot tell you" is not "there were
-    // none", and conflating them is the failure this suite is about. So both are
-    // accepted here, and the thing that is still refused is a value that could carry
-    // text.
-    expect(snapshot.world.memories === null || typeof snapshot.world.memories === 'number').toBe(true)
+    // none", and conflating them is the failure this suite is about. A zero would be
+    // that conflation wearing a number's clothes, so it is refused here too: the
+    // assertion is the specific honest answer, not "null or some number".
+    expect(snapshot.world.memories).toBeNull()
     expect(typeof snapshot.world.memories).not.toBe('string')
     expect(snapshot.continuity.listed).toBe(snapshot.continuity.items.length)
   })
@@ -345,22 +346,23 @@ describe('attack: an absent subsystem rendered as an empty one', () => {
       },
       AT,
     )
-    // Absent rows rather than an empty list: a consumer can act on "this is
-    // missing", and cannot act on "I cannot tell you what is missing". The count is
-    // read from the producer's own table rather than written down, because a row
-    // that only appears once the producer exists is precisely how a snapshot ends up
-    // silently complete while missing a whole domain — and because writing the
-    // number down here is what let this go stale twice: once for Phase 21's `life`
-    // and once for Phase 22's `self` and `world`.
+    // Fourteen absent rows rather than an empty list: a consumer can act on "this
+    // is missing", and cannot act on "I cannot tell you what is missing".
+    // Fourteen rather than twelve because Phase 20 added `self` and `world` as
+    // separate provenance rows, and `life` is a row *before* it is a subsystem.
     //
-    // So the assertion is the claim itself rather than a tally: *every* declared
-    // source has a row, and every row says `absent`. A domain added later without a
-    // row now fails here.
+    // The number is written down *and* checked against the producer's own table.
+    // The written number is what forces a human to look when a domain lands — it
+    // went stale once for Phase 21's `life` and once for Phase 22's `self` and
+    // `world`. The derived check is what makes the assertion the claim itself rather
+    // than a tally: *every* declared source has a row, every row says `absent`, and
+    // the set is exactly the declared one — so neither a domain added later without a
+    // row nor a stale row that outlived its domain can slip through.
     const { CONSCIOUS_SOURCES } = await import('../../core/consciousness/types')
     const rows = snapshot.provenance.sources
+    expect(rows).toHaveLength(14)
     expect(rows).toHaveLength(CONSCIOUS_SOURCES.length)
     expect(rows.every((row) => row.freshness === 'absent')).toBe(true)
-    // And the set is exactly the declared one, so a stale row cannot linger either.
     expect(rows.map((row) => row.domain).sort()).toEqual([...CONSCIOUS_SOURCES].sort())
   })
 })

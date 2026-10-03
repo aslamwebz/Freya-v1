@@ -57,6 +57,16 @@ export type ActivityKind =
   | 'work.run.recovered'
   | 'work.step.verified'
   | 'work.approval.requested'
+  // Continuous Life Loop (Phase 23). Four of the loop's seventeen events earn a row
+  // and thirteen deliberately do not: a wake, a deterministic refusal, a stop and a
+  // lift are things a person might want to see, whereas an action index or a
+  // continuation decision is bookkeeping at a granularity that would bury the feed.
+  // The loop's own projection carries the rest, and `describeActivity` returning
+  // `null` is how "not worth an activity row" is spelled.
+  | 'lifeloop.woke'
+  | 'lifeloop.refused'
+  | 'lifeloop.stopped'
+  | 'lifeloop.unstopped'
   | 'work.approval.decided'
   // Missions. Every one of the eleven is named, because the distinction between
   // "established" and "hit a ceiling" is the reason the subsystem exists and a feed
@@ -737,6 +747,54 @@ export function describeActivity(event: {
         kind: 'workforce.limit.exceeded',
         text: `Workforce ceiling reached: ${text(event.payload.limit, 'unknown')}.`,
         tone: 'warn',
+      }
+
+    /* ----------------------------------------------- continuous life loop */
+
+    // Metadata only, and worded so a row cannot say more than the journal does. The
+    // closed kind and the closed code are the whole content: no event text, no
+    // prompt, no reference spelled out as anything a person could read as content.
+    case 'lifeloop.wake.received':
+      return {
+        ...base,
+        kind: 'lifeloop.woke',
+        text: `Freya woke up (${event.payload.kind}); she will decide whether it is worth thinking about.`,
+        tone: 'neutral',
+      }
+
+    case 'lifeloop.filter.denied':
+      // The one row here that is genuinely news: a deterministic gate said no, and
+      // naming the closed code is what lets a person tell "nothing authorized this"
+      // apart from "she thought and chose silence".
+      return {
+        ...base,
+        kind: 'lifeloop.refused',
+        text: `Freya decided not to think: ${event.payload.code}.`,
+        tone: 'neutral',
+      }
+
+    case 'lifeloop.wake.denied':
+      return {
+        ...base,
+        kind: 'lifeloop.refused',
+        text: `Freya did not wake for that: ${event.payload.code}.`,
+        tone: 'neutral',
+      }
+
+    case 'lifeloop.stopped':
+      return {
+        ...base,
+        kind: 'lifeloop.stopped',
+        text: 'The life loop stopped.',
+        tone: 'warn',
+      }
+
+    case 'lifeloop.unstopped':
+      return {
+        ...base,
+        kind: 'lifeloop.unstopped',
+        text: 'The owner cleared the stop and the life loop is running again.',
+        tone: 'good',
       }
 
     /* ------------------------------------------------------------ attention */

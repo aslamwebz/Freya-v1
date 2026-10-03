@@ -124,6 +124,8 @@ function installFakeBridge() {
     // make the absence look tested.
     coreConsciousness: async () => null,
     onCoreConsciousness: () => () => {},
+    coreLifeLoop: async () => null,
+    onCoreLifeLoop: () => () => {},
   }
   window.freyaHost = bridge
 }

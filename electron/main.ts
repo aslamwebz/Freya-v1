@@ -525,6 +525,20 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:world', projection)
   })
 
+  /**
+   * The Continuous Life Loop: a read channel and nothing else.
+   *
+   * There is deliberately no `freya:core:lifeloop:write`, no `:tick` and no
+   * `:wake`. A window that could wake the loop could make Freya think, and a window
+   * that could tick it could drive the clock — and the one thing Phase 23 is built
+   * to guarantee is that neither is reachable from a surface. The heartbeat the loop
+   * rides is the attention timer below, which exists in the main process and is not
+   * a channel.
+   */
+  const detachLifeLoop = coreHost?.onLifeLoop((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:lifeloop', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -542,6 +556,7 @@ function createWindow(): BrowserWindow {
     detachSkills?.()
     detachWorld?.()
     detachConsciousness?.()
+    detachLifeLoop?.()
   })
 
   if (DEV_SERVER) {
@@ -683,6 +698,7 @@ function registerIpc(): void {
   // because a snapshot a window could ask Core to rebuild is a snapshot a window
   // could ask Core to build wrongly, and there is no command behind it to refuse.
   ipcMain.handle('freya:core:consciousness', () => requireCore().consciousness())
+  ipcMain.handle('freya:core:lifeloop', () => requireCore().lifeLoop())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

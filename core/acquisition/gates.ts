@@ -325,8 +325,8 @@ function isDerivedGateKindName(kind: GateKind): kind is DerivedGateKind {
  */
 export function latestGateVerdicts(
   ledger: readonly GateVerdictRecord[],
-): Readonly<Record<string, GateVerdictRecord>> {
-  const latest: Record<string, GateVerdictRecord> = {}
+): Readonly<Record<GateKind, GateVerdictRecord>> {
+  const latest = {} as Record<GateKind, GateVerdictRecord>
   for (const verdict of ledger) latest[verdict.kind] = verdict
   return Object.freeze(latest)
 }

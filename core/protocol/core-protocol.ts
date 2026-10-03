@@ -215,6 +215,41 @@ export const CAPABILITIES = [
   'acquisition.propose',
   'acquisition.verification.record',
   'acquisition.activation.manage',
+
+  /**
+   * Self-Improving Architecture (Phase 30). Five, and the split is the phase.
+   *
+   * `improvement.status.read` is the owner's read: what Freya is trying to change about herself,
+   * what is blocked and which landed changes are now past their own review date. It grants
+   * nothing, and it is deliberately readable while everything else is *paused*, so an owner can
+   * always see why a merge is stuck.
+   *
+   * `improvement.propose` raises a change. A worker principal does **not** hold it: an agent that
+   * could file tickets against Freya's own architecture is the first step of the loop this phase
+   * exists to keep human.
+   *
+   * `improvement.stage` and `improvement.verify` stage a change and record that a *named* verifier
+   * found something. Neither can report a gate as satisfied for something it did not check, and
+   * neither can touch the merge gate at all.
+   *
+   * `improvement.merge.approve` is the one that means **a person is being trusted**, and it is
+   * separate for the same reason `work.approval.decide` and `acquisition.activation.manage` are: it
+   * can be withheld, audited and re-gated without touching the rest of the domain.
+   * `improvement.rollback` is separate again, and that separation is the point: a merge is a
+   * forward change to Freya's own architecture and a rollback is another, so neither implies the
+   * other. Giving the engine one capability for "change herself" would let a merge grant a
+   * rollback by accident.
+   *
+   * Nothing here makes a change *apply*. An approved merge means the owner approved it; what
+   * happens next is the owner's own action, and `StageExecution.appliedBy` is hard-set to
+   * `'owner'` with no producer, so a self-merge is unrepresentable rather than merely forbidden.
+   */
+  'improvement.status.read',
+  'improvement.propose',
+  'improvement.stage',
+  'improvement.verify',
+  'improvement.merge.approve',
+  'improvement.rollback',
 ] as const
 
 export type Capability = (typeof CAPABILITIES)[number]

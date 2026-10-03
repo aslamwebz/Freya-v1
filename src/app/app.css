@@ -1,0 +1,164 @@
+/*
+ * Freya App Mode — the shell.
+ *
+ * v2 anatomy: a fixed rail, a header, a ticker, a body of three columns around a
+ * constant centre, and a global command bar. The centre is its own layer with a
+ * fixed size so no layout change can move it.
+ */
+
+.freya-app {
+  --a-rail: 208px;
+  --a-gap: 18px;
+  display: grid;
+  grid-template-columns: var(--a-rail) 1fr;
+  grid-template-rows: auto auto 1fr auto;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--f-bg);
+  color: var(--f-ink);
+  font-family: var(--f-font);
+}
+
+/* Background: obsidian ground with a faint horizon glow. */
+.a-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(120% 80% at 50% 120%, color-mix(in srgb, var(--f-action) 10%, transparent), transparent 60%),
+    radial-gradient(90% 60% at 50% -10%, color-mix(in srgb, var(--f-cognition) 8%, transparent), transparent 55%),
+    var(--f-bg);
+}
+.a-atmos { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+.a-atmos .a-stars {
+  position: absolute; inset: 0;
+  background-image: radial-gradient(1px 1px at 20% 30%, color-mix(in srgb, var(--f-ink) 40%, transparent), transparent),
+    radial-gradient(1px 1px at 70% 60%, color-mix(in srgb, var(--f-ink) 30%, transparent), transparent),
+    radial-gradient(1px 1px at 45% 80%, color-mix(in srgb, var(--f-ink) 25%, transparent), transparent);
+  opacity: .5;
+}
+
+/* Rail */
+.a-rail {
+  grid-column: 1; grid-row: 1 / -1;
+  position: relative; z-index: 2;
+  display: flex; flex-direction: column; gap: .2rem;
+  padding: 1rem .7rem;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--f-bg) 92%, transparent), color-mix(in srgb, var(--f-panel) 60%, transparent));
+  border-right: 1px solid var(--f-line);
+}
+.a-mark { display: grid; place-items: center; width: 44px; height: 44px; margin: .2rem 0 1.2rem .3rem; text-decoration: none; }
+.a-orbit {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 1.5px solid var(--f-action);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--f-action) 45%, transparent), inset 0 0 8px color-mix(in srgb, var(--f-action) 35%, transparent);
+}
+.a-rail nav { display: flex; flex-direction: column; gap: .12rem; }
+.a-rail-item {
+  justify-content: flex-start; gap: .7rem; width: 100%;
+  padding: .58rem .7rem; border-radius: 10px;
+  color: var(--f-muted); font-size: .92rem;
+}
+.a-rail-item:hover { color: var(--f-ink); background: color-mix(in srgb, var(--f-action) 8%, transparent); }
+.a-rail-item[aria-current='page'] {
+  color: var(--f-heading);
+  background: color-mix(in srgb, var(--f-action) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--f-action);
+}
+.a-online { margin-top: auto; display: grid; gap: .1rem; padding: .8rem .7rem 0; border-top: 1px solid var(--f-line); font-size: .78rem; }
+.a-online .a-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--f-positive); box-shadow: 0 0 8px var(--f-positive); }
+.a-online b { color: var(--f-ink); font-weight: 600; }
+.a-online small { color: var(--f-muted); }
+
+/* Header */
+.a-head {
+  grid-column: 2; grid-row: 1; position: relative; z-index: 2;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+  padding: 1.1rem 1.6rem .4rem;
+}
+.a-brand { display: grid; grid-template-columns: auto auto auto; align-items: baseline; gap: .55rem; }
+.a-brand b { font-family: var(--f-narrative); font-size: 2.1rem; letter-spacing: .28em; font-weight: 400; }
+.a-brand i { color: var(--f-muted); font-style: normal; }
+.a-brand span { font-size: .72rem; letter-spacing: .28em; color: var(--f-heading); }
+.a-brand small { grid-column: 1 / -1; font-size: .62rem; letter-spacing: .22em; color: var(--f-muted); text-transform: uppercase; }
+.a-head-right { display: flex; align-items: center; gap: 1.2rem; }
+.a-head-right .f-clock { display: grid; justify-items: end; text-align: right; line-height: 1.15; }
+.a-head-right .f-clock small { font-size: .68rem; color: var(--f-muted); }
+.a-head-right .f-clock time { font-size: 1.45rem; letter-spacing: .04em; }
+.a-head-right blockquote { margin: 0; text-align: right; font-family: var(--f-narrative); font-size: 1.05rem; line-height: 1.25; color: var(--f-ink); }
+.a-head-right blockquote span { display: block; }
+.a-head-right blockquote em { display: block; color: var(--f-muted); font-style: italic; }
+.a-theme { padding: .5rem; border-radius: 50%; border: 1px solid var(--f-line); }
+
+/* Ticker */
+.a-ticker {
+  grid-column: 2; grid-row: 2; position: relative; z-index: 2;
+  display: flex; gap: .7rem; justify-content: flex-end;
+  padding: 0 1.6rem .5rem;
+  font-size: .6rem; letter-spacing: .24em; color: var(--f-muted);
+  border-bottom: 1px solid var(--f-line);
+}
+
+/* Body: left · centre · right */
+.a-body {
+  grid-column: 2; grid-row: 3; position: relative; z-index: 1;
+  display: grid; grid-template-columns: minmax(280px, 22rem) 1fr minmax(280px, 23rem);
+  gap: var(--a-gap); padding: 1rem 1.6rem; min-height: 0; overflow: hidden;
+}
+.a-col { display: flex; flex-direction: column; gap: var(--a-gap); overflow-y: auto; padding-right: .2rem; }
+
+/* The constant centre. Fixed size, its own stacking, never reflowed. */
+.a-centre { display: grid; align-content: center; justify-items: center; gap: .8rem; min-width: 0; }
+.a-centre-stage {
+  position: relative; contain: layout size;
+  width: min(46vh, 30rem); height: min(46vh, 30rem);
+  display: grid; place-items: center;
+}
+.a-centre-canvas { width: 100%; height: 100%; }
+.a-centre-fallback { grid-area: 1 / 1; color: var(--f-muted); font-size: .8rem; text-align: center; max-width: 14rem; }
+.a-centre-caption { text-align: center; display: grid; gap: .15rem; }
+.a-centre-caption b { font-family: var(--f-narrative); letter-spacing: .3em; font-size: 1.1rem; font-weight: 400; }
+.a-centre-caption span { font-size: .58rem; letter-spacing: .3em; color: var(--f-heading); }
+.a-centre-caption small { font-size: .58rem; letter-spacing: .22em; color: var(--f-muted); }
+
+/* Screen title watermark */
+.a-screen-title {
+  position: fixed; left: calc(var(--a-rail) + 1.6rem); bottom: 5.4rem; z-index: 2;
+  display: flex; align-items: center; gap: .5rem; color: transparent;
+  -webkit-text-stroke: 1px color-mix(in srgb, var(--f-muted) 55%, transparent);
+  font-size: 1.5rem; font-weight: 700; letter-spacing: .04em; pointer-events: none;
+  mask-image: linear-gradient(90deg, #000, transparent);
+}
+.a-screen-title svg { -webkit-text-stroke: 0; color: color-mix(in srgb, var(--f-muted) 60%, transparent); }
+
+/* Command bar */
+.a-cmd {
+  grid-column: 2; grid-row: 4; position: relative; z-index: 3;
+  display: grid; justify-items: center; gap: .35rem;
+  padding: .6rem 1.6rem 1.1rem;
+}
+.a-cmd form {
+  display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: .7rem;
+  width: min(60rem, 100%);
+  padding: .5rem .7rem; border-radius: 999px;
+  border: 1px solid var(--f-line);
+  background: var(--f-dialog);
+  box-shadow: var(--f-shadow);
+}
+.a-voice { border-radius: 50%; padding: .55rem; }
+.a-cmd .f-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.a-cmd .f-field input {
+  width: 100%; background: transparent; border: 0; color: var(--f-ink);
+  font-size: 1.05rem; padding: .4rem .2rem;
+}
+.a-cmd .f-field input:focus { outline: none; }
+.a-intents { display: flex; gap: .3rem; }
+.a-intents .f-button { border: 1px solid var(--f-line); border-radius: 999px; padding: .35rem .8rem; color: var(--f-muted); }
+.a-intents .f-button[aria-pressed='true'] { color: var(--f-heading); border-color: var(--f-action); background: color-mix(in srgb, var(--f-action) 12%, transparent); }
+.a-cmd-status { font-size: .78rem; color: var(--f-muted); }
+
+@media (max-width: 1200px) {
+  .freya-app { --a-rail: 74px; }
+  .a-rail-item span { display: none; }
+  .a-col-left, .a-col-right { display: none; }
+}

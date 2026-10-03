@@ -13,7 +13,8 @@ import {
   type AcquisitionRequest,
   type GateVerdictRecord,
 } from '../../../core/acquisition'
-import { MemoryAcquisitionStore, VaultAcquisitionStore } from '../../../core/vault/repositories/acquisition-store'
+import { MemoryAcquisitionStore } from '../../../core/vault/repositories/acquisition-store'
+import type { VaultAcquisitionStore } from '../../../core/vault/repositories/acquisition-store'
 
 /**
  * THE ATTACKS, aimed at the one thing this phase exists to prevent.

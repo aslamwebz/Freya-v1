@@ -310,7 +310,7 @@ describe('the request lifecycle is a closed table', () => {
   })
 
   it('grants an activation only from activation-requested, with a code-owned deadline', () => {
-    // Only ctivation-requested may be activated: proposed and erified are both refused.
+    // Only activation-requested may be activated: proposed and verified are both refused.
     expect(activateAcquisitionRequest(request(), { now: AT }).ok).toBe(false)
     expect(advanceAcquisitionRequest(request(), { now: AT, to: 'built' }).ok).toBe(false)
     expect(activateAcquisitionRequest(readyForActivation(), { now: LATER }).ok).toBe(false)

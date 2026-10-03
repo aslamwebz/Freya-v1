@@ -132,7 +132,6 @@ function check(
 
 function proposalAt(status: 'staged' | 'reviewed' | 'merging' | 'merged'): ImprovementProposal {
   let current = proposal()
-  if (status === 'proposed' || status === 'staging') return current
   current = unwrap(advanceImprovement(current, { now: AT, to: 'staging' }))
   current = unwrap(advanceImprovement(current, { now: AT, to: 'staged', restoresRevision: 'rev-7' }))
   if (status === 'staged') return current
@@ -509,7 +508,7 @@ describe('the gate ledger', () => {
     )
     if (!failed.ok) throw new Error('fixture refused')
     const latest = latestGateRecords([passed, failed.record])
-    expect(latest['tests-passed'].verdict).toBe('failed')
+    expect(latest['tests-passed']?.verdict).toBe('failed')
   })
 
   it('counts only passed as satisfied, so not-applicable is not a way out', () => {
@@ -537,9 +536,9 @@ describe('the gate ledger', () => {
       targets: ['rollback-mechanism'],
     } as ImprovementProposal
     const byKind = latestGateRecords(evaluateDerivedGates(wide, AT))
-    expect(byKind['no-authority-widening'].verdict).toBe('failed')
-    expect(byKind['no-protected-surface'].verdict).toBe('failed')
-    expect(byKind['no-authority-widening'].reason).toBe('requires-a-forbidden-change')
+    expect(byKind['no-authority-widening']?.verdict).toBe('failed')
+    expect(byKind['no-protected-surface']?.verdict).toBe('failed')
+    expect(byKind['no-authority-widening']?.reason).toBe('requires-a-forbidden-change')
     for (const record of evaluateDerivedGates(proposal(), AT)) {
       expect(record.verifier).toBeNull()
       expect(record.authority).toBe('gate')

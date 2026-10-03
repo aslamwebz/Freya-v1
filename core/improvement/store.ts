@@ -1,4 +1,9 @@
-import type { ImprovementGateRecord, ImprovementProposal, ImprovementState } from './types'
+import type {
+  ImprovementGateRecord,
+  ImprovementProposal,
+  ImprovementState,
+  MergeDecision,
+} from './types'
 
 /**
  * THE IMPROVEMENT STORE.
@@ -53,7 +58,7 @@ export interface GateLedgerWrite {
   readonly verdicts: readonly ImprovementGateRecord[]
 }
 
-export type ImprovementWrite = ImprovementProposal | GateLedgerWrite | import('./types').MergeDecision
+export type ImprovementWrite = ImprovementProposal | GateLedgerWrite | MergeDecision
 
 export interface ImprovementStore {
   /** What durability this store actually provides. Never a guess. */

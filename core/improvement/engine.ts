@@ -31,6 +31,7 @@ import {
   type ImprovementClosedReason,
   type ImprovementDerivation,
   type ImprovementGateKind,
+  type ImprovementGateReason,
   type ImprovementGateRecord,
   type ImprovementPrecedence,
   type ImprovementProposal,
@@ -940,7 +941,7 @@ function checkReasonFor(
   kind: string,
   passed: boolean,
   notApplicable: boolean,
-): import('./types').ImprovementGateReason {
+): ImprovementGateReason {
   if (notApplicable) return 'marked-not-applicable-by-verifier'
   if (kind === 'staged-verified') {
     return passed ? 'stage-was-confirmed-by-a-named-check' : 'stage-was-not-confirmed'

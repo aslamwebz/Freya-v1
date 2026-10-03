@@ -15,6 +15,7 @@ import {
   type ImprovementGateRecord,
   type ImprovementProposal,
   type ImprovementStatus,
+  type MergeDecision,
 } from './types'
 
 /**
@@ -228,7 +229,7 @@ export function rebuildGateLedger(value: unknown): Rebuild<readonly ImprovementG
 export function rebuildMergeDecision(
   value: unknown,
   proposal: ImprovementProposal,
-): Rebuild<import('./types').MergeDecision> {
+): Rebuild<MergeDecision> {
   if (!isPlainObject(value)) return { ok: false, reason: 'a stored merge decision is not an object' }
   const expected = ['proposalId', 'approved', 'gates', 'unsatisfied', 'decidedAt', 'ownerApproved', 'precedence']
   if (!hasExactKeySet(value, expected)) {
@@ -272,5 +273,5 @@ export function rebuildMergeDecision(
   if (precedence !== null && typeof precedence !== 'string') {
     return { ok: false, reason: 'a stored merge decision carries an unreadable precedence' }
   }
-  return { ok: true, value: value as unknown as import('./types').MergeDecision }
+  return { ok: true, value: value as unknown as MergeDecision }
 }

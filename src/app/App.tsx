@@ -17,6 +17,10 @@ import { Life } from './screens/Life'
 import { Workforce } from './screens/Workforce'
 import { Foundry } from './screens/Foundry'
 import { Relay } from './screens/Relay'
+import { Focus } from './screens/Focus'
+import { People } from './screens/People'
+import { Memory } from './screens/Memory'
+import { Settings } from './screens/Settings'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
@@ -122,7 +126,15 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
               ? Foundry()
               : current.id === 'relay'
                 ? Relay()
-                : placeholder(current.label, current.symbol, 'This screen is next in the build.')
+                : current.id === 'focus'
+                  ? Focus()
+                  : current.id === 'people'
+                    ? People()
+                    : current.id === 'memory'
+                      ? Memory()
+                      : current.id === 'settings'
+                        ? Settings()
+                        : placeholder(current.label, current.symbol, 'This screen is next in the build.')
   const cycleTheme = () => preferences.update({ theme: THEMES[(themeIndex + 1) % THEMES.length]! })
 
   const send = () => {

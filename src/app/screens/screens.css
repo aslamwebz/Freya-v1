@@ -190,3 +190,20 @@
   .rl-view { grid-template-columns: 16rem 1fr; }
   .rl-thread { display: none; }
 }
+
+/* People */
+.pp-list { display: grid; gap: .15rem; }
+.pp-person { display: grid; grid-template-columns: auto 1fr auto; gap: .6rem; align-items: center; text-align: left; padding: .5rem; border-radius: 12px; border: 1px solid transparent; background: none; color: inherit; cursor: pointer; }
+.pp-person[data-active='true'] { border-color: var(--f-line); background: color-mix(in srgb, var(--f-action) 8%, transparent); }
+.pp-person .c-row-text b { font-size: .85rem; }
+.pp-person .c-row-text small { font-size: .72rem; color: var(--f-muted); }
+
+/* Settings */
+.st-nav { display: grid; gap: .15rem; }
+.st-cat { display: flex; align-items: center; gap: .6rem; text-align: left; padding: .5rem .6rem; border-radius: 10px; border: 1px solid transparent; background: none; color: var(--f-muted); cursor: pointer; font-size: .9rem; }
+.st-cat[data-active='true'] { color: var(--f-heading); border-color: var(--f-line); background: color-mix(in srgb, var(--f-action) 8%, transparent); box-shadow: inset 2px 0 0 var(--f-action); }
+.st-themes { display: grid; grid-template-columns: repeat(2, 1fr); gap: .5rem; }
+.st-theme { display: flex; align-items: center; gap: .5rem; padding: .45rem .55rem; border-radius: 10px; border: 1px solid var(--f-line); background: none; color: var(--f-muted); cursor: pointer; font-size: .8rem; }
+.st-theme[data-active='true'] { color: var(--f-heading); border-color: var(--f-action); background: color-mix(in srgb, var(--f-action) 10%, transparent); }
+.st-swatch { width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+.st-value { color: var(--f-heading); font-size: .78rem; }

@@ -1,9 +1,9 @@
-import type { ActivityRow, AttentionView, CoreView, HomeView, MissionView, Resource, UiAdapter, UiSnapshot, WorkforceView } from './contract'
+import type { ActivityRow, AttentionView, CoreView, HomeView, MissionView, ProviderView, Resource, UiAdapter, UiSnapshot, WorkforceView } from './contract'
 import { coreMirror } from '../../platform/coreClient'
 import { missionMirror } from '../../platform/missionClient'
 import { workforceMirror } from '../../platform/workforceClient'
 import { attentionMirror } from '../../platform/attentionClient'
-import { hostBridge } from '../../platform/host'
+import { hostBridge, type ProviderConfigView } from '../../platform/host'
 
 /**
  * The Phase 19.1 live adapter: the UI's first real projection of Phases 0–18.
@@ -47,6 +47,27 @@ function countPhrase(count: number, singular: string, plural = `${singular}s`): 
   return `${count} ${count === 1 ? singular : plural}`
 }
 
+/**
+ * The provider status in words a surface can render.
+ *
+ * `hasKey` is a usable configuration, because the host only reports `true` when it
+ * can actually unwrap a stored credential. The three details are the only states
+ * that exist: a key plus live enabled is `connected`; a key with live inference
+ * switched off is `live-disabled`; no usable key is `not configured`. Nothing here
+ * inspects, logs or forwards the key — it is a boolean on the far side.
+ */
+function providerView(config: ProviderConfigView): ProviderView {
+  const connected = config.hasKey
+  return {
+    connected,
+    baseUrl: config.baseUrl,
+    model: config.model,
+    liveEnabled: config.liveEnabled,
+    hasKey: config.hasKey,
+    detail: connected ? (config.liveEnabled ? 'connected' : 'live-disabled') : 'not configured',
+  }
+}
+
 export interface LiveAdapter extends UiAdapter {
   /** Idempotent. Attaches every mirror this projection needs, once. */
   attach(): Promise<() => void>
@@ -72,13 +93,41 @@ export function createLiveAdapter(): LiveAdapter {
   const noCore = <T,>(): Resource<T> => ({ status: 'unavailable', reason: NO_CORE_REASON })
   const absent: UiSnapshot = {
     home: noCore(), core: noCore(), mission: noCore(),
-    workforce: noCore(), activity: noCore(), attention: noCore(),
+    workforce: noCore(), activity: noCore(), attention: noCore(), provider: noCore(),
   }
 
   let snapshot: UiSnapshot = available
-    ? { home: LOADING, core: LOADING, mission: LOADING, workforce: LOADING, activity: LOADING, attention: LOADING }
+    ? { home: LOADING, core: LOADING, mission: LOADING, workforce: LOADING, activity: LOADING, attention: LOADING, provider: LOADING }
     : absent
   const listeners = new Set<() => void>()
+
+  /**
+   * The provider resource, read once through the bridge rather than polled.
+   *
+   * The provider is a setting, not a stream: it changes only when the owner saves a
+   * new one, and the Settings surface re-reads it through the bridge at that moment.
+   * There is no subscription to hold open, so an idle window never asks the main
+   * process for a credential status it already has.
+   */
+  let providerResource: Resource<ProviderView> = available ? LOADING : noCore()
+
+  const refreshProvider = async (): Promise<void> => {
+    const bridge = hostBridge()
+    if (!bridge) {
+      providerResource = noCore()
+      derive()
+      return
+    }
+    try {
+      providerResource = { status: 'ready', source: 'live', data: providerView(await bridge.providerConfig()) }
+    } catch (error) {
+      providerResource = {
+        status: 'error',
+        reason: error instanceof Error ? error.message : 'the provider configuration could not be read',
+      }
+    }
+    derive()
+  }
 
   const coreView = (): Resource<CoreView> => {
     const status = core.status
@@ -255,6 +304,7 @@ export function createLiveAdapter(): LiveAdapter {
       workforce: workforceView(),
       activity: activityView(),
       attention: attentionView(),
+      provider: providerResource,
     }
     // A new object each pass would re-render every subscriber on every Core push, so
     // identity is compared before publishing. `useSyncExternalStore` depends on it.
@@ -288,6 +338,9 @@ export function createLiveAdapter(): LiveAdapter {
       disposers.push(await attention.attach())
       disposers.push(attention.subscribe(derive))
       derive()
+      // The provider is a read, not a subscription: one backstop read per attach, and
+      // the Settings surface re-reads it directly when a save lands.
+      if (available) void refreshProvider()
       return () => {
         for (const dispose of disposers.splice(0)) dispose()
       }

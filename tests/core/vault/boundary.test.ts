@@ -33,8 +33,11 @@ async function sourceFiles(dir: string, extensions = ['.ts', '.tsx']): Promise<s
   return output
 }
 
-async function readAll(dir: string): Promise<{ path: string; source: string }[]> {
-  const files = await sourceFiles(join(REPO_ROOT, dir))
+async function readAll(
+  dir: string,
+  extensions = ['.ts', '.tsx'],
+): Promise<{ path: string; source: string }[]> {
+  const files = await sourceFiles(join(REPO_ROOT, dir), extensions)
   return Promise.all(files.map(async (path) => ({ path, source: await readFile(path, 'utf8') })))
 }
 
@@ -64,6 +67,38 @@ describe('Vault renderer/Hands boundary', () => {
       expect(file.source).not.toMatch(SQLCIPHER_IMPORT)
       expect(file.source).not.toMatch(/from\s+['"][^'"]*vault/)
     }
+  })
+
+  it('keeps the test-only SQL adapter out of core and out of the bridge', async () => {
+    // `tests/core/vault/sql-adapter.ts` runs the ledger's SQL against Node's built-in
+    // SQLite so the assertions are not all skipped while binding selection is blocked.
+    // That is a *test* affordance and nothing else: plain SQLite must never reach the
+    // product, or "no plaintext fallback" would have a second door in it.
+    // Import forms only: `core/events/jsonl-store.ts` names the module in a comment
+    // explaining why the journal does *not* use it, and a prose mention is not a door.
+    const SQLITE_IMPORT = /(?:from\s+|require\(|import\()\s*['"][^'"]*node:sqlite[^'"]*['"]/
+    for (const dir of ['core', 'src', 'electron']) {
+      for (const file of await readAll(dir)) {
+        expect(file.source).not.toMatch(SQLITE_IMPORT)
+      }
+    }
+    for (const file of await readAll('scripts', ['.mjs', '.ts'])) {
+      expect(file.source).not.toMatch(SQLITE_IMPORT)
+    }
+  })
+
+  it('keeps every durable world store in the Vault, with no bespoke world file', async () => {
+    // `PLAN.md` Step E: no new custom durable store for Phase 22. The structural proof
+    // is that `core/world` cannot reach a filesystem at all, so a per-domain encrypted
+    // world file cannot reappear without failing a test.
+    for (const file of await readAll('core/world')) {
+      expect(file.source).not.toMatch(/from ['"]node:fs/)
+      expect(file.source).not.toMatch(/from ['"][^'"]*vault/)
+    }
+    // And the world tables live in the Vault's own migration list.
+    const schema = await readFile(join(REPO_ROOT, 'core', 'vault', 'schema.ts'), 'utf8')
+    expect(schema).toContain('CREATE TABLE IF NOT EXISTS world_evidence')
+    expect(schema).toContain('CREATE TABLE IF NOT EXISTS world_meta')
   })
 
   it('does not expose a Vault accessor on the public Core interface', async () => {

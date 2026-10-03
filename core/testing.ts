@@ -5,6 +5,7 @@ import type { SubordinateWorkerScope, WorkforceOwnerScope } from './workforce/au
 import type { AttentionSourceScope } from './attention/engine'
 import type { AttentionSource } from './attention/types'
 import type { SkillOwnerScope } from './skills/engine'
+import type { LifeOwnerScope } from './life/engine'
 
 /**
  * TEST SEAMS. NOT PART OF THE PRODUCTION CAPABILITY SURFACE.
@@ -26,6 +27,7 @@ interface AuthorityIssuer {
   issueSubordinateScope(workerId: string): SubordinateWorkerScope
   issueAttentionSourceScope(source: AttentionSource): AttentionSourceScope
   issueSkillOwnerScope(): SkillOwnerScope
+  issueLifeOwnerScope(): LifeOwnerScope
 }
 
 /** The owner's authority. Grant governance is only on this interface. */
@@ -86,4 +88,17 @@ export function attentionSource(core: Core, source: AttentionSource): AttentionS
  */
 export function skillOwnerScope(core: Core): SkillOwnerScope {
   return (core as unknown as AuthorityIssuer).issueSkillOwnerScope()
+}
+
+/**
+ * The owner's face of Life History.
+ *
+ * Holding it is the authority to record, consolidate, revise and withdraw a Life
+ * entry, and it is issued by Core rather than acquired by naming a capability. It
+ * cannot raise a confidence above its derivation ceiling, cannot write a
+ * secret-shaped entry, cannot delete history and cannot reach a model: the engine
+ * has no such method.
+ */
+export function lifeOwnerScope(core: Core): LifeOwnerScope {
+  return (core as unknown as AuthorityIssuer).issueLifeOwnerScope()
 }

@@ -29,9 +29,12 @@ import { RELAY_NO_PAYLOAD } from '../core/protocol/relay'
 import { RELAY_LIMITS } from '../core/relay/types'
 import type { OfficeProjection } from '../core/office/projection'
 import type { SkillProjection } from '../core/protocol/skills'
+import type { WorldSummaryView } from '../core/protocol/world'
+import type { ConsciousContextProjection } from '../core/protocol/consciousness'
 import { SKILL_NO_PAYLOAD } from '../core/protocol/skills'
 import { SKILL_LIMITS } from '../core/skills/types'
 import type { ProviderConfig, ProviderConfigInput } from './providerConfig'
+import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
 
 export interface RuntimeInfo {
   version: string
@@ -421,6 +424,36 @@ const api = {
    * narrow payload contract per command, and Core's own admission, evaluation and
    * promotion tables sit behind them.
    */
+  /**
+   * The unified conscious context: one coherent account of what Freya currently
+   * understands about herself and her situation, derived from the projections this
+   * window could otherwise have to assemble itself.
+   *
+   * A read and a follow, and **nothing else**. There is deliberately no
+   * `consciousness.*` name in `CORE_COMMANDS` below, so `coreSubmit` cannot reach
+   * this lane at all - the absence of a write verb is the property, and it is
+   * asserted against this file's source in
+   * `tests/host/consciousnessBridge.test.ts` rather than left to this comment.
+   *
+   * Note what this lane reports on this build: Phase 21 Life and Phase 22
+   * Self/World are not integrated yet, so the snapshot arrives `degraded` and
+   * names `life` in its reason. That is the truthful reading, not a defect to be
+   * smoothed over here.
+   */
+  coreConsciousness: (): Promise<ConsciousContextProjection | null> =>
+    ipcRenderer.invoke('freya:core:consciousness'),
+
+  onCoreConsciousness: (
+    handler: (projection: ConsciousContextProjection) => void,
+  ): (() => void) => {
+    const listener = (_event: unknown, projection: ConsciousContextProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:consciousness', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:consciousness', listener)
+    }
+  },
+
   coreSkills: (): Promise<SkillProjection | null> =>
     ipcRenderer.invoke('freya:core:skills'),
 
@@ -430,6 +463,43 @@ const api = {
     ipcRenderer.on('freya:core:skills', listener)
     return () => {
       ipcRenderer.removeListener('freya:core:skills', listener)
+    }
+  },
+
+  /**
+   * The Life History projection, read-only.
+   *
+   * The counterpart to the command surface and the reason it is narrow: what
+   * crosses is Core's report — ids, closed labels, dates, statuses and measured
+   * lengths. An entry's own summary and body do not cross here; the one route to
+   * them is the explicit `life.entry.read` for a single entry. There is no
+   * `freya:core:life:write` channel and no bridge method that records, revises or
+   * withdraws an entry.
+   */
+  coreLife: (): Promise<LifeProjection | null> => ipcRenderer.invoke('freya:core:life'),
+
+  onCoreLife: (handler: (projection: LifeProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: LifeProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:life', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:life', listener)
+    }
+  },
+
+  /**
+   * The World & self **summary**: counts, claim kinds, freshness, conflicts. Not the
+   * graph — that is `coreSubmit('world.relations.read')`, which Core bounds and
+   * Guard-evaluates. No method here creates anything: the two owner-facing world
+   * commands are absent from `CORE_COMMANDS`.
+   */
+  coreWorld: (): Promise<WorldSummaryView | null> => ipcRenderer.invoke('freya:core:world'),
+
+  onCoreWorld: (handler: (projection: WorldSummaryView) => void): (() => void) => {
+    const listener = (_event: unknown, projection: WorldSummaryView): void => handler(projection)
+    ipcRenderer.on('freya:core:world', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:world', listener)
     }
   },
 
@@ -609,6 +679,26 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'relay.approval.decide',
   'foundry.status.read',
 
+  // Life History. Three reads and nothing else: there is no `life.record`,
+  // `life.consolidate`, `life.revise`, `life.withdraw`, `life.confidence.set` or
+  // `life.promote` on the renderer surface, because a window that could write one
+  // would be a second author of Freya's autobiography. The owner scope that
+  // records, revises, consolidates and withdraws is Core-internal and has no
+  // command name a window could reach.
+  'life.status.read',
+  'life.timeline.read',
+  'life.entry.read',
+
+  // World & self: five **reads**. `world.statement.submit` and `.withdraw` are
+  // deliberately absent — owner-only in Core, whose own seams call the same admission
+  // directly. Leaving them off is what makes "a renderer cannot invent an entity, a
+  // relation, a trust level or a confidence" true of the bridge, not just its code.
+  'world.summary.read',
+  'world.entities.read',
+  'world.entity.read',
+  'world.relations.read',
+  'self.status.read',
+
   // Office. A window may read the Office projection and ask for an agent to
   // join the desktop Presence. Note what it may *not* do: it cannot invent a
   // station, inflate a count, fabricate a percentage, name a principal, assert
@@ -663,7 +753,52 @@ function carriesNothing(payload: unknown): boolean {
   return Object.keys(payload as Record<string, unknown>).length === 0
 }
 
+/**
+ * The world protocol's refusal sentence, restated rather than imported: importing it
+ * would pull `core/protocol/world.ts` and every frozen absent projection into a preload
+ * script every window parses at startup, and Phase 18 measures exactly that. A red-team
+ * test asserts the two copies are the same string, so they cannot drift silently.
+ */
+const WORLD_NO_PAYLOAD = 'this world command takes no payload'
+
+/**
+ * Entity kinds a world read may name, written out rather than imported from
+ * `core/world` for the same budget reason. Core re-checks every kind on arrival, so this
+ * is a convenience, not a boundary.
+ */
+const WORLD_READ_KINDS: ReadonlySet<string> = new Set([
+  'person', 'project', 'organisation', 'place', 'mission', 'run',
+  'task', 'worker', 'team', 'skill', 'artifact', 'self',
+])
+
+/**
+ * Narrow a world read to a closed field list plus a per-field check. One shape for all
+ * three: one place to refuse is one place to audit, and an unlisted field is refused
+ * whole rather than ignored.
+ */
+function narrowWorldRead(
+  payload: unknown,
+  fields: readonly string[],
+  check: (body: Record<string, unknown>) => string | null,
+): { ok: true } | { ok: false; reason: string } {
+  if (payload !== undefined && (typeof payload !== 'object' || payload === null || Array.isArray(payload))) {
+    return { ok: false, reason: 'this world read takes an object' }
+  }
+  const body = (payload ?? {}) as Record<string, unknown>
+  if (Object.keys(body).some((key) => !fields.includes(key))) {
+    return { ok: false, reason: `this world read accepts only ${fields.join(', ')}` }
+  }
+  const refusal = check(body)
+  return refusal === null ? { ok: true } : { ok: false, reason: refusal }
+}
+
+/** A usable, bounded id. */
+function isBoundedId(value: unknown): boolean {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256
+}
+
 const MAX_ID_CHARS = 256
+const LIFE_TIMELINE_LIMIT = 200
 /** A model id is bounded like an id; the same ceiling Core re-checks inside. */
 const MAX_MODEL_ID_CHARS = 256
 /** Matches the Searcher's own ceiling, so the bridge and Core agree on the limit. */
@@ -1433,6 +1568,51 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       return { ok: true }
     }
 
+    case 'world.summary.read':
+    case 'self.status.read':
+      // Payloadless: a filter here is how a bounded read becomes a query.
+      if (!carriesNothing(payload)) return { ok: false, reason: WORLD_NO_PAYLOAD }
+      return { ok: true }
+
+    case 'world.entities.read':
+      return narrowWorldRead(payload, ['kind', 'includeWithdrawn'], (body) => {
+        if (body.kind != null && !WORLD_READ_KINDS.has(String(body.kind))) {
+          return 'that is not an entity kind this Core knows'
+        }
+        if (body.includeWithdrawn !== undefined && typeof body.includeWithdrawn !== 'boolean') {
+          return 'includeWithdrawn is true or false'
+        }
+        return null
+      })
+
+    case 'world.entity.read':
+      // One id and nothing else: there is no "list every claim's text" form.
+      return narrowWorldRead(payload, ['entityId'], (body) =>
+        isBoundedId(body.entityId) ? null : 'entityId is not a usable id',
+      )
+
+    case 'world.relations.read':
+      // `maxDepth` caps at 2 so a window cannot ask for the whole world by walking.
+      return narrowWorldRead(payload, ['focusEntityId', 'kinds', 'maxDepth'], (body) => {
+        if (body.focusEntityId != null && !isBoundedId(body.focusEntityId)) {
+          return 'focusEntityId is not a usable entity id'
+        }
+        if (body.kinds != null) {
+          const list = body.kinds as unknown[]
+          if (!Array.isArray(list) || list.length === 0 || list.length > 12) {
+            return 'kinds must be a short list of entity kinds'
+          }
+          if (list.some((kind) => typeof kind !== 'string' || !WORLD_READ_KINDS.has(kind))) {
+            return 'kinds must contain only entity kinds'
+          }
+        }
+        const depth = body.maxDepth
+        if (depth != null && (typeof depth !== 'number' || !Number.isInteger(depth) || depth < 0 || depth > 2)) {
+          return 'maxDepth is 0, 1 or 2'
+        }
+        return null
+      })
+
     case 'skill.admit':
     case 'skill.revise': {
       const name = string('name', SKILL_LIMITS.maxNameChars)
@@ -1592,6 +1772,67 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
         return { ok: false, reason: 'a detail read needs the skill id' }
       }
       return { ok: true, payload: { skillId } }
+    }
+
+    case 'life.status.read': {
+      // The payloadless read. Anything attached is refused rather than dropped, so
+      // a window cannot accompany "what do you remember" with a status, a
+      // derivation class, a confidence or a date.
+      if (!carriesNothing(payload)) {
+        return { ok: false, reason: LIFE_NO_PAYLOAD }
+      }
+      return { ok: true }
+    }
+
+    case 'life.timeline.read': {
+      if (payload === undefined || payload === null) return { ok: true }
+      if (record === null) {
+        return { ok: false, reason: 'a timeline read takes a bounded limit and known entry kinds' }
+      }
+      for (const key of Object.keys(record)) {
+        if (key !== 'limit' && key !== 'kinds' && key !== 'includeWithdrawn') {
+          return { ok: false, reason: 'a timeline read takes a bounded limit and known entry kinds' }
+        }
+      }
+      const result: Record<string, unknown> = {}
+      const limit = record.limit
+      if (limit !== undefined) {
+        if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 0 || limit > LIFE_TIMELINE_LIMIT) {
+          return { ok: false, reason: 'the timeline limit is invalid' }
+        }
+        result.limit = limit
+      }
+      const kinds = record.kinds
+      if (kinds !== undefined) {
+        if (!Array.isArray(kinds) || kinds.length > 8) {
+          return { ok: false, reason: 'the timeline kinds are invalid' }
+        }
+        const accepted = new Set(['episode', 'milestone', 'period', 'theme'])
+        for (const kind of kinds) {
+          if (typeof kind !== 'string' || !accepted.has(kind)) {
+            return { ok: false, reason: 'the timeline kinds are invalid' }
+          }
+        }
+        result.kinds = [...kinds]
+      }
+      const includeWithdrawn = record.includeWithdrawn
+      if (includeWithdrawn !== undefined) {
+        if (typeof includeWithdrawn !== 'boolean') {
+          return { ok: false, reason: 'the timeline withdrawal flag is invalid' }
+        }
+        result.includeWithdrawn = includeWithdrawn
+      }
+      return { ok: true, payload: result }
+    }
+
+    case 'life.entry.read': {
+      // One id. The one route to an entry's own text, and it carries nothing else:
+      // no confidence, no derivation class, no body.
+      const entryId = string('entryId', MAX_ID_CHARS)
+      if (entryId === null || entryId === undefined) {
+        return { ok: false, reason: 'an entry read needs the entry id' }
+      }
+      return { ok: true, payload: { entryId } }
     }
 
     case 'voice.capture.end': {

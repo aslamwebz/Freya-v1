@@ -16,6 +16,8 @@ import type { RelayProjection } from '../../core/protocol/relay'
 import type { FoundryProjection } from '../../core/protocol/foundry'
 import type { OfficeProjection } from '../../core/office/projection'
 import type { SkillProjection } from '../../core/protocol/skills'
+import type { LifeProjection } from '../../core/protocol/life'
+import type { ConsciousContextProjection } from '../../core/protocol/consciousness'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -237,6 +239,32 @@ export interface FreyaHostBridge {
    */
   coreSkills(): Promise<SkillProjection | null>
   onCoreSkills(handler: (projection: SkillProjection) => void): () => void
+
+  /**
+   * The Life History projection, read-only.
+   *
+   * A mirror, in the same sense as every other channel here: every field arrived
+   * from Core over a channel the window cannot write into, and the renderer
+   * cannot write one either. An entry's own summary and body do not cross here;
+   * the one route to them is the explicit `life.entry.read` for a single entry.
+   */
+  coreLife(): Promise<LifeProjection | null>
+  onCoreLife(handler: (projection: LifeProjection) => void): () => void
+
+  /**
+   * The unified conscious context and its subscription. A read and a follow.
+   *
+   * Declared and not yet mirrored on purpose: there is no consumer for it in this
+   * repository, so a `consciousnessClient` today would be a cache with no reader -
+   * and a cache with no reader is the thing this codebase has consistently refused
+   * to add. When a surface needs it, it gets the mirror then, and the mirror's
+   * surface-pinning test is written alongside the surface rather than before it.
+   *
+   * There is no method here that rebuilds, corrects, refreshes or otherwise
+   * influences the snapshot.
+   */
+  coreConsciousness(): Promise<ConsciousContextProjection | null>
+  onCoreConsciousness(handler: (projection: ConsciousContextProjection) => void): () => void
 
 
   coreFoundry(): Promise<FoundryProjection | null>

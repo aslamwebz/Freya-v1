@@ -129,6 +129,9 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
           ))}
         </nav>
         <div className="a-online"><span className="a-dot" /><b>Freya Online</b><small>Phase 19 · Build 19.0.1</small></div>
+        <Button className="a-rail-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={() => setCollapsed((value) => !value)}>
+          <Glyph name="arrow" size={16} style={{ transform: collapsed ? 'rotate(180deg)' : 'none' }} /><span>Collapse</span>
+        </Button>
       </aside>
 
       <header className="a-head">
@@ -138,6 +141,11 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
           <blockquote><span>{QUOTES[quote]![0]}</span><em>{QUOTES[quote]![1]}</em></blockquote>
           <Clock />
           <Button className="a-theme" aria-label="Change theme" onClick={cycleTheme}><Glyph name="settings" /></Button>
+          <div className="a-win" role="group" aria-label="Window">
+            <Button className="a-win-btn" aria-label="Minimize" onClick={() => void hostBridge()?.windowMinimize()}><Glyph name="win-min" size={16} /></Button>
+            <Button className="a-win-btn" aria-label="Maximize" onClick={() => void hostBridge()?.windowMaximize()}><Glyph name="win-max" size={16} /></Button>
+            <Button className="a-win-btn a-win-close" aria-label="Close" onClick={() => void hostBridge()?.windowClose()}><Glyph name="win-close" size={16} /></Button>
+          </div>
         </div>
       </header>
 

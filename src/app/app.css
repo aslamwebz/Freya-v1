@@ -181,3 +181,21 @@
   .a-rail-item span { display: none; }
   .a-col-left, .a-col-right { display: none; }
 }
+
+/* Frameless window: the header drags; controls do not. */
+.a-head { -webkit-app-region: drag; }
+.a-head button, .a-head .a-theme, .a-head .a-win { -webkit-app-region: no-drag; }
+.a-win { display: flex; align-items: center; gap: .15rem; }
+.a-win-btn { padding: .32rem .42rem; border-radius: 6px; color: var(--f-muted); }
+.a-win-btn:hover { color: var(--f-ink); background: color-mix(in srgb, var(--f-ink) 8%, transparent); }
+.a-win-close:hover { background: var(--f-danger); color: #fff; }
+
+/* Collapsible rail. */
+.a-rail-toggle { margin-top: .5rem; justify-content: flex-start; gap: .6rem; color: var(--f-muted); padding: .5rem .7rem; }
+.freya-app[data-rail='collapsed'] { --a-rail: 76px; }
+.freya-app[data-rail='collapsed'] .a-rail-item { justify-content: center; }
+.freya-app[data-rail='collapsed'] .a-rail-item span,
+.freya-app[data-rail='collapsed'] .a-rail-toggle span,
+.freya-app[data-rail='collapsed'] .a-online b,
+.freya-app[data-rail='collapsed'] .a-online small { display: none; }
+.freya-app[data-rail='collapsed'] .a-rail-toggle { justify-content: center; }

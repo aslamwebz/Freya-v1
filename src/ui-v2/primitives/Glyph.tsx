@@ -20,6 +20,9 @@ const paths: Record<string, string> = {
   mic: 'M9 4a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0V4Zm-3 7v1a6 6 0 0 0 12 0v-1m-6 7v4m-4 0h8',
   plus: 'M12 4v16M4 12h16',
   arrow: 'M4 12h16m-6-6 6 6-6 6',
+  'win-min': 'M5 12h14',
+  'win-max': 'M5 5h14v14H5z',
+  'win-close': 'M6 6l12 12M18 6 6 18',
 }
 export function Glyph({ name, size = 20, style }: { name: string; size?: number; style?: CSSProperties }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"

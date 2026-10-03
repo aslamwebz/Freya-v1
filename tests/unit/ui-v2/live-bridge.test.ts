@@ -86,6 +86,9 @@ function installFakeBridge() {
     loadWorkspace: async () => null,
     saveWorkspace: async () => true,
     onCollect: () => {},
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
     providerConfig: async () => ({ baseUrl: 'https://nano-gpt.com/api/v1', model: 'openai/gpt-4.1-nano', liveEnabled: true, hasKey: true }),
     saveProviderConfig: async () => ({ baseUrl: 'https://nano-gpt.com/api/v1', model: 'openai/gpt-4.1-nano', liveEnabled: true, hasKey: true }),
     coreSubmit: async () => ({ requestId: 'r', ok: false, refusal: { reason: 'not allowed' } }),
@@ -114,10 +117,18 @@ function installFakeBridge() {
     onCoreRelay: () => () => {},
     coreSkills: async () => null,
     onCoreSkills: () => () => {},
+    coreLife: async () => null,
+    onCoreLife: () => () => {},
     coreFoundry: async () => null,
     onCoreFoundry: () => () => {},
     coreOffice: async () => null,
     onCoreOffice: () => () => {},
+    // The conscious-context lane, declared on the bridge and deliberately unused by
+    // any surface yet. Answering `null` here is the honest fake: this build reports
+    // the lane but no surface reads it, and a fake that invented a snapshot would
+    // make the absence look tested.
+    coreConsciousness: async () => null,
+    onCoreConsciousness: () => () => {},
   }
   window.freyaHost = bridge
 }

@@ -544,8 +544,40 @@ function createWindow(): BrowserWindow {
    * deliberately no `freya:core:skills:write` channel and no preload method that
    * accepts a skill body, so the bridge cannot become a second admission door.
    */
+  /**
+   * The unified conscious context: the one lane a future surface can read instead
+   * of assembling eleven projections itself.
+   *
+   * Push-only, like every other Core projection channel here, and for the same
+   * reason: the renderer holds what Core last derived and cannot write a field of
+   * it. There is deliberately no `freya:core:consciousness:write`, `:submit` or
+   * `:refresh` channel and no preload method that accepts a correction - a window
+   * that could ask Core to rebuild a snapshot on demand is a window that could ask
+   * Core to rebuild one at the wrong moment.
+   */
+  const detachConsciousness = coreHost?.onConsciousness((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:consciousness', projection)
+  })
+
   const detachSkills = coreHost?.onSkills((projection) => {
     if (!window.isDestroyed()) window.webContents.send('freya:core:skills', projection)
+  })
+
+  /**
+   * World & self: a thirteenth channel, and the narrowest one in this file.
+   *
+   * Only the *summary* is pushed, and the only command-free read is the summary too.
+   * The graph, the entity list, the inspector and the self status are all reached
+   * through `freya:core:submit` with a read command, which Core Guard-evaluates.
+   *
+   * There is deliberately no `freya:core:world:write` channel and no preload method
+   * that accepts a claim. The two owner-facing world commands exist in Core, are
+   * owner-only through Guard, and are absent from the preload command allowlist — so
+   * a renderer cannot create an entity, a relation, a trust level or a confidence
+   * even if it can reach this bridge.
+   */
+  const detachWorld = coreHost?.onWorld((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:world', projection)
   })
 
   window.on('closed', () => {
@@ -563,6 +595,8 @@ function createWindow(): BrowserWindow {
     detachOffice?.()
     detachRelay?.()
     detachSkills?.()
+    detachWorld?.()
+    detachConsciousness?.()
   })
 
   if (DEV_SERVER) {
@@ -722,6 +756,14 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:relay', () => requireCore().relay())
   // The Skills projection is read-only; mutation remains Core-command-only.
   ipcMain.handle('freya:core:skills', () => requireCore().skills())
+  // The World & self summary is read-only, and it is counts only. The graph, the
+  // entity list, the inspector and the self status are Core commands, not a channel.
+  ipcMain.handle('freya:core:world', () => requireCore().world())
+  // The unified conscious context: one `handle`, no `on`. There is deliberately no
+  // write channel for this lane - no `consciousness:set`, `:submit`, `:refresh` -
+  // because a snapshot a window could ask Core to rebuild is a snapshot a window
+  // could ask Core to build wrongly, and there is no command behind it to refuse.
+  ipcMain.handle('freya:core:consciousness', () => requireCore().consciousness())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

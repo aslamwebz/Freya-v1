@@ -11,6 +11,9 @@ import { Brain } from './presence/Brain'
 import { brainState } from './presence/state'
 import { Home, type ScreenSlots } from './screens/Home'
 import { placeholder } from './screens/Placeholder'
+import { DressingTable } from './dressing/DressingTable'
+import type { DressingStore } from './dressing/store'
+import portrait from '../ui-v2/assets/freya-portrait.webp'
 
 /**
  * Freya App Mode — the shell.
@@ -53,8 +56,9 @@ const QUOTES = [
   ['From possibility', 'to capability.'],
 ] as const
 
-export function App({ preferences, adapter }: { preferences: PreferencesStore; adapter: UiAdapter }) {
+export function App({ preferences, dressing, adapter }: { preferences: PreferencesStore; dressing: DressingStore; adapter: UiAdapter }) {
   const settings = useSyncExternalStore(preferences.subscribe, preferences.getSnapshot, preferences.getSnapshot)
+  const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   const snapshot = useUiState(adapter)
   const preview = uiMode(snapshot) === 'preview'
 
@@ -107,7 +111,7 @@ export function App({ preferences, adapter }: { preferences: PreferencesStore; a
   }
 
   return (
-    <div className="freya-v2 freya-app" data-theme={settings.theme} data-screen={current.id}>
+    <div className="freya-v2 freya-app" data-theme={settings.theme} data-background={design.background} data-screen={current.id}>
       <div className="a-bg" aria-hidden="true" />
       <div className="a-atmos" aria-hidden="true"><span className="a-stars" /></div>
 
@@ -142,7 +146,9 @@ export function App({ preferences, adapter }: { preferences: PreferencesStore; a
         <section className="a-centre" aria-label="Freya centre">
           {/* The Brain: the one constant of every screen. */}
           <div className="a-centre-stage" data-screen={current.id}>
-            <Brain state={cognition} />
+            {design.centre === 'brain'
+              ? <Brain state={cognition} variant={design.style} rings={design.rings === 'on'} />
+              : <p className="a-centre-note">{design.centre[0]?.toUpperCase()}{design.centre.slice(1)} centre — in progress</p>}
           </div>
           <div className="a-centre-caption"><b>FREYA</b><span>PHASE 19</span><small>SAME MIND. A BRIGHTER TOMORROW.</small></div>
         </section>
@@ -162,6 +168,13 @@ export function App({ preferences, adapter }: { preferences: PreferencesStore; a
         {generating && <p role="status" className="a-cmd-status">Freya is thinking…</p>}
         {notice && <p role="status" className="a-cmd-status">{notice}</p>}
       </footer>
+      {design.form !== 'brain' ? (
+        <div className="a-side-presence" aria-label={`Freya ${design.form} presence`}>
+          <img src={portrait} alt={`Freya ${design.form} — placeholder`} />
+          <span>{design.form}</span>
+        </div>
+      ) : null}
+      <DressingTable store={dressing} />
     </div>
   )
 }

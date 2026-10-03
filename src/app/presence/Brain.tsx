@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type * as ThreeTypes from 'three'
 import type { BrainState } from './state'
+import type { CentreStyle } from '../dressing/store'
 
 /**
  * The Brain — Freya thinking.
@@ -39,7 +40,7 @@ interface BrainHandle {
   setState(state: BrainState): void
 }
 
-export function Brain({ state }: { state: BrainState }) {
+export function Brain({ state, variant = 'lattice', rings = true }: { state: BrainState; variant?: CentreStyle; rings?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const handleRef = useRef<BrainHandle | null>(null)
   const stateRef = useRef<BrainState>(state)
@@ -55,7 +56,7 @@ export function Brain({ state }: { state: BrainState }) {
         const THREE = await import('three')
         const canvas = canvasRef.current
         if (disposed || canvas === null) return
-        cleanup = build(THREE, canvas, stateRef, (handle) => {
+        cleanup = build(THREE, canvas, stateRef, variant, rings, (handle) => {
           handleRef.current = handle
           handle.setState(stateRef.current)
         })
@@ -70,7 +71,7 @@ export function Brain({ state }: { state: BrainState }) {
       cleanup = null
       handleRef.current = null
     }
-  }, [])
+  }, [variant, rings])
 
   useEffect(() => {
     handleRef.current?.setState(state)
@@ -92,6 +93,8 @@ function build(
   THREE: typeof ThreeTypes,
   canvas: HTMLCanvasElement,
   stateRef: { current: BrainState },
+  variant: CentreStyle,
+  rings: boolean,
   onReady: (handle: BrainHandle) => void,
 ): () => void {
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true })
@@ -100,17 +103,8 @@ function build(
   const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100)
   camera.position.z = 5.2
 
-  // A golden-angle lattice on a thin shell, plus an inner core.
-  const shellPositions: number[] = []
-  const N = 480
-  const golden = Math.PI * (3 - Math.sqrt(5))
-  for (let i = 0; i < N; i += 1) {
-    const y = 1 - (i / (N - 1)) * 2
-    const radius = Math.sqrt(Math.max(0, 1 - y * y))
-    const angle = i * golden
-    const thickness = 0.92 + Math.random() * 0.16
-    shellPositions.push(Math.cos(angle) * radius * thickness, y * thickness, Math.sin(angle) * radius * thickness)
-  }
+  // A point distribution for the chosen style.
+  const shellPositions = shellPoints(variant)
   const shellGeom = new THREE.BufferGeometry()
   shellGeom.setAttribute('position', new THREE.Float32BufferAttribute(shellPositions, 3))
 
@@ -169,9 +163,11 @@ function build(
   }
 
   ringGroup.add(tickRing(1.55, 150, 0.045, intelligenceColor, 0.5))
-  ringGroup.add(arc(1.8, 0.2, 1.4, cognitionColor, 0.7))
-  ringGroup.add(arc(1.8, 2.4, 0.9, cognitionColor, 0.5))
-  ringGroup.add(arc(1.3, 3.4, 1.8, intelligenceColor, 0.45))
+  if (rings) {
+    ringGroup.add(arc(1.8, 0.2, 1.4, cognitionColor, 0.7))
+    ringGroup.add(arc(1.8, 2.4, 0.9, cognitionColor, 0.5))
+    ringGroup.add(arc(1.3, 3.4, 1.8, intelligenceColor, 0.45))
+  }
 
   // Beacons orbiting the lattice.
   const beaconPositions = new Float32Array([0, 1.9, 0, 1.9, 0, 0, 0, -1.9, 0])
@@ -245,4 +241,45 @@ function build(
     shellMat.dispose(); coreMat.dispose(); (beacons.material as ThreeTypes.Material).dispose()
     renderer.dispose()
   }
+}
+
+/** The point distribution for a centre style. */
+function shellPoints(variant: CentreStyle): number[] {
+  const points: number[] = []
+  if (variant === 'slices') {
+    const bands = 14
+    const per = 36
+    for (let band = 0; band < bands; band += 1) {
+      const y = -1 + (band / (bands - 1)) * 2
+      const radius = Math.sqrt(Math.max(0, 1 - y * y)) * 0.98
+      const phase = band * 0.7
+      for (let i = 0; i < per; i += 1) {
+        const angle = phase + (i / per) * Math.PI * 2
+        points.push(Math.cos(angle) * radius, y, Math.sin(angle) * radius)
+      }
+    }
+    return points
+  }
+  if (variant === 'flow') {
+    const n = 520
+    for (let i = 0; i < n; i += 1) {
+      const t = i / n
+      const angle = t * Math.PI * 2 * 7
+      const y = Math.sin(t * Math.PI * 2 * 3) * 0.55
+      const shell = Math.sqrt(Math.max(0, 1 - y * y))
+      const radius = (0.75 + 0.25 * Math.sin(t * Math.PI * 6)) * shell
+      points.push(Math.cos(angle) * radius, y, Math.sin(angle) * radius)
+    }
+    return points
+  }
+  const n = 480
+  const golden = Math.PI * (3 - Math.sqrt(5))
+  for (let i = 0; i < n; i += 1) {
+    const y = 1 - (i / (n - 1)) * 2
+    const radius = Math.sqrt(Math.max(0, 1 - y * y))
+    const angle = i * golden
+    const thickness = 0.92 + Math.random() * 0.16
+    points.push(Math.cos(angle) * radius * thickness, y * thickness, Math.sin(angle) * radius * thickness)
+  }
+  return points
 }

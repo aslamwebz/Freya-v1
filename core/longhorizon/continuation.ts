@@ -3,6 +3,7 @@ import type { EventFabric } from '../events/fabric'
 import type { PrincipalId } from '../protocol/core-protocol'
 import {
   CONTINUATION_STATES,
+  DEFAULT_GOAL_LIMITS,
   type ContinuationDecision,
   type ContinuationState,
   type GoalStatus,
@@ -32,6 +33,27 @@ import {
  * a reason. A decision is data: it cannot move a goal, grant authority, or
  * bypass Guard. The goal engine executes the decision through its own state
  * machine.
+ *
+ * ## Every wait is bounded
+ *
+ * A `wait` decision names the instant at which it stops being valid, and the
+ * subsystem must decide again from that point on. `ContinuationDecision` makes
+ * `deadline` required on `wait`, so a decision that waits without saying how
+ * long cannot be written at all — and "wait until something happens" is exactly
+ * the open-ended wait this subsystem must not be able to record, because nothing
+ * here has a timer that could ever end it. The deadline is derived from a bound
+ * that already exists in the domain:
+ *
+ * - **Waiting behind an in-flight verification** takes `verificationDeadlineMs`
+ *   from `DEFAULT_GOAL_LIMITS` — the same bound the verifier is raced against. A
+ *   wait cannot usefully outlast the thing it waits for: at that instant the
+ *   checkpoint is `timeout` and the wait must be re-decided.
+ * - **Every other wait** (the engine is closing, STOP ALL is latched, the wake
+ *   names no goal, the goal is not open) is bounded at `now`. None of those can
+ *   change on a clock — they change on a shutdown, an owner clearing the latch,
+ *   or another wake — so a future instant would promise a re-examination this
+ *   subsystem has no mechanism to perform. A wait that defers nothing expires
+ *   immediately, and is re-decided by the next wake.
  *
  * ## No model call
  *
@@ -120,31 +142,43 @@ export class ContinuationEngine {
     // A wake with no goal reference is an idle wake: it asks whether anything
     // needs doing, and the honest answer from IDLE is "wait".
     if (wake.goalId === null) {
-      return this.decide('wait', null, 'no goal is referenced by this wake')
+      return this.decide(this.expiresNow('wait', 'no goal is referenced by this wake'), null)
     }
 
     const goalId = wake.goalId
     if (!this.options.goals.isGoalOpen(goalId)) {
-      return this.decide('wait', goalId, 'the goal is not open')
+      return this.decide(this.expiresNow('wait', 'the goal is not open'), goalId)
     }
 
     const status = this.options.goals.goalState(goalId)
     if (status === 'paused') {
-      return this.decide('pause', goalId, 'the goal is paused')
+      return this.decide({ decision: 'pause', reason: 'the goal is paused' }, goalId)
     }
 
     const verified = this.options.goals.verifiedCheckpoints(goalId)
     const total = this.options.goals.totalCheckpoints(goalId)
 
     if (total > 0 && verified >= total) {
-      return this.decide('complete', goalId, 'every checkpoint has been verified')
+      return this.decide({ decision: 'complete', reason: 'every checkpoint has been verified' }, goalId)
     }
 
     if (this.state === 'CHECKPOINT') {
-      return this.decide('wait', goalId, 'a checkpoint is already being verified')
+      // The one wait that is bounded by something other than the current instant:
+      // see the module note on wait deadlines.
+      return this.decide(
+        {
+          decision: 'wait',
+          reason: 'a checkpoint is already being verified',
+          deadline: this.clockAfter(DEFAULT_GOAL_LIMITS.verificationDeadlineMs),
+        },
+        goalId,
+      )
     }
 
-    return this.decide('continue', goalId, 'the goal is open and has unverified checkpoints')
+    return this.decide(
+      { decision: 'continue', reason: 'the goal is open and has unverified checkpoints' },
+      goalId,
+    )
   }
 
   /**
@@ -177,38 +211,49 @@ export class ContinuationEngine {
   /* -------------------------------------------------------------- internal */
 
   private async decide(
-    decision: ContinuationDecision['decision'],
+    decision: ContinuationDecision,
     goalId: string | null,
-    reason: string,
-    deadline?: string,
   ): Promise<ContinuationDecisionOutcome> {
-    const resolved: ContinuationDecision =
-      decision === 'wait' && deadline !== undefined
-        ? { decision, reason, deadline }
-        : { decision, reason }
-
-    if (decision === 'continue' && goalId !== null) {
+    if (decision.decision === 'continue' && goalId !== null) {
       this.state = 'GOAL_ACTIVE'
       this.activeGoalId = goalId
-    } else if (decision === 'pause') {
+    } else if (decision.decision === 'pause') {
       this.state = 'GOAL_PAUSED'
-    } else if (decision === 'complete') {
+    } else if (decision.decision === 'complete') {
       this.state = 'GOAL_COMPLETE'
-    } else if (decision === 'fail') {
+    } else if (decision.decision === 'fail') {
       this.state = 'GOAL_FAILED'
     }
 
     await this.emit('longhorizon.continuation.decided', {
       goalId,
-      decision: resolved.decision,
-      reason: resolved.reason,
+      decision: decision.decision,
+      reason: decision.reason,
     })
     this.onChange()
-    return { decision: resolved, goalId }
+    return { decision, goalId }
+  }
+
+  /**
+   * A wait that defers nothing, and so expires at the current instant.
+   *
+   * Used for the waits whose condition no clock can change — see the module note
+   * on wait deadlines.
+   */
+  private expiresNow(decision: 'wait', reason: string): ContinuationDecision {
+    return { decision, reason, deadline: this.clockNow() }
   }
 
   private idleDecision(reason: string): ContinuationDecisionOutcome {
-    return { decision: { decision: 'wait', reason }, goalId: null }
+    return { decision: this.expiresNow('wait', reason), goalId: null }
+  }
+
+  private clockNow(): string {
+    return this.options.now?.().toISOString() ?? new Date().toISOString()
+  }
+
+  private clockAfter(ms: number): string {
+    return new Date(Date.parse(this.clockNow()) + ms).toISOString()
   }
 
   private async emit(type: string, payload: Record<string, unknown>): Promise<void> {

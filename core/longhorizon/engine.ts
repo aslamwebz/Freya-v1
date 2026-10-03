@@ -14,14 +14,11 @@ import {
   type GoalContent,
   type GoalContentInput,
   type GoalDetail,
-  type GoalLimits,
   type GoalProjection,
   type GoalReason,
   type GoalRecord,
   type GoalState,
   type GoalStatus,
-  type GoalVerificationContext,
-  type GoalVerifier,
 } from './types'
 
 /**
@@ -94,10 +91,7 @@ const CLOSE_DRAIN_MS = 1_000
 export class GoalEngine {
   private goalState: GoalState = initialGoalState()
   private readonly locks = new Map<string, Promise<unknown>>()
-  /** Goals with a verification in flight. Guards duplicate requests. */
-  private readonly verifying = new Set<string>()
   private readonly inflight = new Set<Promise<unknown>>()
-  private closed = false
 
   constructor(private readonly options: GoalEngineOptions) {}
 
@@ -178,7 +172,6 @@ export class GoalEngine {
   }
 
   async close(): Promise<void> {
-    this.closed = true
     this.dispose()
     // Wait for in-flight verifications to settle, bounded by CLOSE_DRAIN_MS.
     if (this.inflight.size > 0) {
@@ -193,9 +186,9 @@ export class GoalEngine {
   /* -------------------------------------------------------------- commands */
 
   async createGoal(input: GoalContentInput): Promise<GoalCommandOutcome> {
-    if (this.stopped()) return this.refused('create', 'STOP ALL is active')
+    if (this.stopped()) return this.refused('created', 'STOP ALL is active')
     const normalised = normaliseGoalContent(input)
-    if (!normalised.ok) return this.refused('create', normalised.reason)
+    if (!normalised.ok) return this.refused('created', normalised.reason)
 
     const goalId = this.newId()
     const now = this.nowIso()
@@ -208,7 +201,7 @@ export class GoalEngine {
     try {
       await this.options.store.write(content)
     } catch (error) {
-      return this.refused('create', this.describe(error))
+      return this.refused('created', this.describe(error))
     }
 
     const deadlineAt = new Date(this.now().getTime() + DEFAULT_GOAL_LIMITS.lifetimeMs).toISOString()

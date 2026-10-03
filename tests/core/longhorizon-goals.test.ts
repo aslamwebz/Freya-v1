@@ -78,6 +78,15 @@ async function openEngine(options: Partial<ConstructorParameters<typeof GoalEngi
   return { engine, store, fabric }
 }
 
+/**
+ * A journal line, for the fold tests.
+ *
+ * `AnyCoreEvent` is a union keyed on `type`, so no single object literal can name
+ * an arbitrary type and an arbitrary payload at once — the cast is at that one
+ * join, not on the payload: `payload` stays `Record<string, unknown>`, so every
+ * field this helper writes is still checked, and the reducer still has to accept
+ * what it is given.
+ */
 function event(type: AnyCoreEvent['type'], payload: Record<string, unknown>, sequence: number): AnyCoreEvent {
   return {
     eventId: `evt-${sequence}`,
@@ -89,8 +98,8 @@ function event(type: AnyCoreEvent['type'], payload: Record<string, unknown>, seq
     actor: 'owner',
     correlationId: `corr-${sequence}`,
     causationId: null,
-    payload: payload as never,
-  }
+    payload,
+  } as unknown as AnyCoreEvent
 }
 
 /* ---------------------------------------------------------- state machine */

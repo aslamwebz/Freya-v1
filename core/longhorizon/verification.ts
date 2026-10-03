@@ -158,7 +158,9 @@ export class VerificationEngine {
     const deadlineMs = this.options.verificationDeadlineMs ?? DEFAULT_GOAL_LIMITS.verificationDeadlineMs
 
     let outcome: CheckpointOutcome
-    let reason: GoalReason | null = null
+    // Assigned on every path below — a passed verification has no reason to
+    // record, so the initial value would never be read.
+    let reason: GoalReason | null
 
     try {
       const result = await runWithDeadline(verifier, context, signal, deadlineMs)
@@ -197,10 +199,6 @@ export class VerificationEngine {
 
   private stopped(): boolean {
     return this.options.stopAll?.() ?? false
-  }
-
-  private now(): Date {
-    return this.options.now?.() ?? new Date()
   }
 
   private isDeadlineError(error: unknown): boolean {

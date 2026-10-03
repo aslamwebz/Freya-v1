@@ -106,6 +106,14 @@ async function openScheduler(options: Partial<ConstructorParameters<typeof GoalS
   return { scheduler, store, fabric }
 }
 
+/**
+ * A journal line, for the fold and replay-attack tests.
+ *
+ * `AnyCoreEvent` is a union keyed on `type`, so the cast is at that one join and
+ * only there: the payload keeps its `Record<string, unknown>` type and every
+ * envelope field stays written out in full, so a hand-forged line in a test is
+ * built from the same named fields a real line has.
+ */
 function event(type: AnyCoreEvent['type'], payload: Record<string, unknown>, sequence: number): AnyCoreEvent {
   return {
     eventId: `evt-${sequence}`,
@@ -117,8 +125,8 @@ function event(type: AnyCoreEvent['type'], payload: Record<string, unknown>, seq
     actor: 'owner',
     correlationId: `corr-${sequence}`,
     causationId: null,
-    payload: payload as never,
-  }
+    payload,
+  } as unknown as AnyCoreEvent
 }
 
 /* ---------------------------------------------------------- authority escalation */

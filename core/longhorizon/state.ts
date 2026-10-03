@@ -9,7 +9,6 @@ import {
   type GoalState,
   type GoalStatus,
   type GoalCheckpointRecord,
-  type GoalVerificationState,
 } from './types'
 
 /**
@@ -282,13 +281,6 @@ function readOrder(value: unknown): number {
 
 function readAttempts(value: unknown): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
-}
-
-function readVerificationState(value: unknown): GoalVerificationState | null {
-  return typeof value === 'string' &&
-    (['requested', 'passed', 'not_established', 'timeout', 'cancelled'] as readonly string[]).includes(value)
-    ? (value as GoalVerificationState)
-    : null
 }
 
 /**

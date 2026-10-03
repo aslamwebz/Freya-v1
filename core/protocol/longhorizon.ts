@@ -52,7 +52,19 @@ export interface GoalSummaryView {
   } | null
 }
 
-/** The frozen projection for a Core with no goal domain. */
+/** The reason a Core with no goal domain reports. */
+export const NO_GOAL_DOMAIN_REASON = 'this build has no goal domain and none is simulated'
+
+/** The reason a Core that has not started yet reports. */
+export const GOAL_NO_PAYLOAD = 'no Core has started yet'
+
+/**
+ * The frozen projection for a Core with no goal domain.
+ *
+ * Declared after `NO_GOAL_DOMAIN_REASON` because it reads that constant: a
+ * projection whose `reason` was a restatement of the string would be two
+ * definitions of one sentence, free to drift apart.
+ */
 export const ABSENT_GOAL_PROJECTION: GoalProjectionView = Object.freeze({
   persistence: Object.freeze({
     mode: 'unavailable',
@@ -75,12 +87,6 @@ export const ABSENT_GOAL_PROJECTION: GoalProjectionView = Object.freeze({
   goalsHidden: 0,
   sequence: 0,
 })
-
-/** The reason a Core with no goal domain reports. */
-export const NO_GOAL_DOMAIN_REASON = 'this build has no goal domain and none is simulated'
-
-/** The reason a Core that has not started yet reports. */
-export const GOAL_NO_PAYLOAD = 'no Core has started yet'
 
 /** The projection a window holds. */
 export interface GoalProjectionView {

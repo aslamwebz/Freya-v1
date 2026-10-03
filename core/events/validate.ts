@@ -439,24 +439,15 @@ const RESEARCH_STAGE = (p: Record<string, unknown>): boolean => {
   return RESEARCH_STAGE_COUNTER_KEYS.every((key) => isNonNegativeInt((counters as Record<string, unknown>)[key]))
 }
 
-/** Closed reason codes. A Mission event cannot carry free text as a reason. */
-const MISSION_REASON_CODES: ReadonlySet<string> = new Set([
-  'owner',
-  'verification_passed',
-  'verification_not_established',
-  'verification_timeout',
-  'no_child_runs',
-  'child_run_failed',
-  'child_run_cancelled',
-  'child_run_unverified',
-  'deadline_expired',
-  'child_run_limit',
-  'concurrent_run_limit',
-  'retention_limit',
-  'lifetime_limit',
-  'recovery',
-  'shutdown',
-])
+/**
+ * Closed reason codes, read from the domain's own tables rather than restated.
+ *
+ * A Mission event cannot carry free text as a reason, and the set of codes that may
+ * appear is `MISSION_REASONS` itself: deriving it means a code added to the domain
+ * cannot leave this validator rejecting a line Core would have written, and no code
+ * can be accepted here that the domain would refuse.
+ */
+const MISSION_REASON_CODES: ReadonlySet<string> = new Set<string>(Object.keys(MISSION_REASONS))
 
 /**
  * A lifecycle transition.
@@ -484,24 +475,13 @@ const MISSION_STATUS_SET: ReadonlySet<string> = new Set([
   'cancelled',
 ])
 
-/** Closed reason codes. A goal event cannot carry free text as a reason. */
-const GOAL_REASON_CODES: ReadonlySet<string> = new Set([
-  'owner',
-  'verification_passed',
-  'verification_not_established',
-  'verification_timeout',
-  'deadline_expired',
-  'retry_ceiling_reached',
-  'hard_blocker',
-  'stop_all',
-  'budget_exhausted',
-  'dependency_unmet',
-  'dependency_met',
-  'recovery',
-  'shutdown',
-  'restart_interrupted',
-  'preempted',
-])
+/**
+ * Closed reason codes for every goal event, read from `GOAL_REASONS` rather than
+ * restated — the same reasoning as `MISSION_REASON_CODES`, and the reason one
+ * definition serves goal creation, transitions, checkpoint outcomes and
+ * cancellation rather than five drifting copies of it.
+ */
+const GOAL_REASON_CODES: ReadonlySet<string> = new Set<string>(Object.keys(GOAL_REASONS))
 
 const GOAL_STATE_SET: ReadonlySet<string> = new Set([
   'draft',

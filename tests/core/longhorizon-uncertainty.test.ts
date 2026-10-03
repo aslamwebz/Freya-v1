@@ -31,6 +31,14 @@ const NOW = new Date('2026-10-01T09:00:00.000Z')
 
 /* ---------------------------------------------------------- helpers */
 
+/** Certainty, most to least. `unknown` is last: it claims nothing, so it loses. */
+const CERTAINTY: readonly ConfidenceLevel[] = ['high', 'medium', 'low', 'unknown']
+
+/** The conservative reading of a conflict: whichever side claims less. */
+function lessCertain(left: ConfidenceLevel, right: ConfidenceLevel): ConfidenceLevel {
+  return CERTAINTY.indexOf(left) >= CERTAINTY.indexOf(right) ? left : right
+}
+
 function evidence(overrides: Partial<GoalEvidence> = {}): GoalEvidence {
   return {
     evidenceId: 'e1',
@@ -148,10 +156,19 @@ describe('conflicted evidence is preserved', () => {
   })
 
   it('uses the conservative interpretation', () => {
-    const a: ConfidenceLevel = 'high'
-    const b: ConfidenceLevel = 'low'
-    const conservative = conservativeInterpretation(a, b, (x, y) => (x === 'unknown' ? x : y))
-    expect(conservative).toBe('low')
+    // Order-independent on purpose: a conflict resolved to whichever side happened
+    // to be passed first would be a coin toss wearing a determinism claim.
+    expect(conservativeInterpretation('high', 'low', lessCertain)).toBe('low')
+    expect(conservativeInterpretation('low', 'high', lessCertain)).toBe('low')
+  })
+
+  it('treats unknown as the least certain reading', () => {
+    expect(conservativeInterpretation('medium', 'unknown', lessCertain)).toBe('unknown')
+    expect(conservativeInterpretation('unknown', 'medium', lessCertain)).toBe('unknown')
+  })
+
+  it('returns the reading itself when the two do not differ', () => {
+    expect(conservativeInterpretation('low', 'low', lessCertain)).toBe('low')
   })
 })
 

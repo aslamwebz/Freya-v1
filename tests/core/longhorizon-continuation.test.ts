@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ContinuationEngine, type ContinuationWake, type GoalTruthPort } from '../../core/longhorizon/continuation'
+import type { ContinuationDecision } from '../../core/longhorizon/types'
 import { EventFabric } from '../../core/events/fabric'
 import { JsonlEventStore } from '../../core/events/jsonl-store'
 
@@ -160,6 +161,64 @@ describe('continuation decisions', () => {
     const events = await fabric.readAll()
     const decisions = events.filter((event) => event.type === 'longhorizon.continuation.decided')
     expect(decisions.length).toBeGreaterThan(0)
+  })
+})
+
+/* ---------------------------------------------------------- bounded waits */
+
+describe('every wait is bounded', () => {
+  const NOW = '2026-10-01T09:00:00.000Z'
+  const AFTER_VERIFICATION_DEADLINE = '2026-10-02T09:00:00.000Z'
+
+  /** The deadline on a wait, or a failure that says which decision had none. */
+  function deadlineOf(decision: ContinuationDecision): string {
+    if (decision.decision !== 'wait') {
+      throw new Error(`expected a wait, got ${decision.decision}`)
+    }
+    return decision.deadline
+  }
+
+  it('bounds a wait behind an in-flight verification by the verification deadline', async () => {
+    const { engine } = await openEngine()
+    await engine.handleWake(wake())
+    engine.beginCheckpoint('g1')
+    const outcome = await engine.handleWake(wake({ wakeId: 'wake-2' }))
+    expect(deadlineOf(outcome.decision)).toBe(AFTER_VERIFICATION_DEADLINE)
+  })
+
+  it('expires a wait that defers nothing at the current instant', async () => {
+    const { engine } = await openEngine()
+
+    const noGoal = await engine.handleWake(wake({ goalId: null }))
+    expect(deadlineOf(noGoal.decision)).toBe(NOW)
+
+    const closedGoal = await openEngine({ goals: goalPort({ isGoalOpen: () => false }) })
+    const notOpen = await closedGoal.engine.handleWake(wake())
+    expect(deadlineOf(notOpen.decision)).toBe(NOW)
+  })
+
+  it('bounds the waits taken while STOP ALL is latched and while closing', async () => {
+    const latched = await openEngine({ stopAll: () => true })
+    const stopped = await latched.engine.handleWake(wake())
+    expect(deadlineOf(stopped.decision)).toBe(NOW)
+
+    const closing = await openEngine()
+    await closing.engine.close()
+    const halted = await closing.engine.handleWake(wake())
+    expect(deadlineOf(halted.decision)).toBe(NOW)
+  })
+
+  it('never decides wait without a deadline, whatever the wake', async () => {
+    const wakeShapes: ContinuationWake[] = [
+      wake({ goalId: null }),
+      wake(),
+      wake({ wakeId: 'wake-2' }),
+    ]
+    for (const shape of wakeShapes) {
+      const { engine } = await openEngine({ goals: goalPort({ isGoalOpen: () => false }) })
+      const outcome = await engine.handleWake(shape)
+      expect(deadlineOf(outcome.decision)).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    }
   })
 })
 

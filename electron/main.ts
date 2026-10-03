@@ -655,6 +655,20 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('freya:workspace:load', () => requireWorkspace().load())
+  // The window is frameless, so the renderer drives these. Each acts on the
+  // window that asked, never another: a window can name no other window.
+  ipcMain.handle('freya:window:minimize', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize()
+  })
+  ipcMain.handle('freya:window:maximize', (event) => {
+    const target = BrowserWindow.fromWebContents(event.sender)
+    if (!target) return
+    if (target.isMaximized()) target.unmaximize()
+    else target.maximize()
+  })
+  ipcMain.handle('freya:window:close', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close()
+  })
   ipcMain.handle('freya:core:submit', (_event, envelope: CoreCommandEnvelope) => {
     const result = requireCore().submit(envelope)
     // The microphone gate follows Core's verdict rather than the request, so a

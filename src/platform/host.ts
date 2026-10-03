@@ -81,6 +81,11 @@ export interface FreyaHostBridge {
   /** The host asks for the current layout as the window is closing. */
   onCollect(handler: () => unknown): void
 
+  /** Frameless-window controls. Each acts on the window that calls. */
+  windowMinimize(): Promise<void>
+  windowMaximize(): Promise<void>
+  windowClose(): Promise<void>
+
   /**
    * The provider settings, and the one place a credential crosses this bridge — in
    * one direction only.

@@ -66,6 +66,11 @@ const api = {
   saveWorkspace: (payload: unknown): Promise<boolean> =>
     ipcRenderer.invoke('freya:workspace:save', payload),
 
+  // Frameless-window controls. Each acts on the window that asked.
+  windowMinimize: (): Promise<void> => ipcRenderer.invoke('freya:window:minimize'),
+  windowMaximize: (): Promise<void> => ipcRenderer.invoke('freya:window:maximize'),
+  windowClose: (): Promise<void> => ipcRenderer.invoke('freya:window:close'),
+
   /**
    * Provider settings, and the one place a credential crosses this bridge — in
    * one direction only.

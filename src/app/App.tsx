@@ -6,6 +6,7 @@ import { Button, Field } from '../ui-v2/primitives/Controls'
 import { Clock } from '../ui-v2/primitives/Clock'
 import { Glyph } from '../ui-v2/primitives/Glyph'
 import { conversationMirror, ensureConversationAttached } from '../platform/conversationClient'
+import { hostBridge } from '../platform/host'
 import { sendMessage } from '../ui-v2/chat/sendMessage'
 import { Brain } from './presence/Brain'
 import { brainState } from './presence/state'
@@ -63,6 +64,7 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
   const preview = uiMode(snapshot) === 'preview'
 
   const [screen, setScreen] = useState('home')
+  const [collapsed, setCollapsed] = useState(false)
   const [quote, setQuote] = useState(0)
   const [draft, setDraft] = useState('')
   const [intent, setIntent] = useState('Think')
@@ -111,7 +113,7 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
   }
 
   return (
-    <div className="freya-v2 freya-app" data-theme={settings.theme} data-background={design.background} data-screen={current.id}>
+    <div className="freya-v2 freya-app" data-theme={settings.theme} data-background={design.background} data-rail={collapsed ? 'collapsed' : 'expanded'} data-screen={current.id}>
       <div className="a-bg" aria-hidden="true" />
       <div className="a-atmos" aria-hidden="true"><span className="a-stars" /></div>
 

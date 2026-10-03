@@ -188,6 +188,33 @@ export const CAPABILITIES = [
   // claim could contain that would widen what these two permit.
   'world.status.read',
   'world.statement.submit',
+  /**
+   * Autonomous Capability Acquisition (Phase 29). Four, and the split is the phase.
+   *
+   * `acquisition.status.read` is the owner's read: the gap ledger, what is blocked and on what.
+   * It grants nothing, and it is deliberately readable while building is *paused*, so an owner
+   * can always see why an activation is stuck.
+   *
+   * `acquisition.propose` is what detects a gap and proposes a build. A worker principal does
+   * **not** hold it: a subordinate agent that could raise its own capability requests would be
+   * the whole acquisition loop with an agent at one end of it.
+   *
+   * `acquisition.verification.record` is what records that a *named* verifier found something.
+   * It is not `verification.decide` — it can never report a gate as satisfied for something it
+   * did not check, because `recordGateVerdict` requires the verifier's name and refuses the
+   * evaluator's own authority on an evidence gate.
+   *
+   * `acquisition.activation.manage` is the one that means **a person is being trusted**, and it
+   * is separate for the same reason `work.approval.decide` and `relay.approval.decide` are: it
+   * can be withheld, audited and re-gated without touching the rest of the domain. Nothing in
+   * this vocabulary makes an approved capability *do* anything — an activation means the owner
+   * approved that request, and what an approved capability may do is decided by the runtime that
+   * holds it, under its own authority.
+   */
+  'acquisition.status.read',
+  'acquisition.propose',
+  'acquisition.verification.record',
+  'acquisition.activation.manage',
 ] as const
 
 export type Capability = (typeof CAPABILITIES)[number]

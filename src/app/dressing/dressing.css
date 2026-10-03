@@ -27,12 +27,18 @@
 
 /* Backgrounds. */
 .freya-app[data-background='obsidian'] .a-bg {
-  background: radial-gradient(120% 80% at 50% 120%, color-mix(in srgb, var(--f-action) 10%, transparent), transparent 60%), radial-gradient(90% 60% at 50% -10%, color-mix(in srgb, var(--f-cognition) 8%, transparent), transparent 55%), var(--f-bg);
+  background: radial-gradient(120% 85% at 50% 118%, color-mix(in srgb, var(--f-action) 22%, transparent), transparent 62%), radial-gradient(90% 60% at 50% -10%, color-mix(in srgb, var(--f-cognition) 16%, transparent), transparent 55%), var(--f-bg);
 }
 .freya-app[data-background='space'] .a-bg { background: linear-gradient(180deg, transparent 35%, color-mix(in srgb, var(--f-bg) 88%, transparent)), url('../assets/earth-night.jpg') center 60% / cover no-repeat, #01030a; }
-.freya-app[data-background='aurora'] .a-bg { background: radial-gradient(120% 90% at 20% 110%, color-mix(in srgb, var(--f-cognition) 22%, transparent), transparent 55%), radial-gradient(120% 90% at 80% 120%, color-mix(in srgb, var(--f-positive) 16%, transparent), transparent 55%), var(--f-bg); }
+.freya-app[data-background='aurora'] .a-bg { background: radial-gradient(120% 90% at 20% 110%, color-mix(in srgb, var(--f-cognition) 26%, transparent), transparent 55%), radial-gradient(120% 90% at 80% 120%, color-mix(in srgb, var(--f-positive) 18%, transparent), transparent 55%), var(--f-bg); }
 .freya-app[data-background='grid'] .a-bg { background-image: linear-gradient(color-mix(in srgb, var(--f-line) 55%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--f-line) 55%, transparent) 1px, transparent 1px); background-size: 46px 46px; background-color: var(--f-bg); }
-.freya-app[data-background='city'] .a-bg { background: linear-gradient(180deg, transparent 30%, color-mix(in srgb, var(--f-bg) 82%, transparent)), url('../assets/city.jpg') center 60% / cover no-repeat, var(--f-bg); }
+.freya-app[data-background='city'] .a-bg {
+  background:
+    radial-gradient(85% 55% at 50% 6%, color-mix(in srgb, var(--f-action) 18%, transparent), transparent 60%),
+    linear-gradient(180deg, transparent 20%, color-mix(in srgb, var(--f-bg) 66%, transparent)),
+    url('../assets/city.jpg') center 60% / cover no-repeat,
+    var(--f-bg);
+}
 
 /* Freya's dashboard side presence (chibi/adult placeholder). */
 .a-side-presence {

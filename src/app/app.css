@@ -121,16 +121,16 @@
 }
 .a-centre-stage {
   position: relative; contain: layout size;
-  width: min(46vh, 30rem); height: min(46vh, 30rem);
+  width: min(56vh, 36rem); height: min(56vh, 36rem);
   display: grid; place-items: center;
 }
 .a-centre-labels { position: absolute; inset: 0; pointer-events: none; }
 .a-cl { position: absolute; font-size: .58rem; letter-spacing: .3em; color: var(--f-muted); text-transform: uppercase; }
-.a-cl-top { top: 1%; left: 50%; transform: translateX(-50%); }
-.a-cl-left { top: 45%; left: -6%; }
-.a-cl-right { top: 45%; right: -6%; }
-.a-cl-bl { bottom: 10%; left: -2%; }
-.a-cl-br { bottom: 10%; right: -2%; }
+.a-cl-top { top: 3%; left: 50%; transform: translateX(-50%); }
+.a-cl-left { top: 46%; left: 3%; }
+.a-cl-right { top: 46%; right: 3%; }
+.a-cl-bl { bottom: 14%; left: 6%; }
+.a-cl-br { bottom: 14%; right: 6%; }
 .a-centre-canvas { width: 100%; height: 100%; }
 .a-brain { position: relative; width: 100%; height: 100%; display: grid; place-items: center; }
 .a-brain-fallback { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; max-width: 15rem; margin: auto; color: var(--f-muted); font-size: .78rem; }

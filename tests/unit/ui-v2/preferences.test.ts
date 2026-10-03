@@ -3,7 +3,7 @@ import { DEFAULT_PREFERENCES, parsePreferences, PreferencesStore, PREFERENCES_KE
 
 describe('Phase 19 preferences', () => {
   it('recovers unsupported versions and invalid presentation values', () => {
-    expect(parsePreferences({ version: 19, theme: 'pearl' })).toEqual(DEFAULT_PREFERENCES)
+    expect(parsePreferences({ version: 19, theme: 'dawn' })).toEqual(DEFAULT_PREFERENCES)
     expect(parsePreferences({ version: 1, theme: 'gold', mode: 'admin', textScale: 9 })).toEqual(DEFAULT_PREFERENCES)
   })
   it('persists only presentation fields and restores a supported theme', () => {
@@ -13,7 +13,7 @@ describe('Phase 19 preferences', () => {
     const store = new PreferencesStore(port)
     store.update({ mode: 'immersive', density: 'compact' })
     const restored = new PreferencesStore(port)
-    expect(restored.getSnapshot()).toMatchObject({ theme: 'pearl', mode: 'immersive', density: 'compact' })
+    expect(restored.getSnapshot()).toMatchObject({ theme: 'dawn', mode: 'immersive', density: 'compact' })
     expect(storage.get(PREFERENCES_KEY)).not.toContain('private-content')
     expect(Object.isFrozen(restored.getSnapshot())).toBe(true)
   })
@@ -22,21 +22,21 @@ describe('Phase 19 preferences', () => {
     let changes = 0
     const dispose = store.subscribe(() => changes++)
     const first = store.getSnapshot()
-    store.update({ theme: 'aurora' })
+    store.update({ theme: 'abyss' })
     expect(store.getSnapshot()).toBe(first)
-    store.update({ theme: 'midnight', reducedEffects: true })
+    store.update({ theme: 'vessel', reducedEffects: true })
     expect(changes).toBe(1)
     store.reset()
     expect(store.getSnapshot()).toEqual(DEFAULT_PREFERENCES)
     expect(changes).toBe(2)
     dispose()
-    store.update({ theme: 'pearl' })
+    store.update({ theme: 'dawn' })
     expect(changes).toBe(2)
   })
   it('survives blocked storage and corrupt JSON without losing in-memory settings', () => {
     const store = new PreferencesStore({ getItem: () => '{bad', setItem: () => { throw new Error('blocked') } })
-    store.update({ theme: 'pearl' })
-    expect(store.getSnapshot().theme).toBe('pearl')
+    store.update({ theme: 'dawn' })
+    expect(store.getSnapshot().theme).toBe('dawn')
   })
   it('restores panel choices and rejects unknown or duplicate panel ids', () => {
     const storage = new Map<string, string>()

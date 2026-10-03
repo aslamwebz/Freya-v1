@@ -6,8 +6,8 @@ body { background: #040910; }
 .freya-v2[data-workspace='workforce'] .f-atmosphere { background-image: url('./assets/office.webp'); }
 .freya-v2[data-workspace='forge'] .f-atmosphere { background-image: url('./assets/foundry.webp'); }
 .freya-v2[data-workspace='mind'] .f-atmosphere::after, .freya-v2[data-workspace='relay'] .f-atmosphere::after, .freya-v2[data-workspace='life'] .f-atmosphere::after { background: linear-gradient(145deg, #2c104127, transparent 55%, #51236127); }
-.freya-v2[data-theme='pearl'] .f-atmosphere::after { background: #e9f2fbd6; }
-.freya-v2[data-theme='midnight'] .f-atmosphere::after { background: #02081180; }
+.freya-v2[data-theme='dawn'] .f-atmosphere::after { background: #e9f2fbd6; }
+.freya-v2[data-theme='abyss'] .f-atmosphere::after { background: #02081180; }
 .freya-v2[data-backdrop='quiet'] .f-atmosphere::after { background: color-mix(in srgb, var(--f-bg) 55%, transparent); }
 .freya-v2[data-backdrop='solid'] .f-atmosphere { background: var(--f-bg); }
 .f-horizon, .f-stars { display: none; }

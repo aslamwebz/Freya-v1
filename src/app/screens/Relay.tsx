@@ -49,6 +49,7 @@ export function Relay(): ScreenSlots {
     left: null,
     right: null,
     layout: 'wide',
+    presence: 'none',
     centre: (
       <div className="rl-view">
         <Card title="Conversations" icon="relay" className="rl-conversations" meta={<button type="button" className="rl-add" aria-label="New conversation">+</button>}>

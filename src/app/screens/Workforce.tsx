@@ -50,6 +50,7 @@ export function Workforce(): ScreenSlots {
     left: null,
     right: null,
     layout: 'wide',
+    presence: 'none',
     centre: (
       <div className="wf-view">
         <div className="w-filters wf-tabs">{TABS.map((tab, index) => <button key={tab} type="button" className="w-filter" aria-pressed={index === 0}>{tab}</button>)}</div>

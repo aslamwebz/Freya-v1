@@ -97,6 +97,7 @@ export function World(): ScreenSlots {
     left: null,
     right: null,
     layout: 'wide',
+    presence: 'none',
     centre: (
       <div className="w-view">
         <div className="w-toolbar">

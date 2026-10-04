@@ -51,6 +51,7 @@ export function Life(): ScreenSlots {
     left: null,
     right: null,
     layout: 'wide',
+    presence: 'none',
     centre: (
       <div className="l-view">
         <div className="l-toolbar">

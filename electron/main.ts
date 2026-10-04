@@ -15,6 +15,7 @@ import { loadLocalEnv } from './localEnv'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import { PresenceHost } from './presence/host'
+import { createBrowserExtensionHost, type BrowserExtensionHost } from './browserext'
 import { installSingleInstanceGuard } from './startup/singleInstance'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ProviderConfigInput } from './providerConfig'
@@ -50,6 +51,14 @@ let providerStore: ProviderConfigStore | null = null
 let coreHost: ElectronCoreHost | null = null
 /** The presence host. Owns the presence window and pushes frames to it. */
 let presenceHost: PresenceHost | null = null
+/**
+ * The browser-extension bridge, when Device Hands is switched on.
+ *
+ * Null means the extension cannot act at all, which is the state whenever
+ * `FREYA_DEVICE_HANDS` is not `1`. Kept beside the other host singletons so the
+ * shutdown path can reach it.
+ */
+let browserExtensionHost: BrowserExtensionHost | null = null
 /**
  * The bounded attention wake.
  *
@@ -429,6 +438,13 @@ function shutdownCoreAndThen(finish: () => void): void {
   }
   presenceHost?.stop()
   presenceHost = null
+  // Before Core stops, so the bridge is closed while its authority is still readable
+  // and a request in flight is refused by the host rather than by a vanished socket.
+  void (browserExtensionHost?.stop() ?? Promise.resolve())
+    .catch((error: unknown) => {
+      console.error('[freya] the browser extension bridge failed to stop cleanly', error)
+    })
+  browserExtensionHost = null
   collectWorkspaceAndThen(() => {
     void (coreHost?.stop('app quitting') ?? Promise.resolve())
       .catch((error: unknown) => {
@@ -1055,6 +1071,69 @@ app.whenReady().then(async () => {
       },
     )
     registerIpc()
+
+    /**
+     * Mount the browser-extension bridge, but only when Device Hands is really on.
+     *
+     * Phase 43 landed this seam set to `'pending-phase42'`: the bridge, the pairing
+     * and the read-only observations worked, and every *act* was refused at the
+     * `enabled` gate. That was the honest state while nothing supplied a real Device
+     * Hands adapter. Phase 42 is now in main, so the seam can be `'active'` — and the
+     * activation follows the same switch that governs Device Hands itself rather than
+     * being its own flag, because a browser-control surface that can be enabled while
+     * the hands it depends on are off is two switches where there should be one.
+     *
+     * The grant source is the **same owner-authored grant file** Phase 42 reads, and
+     * the same policy lists. That is deliberate: the extension is a port onto Device
+     * Hands, not a second capability with its own grants. An extension cannot hold a
+     * grant the hands themselves do not have.
+     *
+     * Approvals are denied rather than routed, matching Phase 42 exactly. There is no
+     * owner-approval channel in this architecture, and inventing one here would let a
+     * browser action self-approve. A consequential action therefore stays blocked,
+     * which is the correct outcome rather than a gap to paper over.
+     *
+     * `stopAllActive` comes from Core's own latch, so pressing STOP ALL refuses
+     * extension actions on the same turn as everything else.
+     */
+    if (deviceHandsSeam !== undefined) {
+      const seamGrants = readDeviceHandsGrants(join(app.getPath('userData'), 'device-hands.grants.json'))
+      browserExtensionHost = createBrowserExtensionHost({
+        activation: 'active',
+        activeGrant: (principalId, scope) =>
+          seamGrants.find(
+            (grant) => grant.principalId === principalId && grant.scope === scope && grant.revokedAt === null,
+          ) ?? null,
+        // Denied in exactly the shape Phase 42 denies: `granted: false` with
+        // `decidedBy: 'unknown'`, because nobody decided. Recording it as an owner
+        // refusal would put a decision in the journal that was never made.
+        requestOwnerApproval: async (ask) => ({
+          approvalId: ask.approvalId,
+          granted: false,
+          decidedBy: 'unknown',
+          decidedAt: new Date().toISOString(),
+        }),
+        policy: {
+          allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
+          deniedRoots: [join(app.getPath('userData'), 'vault')],
+          allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+          allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
+          allowedEnvNames: [],
+        },
+      })
+      browserExtensionHost
+        .start()
+        .then((started) => {
+          console.log(`[freya] the browser extension bridge is listening on port ${started.port}`)
+        })
+        .catch((error: unknown) => {
+          // A bridge that cannot bind must not take the app down with it, and must not
+          // leave a half-started host behind pretending to be available.
+          console.error('[freya] the browser extension bridge failed to start', error)
+          browserExtensionHost = null
+        })
+    }
+
     mainWindow = createWindow()
     startPresenceFor(mainWindow)
 

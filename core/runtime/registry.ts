@@ -385,6 +385,31 @@ export const RUNTIME_REGISTRY: readonly RuntimeDomainDescriptor[] = Object.freez
     order: 108,
     note: 'A measurement system, never an authority source: a mature result unlocks nothing.',
   }),
+
+  /* ------------------------------------------------------- browser extension */
+  descriptor({
+    id: 'core.browserext',
+    family: 'browserext',
+    title: 'Browser extension bridge',
+    module: 'core/browserext',
+    kind: 'phase-runtime',
+    // Fail-closed rather than blocked: the bridge, the pairing and the read-only
+    // observations are real and work, while every *act* is refused unless Device
+    // Hands is switched on and holds a grant. Reporting it as blocked would hide a
+    // domain that is genuinely half-available; reporting it as core-owned would
+    // imply it needs nothing.
+    activation: 'fail-closed',
+    requirements: [
+      require('journal', 'the durable event journal'),
+      // The extension is a *port* onto Device Hands, not a second capability. It
+      // requires the same adapter and the same class of grant, so an extension can
+      // never hold authority the hands themselves do not.
+      require('host-adapter', 'the Device Hands host adapter', 'device-hands'),
+      require('capability-grant', 'a Device Hands capability grant', 'device.hands'),
+    ],
+    order: 105,
+    note: 'Read and paired without authority; acting needs the hands adapter and a live capability grant.',
+  }),
 ])
 
 export function registryById(id: string): RuntimeDomainDescriptor | undefined {

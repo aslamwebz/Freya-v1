@@ -126,6 +126,7 @@ export const RUNTIME_FAMILIES = [
   'resilience',
   'sovereignty',
   'evolution',
+  'browserext',
   'threshold',
 ] as const
 

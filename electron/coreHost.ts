@@ -27,6 +27,7 @@ import { fixtureSearchProvider, fixtureTransport, researchFixturesEnabled } from
 import { SafeHttpTransport } from '../core/research/transport'
 import type { SearchProvider } from '../core/research/types'
 import type { ModelProvider } from '../core/model/provider'
+import type { GrantFact } from '../core/devicehands'
 import type { BrowserTargetFactory } from '../core/research/browser'
 import { randomUUID } from 'node:crypto'
 import {
@@ -485,8 +486,14 @@ export interface DeviceHandsHostOptions {
   readonly authority: DeviceHandsAuthority
   /** The surface policy. Must name the Vault and keyring roots among its denied roots. */
   readonly policy?: unknown
-  /** Grants Core policy already authorized. Registered here, never minted here. */
-  readonly grants?: readonly unknown[]
+  /**
+   * Grants Core policy already authorized. Registered here, never minted here.
+   *
+   * Typed rather than `unknown[]` because the host reads `revokedAt` and `scope` off
+   * these to report runtime facts, and an untyped array silently becomes `unknown` at
+   * every use — which is how a revoked grant would end up counted as a live one.
+   */
+  readonly grants?: readonly GrantFact[]
   /** Whether to switch the phase on at start. Default false. */
   readonly enabled?: boolean
   /** Whether a journal that does not chain refuses to open. Default true. */
@@ -901,6 +908,21 @@ export class ElectronCoreHost implements CoreHost {
         personalityKey: this.options.personalityKey ?? null,
         skillKey: this.options.skillKey ?? null,
         ...(this.options.vault ? { vault: this.options.vault } : {}),
+        // Declare what the host wired but does not route through Core, so the Phase 40
+        // runtime registry reports Device Hands as present rather than permanently
+        // blocked. Facts only — Core records them and Core cannot act on them.
+        ...(this.options.deviceHands !== undefined
+          ? {
+              runtimeFacts: {
+                hostAdapters: ['device-hands'],
+                // Only unrevoked grants the owner authored. A revoked grant is not a
+                // fact about what is currently permitted.
+                capabilityGrants: (this.options.deviceHands.grants ?? [])
+                  .filter((grant) => grant.revokedAt === null)
+                  .map((grant) => grant.scope),
+              },
+            }
+          : {}),
         // The Workforce seam, forwarded whole. Nothing is derived from it here:
         // the host neither reads nor interprets a workforce, it only hands Core
         // the reader it was given and mirrors what Core reports.

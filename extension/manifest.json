@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Freya Browser Bridge",
+  "version": "0.1.0",
+  "description": "Connect the current tab to Freya under explicit, visible, revocable authority.",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "scripting", "tabs", "storage"],
+  "host_permissions": [],
+  "optional_host_permissions": [],
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "dist/popup.html",
+    "default_title": "Freya"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "web_accessible_resources": []
+}

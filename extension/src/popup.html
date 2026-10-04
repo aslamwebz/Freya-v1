@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Freya</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <strong>Freya</strong>
+        <span id="status" class="status">disconnected</span>
+      </header>
+
+      <section id="pair-section">
+        <label for="pair-code">Pairing code from Freya</label>
+        <div class="row">
+          <input id="pair-code" type="text" autocomplete="off" spellcheck="false" maxlength="12" />
+          <button id="pair">Pair</button>
+        </div>
+      </section>
+
+      <section id="controls">
+        <div class="state-line">
+          <span>Page shared</span><span id="shared">no</span>
+        </div>
+        <div class="state-line">
+          <span>Control</span><span id="control">off</span>
+        </div>
+        <div class="buttons">
+          <button id="share">Share current page</button>
+          <button id="unshare">Stop sharing</button>
+          <button id="allow">Allow control</button>
+          <button id="revoke">Revoke control</button>
+          <button id="stop" class="danger">STOP</button>
+        </div>
+      </section>
+
+      <footer>
+        <div id="last">No action yet.</div>
+        <div id="origin" class="muted"></div>
+      </footer>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

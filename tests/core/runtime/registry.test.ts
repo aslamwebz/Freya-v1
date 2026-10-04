@@ -73,4 +73,50 @@ describe('the canonical runtime registry', () => {
       expect(entry.kind).not.toBe('')
     }
   })
+
+  it('keeps authority vocabulary out of every note, because notes reach the journal', () => {
+    /**
+     * A `fail-closed` domain's `note` becomes `computed.reason`, which the activation
+     * controller writes into the **durable event journal** verbatim
+     * (`controller.ts` records `reason: computed.reason`).
+     *
+     * So a note is not a comment. Three separate red-team suites assert that
+     * particular vocabulary never appears in a journal — `personality`,
+     * `consciousness-leakage` and `enterprise` all forbid it — which makes the
+     * wording of every note a cross-domain hazard rather than a local style choice.
+     *
+     * This was found the hard way: a browserext note reading "…and no STOP ALL"
+     * wrote that literal string into the journal of an unrelated personality test
+     * and failed it deterministically. The assertion was right and the prose was
+     * wrong.
+     *
+     * Cheaper to catch here than to rediscover one red-team suite at a time.
+     */
+    const forbidden = ['STOP ALL', 'Guard', 'Constitution', 'work.execute']
+    for (const entry of RUNTIME_REGISTRY) {
+      for (const word of forbidden) {
+        expect(entry.note.includes(word), `${entry.id} note contains "${word}", which reaches the journal`).toBe(false)
+      }
+    }
+    // Titles are deliberately exempt, and the reason is worth stating: only `reason`
+    // is journalled — `runtime.activation.decided` carries `domainId`, `outcome`,
+    // `status`, `reason`, `missing` and `requestedAt`, and no title. `core.security-spine`
+    // is *named* for the stop authority and would be wrong if it were not, so a rule
+    // that forbade the words in titles would be forcing that domain to be vague about
+    // what it is in order to satisfy a constraint that does not apply to it.
+  })
+
+  it('registers the browser extension as a port onto the hands, not its own capability', () => {
+    const browserext = registryById('core.browserext')
+    expect(browserext).toBeDefined()
+    // Fail-closed rather than blocked: the bridge, pairing and reads are real, and the
+    // acts are refused. Reporting `blocked` would hide a half-available domain.
+    expect(browserext!.activation).toBe('fail-closed')
+    // It requires the *same* adapter and a grant, so an extension cannot hold authority
+    // the hands themselves lack. This is the whole safety argument for the entry.
+    expect(browserext!.requirements.map((r) => r.kind).sort()).toEqual(
+      ['capability-grant', 'host-adapter', 'journal'].sort(),
+    )
+    expect(browserext!.requirements.find((r) => r.kind === 'host-adapter')?.key).toBe('device-hands')
+  })
 })

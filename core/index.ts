@@ -465,6 +465,32 @@ export interface CoreOptions {
     binding?: VaultBinding
   }
   /**
+   * What the host has actually wired, so the runtime registry can report it.
+   *
+   * Phase 40's registry describes each domain's requirements — a host adapter, a
+   * capability grant — and asks whether they are met. Some of those live in the host
+   * and never pass through Core: Phase 42's Device Hands seam is constructed in
+   * `electron/main.ts` and reaches Core by nothing at all, so `core.device-hands`
+   * could never satisfy its own `host-adapter` requirement no matter how completely
+   * the host wired it. A runtime that reports `blocked` for a domain that is running
+   * is not fail-closed, it is wrong.
+   *
+   * This is a **declaration of fact, not a grant**. Core records which adapters are
+   * present and which capability names hold an owner-authored grant, and reports them
+   * in `RuntimeFacts`. It takes no authority from them, mints nothing, and cannot act
+   * on any of it: the registry only ever renders status. Anything stronger here would
+   * be a back door around Guard, which is the opposite of the point.
+   *
+   * Absent means "the host told Core nothing", which every requirement then reports
+   * unsatisfied. That is the safe direction for a declaration that can be forgotten.
+   */
+  runtimeFacts?: {
+    /** Host adapter names present, e.g. `'device-hands'`. */
+    readonly hostAdapters?: readonly string[]
+    /** Capability names the host holds an active owner-authored grant for. */
+    readonly capabilityGrants?: readonly string[]
+  }
+  /**
    * Overrides the world model's evidence store wholesale. For tests.
    *
    * There is deliberately **no `worldKey`**. Phase 22 used to take a key of its own and
@@ -3012,6 +3038,9 @@ class FreyaCore implements Core {
     if (options.research !== undefined) hostAdapters.push('research')
     if (options.relay !== undefined) hostAdapters.push('relay')
     if (options.voiceTranscriber !== undefined || options.voiceSynthesizer !== undefined) hostAdapters.push('voice')
+    // Adapters the host wired but does not route through Core — Phase 42's Device
+    // Hands seam is the live case. Declared, never inferred.
+    hostAdapters.push(...(options.runtimeFacts?.hostAdapters ?? []))
 
     const connectors: string[] = []
     if (options.relay !== undefined) {
@@ -3033,7 +3062,9 @@ class FreyaCore implements Core {
       ownerApprovals: [],
       // Cognition grants authorise a *cause*, not a capability name, so there is
       // deliberately nothing here that could be mistaken for a capability grant.
-      capabilityGrants: [],
+      // Only capability names the *host* holds an owner-authored grant for appear,
+      // and Core cannot act on any of them.
+      capabilityGrants: [...(options.runtimeFacts?.capabilityGrants ?? [])],
       trustedDevices: 0,
       transportAvailable: false,
       budgetRemainingUnits: 0,

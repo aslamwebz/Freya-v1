@@ -9,6 +9,7 @@ import {
   canTransitionGoal,
   isTerminalGoalStatus,
   normaliseGoalContent,
+  type CheckpointOutcome,
   type GoalAction,
   type GoalCommandOutcome,
   type GoalContent,
@@ -57,6 +58,10 @@ import {
  */
 
 /** What the engine needs from the continuation subsystem, and nothing more. */
+export type CheckpointStartOutcome =
+  | { readonly ok: true; readonly goalId: string; readonly checkpointId: string }
+  | { readonly ok: false; readonly reason: string }
+
 export interface ContinuationPort {
   /** Verify a checkpoint. Resolves to the verification outcome. */
   verifyCheckpoint(
@@ -248,6 +253,7 @@ export class GoalEngine {
    * that could have been verified.
    */
   async completeGoal(goalId: string): Promise<GoalCommandOutcome> {
+    if (this.stopped()) return this.refused('verification-passed', 'STOP ALL is active')
     return this.lock(goalId, async () => {
       const goal = this.goalState.goals.get(goalId)
       if (goal === undefined) return this.refused('verification-passed', 'no such goal')
@@ -271,6 +277,45 @@ export class GoalEngine {
       })
       this.onChange()
       return { operation: 'verification-passed', ok: true, goalId, state: 'completed' }
+    })
+  }
+
+  /**
+   * Start a checkpoint toward a goal.
+   *
+   * A checkpoint is the smallest unit of long-horizon continuation: one is
+   * started, one wake verifies it, and the goal completes when all are verified.
+   * This is the only way a checkpoint enters the goal's plan through the runtime
+   * ΓÇö the journal's `longhorizon.checkpoint.started` line is written here and
+   * nowhere else, so a checkpoint that exists was started by a wake.
+   *
+   * Bounded by the code-owned per-goal ceiling, and refused unless the goal is
+   * `active`: a checkpoint is a unit of progress, and progress belongs to a goal
+   * that is being pursued.
+   */
+  async startCheckpoint(goalId: string, kind: string): Promise<CheckpointStartOutcome> {
+    if (this.stopped()) return { ok: false, reason: 'STOP ALL is active' }
+    return this.lock(goalId, async () => {
+      const goal = this.goalState.goals.get(goalId)
+      if (goal === undefined) return { ok: false, reason: 'no such goal' }
+      if (goal.state !== 'active') {
+        return { ok: false, reason: `a ${goal.state} goal cannot start a checkpoint` }
+      }
+      if (goal.checkpoints.length >= DEFAULT_GOAL_LIMITS.maxCheckpointsPerGoal) {
+        return {
+          ok: false,
+          reason: `a goal may hold at most ${DEFAULT_GOAL_LIMITS.maxCheckpointsPerGoal} checkpoints`,
+        }
+      }
+      const checkpointId = this.newId()
+      await this.emit('longhorizon.checkpoint.started', {
+        goalId,
+        checkpointId,
+        order: goal.checkpoints.length,
+        kind,
+      })
+      this.onChange()
+      return { ok: true, goalId, checkpointId }
     })
   }
 
@@ -393,6 +438,62 @@ export class GoalEngine {
   private describe(error: unknown): string {
     if (error instanceof Error) return error.message
     return String(error)
+  }
+
+  /* --------------------------------------- verification port (inbound records) */
+
+  /**
+   * Record a checkpoint's verification outcome.
+   *
+   * The verification engine's way of telling the goal engine what a verifier
+   * decided. The engine is the authority on what may be recorded: the checkpoint
+   * must exist and be `in-progress`, because an outcome for a checkpoint that
+   * already failed ΓÇö or was already verified ΓÇö is a forged outcome, and the
+   * journal is the last place a fabrication should be able to reach.
+   *
+   * A passed outcome journals `longhorizon.checkpoint.verified`; every other
+   * outcome journals `longhorizon.checkpoint.failed` with a closed reason.
+   */
+  async recordCheckpointOutcome(
+    goalId: string,
+    checkpointId: string,
+    outcome: CheckpointOutcome,
+    reason: GoalReason | null,
+    attempts: number,
+  ): Promise<void> {
+    await this.lock(goalId, async () => {
+      const checkpoint = this.goalState.checkpoints.get(checkpointId)
+      const goal = this.goalState.goals.get(goalId)
+      if (checkpoint === undefined || goal === undefined) return
+      if (checkpoint.status !== 'in-progress') return
+      if (outcome === 'passed') {
+        await this.emit('longhorizon.checkpoint.verified', {
+          goalId,
+          checkpointId,
+          outcome: 'passed',
+          reason: null,
+        })
+        return
+      }
+      await this.emit('longhorizon.checkpoint.failed', {
+        goalId,
+        checkpointId,
+        reason: reason ?? GOAL_REASONS.verification_not_established,
+        attempts,
+      })
+    })
+  }
+
+  /** The checkpoint's current attempt count, or 0 when it does not exist. */
+  checkpointAttempts(goalId: string, checkpointId: string): number {
+    const checkpoint = this.goalState.checkpoints.get(checkpointId)
+    if (checkpoint === undefined || checkpoint.goalId !== goalId) return 0
+    return checkpoint.attempts
+  }
+
+  /** The goal's current retry count, or 0 when it does not exist. */
+  goalRetryCount(goalId: string): number {
+    return this.goalState.goals.get(goalId)?.retryCount ?? 0
   }
 
   /* ----------------------------------------------------------------- reads */

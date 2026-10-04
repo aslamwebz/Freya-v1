@@ -44,6 +44,7 @@ describe('Phase 18 release policy', () => {
   it('accepts a registry-only integrity-pinned lock with the explicit install-script allowlist', () => {
     const { pkg, lock } = packagePair()
     expect(ALLOWED_INSTALL_SCRIPT_PACKAGES.has('node_modules/esbuild')).toBe(true)
+    expect(ALLOWED_INSTALL_SCRIPT_PACKAGES.has('node_modules/better-sqlite3')).toBe(true)
     expect(inspectLockfile(pkg, lock)).toEqual([])
   })
 

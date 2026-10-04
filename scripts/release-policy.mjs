@@ -2,13 +2,19 @@
 import { join } from 'node:path'
 
 export const ALLOWED_INSTALL_SCRIPT_PACKAGES = new Set([
+  'node_modules/better-sqlite3',
   'node_modules/esbuild',
   'node_modules/fsevents',
 ])
 
 export const PERFORMANCE_BUDGETS = Object.freeze({
-  mainBytes: 1_500_000,
-  preloadBytes: 100_000,
+  // Phases 20–31 moved durable Vault, Context, Life, learning, acquisition and
+  // long-horizon assembly into the Electron host. The Phase 18 main/preload ceilings
+  // no longer describe the canonical Phase 31 binary. These bounds retain only
+  // modest headroom over the measured Phase 31 artifacts (~1.76MB / ~109KB), so
+  // future growth still has to be explained rather than silently accumulating.
+  mainBytes: 1_900_000,
+  preloadBytes: 120_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,
   // Phase 19 added the ui-v2 shell: a finished design with ~1.9MB of webp imagery and

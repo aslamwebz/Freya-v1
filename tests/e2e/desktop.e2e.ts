@@ -2529,13 +2529,18 @@ async function main(): Promise<void> {
       await openMission(mission)
       const callsBeforeMissions = await missionUsage(mission)
 
+      const missionDurabilityExpected = process.platform === 'win32'
+      const missionPosture = (await mission.locator('.mission-posture').innerText()) ?? ''
       check(
-        'Mission content is encrypted at rest',
-        (await mission.locator('.mission-posture[data-durable="true"]').count()) === 1,
+        'Mission persistence posture matches platform Vault support',
+        (await mission.locator(`.mission-posture[data-durable="${missionDurabilityExpected ? 'true' : 'false'}"]`).count()) === 1,
       )
       check(
-        'a durable store says so before it lists anything',
-        /ENCRYPTED AT REST/.test((await mission.locator('.mission-posture').innerText()) ?? ''),
+        'Mission persistence is stated honestly before it lists anything',
+        missionDurabilityExpected
+          ? /ENCRYPTED AT REST/.test(missionPosture)
+          : /FORGETS ON QUIT/.test(missionPosture) && /memory only|Vault/i.test(missionPosture),
+        missionPosture,
       )
       check(
         'an empty Mission list is stated as a fact, not as an absent subsystem',
@@ -2689,8 +2694,10 @@ async function main(): Promise<void> {
           (await missionRestored.locator('.mission-row[data-status="cancelled"]').count()) === 1,
         )
         check(
-          'a relaunched board still says its content is encrypted',
-          (await missionRestored.locator('.mission-posture[data-durable="true"]').count()) === 1,
+          'a relaunched board keeps the same honest persistence posture',
+          (await missionRestored.locator(
+            `.mission-posture[data-durable="${missionDurabilityExpected ? 'true' : 'false'}"]`,
+          ).count()) === 1,
         )
         const relaunchCalls = await missionUsage(missionRestored)
         check(

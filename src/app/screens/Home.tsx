@@ -156,6 +156,6 @@ export function Home({ snapshot }: { snapshot: UiSnapshot }): ScreenSlots {
   return {
     left: <><FocusCard snapshot={snapshot} /><MissionCard snapshot={snapshot} /></>,
     right: <><AttentionCard snapshot={snapshot} /><PeopleCard snapshot={snapshot} /><WorkforceCard snapshot={snapshot} /></>,
-    bottom: <><WorldCard snapshot={snapshot} /><MemoryCard snapshot={snapshot} /></>,
+    bottom: [<WorldCard key="world" snapshot={snapshot} />, <MemoryCard key="activity" snapshot={snapshot} />],
   }
 }

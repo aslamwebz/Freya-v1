@@ -1,6 +1,7 @@
 /* Cards — dark smoked glass instrument panels. */
 .c-card {
   position: relative;
+  min-width: 0;
   display: flex; flex-direction: column; gap: .7rem;
   padding: .95rem 1.05rem 1.05rem;
   border-radius: 18px;
@@ -26,7 +27,7 @@
 .c-titles { flex: 1; min-width: 0; }
 .c-titles h2 {
   margin: 0; font-size: .72rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;
-  color: var(--f-heading);
+  color: var(--f-heading); overflow-wrap: anywhere;
 }
 .c-titles h2 small { margin-left: .5rem; color: var(--f-muted); font-weight: 400; letter-spacing: .06em; text-transform: none; }
 .c-more { color: var(--f-muted); letter-spacing: .15em; }
@@ -54,12 +55,12 @@
 .c-row-icon[data-tone='attention'] { color: var(--f-attention); border-color: color-mix(in srgb, var(--f-attention) 50%, transparent); }
 .c-row-icon[data-tone='danger'] { color: var(--f-danger); border-color: color-mix(in srgb, var(--f-danger) 50%, transparent); }
 .c-row-text { flex: 1; min-width: 0; display: grid; }
-.c-row-text b { font-weight: 500; font-size: .9rem; }
-.c-row-text small { color: var(--f-muted); font-size: .78rem; }
+.c-row-text b { font-weight: 500; font-size: .9rem; overflow-wrap: anywhere; }
+.c-row-text small { color: var(--f-muted); font-size: .78rem; overflow-wrap: anywhere; }
 .c-row-end { color: var(--f-muted); font-size: .78rem; white-space: nowrap; }
 
 /* Card bodies */
-.c-lead { margin: 0; font-family: var(--f-narrative); font-size: 1.15rem; line-height: 1.25; font-weight: 400; color: var(--f-ink); }
+.c-lead { margin: 0; font-family: var(--f-narrative); font-size: 1.15rem; line-height: 1.25; font-weight: 400; color: var(--f-ink); overflow-wrap: anywhere; }
 .c-sub { margin: 0; color: var(--f-muted); font-size: .86rem; }
 .c-focus-line { display: flex; align-items: center; gap: .6rem; }
 .c-focus-line .c-meter { flex: 1; }

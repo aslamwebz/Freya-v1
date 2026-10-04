@@ -11,10 +11,10 @@ const sample = <T,>(data: T): Resource<T> => ({ status: 'ready', source: 'previe
 export function createPreviewAdapter(): UiAdapter {
   const snapshot: UiSnapshot = freeze({
     home: sample({
-      focus: { title: 'Product Roadmap — Phase 19', detail: 'Finalizing the workspace architecture, designs, and the next chapter.', progress: 72 },
+      focus: { title: 'Product Roadmap – Phase 19', detail: 'Finalizing the workspace architecture, designs, and the next chapter.', progress: 72 },
       mission: 'Build a more abundant, connected, and fulfilling future.',
-      goals: [{ id: 'beta', text: 'Advance Freya OS to global beta' }, { id: 'community', text: 'Grow an aligned user community' },
-        { id: 'revenue', text: 'Build a sustainable revenue engine' }, { id: 'impact', text: 'Increase positive real-world impact' }],
+      goals: [{ id: 'beta', text: 'Advance Freya OS to global beta' }, { id: 'community', text: 'Grow aligned user community' },
+        { id: 'revenue', text: 'Build sustainable revenue engine' }, { id: 'impact', text: 'Increase real-world positive impact' }],
       attention: { focused: 88, caption: 'Focused and aligned', categories: ['Creative', 'Strategic', 'Communication', 'Operations', 'Misc'], profiles: [
         { id: 'Product', label: 'Deep Work', presence: 'attentive', focused: 88, distribution: [42, 28, 18, 8, 4] },
         { id: 'Strategy', label: 'Strategic work', presence: 'planning', focused: 84, distribution: [20, 52, 14, 10, 4] },

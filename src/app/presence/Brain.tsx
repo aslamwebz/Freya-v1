@@ -173,21 +173,51 @@ function build(
     return new THREE.Line(g, lineMat(color, opacity))
   }
 
-  ringGroup.add(tickRing(1.55, 150, 0.045, intelligenceColor, 0.5))
-  // Glass features: a bright rim and a soft sheen, so the centre reads as glass.
-  ringGroup.add(circle(1.04, intelligenceColor, 0.3))
-  ringGroup.add(arc(1.09, 1.85, 0.75, cognitionColor, 0.55))
-  if (rings) {
-    ringGroup.add(arc(1.8, 0.2, 1.4, cognitionColor, 0.7))
-    ringGroup.add(arc(1.8, 2.4, 0.9, cognitionColor, 0.5))
-    ringGroup.add(arc(1.3, 3.4, 1.8, intelligenceColor, 0.45))
+  if (motif === 'orb') {
+    // Home reference treatment: a few intentional luminous orbits rather than
+    // many full concentric circles. The bright inner cyan rim frames Freya,
+    // while thin outer arcs and sparse violet nodes imply a living instrument.
+    ringGroup.add(circle(1.18, intelligenceColor, 0.64))
+    ringGroup.add(circle(1.205, intelligenceColor, 0.16))
+    ringGroup.add(tickRing(1.34, 112, 0.026, intelligenceColor, 0.34))
+    ringGroup.add(circle(1.62, intelligenceColor, 0.20))
+    if (rings) {
+      ringGroup.add(arc(1.70, 0.18, 1.45, cognitionColor, 0.54))
+      ringGroup.add(arc(1.70, 2.38, 0.92, cognitionColor, 0.42))
+      ringGroup.add(arc(1.48, 3.28, 1.62, intelligenceColor, 0.33))
+      ringGroup.add(arc(1.52, 5.05, 0.72, cognitionColor, 0.50))
+    }
+  } else {
+    ringGroup.add(tickRing(1.55, 150, 0.045, intelligenceColor, 0.5))
+    ringGroup.add(circle(1.04, intelligenceColor, 0.3))
+    ringGroup.add(arc(1.09, 1.85, 0.75, cognitionColor, 0.55))
+    if (rings) {
+      ringGroup.add(arc(1.8, 0.2, 1.4, cognitionColor, 0.7))
+      ringGroup.add(arc(1.8, 2.4, 0.9, cognitionColor, 0.5))
+      ringGroup.add(arc(1.3, 3.4, 1.8, intelligenceColor, 0.45))
+    }
   }
 
-  // Beacons orbiting the lattice.
-  const beaconPositions = new Float32Array([0, 1.9, 0, 1.9, 0, 0, 0, -1.9, 0])
+  // Sparse orbit beacons. Home uses more points around the outer orbit, like
+  // the reference render; other centres keep the original three beacons.
+  const beaconValues: number[] = []
+  if (motif === 'orb') {
+    const beaconAngles = [0.18, 0.88, 1.66, 2.62, 3.46, 4.18, 5.05, 5.72]
+    for (const a of beaconAngles) beaconValues.push(Math.cos(a) * 1.60, Math.sin(a) * 1.60, 0)
+  } else {
+    beaconValues.push(0, 1.9, 0, 1.9, 0, 0, 0, -1.9, 0)
+  }
+  const beaconPositions = new Float32Array(beaconValues)
   const beaconGeom = new THREE.BufferGeometry()
   beaconGeom.setAttribute('position', new THREE.Float32BufferAttribute(beaconPositions, 3))
-  const beacons = new THREE.Points(beaconGeom, new THREE.PointsMaterial({ color: cognitionColor, size: 0.09, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }))
+  const beacons = new THREE.Points(beaconGeom, new THREE.PointsMaterial({
+    color: cognitionColor,
+    size: motif === 'orb' ? 0.065 : 0.09,
+    transparent: true,
+    opacity: 0.92,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  }))
   scene.add(beacons)
 
   let spin = CONFIG.calm.spin

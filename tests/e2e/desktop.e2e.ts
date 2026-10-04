@@ -117,6 +117,30 @@ async function launch(
   page.on('console', (message) => {
     if (message.type() === 'error') diagnostics.push(`console: ${message.text()}`)
   })
+
+  /**
+   * Pin this window to the legacy shell.
+   *
+   * The default entry is now the from-scratch App Mode, but this suite was written
+   * against the legacy shell and drives it through named surfaces — openChat,
+   * openMission, openWork, openPersonality, openVault and the rest — each of which
+   * launches a surface by id from the Surface Manager. App Mode has its own screens
+   * and does not expose those ids, so without this the suite would boot a shell it
+   * cannot operate and fail on its first selector with nothing to say why.
+   *
+   * Retargeting the suite at App Mode is a rewrite of all 2,700 lines against a UI
+   * that is still being built, which would leave the Core behaviours it covers —
+   * mission persistence across a relaunch, approval ordering, STOP ALL surviving a
+   * restart — untested in the meantime. So the suite names the shell it needs.
+   *
+   * Navigating after `firstWindow()` rather than at launch keeps the production
+   * entry point free of a test-only switch, and it works precisely because of the
+   * property this architecture is built on: the renderer is disposable. A reload
+   * re-reads the workspace and re-attaches to the Core that is already running,
+   * with the same event sequence and the same latched security state, so the
+   * replacement body loses no history and starts no second Core.
+   */
+  await page.goto(`${page.url()}?ui=legacy`)
   try {
     await page.waitForSelector('.app[data-ready="true"]', { timeout: 20_000 })
     await page.waitForSelector('.presence', { timeout: 20_000 })
@@ -1903,10 +1927,33 @@ async function main(): Promise<void> {
         const keys = await research.evaluate(() =>
           Object.keys((window as unknown as { freyaHost?: object }).freyaHost ?? {}).sort(),
         )
+        /**
+         * The bridge must not hand a window a browser handle, a session, a storage
+         * path, or a provider.
+         *
+         * "Provider" here means a *capability to infer* — something a window could
+         * call to spend. Two members match the word and are not that:
+         * `providerConfig` and `saveProviderConfig`, which read and write settings.
+         * They are allowed by exact name, and only by exact name, so a third
+         * provider-shaped member added later still fails this check rather than
+         * being quietly admitted by a widened pattern.
+         *
+         * What makes them settings rather than a handle is on the host side and is
+         * asserted there: the read returns base URL, model, live flag and `hasKey`
+         * with no field a credential could occupy, the write takes the key one way
+         * and never returns it, and the credential is wrapped by the OS keyring in
+         * the main process. Nothing here can name a model for a turn, raise a token
+         * ceiling or reach a provider — a turn still goes through the Gateway and the
+         * Governor whatever this screen is set to.
+         */
+        const SETTINGS_MEMBERS = new Set(['providerConfig', 'saveProviderConfig'])
+        const handles = keys.filter(
+          (key) => !SETTINGS_MEMBERS.has(key) && /browser|target|session|provider|store|path|file|key/i.test(key),
+        )
         check(
           'the bridge exposes no browser handle, provider or storage path',
-          !keys.some((key) => /browser|target|session|provider|store|path|file|key/i.test(key)),
-          keys.join(', '),
+          handles.length === 0,
+          handles.length > 0 ? handles.join(', ') : keys.join(', '),
         )
 
         // Search is driven first and Research is opened afterwards, because these

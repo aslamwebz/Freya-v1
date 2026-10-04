@@ -1,5 +1,7 @@
 /* Reference 01: a single desktop composition. All rules are Home-only. */
-.hd-viewport { position: relative; width: 100%; height: 100dvh; overflow: hidden; background: #030911; }
+/* Contained board: the viewport wears the same panorama as the board so any
+   sliver outside the board blends in instead of reading as a black bar. */
+.hd-viewport { position: relative; width: 100%; height: 100dvh; overflow: hidden; background: linear-gradient(180deg, #01070c24, transparent 60%, #02081215), url('../../ui-v2/assets/panorama.webp') center / cover, #030911; }
 /* Centred even when larger than the viewport, so any crop is symmetric rather
    than only on one side. The frame's transform is fine for canvas blending: the
    nearest stacking context to the canvas is `.hd-dashboard`, which carries the

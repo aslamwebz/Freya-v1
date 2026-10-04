@@ -23,6 +23,11 @@ const paths: Record<string, string> = {
   'win-min': 'M5 12h14',
   'win-max': 'M5 5h14v14H5z',
   'win-close': 'M6 6l12 12M18 6 6 18',
+  attach: 'M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.2-9.19a4 4 0 0 1 5.65 5.66l-9.19 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48',
+  send: 'M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z',
+  chip: 'M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2M6 6h12v12H6zM9.5 9.5h5v5h-5z',
+  bolt: 'M13 2 4 14h6l-1 8 9-12h-6l1-8Z',
+  chevron: 'm6 9 6 6 6-6',
 }
 export function Glyph({ name, size = 20, style }: { name: string; size?: number; style?: CSSProperties }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"

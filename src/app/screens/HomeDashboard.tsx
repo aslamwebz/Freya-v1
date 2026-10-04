@@ -3,6 +3,7 @@ import type { UiSnapshot } from '../../ui-v2/state/contract'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { Clock } from '../../ui-v2/primitives/Clock'
 import { ready } from '../state/view'
+import { readModelCatalog, selectModel } from '../../platform/modelClient'
 import { hostBridge } from '../../platform/host'
 import portrait from '../../ui-v2/assets/freya-portrait.webp'
 import './home-dashboard.css'
@@ -19,9 +20,15 @@ interface Props {
 
 }
 
-const NAV = [['home', 'Home', 'home'], ['focus', 'Focus', 'focus'], ['people', 'People', 'people'],
-  ['workforce', 'Workforce', 'workforce'], ['world', 'World', 'world'], ['memory', 'Memory', 'core'],
-  ['create', 'Create', 'create'], ['settings', 'Settings', 'settings']] as const
+const NAV = [['home', 'Home', 'home'], ['mind', 'Mind', 'mind'], ['focus', 'Focus', 'focus'],
+  ['people', 'People', 'people'], ['workforce', 'Workforce', 'workforce'], ['world', 'World', 'world'],
+  ['memory', 'Memory', 'memory'], ['life', 'Life', 'life'], ['create', 'Foundry', 'forge'],
+  ['relay', 'Relay', 'relay']] as const
+
+// The thinking levels the composer offers. The model list is never hard-coded:
+// it is read from the configured provider through Core's catalogue command.
+const THINK = ['None', 'Think', 'Deep', 'Fast'] as const
+type ModelEntry = { readonly id: string; readonly ownedBy: string | null }
 
 // Existing reference artwork supplies decorative face thumbnails, never UI text.
 const FACES = [[290, 219], [378, 236], [291, 310], [470, 199]] as const
@@ -80,8 +87,13 @@ function Orbits() {
 export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, onSend, onNavigate, onChat }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(1)
-  const [intent, setIntent] = useState('Think')
   const [voiceNotice, setVoiceNotice] = useState('')
+  const [menu, setMenu] = useState<string | null>(null)
+  const [models, setModels] = useState<readonly ModelEntry[]>([])
+  const [model, setModel] = useState<string | null>(null)
+  const [catalogNote, setCatalogNote] = useState('')
+  const [thinkLevel, setThinkLevel] = useState<typeof THINK[number]>('Think')
+  const [collapsed, setCollapsed] = useState(false)
   useEffect(() => {
     const node = viewport.current
     if (!node) return
@@ -99,22 +111,53 @@ export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, on
   const online = core?.lifecycle === 'ready'
   const workers = ready(snapshot.workforce)
   const activity = ready(snapshot.activity)
+  const provider = ready(snapshot.provider)
   const open = (screen: string) => () => onNavigate(screen)
+
+  // The catalogue is a provider read, asked for only when the selector opens —
+  // never cached, never invented. A refusal is shown in Core's own words.
+  const toggleModelMenu = () => {
+    const next = menu === 'model' ? null : 'model'
+    setMenu(next)
+    if (next !== 'model') return
+    setCatalogNote('')
+    void readModelCatalog().then(outcome => {
+      if (outcome.operation === 'catalog' && outcome.models) setModels(outcome.models)
+      else { setModels([]); setCatalogNote(outcome.reason ?? 'The model catalogue is unavailable.') }
+    })
+  }
+  const chooseModel = (id: string) => {
+    setModel(id)
+    setMenu(null)
+    void selectModel(id)
+  }
+  const activeModel = model ?? provider?.model ?? 'provider default'
   const style = { '--hd-scale': scale, width: 1672 * scale, height: 941 * scale } as CSSProperties
 
   return <div className="freya-v2 hd-viewport" data-theme="abyss" ref={viewport}>
     <div className="hd-frame" style={style}><div className="hd-dashboard" data-screen="home">
-      <aside className="hd-rail">
-        <button className="hd-logo" aria-label="Freya Home" onClick={open('home')}><span /><i /><b /></button>
-        <nav aria-label="Freya">{NAV.map(([id, label, icon]) => <button key={id} aria-label={label} aria-current={id === 'home' ? 'page' : undefined} onClick={open(id)}><Glyph name={icon} size={23} /><span>{label}</span></button>)}</nav>
-        <div className="hd-online" title={preview ? 'Design preview · Sample data' : undefined}><span className="hd-status-dot" /><span>{online ? 'Freya Online' : 'Freya Offline'}</span><small>Phase 19<br />Build 19.0.1</small></div>
-      </aside>
       <header className="hd-header">
-        <div className="hd-brand"><div><b>FREYA</b><span>PHASE 19</span></div><p>A PERSISTENT INTELLIGENCE FOR A BRIGHTER TOMORROW</p></div>
-        <div className="hd-manifesto"><blockquote>“More clarity.<br /><span>A kinder, smarter tomorrow.”</span></blockquote><p>PERSISTENT <i>•</i> EVOLVING <i>•</i> ALIGNED <i>•</i> FOR A BRIGHTER TOMORROW</p></div>
-        <div className="hd-clock"><Clock /><button aria-label="Open appearance settings" onClick={open('settings')}><Glyph name="settings" size={26} /></button></div>
-        {hostBridge() && <div className="hd-window-controls" aria-label="Window controls"><button aria-label="Minimize" onClick={() => void hostBridge()?.windowMinimize()}>−</button><button aria-label="Maximize" onClick={() => void hostBridge()?.windowMaximize()}>□</button><button aria-label="Close" onClick={() => void hostBridge()?.windowClose()}>×</button></div>}
+        <div className="hd-clock">
+          <Clock />
+          <button aria-label="Open appearance settings" onClick={open('settings')}><Glyph name="settings" size={26} /></button>
+          <div className="hd-win" role="group" aria-label="Window">
+            <button aria-label="Minimize" onClick={() => void hostBridge()?.windowMinimize()}><Glyph name="win-min" size={16} /></button>
+            <button aria-label="Maximize" onClick={() => void hostBridge()?.windowMaximize()}><Glyph name="win-max" size={16} /></button>
+            <button className="hd-win-close" aria-label="Close" onClick={() => void hostBridge()?.windowClose()}><Glyph name="win-close" size={16} /></button>
+          </div>
+        </div>
       </header>
+      <aside className="hd-rail" data-collapsed={collapsed || undefined}>
+        <div className="hd-rail-top">
+          <div className="hd-brand"><b>FREYA</b></div>
+          <button className="hd-rail-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={() => setCollapsed(value => !value)}><Glyph name="arrow" size={16} /></button>
+        </div>
+        <nav aria-label="Freya">{NAV.map(([id, label, icon]) => <button key={id} aria-label={label} aria-current={id === 'home' ? 'page' : undefined} onClick={open(id)}><Glyph name={icon} size={23} /><span>{label}</span></button>)}</nav>
+        <div className="hd-rail-foot">
+          <div className="hd-online" title={preview ? 'Design preview · Sample data' : undefined}><span className="hd-status-dot" /><span>{online ? 'Freya Online' : 'Freya Offline'}</span><small>Phase 19<br />Build 19.0.1</small></div>
+          <button className="hd-user" aria-label="Open your profile" onClick={open('settings')}><span className="hd-user-avatar">A</span><span className="hd-user-name">Aslam</span><Glyph name="settings" size={15} /></button>
+        </div>
+      </aside>
       <main className="hd-main" aria-label={preview ? 'Freya dashboard · Sample data' : 'Freya dashboard'}>
         <Panel name="focus" title="Current focus" icon="focus" onOpen={open('focus')}>
           <h3>{focus?.title ?? 'No focus reported'}</h3>
@@ -166,8 +209,23 @@ export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, on
       <footer className="hd-dock"><form aria-label="Freya composer" onSubmit={event => { event.preventDefault(); onSend() }}>
         <button type="button" className="hd-mic" aria-label="Voice input unavailable" onClick={() => setVoiceNotice('Voice input is not connected yet. You can type to Freya.')}><Glyph name="mic" size={27} /></button>
         <label className="hd-input"><span className="hd-sr-only">Ask Freya</span><input value={draft} onChange={event => onDraft(event.target.value)} placeholder={generating ? 'Freya is answering…' : 'Ask Freya...'} /></label>
-        <div className="hd-intents">{[['Think', 'mind'], ['Plan', 'mission'], ['Create', 'create'], ['Search', 'search']].map(([label, icon]) => <button type="button" key={label} aria-pressed={intent === label} onClick={() => { setIntent(label!); if (label === 'Plan') onNavigate('focus'); if (label === 'Create') onNavigate('create'); if (label === 'Search') onNavigate('world') }}><Glyph name={icon!} size={12} />{label}</button>)}</div>
-        <button className="hd-send" type="submit" aria-label="Send message" disabled={!draft.trim() || generating}>⌘ ↵</button>
+        <div className="hd-tools">
+          <button type="button" className="hd-tool" aria-label="Attach a file" onClick={() => setVoiceNotice('Attachments are not connected yet.')}><Glyph name="attach" size={18} /></button>
+          <div className="hd-select">
+            <button type="button" className="hd-tool hd-tool-model" aria-label="Choose model" aria-haspopup="listbox" aria-expanded={menu === 'model'} onClick={toggleModelMenu}><Glyph name="chip" size={17} /><span>{activeModel}</span><Glyph name="chevron" size={13} /></button>
+            {menu === 'model' && <ul className="hd-menu" role="listbox" aria-label="Provider models">
+              {catalogNote && <li className="hd-menu-note">{catalogNote}</li>}
+              {models.map(entry => <li key={entry.id}><button type="button" role="option" aria-selected={entry.id === activeModel} onClick={() => chooseModel(entry.id)}><b>{entry.id}</b>{entry.ownedBy && <small>{entry.ownedBy}</small>}</button></li>)}
+            </ul>}
+          </div>
+          <div className="hd-select">
+            <button type="button" className="hd-tool hd-tool-think" aria-label="Thinking level" aria-haspopup="listbox" aria-expanded={menu === 'think'} onClick={() => setMenu(menu === 'think' ? null : 'think')}><Glyph name="mind" size={18} /><span>{thinkLevel}</span><Glyph name="chevron" size={13} /></button>
+            {menu === 'think' && <ul className="hd-menu" role="listbox" aria-label="Thinking level">
+              {THINK.map(level => <li key={level}><button type="button" role="option" aria-selected={level === thinkLevel} onClick={() => { setThinkLevel(level); setMenu(null) }}>{level}</button></li>)}
+            </ul>}
+          </div>
+        </div>
+        <button className="hd-send" type="submit" aria-label={generating ? 'Freya is thinking' : 'Send message'} disabled={!draft.trim() || generating}>{generating ? <span className="hd-send-orb" aria-hidden="true" /> : <Glyph name="send" size={20} />}</button>
       </form>{(notice || voiceNotice || generating) && <p className="hd-notice" role="status">{notice || voiceNotice || 'Freya is thinking…'}</p>}</footer>
       <button className="hd-chat-shortcut" onClick={onChat} aria-label="Open chat">HIGHER<br />CAPABILITIES<br />KINDER OUTCOMES<br />A BRIGHTER TOMORROW</button>
     </div></div>

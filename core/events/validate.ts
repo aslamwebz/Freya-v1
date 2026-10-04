@@ -20,6 +20,31 @@ import {
   isWakeKind,
   isWakeSource,
 } from '../lifeloop/types'
+import { ECONOMIC_DECISIONS } from '../economic/continuation'
+import {
+  CONFIDENCE_LEVELS,
+  ECONOMIC_ANY_REFUSAL_CODE_SET,
+  ECONOMIC_EXPERIMENT_KINDS,
+  ECONOMIC_EXPERIMENT_STATES,
+  ECONOMIC_LIMITS,
+  ECONOMIC_REASON_CODES,
+  ECONOMIC_REFUSAL_SUBJECTS,
+  ECONOMIC_SIGNALS,
+  ECONOMIC_STAGES,
+  ECONOMIC_WAKE_KIND_SOURCE,
+  EVIDENCE_SOURCE_KINDS,
+  EVIDENCE_STATES,
+  EXPERIMENT_BLOCKERS,
+  FORBIDDEN_ECONOMIC_PAYLOAD_KEYS,
+  LATCHED_ECONOMIC_STOP_CODE,
+  PAPER_ORDER_SIDES,
+  SIMULATION_STRATEGIES,
+  isClearableEconomicStopCode,
+  isEconomicReconciliationCode,
+  isEconomicWakeKind,
+  isEconomicWakeRefusalCode,
+  isEconomicWakeSource,
+} from '../economic/types'
 
 function isDeadlineType(value: unknown): boolean {
   return (
@@ -1705,6 +1730,355 @@ const PAYLOAD_RULES: {
       (p.code === null || isClosedValue(p.code, LIFE_LOOP_STOP_CODES)),
   ),
 
+  /* ------------------------------------------------- economic intelligence */
+
+  /**
+   * Economic payloads are validated against the lane's *own* published vocabulary, for
+   * exactly the reason the life-loop ones are.
+   *
+   * `allowed` below is the per-event key list, and the wrapper checks it against
+   * `ECONOMIC_PAYLOAD_KEYS` rather than in place of it — so this validator can be neither
+   * wider nor narrower than `core/economic/types.ts`, and the two cannot fall out of step
+   * because the rule refuses any divergence in either direction. Hand-copying the shapes
+   * would produce a silent failure in the worst direction: an unknown key would be
+   * *accepted* by the journal and then *refused* by the fold, so the log would hold an
+   * entry the subsystem itself calls tampering.
+   *
+   * On top of that, a key from `FORBIDDEN_ECONOMIC_PAYLOAD_KEYS` is refused outright. The
+   * authority half of that set is the usual business — authority is minted by the Guard
+   * and the Governor and never by an event. The **real-money** half is the important one:
+   * there is no field anywhere in Phase 32 that could name a venue, a broker, an account,
+   * a wallet or an amount, so these keys are refused *and* reported by
+   * `analyseEconomicAssertions` under `noRealMoneyAction`. Naming them here is not an
+   * oversight in the vocabulary; it is the vocabulary.
+   */
+  'economic.experiment.created': economicRule(
+    [
+      'experimentId',
+      'kind',
+      'state',
+      'title',
+      'question',
+      'criteria',
+      'criteriaCount',
+      'progress',
+      'deadlineAt',
+      'createdAt',
+      'updatedAt',
+    ],
+    (p) =>
+      isEventId(p.experimentId) &&
+      isClosedValue(p.kind, ECONOMIC_EXPERIMENT_KINDS) &&
+      isClosedValue(p.state, ECONOMIC_EXPERIMENT_STATES) &&
+      isBoundedText(p.title, ECONOMIC_LIMITS.maxTitleLength) &&
+      isBoundedText(p.question, ECONOMIC_LIMITS.maxQuestionLength) &&
+      isBoundedText(p.criteria, ECONOMIC_LIMITS.maxPayloadTextLength) &&
+      isPositiveInt(p.criteriaCount) &&
+      p.criteriaCount <= ECONOMIC_LIMITS.maxCompletionCriteria &&
+      isRatio(p.progress) &&
+      isInstant(p.deadlineAt) &&
+      isInstant(p.createdAt) &&
+      isInstant(p.updatedAt),
+  ),
+
+  'economic.experiment.state-changed': economicRule(
+    ['experimentId', 'from', 'to', 'signal', 'progress', 'reasoning', 'updatedAt'],
+    (p) =>
+      isEventId(p.experimentId) &&
+      isClosedValue(p.from, ECONOMIC_STAGES) &&
+      isClosedValue(p.to, ECONOMIC_STAGES) &&
+      isClosedValue(p.signal, ECONOMIC_SIGNALS) &&
+      isRatio(p.progress) &&
+      isClosedValue(p.reasoning, ECONOMIC_REASON_CODES) &&
+      isInstant(p.updatedAt),
+  ),
+
+  'economic.experiment.completed': economicRule(
+    ['experimentId', 'from', 'progress', 'criteriaMet', 'completedAt'],
+    (p) =>
+      isEventId(p.experimentId) &&
+      isClosedValue(p.from, ECONOMIC_STAGES) &&
+      isRatio(p.progress) &&
+      isNonNegativeInt(p.criteriaMet) &&
+      isInstant(p.completedAt),
+  ),
+
+  'economic.experiment.failed': economicRule(
+    ['experimentId', 'from', 'code', 'updatedAt'],
+    (p) =>
+      isEventId(p.experimentId) &&
+      isClosedValue(p.from, ECONOMIC_STAGES) &&
+      isNonEmptyString(p.code) &&
+      isInstant(p.updatedAt),
+  ),
+
+  'economic.experiment.cancelled': economicRule(
+    ['experimentId', 'from', 'reason', 'updatedAt'],
+    (p) =>
+      isEventId(p.experimentId) &&
+      isClosedValue(p.from, ECONOMIC_STAGES) &&
+      isBoundedText(p.reason, ECONOMIC_LIMITS.maxPayloadTextLength) &&
+      isInstant(p.updatedAt),
+  ),
+
+  'economic.evidence.gathered': economicRule(
+    [
+      'evidenceId',
+      'experimentId',
+      'source',
+      'sourceRef',
+      'citation',
+      'claim',
+      'observedAt',
+      'state',
+      'confidence',
+    ],
+    (p) =>
+      isEventId(p.evidenceId) &&
+      isEventId(p.experimentId) &&
+      isClosedValue(p.source, EVIDENCE_SOURCE_KINDS) &&
+      isEventId(p.sourceRef) &&
+      isBoundedText(p.citation, ECONOMIC_LIMITS.maxCitationLength) &&
+      isBoundedText(p.claim, ECONOMIC_LIMITS.maxCriterionLength) &&
+      isInstant(p.observedAt) &&
+      isClosedValue(p.state, EVIDENCE_STATES) &&
+      isClosedValue(p.confidence, CONFIDENCE_LEVELS),
+  ),
+
+  'economic.simulation.started': economicRule(
+    [
+      'scenarioId',
+      'experimentId',
+      'strategy',
+      'parameterCount',
+      'assumptionCount',
+      'observationCount',
+      'startedAt',
+    ],
+    (p) =>
+      isEventId(p.scenarioId) &&
+      isEventId(p.experimentId) &&
+      isClosedValue(p.strategy, SIMULATION_STRATEGIES) &&
+      isNonNegativeInt(p.parameterCount) &&
+      p.parameterCount <= ECONOMIC_LIMITS.maxParametersPerScenario &&
+      isNonNegativeInt(p.assumptionCount) &&
+      p.assumptionCount <= ECONOMIC_LIMITS.maxAssumptionsPerScenario &&
+      isNonNegativeInt(p.observationCount) &&
+      p.observationCount <= ECONOMIC_LIMITS.maxSeriesLength &&
+      isInstant(p.startedAt),
+  ),
+
+  'economic.simulation.completed': economicRule(
+    [
+      'scenarioId',
+      'experimentId',
+      'resultId',
+      'strategy',
+      'metricCount',
+      'observationCount',
+      'completedAt',
+      'failed',
+    ],
+    (p) =>
+      isEventId(p.scenarioId) &&
+      isEventId(p.experimentId) &&
+      isEventId(p.resultId) &&
+      isClosedValue(p.strategy, SIMULATION_STRATEGIES) &&
+      isNonNegativeInt(p.metricCount) &&
+      p.metricCount <= ECONOMIC_LIMITS.maxMetricsPerExperiment &&
+      isNonNegativeInt(p.observationCount) &&
+      p.observationCount <= ECONOMIC_LIMITS.maxSeriesLength &&
+      isInstant(p.completedAt) &&
+      typeof p.failed === 'boolean',
+  ),
+
+  'economic.paper-order.placed': economicRule(
+    ['orderId', 'experimentId', 'symbol', 'side', 'quantity', 'price', 'placedAt', 'reasoning'],
+    (p) =>
+      isEventId(p.orderId) &&
+      isEventId(p.experimentId) &&
+      isSymbol(p.symbol) &&
+      isClosedValue(p.side, PAPER_ORDER_SIDES) &&
+      isPositiveInt(p.quantity) &&
+      p.quantity <= ECONOMIC_LIMITS.maxOrderQuantity &&
+      isPositiveNumber(p.price) &&
+      p.price <= ECONOMIC_LIMITS.maxOrderPrice &&
+      isInstant(p.placedAt) &&
+      isBoundedText(p.reasoning, ECONOMIC_LIMITS.maxPayloadTextLength),
+  ),
+
+  'economic.paper-order.filled': economicRule(
+    [
+      'orderId',
+      'experimentId',
+      'positionId',
+      'symbol',
+      'side',
+      'quantity',
+      'price',
+      'realizedPnl',
+    ],
+    (p) =>
+      isEventId(p.orderId) &&
+      isEventId(p.experimentId) &&
+      isEventId(p.positionId) &&
+      isSymbol(p.symbol) &&
+      isClosedValue(p.side, PAPER_ORDER_SIDES) &&
+      isPositiveInt(p.quantity) &&
+      isPositiveNumber(p.price) &&
+      isFiniteNumber(p.realizedPnl),
+  ),
+
+  /**
+   * A metric, with its denominator and unit **required**.
+   *
+   * Both are non-optional on purpose, and the denominator is additionally required to be
+   * greater than zero. A metric with no denominator is not a measurement; a metric whose
+   * denominator is zero is `0/0`, and the runtime refuses to emit one at all rather than
+   * letting one into the journal.
+   */
+  'economic.metric.computed': economicRule(
+    ['metricId', 'experimentId', 'name', 'value', 'denominator', 'unit', 'computedAt'],
+    (p) =>
+      isEventId(p.metricId) &&
+      isEventId(p.experimentId) &&
+      isBoundedText(p.name, ECONOMIC_LIMITS.maxTitleLength) &&
+      isFiniteNumber(p.value) &&
+      isPositiveNumber(p.denominator) &&
+      isBoundedText(p.unit, 32) &&
+      isInstant(p.computedAt),
+  ),
+
+  /**
+   * The continuation decision.
+   *
+   * `decision` and `reasoning` are closed, and `blocker` is closed **or empty** — the
+   * empty string being the "nothing is blocking this" answer, rather than a null, because
+   * a durable payload is scalars and a reader distinguishing "no blocker" from "a blocker
+   * we forgot to name" is worth the one character.
+   */
+  'economic.continuation.decided': economicRule(
+    [
+      'experimentId',
+      'wakeId',
+      'decision',
+      'stage',
+      'reasoning',
+      'blocker',
+      'evidenceCount',
+      'scenarioCount',
+      'orderCount',
+      'attempt',
+    ],
+    (p) =>
+      isEventId(p.experimentId) &&
+      isEventId(p.wakeId) &&
+      isClosedValue(p.decision, ECONOMIC_DECISIONS) &&
+      isClosedValue(p.stage, ECONOMIC_STAGES) &&
+      isClosedValue(p.reasoning, ECONOMIC_REASON_CODES) &&
+      (p.blocker === '' || isClosedValue(p.blocker, EXPERIMENT_BLOCKERS)) &&
+      isNonNegativeInt(p.evidenceCount) &&
+      p.evidenceCount <= ECONOMIC_LIMITS.maxEvidencePerExperiment &&
+      isNonNegativeInt(p.scenarioCount) &&
+      p.scenarioCount <= ECONOMIC_LIMITS.maxScenariosPerExperiment &&
+      isNonNegativeInt(p.orderCount) &&
+      p.orderCount <= ECONOMIC_LIMITS.maxPaperOrdersPerExperiment &&
+      isNonNegativeInt(p.attempt) &&
+      p.attempt <= ECONOMIC_LIMITS.maxRetryCeiling,
+  ),
+
+  /**
+   * Which gates cleared, and which one refused.
+   *
+   * `code` is checked against *both* refusal vocabularies, because a gate may refuse with
+   * either and a validator that only knew one of them would reject a legitimate denial.
+   * `remainingUnits` is a count of bounded work and is never an amount of anything.
+   */
+  'economic.gate.decided': economicRule(
+    ['wakeId', 'experimentId', 'outcome', 'code', 'checked', 'remainingUnits', 'at'],
+    (p) =>
+      isOptionalId(p.wakeId) &&
+      isOptionalId(p.experimentId) &&
+      (p.outcome === 'allow' || p.outcome === 'deny') &&
+      isEconomicAnyRefusalCode(p.code) &&
+      isOptionalBoundedText(p.checked, ECONOMIC_LIMITS.maxPayloadTextLength) &&
+      isNonNegativeInt(p.remainingUnits) &&
+      isInstant(p.at),
+  ),
+
+  /**
+   * A refusal. Both the code and the subject are closed, so a caller's own text cannot
+   * reach the journal through a refusal — which is the oldest mistake in this trade and
+   * the reason this shape is two codes rather than one string.
+   */
+  'economic.refusal.recorded': economicRule(
+    ['refusalId', 'code', 'subject', 'experimentId', 'wakeId', 'at'],
+    (p) =>
+      isEventId(p.refusalId) &&
+      isEconomicAnyRefusalCode(p.code) &&
+      isClosedValue(p.subject, ECONOMIC_REFUSAL_SUBJECTS) &&
+      isOptionalId(p.experimentId) &&
+      isOptionalId(p.wakeId) &&
+      isInstant(p.at),
+  ),
+
+  'economic.wake.received': economicRule(
+    [
+      'wakeId',
+      'source',
+      'kind',
+      'wakeKey',
+      'experimentId',
+      'goalRef',
+      'sourceRef',
+      'occurredAt',
+      'observedAt',
+    ],
+    (p) =>
+      isEventId(p.wakeId) &&
+      isEconomicWakeSource(p.source) &&
+      isEconomicWakeKind(p.kind) &&
+      ECONOMIC_WAKE_KIND_SOURCE[p.kind as never] === p.source &&
+      isBoundedText(p.wakeKey, ECONOMIC_LIMITS.maxPayloadTextLength) &&
+      isEventId(p.experimentId) &&
+      isBoundedText(p.goalRef, ECONOMIC_LIMITS.maxTitleLength) &&
+      isBoundedText(p.sourceRef, ECONOMIC_LIMITS.maxTitleLength) &&
+      isInstant(p.occurredAt) &&
+      isInstant(p.observedAt),
+  ),
+
+  'economic.wake.denied': economicRule(
+    ['wakeId', 'source', 'kind', 'code', 'experimentId'],
+    (p) =>
+      isEventId(p.wakeId) &&
+      isEconomicWakeSource(p.source) &&
+      isEconomicWakeKind(p.kind) &&
+      isEconomicWakeRefusalCode(p.code) &&
+      isOptionalId(p.experimentId),
+  ),
+
+  'economic.reconciled': economicRule(
+    ['code', 'from', 'experimentId', 'atStage'],
+    (p) =>
+      isEconomicReconciliationCode(p.code) &&
+      isClosedValue(p.from, ECONOMIC_STAGES) &&
+      isEventId(p.experimentId) &&
+      isClosedValue(p.atStage, ECONOMIC_STAGES),
+  ),
+
+  'economic.stopped': economicRule(
+    ['experimentId', 'stage', 'code'],
+    (p) =>
+      isOptionalId(p.experimentId) &&
+      isClosedValue(p.stage, ECONOMIC_STAGES) &&
+      (p.code === LATCHED_ECONOMIC_STOP_CODE || isClearableEconomicStopCode(p.code)),
+  ),
+
+  'economic.unstopped': economicRule(
+    ['code'],
+    (p) => p.code === 'stop-latch-cleared',
+  ),
+
   'office.presence.requested': workRule(
     ['workerId'],
     (p) => isEventId(p.workerId),
@@ -2295,6 +2669,109 @@ function lifeLoopRule(
     }
     return rule(payload)
   }
+}
+
+/**
+ * Wrap an economic payload rule with the lane's own closed vocabulary.
+ *
+ * Three layers, and the first two are the same ones `lifeLoopRule` has:
+ *
+ *   - the named-key check, against `ECONOMIC_PAYLOAD_KEYS` rather than in place of it, so
+ *     this file cannot be wider or narrower than `core/economic/types.ts`;
+ *   - the forbidden-key check, `FORBIDDEN_ECONOMIC_PAYLOAD_KEYS`, which is the authority
+ *     half and the **real-money** half of the same frozen set. A payload naming a broker
+ *     is refused here *and* reported by `analyseEconomicAssertions` as a
+ *     `noRealMoneyAction` violation — two mechanisms for one promise, because a promise
+ *     enforced in only one place is a policy rather than a guarantee.
+ *   - a text ceiling on every string value.
+ *
+ * The ceiling is `ECONOMIC_LIMITS.maxPayloadTextLength` rather than the life loop's 200,
+ * and that is not a loosening so much as an accounting: eight completion criteria of 32
+ * characters plus seven separators is 277, so 300 is the smallest round number that holds
+ * one. Every other string in an economic event is far below it.
+ */
+function economicRule(
+  allowed: readonly string[],
+  rule: (payload: Record<string, unknown>) => boolean,
+): (payload: Record<string, unknown>) => boolean {
+  return (payload) => {
+    if (!onlyNamedKeys(payload, allowed)) return false
+    for (const key of Object.keys(payload)) {
+      if (FORBIDDEN_ECONOMIC_PAYLOAD_KEYS.has(key)) return false
+    }
+    for (const value of Object.values(payload)) {
+      if (typeof value === 'string' && value.length > ECONOMIC_LIMITS.maxPayloadTextLength) return false
+    }
+    return rule(payload)
+  }
+}
+
+/**
+ * Either refusal vocabulary, or the one allowance code.
+ *
+ * A gate may refuse with a subsystem code (`guard-denied`), with a wake code
+ * (`unauthorized-actor`), or record that everything cleared (`all-gates-clear`). A
+ * validator that knew only the refusal half would reject the allowed path — which is the
+ * worst possible failure for a validator, because it would refuse an honest record and
+ * teach somebody to trust the journal less.
+ */
+function isEconomicAnyRefusalCode(value: unknown): boolean {
+  return typeof value === 'string' && (value === 'all-gates-clear' || ECONOMIC_ANY_REFUSAL_CODE_SET.has(value))
+}
+
+/** A finite number, negative permitted. Used where a signed quantity is meaningful. */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+/** A finite number greater than zero. Used for every price and every denominator. */
+function isPositiveNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+/** A fraction in `[0, 1]`. Progress and confidence are the only things shaped like this. */
+function isRatio(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+}
+
+/**
+ * The symbol grammar, checked here as well as in the engine.
+ *
+ * Uppercase alphanumerics and three separators, at most `maxSymbolLength` of them. It is
+ * a closed shape rather than free text, because a symbol is something a window renders
+ * next to a quantity and a free-text symbol is a place somebody puts a sentence.
+ */
+function isSymbol(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  if (value.length === 0 || value.length > ECONOMIC_LIMITS.maxSymbolLength) return false
+  return /^[A-Z0-9][A-Z0-9./-]*$/.test(value)
+}
+
+/**
+ * Bounded text where the empty string is a meaningful value.
+ *
+ * Needed for exactly two fields, and both of them are cases where "nothing" is a real
+ * answer rather than a missing one: `economic.gate.decided.checked` (the cleared prefix
+ * is empty when the *first* gate refused, which is the most interesting case there is) and
+ * `economic.continuation.decided.blocker`. A durable payload is scalars, so those cannot
+ * be null; requiring a non-empty string would have meant refusing the most informative
+ * refusal the subsystem can produce.
+ */
+function isOptionalBoundedText(value: unknown, max: number): value is string {
+  return typeof value === 'string' && value.length <= max
+}
+
+/**
+ * A reference where the empty string means "none of them".
+ *
+ * Needed across the economic family because a durable payload is scalars and `null` is
+ * not one of the permitted value types. An empty string is therefore how "this wake
+ * names no experiment" and "no wake was in hand when this gate ran" reach the journal,
+ * and the alternative — inventing an id — would be worse: a reader could not tell a real
+ * reference from a placeholder.
+ */
+function isOptionalId(value: unknown): value is string {
+  return typeof value === 'string' && (value.length === 0 || isEventId(value))
 }
 
 /**

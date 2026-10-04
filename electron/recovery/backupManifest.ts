@@ -1,4 +1,4 @@
-﻿import { basename, dirname, join } from 'node:path'
+﻿import { posix, win32 } from 'node:path'
 
 export type BackupClass = 'journal' | 'encrypted-domain' | 'protected-keyring' | 'workspace'
 export type RestoreMode = 'same-profile' | 'migration'
@@ -10,8 +10,15 @@ export interface BackupEntry {
   readonly portableAcrossProfiles: boolean
 }
 
+function pathApi(dataPath: string) {
+  return /^[A-Za-z]:[\\/]/.test(dataPath) || dataPath.startsWith('\\\\') || dataPath.includes('\\')
+    ? win32
+    : posix
+}
+
 export function backupManifest(dataPath: string): readonly BackupEntry[] {
-  const dir = dirname(dataPath)
+  const path = pathApi(dataPath)
+  const dir = path.dirname(dataPath)
   const entries: BackupEntry[] = [
     { path: dataPath, class: 'journal', requiredForCompleteRestore: true, portableAcrossProfiles: true },
     { path: `${dataPath}.conversations`, class: 'encrypted-domain', requiredForCompleteRestore: false, portableAcrossProfiles: true },
@@ -20,8 +27,8 @@ export function backupManifest(dataPath: string): readonly BackupEntry[] {
     { path: `${dataPath}.context.enc`, class: 'encrypted-domain', requiredForCompleteRestore: false, portableAcrossProfiles: true },
     { path: `${dataPath}.personality.enc`, class: 'encrypted-domain', requiredForCompleteRestore: false, portableAcrossProfiles: true },
     { path: `${dataPath}.skills.enc`, class: 'encrypted-domain', requiredForCompleteRestore: false, portableAcrossProfiles: true },
-    { path: join(dir, 'freya.keyring.json'), class: 'protected-keyring', requiredForCompleteRestore: true, portableAcrossProfiles: false },
-    { path: join(dir, 'workspace.json'), class: 'workspace', requiredForCompleteRestore: false, portableAcrossProfiles: true },
+    { path: path.join(dir, 'freya.keyring.json'), class: 'protected-keyring', requiredForCompleteRestore: true, portableAcrossProfiles: false },
+    { path: path.join(dir, 'workspace.json'), class: 'workspace', requiredForCompleteRestore: false, portableAcrossProfiles: true },
   ]
   return Object.freeze(entries.map((entry) => Object.freeze(entry)))
 }
@@ -50,7 +57,7 @@ export function validateRestoreSet(
     failures.push('encrypted domain files are present without the protected keyring; do not claim a complete restore')
   }
   if (!presentPaths.has(dataPath)) {
-    failures.push(`the event journal ${basename(dataPath)} is absent; durable security state cannot be reconstructed`)
+    failures.push(`the event journal ${pathApi(dataPath).basename(dataPath)} is absent; durable security state cannot be reconstructed`)
   }
   return Object.freeze(failures)
 }

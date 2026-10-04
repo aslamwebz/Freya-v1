@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { Confidence } from '../brain/types'
 import type { AnyCoreEvent } from '../events/envelope'
 import type { EventFabric } from '../events/fabric'
@@ -123,7 +124,7 @@ export class LifeEngine implements LifeOwnerScope {
     this.fabric = options.fabric
     this.store = options.store
     this.now = options.now ?? (() => new Date())
-    this.newId = options.newId ?? (() => `${Date.now()}`)
+    this.newId = options.newId ?? (() => randomUUID())
     this.onChange = options.onChange ?? (() => {})
     this.stopped = options.stopped ?? (() => false)
   }

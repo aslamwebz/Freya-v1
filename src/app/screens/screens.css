@@ -34,12 +34,15 @@
 .l-toolbar { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .l-title { display: grid; gap: .2rem; }
 .l-title h1 { margin: 0; font-family: var(--f-narrative); font-size: 2.2rem; font-weight: 400; }
-.l-timeline { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(9rem, 1fr); gap: .8rem; align-items: center; padding: 1.4rem 0; overflow-x: auto; }
+.l-timeline { position: relative; display: grid; grid-template-columns: 1fr auto 1fr; gap: .8rem; align-items: center; padding: 1.4rem 0; }
+.l-side { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: .8rem; min-width: 0; }
 .l-line { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: linear-gradient(90deg, transparent, var(--f-action), transparent); }
 .l-today { position: absolute; top: 0; left: 50%; transform: translateX(-50%); font-size: .6rem; letter-spacing: .24em; color: var(--f-heading); }
-.l-event { display: grid; gap: .3rem; }
+.l-event { display: grid; gap: .3rem; min-width: 0; }
+/* Keeps the centre clear of the timeline so Freya is not covered. */
+.l-centre-gap { width: clamp(220px, 24vw, 400px); }
 .l-event small { font-size: .58rem; letter-spacing: .18em; text-transform: uppercase; color: var(--f-muted); }
-.l-card { border: 1px solid var(--f-line); background: var(--f-glass); border-radius: 12px; padding: .6rem .7rem; display: grid; gap: .2rem; }
+.l-card { border: 1px solid var(--f-line); background: var(--f-glass); border-radius: 12px; padding: .6rem .7rem; display: grid; gap: .2rem; min-width: 0; overflow-wrap: anywhere; }
 .l-date { font-size: .68rem; color: var(--f-heading); }
 .l-card h4 { margin: 0; font-size: .9rem; }
 .l-card p { margin: 0; font-size: .74rem; color: var(--f-muted); }
@@ -216,7 +219,7 @@
   .w-main, .wf-grid, .rl-view { grid-template-columns: minmax(0, 1fr); }
   .wf-left, .rl-node { display: none; }
   .wf-office { min-height: 22rem; }
-  .l-timeline { grid-auto-columns: minmax(7rem, 1fr); }
+  .l-centre-gap { width: clamp(140px, 24vw, 320px); }
 }
 
 /* ------------------------------------------------------ settings: real form */

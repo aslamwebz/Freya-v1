@@ -81,11 +81,12 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
   return (
     <div className="hd-tab-body" data-layout={wide ? 'wide' : 'standard'}>
       {wide ? null : <div className="hd-col hd-col-l">{slots.left}</div>}
-      {/* Freya is always the centre. A screen may overlay its own geometry (the
-          World graph, a timeline) on top of her rather than replacing her. */}
+      {/* Freya is always the centre and sits in front of the screen's geometry,
+          as the references show — the World graph and Life timeline pass behind
+          her. The overlay is absolute, so DOM order puts Freya on top. */}
       <div className="hd-tab-centre">
-        <FreyaCentre centre={design.centre} style={design.style} rings={design.rings === 'on'} state={cognition} />
         {slots.centre ? <div className="hd-tab-overlay">{slots.centre}</div> : null}
+        <FreyaCentre centre={design.centre} style={design.style} rings={design.rings === 'on'} state={cognition} />
       </div>
       {wide ? null : <div className="hd-col hd-col-r">{slots.right}</div>}
       {slots.bottom ? <div className="hd-col-b">{slots.bottom}</div> : null}
@@ -101,12 +102,12 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 export function HomeDashboard({ screen, slots, snapshot, draft, generating, notice, dressing, onOpenDressing, onDraft, onSend, onNavigate }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
-  // The board fills the viewport (cover). Seed the scale from the window so the
-  // very first paint is already correct — otherwise it renders at scale 1 for a
-  // tick and shows the letterbox bar before the ResizeObserver measures.
+  // The board is *contained* — scaled to fit fully inside the viewport so nothing
+  // is cropped on any edge. Seed it from the window so the first paint is already
+  // correct (no letterbox flash before the ResizeObserver measures).
   const [scale, setScale] = useState(() => typeof window === 'undefined'
     ? 1
-    : Math.max(.65, Math.max(window.innerWidth / 1672, window.innerHeight / 941)))
+    : Math.max(.4, Math.min(window.innerWidth / 1672, window.innerHeight / 941)))
   const [voiceNotice, setVoiceNotice] = useState('')
   const [menu, setMenu] = useState<string | null>(null)
   const [models, setModels] = useState<readonly ModelEntry[]>([])
@@ -117,7 +118,7 @@ export function HomeDashboard({ screen, slots, snapshot, draft, generating, noti
   useEffect(() => {
     const node = viewport.current
     if (!node) return
-    const measure = () => setScale(Math.max(.65, Math.max(node.clientWidth / 1672, node.clientHeight / 941)))
+    const measure = () => setScale(Math.max(.4, Math.min(node.clientWidth / 1672, node.clientHeight / 941)))
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(node)

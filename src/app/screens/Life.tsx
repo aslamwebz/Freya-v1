@@ -68,12 +68,18 @@ export function Life(): ScreenSlots {
           <p className="c-sample-note">Sample timeline — Freya's own history is not connected yet.</p>
           <span className="l-line" aria-hidden="true" />
           <span className="l-today" aria-hidden="true">TODAY · Living and creating together</span>
-          {EVENTS.map((event, index) => (
-            <article key={`${event.date}-${index}`} className="l-event">
-              <small>{event.when}</small>
-              <div className="l-card"><span className="l-date">{event.date}</span><h4>{event.title}</h4><p>{event.detail}</p></div>
-            </article>
-          ))}
+          {/* Events flank a centre gap so Freya stays clear, as the reference shows. */}
+          <div className="l-side l-side-l">
+            {EVENTS.slice(0, 4).map((event, index) => (
+              <article key={`${event.date}-${index}`} className="l-event"><small>{event.when}</small><div className="l-card"><span className="l-date">{event.date}</span><h4>{event.title}</h4><p>{event.detail}</p></div></article>
+            ))}
+          </div>
+          <span className="l-centre-gap" aria-hidden="true" />
+          <div className="l-side l-side-r">
+            {EVENTS.slice(4).map((event, index) => (
+              <article key={`${event.date}-${index}`} className="l-event"><small>{event.when}</small><div className="l-card"><span className="l-date">{event.date}</span><h4>{event.title}</h4><p>{event.detail}</p></div></article>
+            ))}
+          </div>
         </div>
       </div>
     ),

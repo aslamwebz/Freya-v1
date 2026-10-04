@@ -531,6 +531,8 @@ function createWindow(): BrowserWindow {
     minWidth: 1024,
     minHeight: 680,
     show: false,
+    // Freya always opens filling its screen.
+    fullscreen: true,
     backgroundColor: '#050608',
     titleBarStyle: 'hidden',
     titleBarOverlay: process.platform === 'darwin' ? { color: '#050608', symbolColor: '#b9b2a7' } : undefined,

@@ -169,7 +169,7 @@ export function toContextProjection(
  */
 export class ContextChannel {
   private core: ContextReportingCore | null = null
-  private disposeCore: () => void = () => {}
+  private disposeCore: (() => void) | null = null
   private readonly windows = new Set<(projection: ContextProjection) => void>()
 
   /**
@@ -182,6 +182,20 @@ export class ContextChannel {
     this.disposeCore = candidate.onContext((projection) =>
       this.broadcast(toContextProjection(projection)),
     )
+  }
+
+  /**
+   * Release the current Core binding, if any.
+   *
+   * `bind` overwrites `this.disposeCore`, so rebinding without disposing first
+   * leaves the previous subscription attached to a Core that has been stopped, with
+   * no reference left to remove it. Each provider reconfiguration rebinds, so this
+   * is what stops that from accumulating one listener per save.
+   */
+  unbind(): void {
+    this.disposeCore?.()
+    this.disposeCore = null
+    this.core = null
   }
 
   /** Core's last reported projection, or null when no Core is reporting. */
@@ -212,11 +226,10 @@ export class ContextChannel {
 
   /** Detach everything and unbind. A stopped host has no Context to mirror. */
   close(): void {
-    const dispose = this.disposeCore
-    this.disposeCore = () => {}
+    this.disposeCore?.()
+    this.disposeCore = null
     this.core = null
     this.windows.clear()
-    dispose()
   }
 
   private broadcast(projection: ContextProjection): void {
@@ -615,6 +628,16 @@ export class ElectronCoreHost implements CoreHost {
   private windowObservation: WindowObservationRuntime | null = null
   private observedContextId: string | null = null
   private windowLane: ReturnType<Core['contextWindowLane']> | null = null
+  /**
+   * The in-flight provider rebuild, if any.
+   *
+   * Non-null means a rebuild is running. Saves that arrive while it runs update
+   * {@link pendingReconfig} instead of queueing another rebuild, which is what makes
+   * a burst of saves cost a bounded number of Core restarts rather than one each.
+   */
+  private reconfiguring: Promise<void> | null = null
+  /** The newest environment a rebuild has not yet been started for. */
+  private pendingReconfig: HostEnv | null = null
 
   constructor(
     private readonly dataPath: string,
@@ -632,13 +655,129 @@ export class ElectronCoreHost implements CoreHost {
    * teardown, and every attached renderer must keep receiving status from the
    * replacement Core without re-attaching. The env is main-process memory only;
    * no renderer can name or supply it.
+   *
+   * ## Why this is a queue and not a direct swap
+   *
+   * Four things were wrong with the obvious implementation, and each one is a way
+   * for a saved setting to silently not apply — or for the process to be left in a
+   * state where it never will:
+   *
+   *   1. **It reused a stale startup.** `start()` returns `this.starting` when a
+   *      start is in flight, and that promise was built with the *old* env. A save
+   *      arriving during boot therefore set `this.env` and then awaited a Core
+   *      constructed from the previous value, so the setting did nothing until the
+   *      next relaunch. This now waits for any in-flight start to settle first.
+   *   2. **It leaked a window observer.** `stop()` stops `windowObservation` and
+   *      revokes the observed lane; this did neither, and `start()` then built a
+   *      second poller. With observation enabled, every save left another watcher
+   *      running and admitting against a stopped Core.
+   *   3. **It leaked a Context subscription.** `ContextChannel.bind` overwrote its
+   *      own disposer, so each rebind added a listener and dropped the reference
+   *      needed to remove the previous one.
+   *   4. **It was unbounded.** Every save stopped and rebuilt Core — cancelling
+   *      in-flight turns and appending `core.stopping`/`core.stopped` — so a burst
+   *      of saves was a way to keep Freya permanently mid-restart.
+   *
+   * Saves are now serialised, and a burst collapses: while one rebuild is in
+   * flight, further saves only update the environment that the *next* rebuild will
+   * use, so ten rapid saves cost at most two Core restarts.
    */
   async restartWithEnv(env: HostEnv): Promise<void> {
+    this.pendingReconfig = env
+    // Already rebuilding: the running loop will pick the newest environment up, so
+    // this caller waits for the rebuild that carries its change rather than
+    // starting a second one.
+    if (this.reconfiguring !== null) return this.reconfiguring
+    this.reconfiguring = this.drainReconfigs().finally(() => {
+      this.reconfiguring = null
+    })
+    return this.reconfiguring
+  }
+
+  /** Run rebuilds until no newer environment is waiting. Never runs two at once. */
+  private async drainReconfigs(): Promise<void> {
+    while (this.pendingReconfig !== null) {
+      const env = this.pendingReconfig
+      this.pendingReconfig = null
+      await this.reconfigure(env)
+    }
+  }
+
+  private async reconfigure(env: HostEnv): Promise<void> {
+    // (1) Let any startup finish before judging what is running, so a save during
+    // boot cannot be satisfied by a Core built from the previous environment.
+    try {
+      await this.starting
+    } catch {
+      // The start caller receives its own failure; there is simply nothing to wait
+      // for here, and the rebuild below is what gets the chance to succeed.
+    }
+
+    const previous = this.env
     const core = this.core
     this.core = null
-    if (core) await core.stop('provider configuration changed')
+    try {
+      if (core !== null) await core.stop('provider configuration changed')
+    } catch (error) {
+      // A Core that will not stop cleanly must not be left referenced, and must not
+      // be silently replaced either — fall through to the recovery attempt below.
+      console.error('[freya] the core did not stop cleanly for a provider change', error)
+    }
+
+    // (2) Tear down everything that is bound to the Core being replaced, *before* a
+    // replacement is built. Doing this after `start()` is what produced two
+    // pollers and an orphaned Context listener per save.
+    //
+    // The attached window set is deliberately NOT cleared. That is the difference
+    // between this and `stop()`: an attached window must keep receiving status from
+    // the replacement Core without re-attaching, because the renderer cannot know a
+    // swap happened. Clearing it here would leave every open surface showing a Core
+    // that had gone away, and a renderer reload is not something to require here.
+    this.releaseWindowObservation()
+    this.contextChannel.unbind()
+
     this.env = env
-    await this.start()
+    this.stopRequested = false
+    // The settled startup promise would be returned by `start()` unchanged, so it is
+    // cleared and a fresh one is built from the environment set above.
+    this.starting = null
+
+    try {
+      await this.start()
+    } catch (error) {
+      /**
+       * Leave a recoverable state rather than a dead one.
+       *
+       * A provider setting that cannot be applied should not leave the application
+       * unable to start at all. The previous environment is restored and started so
+       * there is a working Core to talk to, and the original failure is still thrown
+       * so the surface that asked for the save learns it did not take effect.
+       */
+      console.error('[freya] the core could not be rebuilt with the new provider configuration', error)
+      this.env = previous
+      this.stopRequested = false
+      this.starting = null
+      await this.start().catch((recoveryError: unknown) => {
+        console.error('[freya] the core could not be restored after a failed provider change', recoveryError)
+      })
+      throw error
+    }
+  }
+
+  /**
+   * Stop the window observer and release the lane it was admitted through.
+   *
+   * Shared by `stop()` and `reconfigure()` so the two teardown paths cannot drift —
+   * which is exactly how the second path came to leak the first one's resources.
+   */
+  private releaseWindowObservation(): void {
+    this.windowObservation?.stop()
+    if (this.observedContextId) {
+      this.windowLane?.revoke(this.observedContextId, 'window observation released')
+    }
+    this.windowObservation = null
+    this.windowLane = null
+    this.observedContextId = null
   }
 
   async start(): Promise<void> {
@@ -912,11 +1051,7 @@ export class ElectronCoreHost implements CoreHost {
   async stop(reason = 'app shutdown'): Promise<void> {
     this.stopRequested = true
     try { await this.starting } catch { /* The start caller receives its own failure. */ }
-    this.windowObservation?.stop()
-    if (this.observedContextId) this.windowLane?.revoke(this.observedContextId, 'window observation stopped')
-    this.windowObservation = null
-    this.windowLane = null
-    this.observedContextId = null
+    this.releaseWindowObservation()
     const core = this.core
     this.core = null
     this.windows.clear()

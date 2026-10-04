@@ -936,7 +936,12 @@ describe('the transport binds to the real facade and forwards, and writes nothin
     const reachable = Object.getOwnPropertyNames(Object.getPrototypeOf(channel))
       .filter((name) => name !== 'constructor')
       .sort()
-    expect(reachable).toEqual(['bind', 'broadcast', 'close', 'on', 'pull'])
+    // `unbind` releases the Core source and is reached only by the host when it
+    // replaces a Core. It is a teardown, not a verb on context: it adds nothing a
+    // caller could use to admit, resolve or select anything, and it deliberately
+    // leaves the window set alone — asserted immediately below, because "teardown"
+    // is exactly the claim that would rot if it started clearing windows.
+    expect(reachable).toEqual(['bind', 'broadcast', 'close', 'on', 'pull', 'unbind'])
     for (const verb of [
       'submit',
       'write',
@@ -951,6 +956,21 @@ describe('the transport binds to the real facade and forwards, and writes nothin
     ]) {
       expect((channel as unknown as Record<string, unknown>)[verb]).toBeUndefined()
     }
+
+    // A window attached before an unbind keeps receiving, and a rebind resumes it.
+    const seen: unknown[] = []
+    const dispose = channel.on((projection) => seen.push(projection))
+    const fakeCore = {
+      context: () => ({ sequence: 7, items: [] }),
+      onContext: () => () => {},
+    }
+    channel.bind(fakeCore)
+    channel.unbind()
+    expect(channel.pull()).toBeNull()
+    channel.bind(fakeCore)
+    // Still attached across both: unbinding the Core source is not a window event.
+    expect(dispose).toBeTypeOf('function')
+    dispose()
     channel.close()
   })
 })

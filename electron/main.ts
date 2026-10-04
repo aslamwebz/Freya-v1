@@ -270,9 +270,29 @@ function currentHostEnv(): HostEnv {
  * main-process only: no renderer can name the env or ask for a rebuild, and the
  * key never leaves this process.
  */
+/**
+ * Re-read the provider environment into Core after a settings save.
+ *
+ * A provider credential and model are read by Core at construction, so a saved
+ * setting only takes effect if the running Core is rebuilt. The stored config is
+ * overlaid onto `process.env` first (the same call the write handler already
+ * makes), then the host env is rebuilt and Core is restarted from it. This is
+ * main-process only: no renderer can name the env or ask for a rebuild, and the
+ * key never leaves this process.
+ *
+ * `EXPLICIT_ENV` is passed here for the same reason it is passed at startup, and
+ * its absence was a real precedence inversion: startup ran
+ * `applyToEnv(process.env, EXPLICIT_ENV)` so a launch-provided value won, while
+ * this path ran `applyToEnv(process.env)` with no explicit snapshot, so the stored
+ * file was laid over the top of the launch environment. The first settings save
+ * would therefore silently replace a key the operator set deliberately in their
+ * shell with whatever `provider.json` happened to contain — a documented ordering
+ * that held on the way in and not on the way out. Both paths now use the same
+ * precedence: explicit launch environment, then the stored config, then `.env`.
+ */
 async function reEnvCore(): Promise<void> {
   if (!providerStore) return
-  await providerStore.applyToEnv(process.env)
+  await providerStore.applyToEnv(process.env, EXPLICIT_ENV)
   await coreHost?.restartWithEnv(currentHostEnv())
 }
 
@@ -715,7 +735,24 @@ function registerIpc(): void {
   ipcMain.handle('freya:provider:read', () => requireProviderConfig().read())
   ipcMain.handle('freya:provider:write', async (_event, input: ProviderConfigInput) => {
     const saved = await requireProviderConfig().write(input)
-    await reEnvCore()
+    try {
+      await reEnvCore()
+    } catch (error) {
+      /**
+       * The write has already been persisted, so this is not a failed save and must
+       * not be reported as one.
+       *
+       * What failed is the live rebuild. Reporting it as a failed write would tell
+       * somebody their key was not stored when it was, and the natural response —
+       * entering it again — would be the wrong one. The message therefore states
+       * both halves: the setting is saved, and it takes effect on the next launch.
+       */
+      const detail = error instanceof Error ? error.message : 'the reason was not reported'
+      throw new Error(
+        `The provider settings were saved, but Freya could not restart with them: ${detail}. They will take effect the next time Freya starts.`,
+        { cause: error },
+      )
+    }
     return saved
   })
 

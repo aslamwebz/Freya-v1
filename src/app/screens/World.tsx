@@ -38,9 +38,6 @@ function Graph() {
       {CLUSTERS.map((cluster) => (
         <line key={cluster.id} className="w-edge" x1={CENTRE.x} y1={CENTRE.y} x2={cluster.x} y2={cluster.y} />
       ))}
-      <circle className="w-core-glow" cx={CENTRE.x} cy={CENTRE.y} r="58" />
-      <circle className="w-core" cx={CENTRE.x} cy={CENTRE.y} r="30" />
-      <text className="w-core-label" x={CENTRE.x} y={CENTRE.y + 4}>FREYA</text>
       {CLUSTERS.map((cluster) => (
         <g key={cluster.id} className="w-cluster" data-id={cluster.id}>
           <circle className="w-node" cx={cluster.x} cy={cluster.y} r="26" />

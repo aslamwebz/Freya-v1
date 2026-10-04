@@ -81,7 +81,12 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
   return (
     <div className="hd-tab-body" data-layout={wide ? 'wide' : 'standard'}>
       {wide ? null : <div className="hd-col hd-col-l">{slots.left}</div>}
-      <div className="hd-tab-centre">{slots.centre ?? <FreyaCentre centre={design.centre} style={design.style} rings={design.rings === 'on'} state={cognition} />}</div>
+      {/* Freya is always the centre. A screen may overlay its own geometry (the
+          World graph, a timeline) on top of her rather than replacing her. */}
+      <div className="hd-tab-centre">
+        <FreyaCentre centre={design.centre} style={design.style} rings={design.rings === 'on'} state={cognition} />
+        {slots.centre ? <div className="hd-tab-overlay">{slots.centre}</div> : null}
+      </div>
       {wide ? null : <div className="hd-col hd-col-r">{slots.right}</div>}
       {slots.bottom ? <div className="hd-col-b">{slots.bottom}</div> : null}
     </div>

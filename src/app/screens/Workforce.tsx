@@ -53,7 +53,7 @@ export function Workforce(): ScreenSlots {
     presence: 'none',
     centre: (
       <div className="wf-view">
-        <div className="w-filters wf-tabs">{TABS.map((tab, index) => <button key={tab} type="button" className="w-filter" aria-pressed={index === 0}>{tab}</button>)}</div>
+        <div className="w-filters wf-tabs">{TABS.map((tab, index) => <button key={tab} type="button" className="w-filter" aria-pressed={index === 0} disabled title="Available when Workforce projections are live">{tab}</button>)}</div>
         <div className="wf-grid">
           <div className="wf-left"><h1>A kinder<br />smarter<br />tomorrow</h1></div>
           <div className="wf-office">

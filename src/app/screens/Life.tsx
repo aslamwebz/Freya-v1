@@ -55,8 +55,8 @@ export function Life(): ScreenSlots {
     centre: (
       <div className="l-view">
         <div className="l-toolbar">
-          <div className="w-filters">{TABS.map((tab, index) => <button key={tab} type="button" className="w-filter" aria-pressed={index === 0}>{tab}</button>)}</div>
-          <div className="w-filters">{RANGES.map((range) => <button key={range} type="button" className="w-filter" aria-pressed={range === 'Day'}>{range}</button>)}<button type="button" className="w-filter">Jump to…</button></div>
+          <div className="w-filters">{TABS.map((tab, index) => <button key={tab} type="button" className="w-filter" aria-pressed={index === 0} disabled title="Available when Life is connected to Core">{tab}</button>)}</div>
+          <div className="w-filters">{RANGES.map((range) => <button key={range} type="button" className="w-filter" aria-pressed={range === 'Day'} disabled title="Available when Life is connected to Core">{range}</button>)}<button type="button" className="w-filter" disabled title="Available when Life is connected to Core">Jump to…</button></div>
         </div>
         <div className="l-title"><h1>My Life</h1><p className="c-sub">A continuous timeline of experiences, work, relationships, memories, and growth. Every moment shapes a brighter tomorrow.</p></div>
         <div className="l-timeline" data-sample={SAMPLE_PREFIX}>

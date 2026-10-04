@@ -51,7 +51,7 @@ export function Foundry(): ScreenSlots {
             <h3 className="c-lead">Design. Build. Test. Deploy.</h3>
             <p className="c-sub">Turn ideas into real capabilities — tools, skills, and apps that expand what Freya and your teams can do.</p>
             <div className="fd-stats">{STATS.map(([label, value]) => <span key={label}><b>{value}</b> {label}</span>)}</div>
-            <button type="button" className="fd-new"><Glyph name="plus" size={16} /> New Capability</button>
+            <button type="button" className="fd-new" disabled title="Available when Foundry is connected to the Skills runtime"><Glyph name="plus" size={16} /> New Capability</button>
           </Card>
           <div className="fd-portrait" aria-hidden="true">
             <span className="fd-arc fd-arc-top">IMAGINE</span>
@@ -66,8 +66,8 @@ export function Foundry(): ScreenSlots {
             <p className="c-lead">Describe what you want to build…</p>
             <p className="c-sub">I'll help you turn it into a working capability.</p>
             <form className="fd-ask" onSubmit={(event) => event.preventDefault()}>
-              <input aria-label="Describe what you want to build" placeholder={'e.g. "A tool to analyze market trends and create briefings…"'} />
-              <button type="submit" aria-label="Send to Foundry"><Glyph name="arrow" size={18} /></button>
+              <input aria-label="Describe what you want to build" placeholder={'e.g. "A tool to analyze market trends and create briefings…"'} disabled title="Available when Foundry is connected to the Skills runtime" />
+              <button type="submit" aria-label="Send to Foundry" disabled><Glyph name="arrow" size={18} /></button>
             </form>
             <div className="c-chips">{ASSIST.map((chip) => <Chip key={chip}>{chip}</Chip>)}</div>
           </Card>
@@ -87,7 +87,7 @@ export function Foundry(): ScreenSlots {
 
         <Card title="My creations" icon="core" className="fd-creations">
           <div className="fd-create-bar">
-            <div className="w-filters">{CREATION_TABS.map((tab, index) => <button key={tab} type="button" className="w-filter" aria-pressed={index === 0}>{tab}</button>)}</div>
+            <div className="w-filters">{CREATION_TABS.map((tab, index) => <button key={tab} type="button" className="w-filter" aria-pressed={index === 0} disabled>{tab}</button>)}</div>
             <div className="fd-create-tools">
               <span className="fd-search">Search creations…</span>
               <Chip>Filter</Chip>

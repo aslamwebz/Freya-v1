@@ -61,7 +61,7 @@ export function Memory(): ScreenSlots {
           <div className="c-bars">{HEALTH.map(([label, value]) => <div key={label} className="c-bar"><span>{label}</span><Meter value={value} /><small>{value}%</small></div>)}</div>
         </Card>
         <Card title="Recall" icon="search" subtitle="Ask memory">
-          <div className="fd-ask"><input aria-label="Search memory" placeholder="Search memories…" /></div>
+          <div className="fd-ask"><input aria-label="Search memory" placeholder="Search memories…" disabled title="Search becomes available when Memory is connected" /></div>
           <div className="c-rows">{INSIGHTS.map((insight) => <Row key={insight} icon="focus" title={insight} />)}</div>
         </Card>
       </>

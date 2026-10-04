@@ -579,3 +579,31 @@
   .l-events { overflow-x: auto; grid-template-columns: repeat(7, minmax(8.5rem, 1fr)); padding-bottom: .25rem; }
   .l-events .l-line { min-width: 62rem; }
 }
+
+
+/* Sample-only controls: visible as part of the intended workspace, but clearly
+   non-interactive until their real projection/action path exists. */
+.hd-dashboard .w-filter:disabled,
+.hd-dashboard .pp-person:disabled,
+.hd-dashboard .rl-conv:disabled,
+.hd-dashboard .rl-add:disabled,
+.hd-dashboard .fd-new:disabled,
+.hd-dashboard .fd-ask button:disabled,
+.hd-dashboard .rl-reply button:disabled {
+  cursor: default;
+}
+.hd-dashboard .w-filter:disabled:not([aria-pressed='true']),
+.hd-dashboard .rl-add:disabled,
+.hd-dashboard .fd-new:disabled { opacity: .62; }
+.hd-dashboard .w-filter:disabled[aria-pressed='true'],
+.hd-dashboard .pp-person:disabled[data-active='true'],
+.hd-dashboard .rl-conv:disabled[data-active='true'] { opacity: 1; }
+.fd-ask input:disabled,
+.rl-reply input:disabled,
+.fd-ask button:disabled,
+.rl-reply button:disabled {
+  opacity: .62;
+  cursor: default;
+}
+.fd-ask input:disabled::placeholder,
+.rl-reply input:disabled::placeholder { color: color-mix(in srgb, var(--f-muted) 74%, transparent); }

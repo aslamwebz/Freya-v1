@@ -101,8 +101,8 @@ export function World(): ScreenSlots {
     centre: (
       <div className="w-view">
         <div className="w-toolbar">
-          <div className="w-filters">{FILTERS.map((filter) => <button key={filter} type="button" className="w-filter" aria-pressed={filter === 'All'}>{filter}</button>)}</div>
-          <div className="w-filters"><button type="button" className="w-filter">Filters (2)</button><button type="button" className="w-filter" aria-pressed>Graph</button><button type="button" className="w-filter">Map</button></div>
+          <div className="w-filters">{FILTERS.map((filter) => <button key={filter} type="button" className="w-filter" aria-pressed={filter === 'All'} disabled title="Available when World is connected to Core">{filter}</button>)}</div>
+          <div className="w-filters"><button type="button" className="w-filter" disabled title="Available when World is connected to Core">Filters</button><button type="button" className="w-filter" aria-pressed disabled>Graph</button><button type="button" className="w-filter" disabled>Map</button></div>
         </div>
         <div className="w-main">
           <Graph />

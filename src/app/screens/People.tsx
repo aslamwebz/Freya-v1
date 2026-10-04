@@ -52,7 +52,7 @@ export function People(): ScreenSlots {
     left: (
       <Card title="People" icon="people" subtitle="18 connected">
         <div className="pp-list">{PEOPLE.map((person, index) => (
-          <button key={person.name} type="button" className="pp-person" data-active={index === 0} aria-current={index === 0 ? 'true' : undefined}>
+          <button key={person.name} type="button" className="pp-person" data-active={index === 0} aria-current={index === 0 ? 'true' : undefined} disabled title="Selection becomes live with the People projection">
             <span className="c-avatar">{person.initial}</span>
             <span className="c-row-text"><b>{person.name}</b><small>{person.role}</small></span>
             <span className="c-row-end">{person.when}</span>

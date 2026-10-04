@@ -52,11 +52,11 @@ export function Relay(): ScreenSlots {
     presence: 'none',
     centre: (
       <div className="rl-view">
-        <Card title="Conversations" icon="relay" className="rl-conversations" meta={<button type="button" className="rl-add" aria-label="New conversation">+</button>}>
-          <div className="w-filters">{FILTERS.map((filter, index) => <button key={filter} type="button" className="w-filter" aria-pressed={index === 0}>{filter}</button>)}</div>
+        <Card title="Conversations" icon="relay" className="rl-conversations" meta={<button type="button" className="rl-add" aria-label="New conversation" disabled title="Available when Relay connectors are configured">+</button>}>
+          <div className="w-filters">{FILTERS.map((filter, index) => <button key={filter} type="button" className="w-filter" aria-pressed={index === 0} disabled>{filter}</button>)}</div>
           <div className="rl-list">
             {CONVERSATIONS.map((conversation, index) => (
-              <button key={conversation.name} type="button" className="rl-conv" data-active={index === 0} aria-current={index === 0 ? 'true' : undefined}>
+              <button key={conversation.name} type="button" className="rl-conv" data-active={index === 0} aria-current={index === 0 ? 'true' : undefined} disabled title="Available when Relay connectors are configured">
                 <span className="c-avatar">{conversation.initial}</span>
                 <span className="rl-conv-text"><b>{conversation.name}</b><small>{conversation.preview}</small></span>
                 <span className="rl-conv-meta"><em>{conversation.when}</em>{conversation.unread > 0 ? <i className="rl-badge">{conversation.unread}</i> : null}</span>
@@ -117,8 +117,8 @@ export function Relay(): ScreenSlots {
             ))}
           </div>
           <form className="rl-reply" onSubmit={(event) => event.preventDefault()}>
-            <input aria-label="Reply to Jordan" placeholder="Reply to Jordan…" />
-            <button type="submit" aria-label="Send reply"><Glyph name="arrow" size={16} /></button>
+            <input aria-label="Reply to Jordan" placeholder="Reply to Jordan…" disabled title="Available when Relay connectors are configured" />
+            <button type="submit" aria-label="Send reply" disabled><Glyph name="arrow" size={16} /></button>
           </form>
         </Card>
       </div>

@@ -1,8 +1,9 @@
 import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'
 import { join } from 'node:path'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
-import { ElectronCoreHost } from './coreHost'
+import { ElectronCoreHost, type HostEnv } from './coreHost'
 import { loadKeyring } from './keyring'
+import { ProviderConfigStore } from './providerConfig'
 import { createFreyaVaultBinding } from './vaultBinding'
 import { loadLocalEnv } from './localEnv'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
@@ -10,6 +11,7 @@ import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import { PresenceHost } from './presence/host'
 import { installSingleInstanceGuard } from './startup/singleInstance'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
+import type { ProviderConfigInput } from './providerConfig'
 import type { ModelProvider } from '../core/model/provider'
 
 const HERE = __dirname
@@ -17,6 +19,11 @@ const ROOT = join(HERE, '..')
 const DEV_SERVER = process.env.FREYA_DEV_SERVER
 const WORKSPACE_FILE = 'workspace.json'
 const CORE_LOG_FILE = 'core-events.jsonl'
+
+// Captured before the `.env` loader runs. A stored provider setting is applied
+// beneath this snapshot at startup, so an explicit launch always wins over both a
+// `.env` file and the app's saved settings. Never logged or forwarded.
+const EXPLICIT_ENV: NodeJS.ProcessEnv = { ...process.env }
 
 // Local `.env` first, in the main process, before anything reads configuration.
 // Real environment variables win over the file; values are never logged, and
@@ -27,6 +34,11 @@ loadLocalEnv(join(ROOT, '.env'))
 let mainWindow: BrowserWindow | null = null
 /** Null until the app is ready; every handler that needs it is registered after. */
 let workspace: WorkspaceFile | null = null
+/**
+ * The provider config, beside the workspace and for the same reason: main-only,
+ * created once the app is ready, reached from a window only through named IPC.
+ */
+let providerStore: ProviderConfigStore | null = null
 /** One Core per process. Survives renderer reloads; dies only with the app. */
 let coreHost: ElectronCoreHost | null = null
 /** The presence host. Owns the presence window and pushes frames to it. */
@@ -219,6 +231,49 @@ function requireWorkspace(): WorkspaceFile {
 function requireCore(): ElectronCoreHost {
   if (!coreHost) throw new Error('core used before the app was ready')
   return coreHost
+}
+
+function requireProviderConfig(): ProviderConfigStore {
+  if (!providerStore) throw new Error('provider config used before the app was ready')
+  return providerStore
+}
+
+/**
+ * The host environment, rebuilt from the current process environment.
+ *
+ * This is the same named set of values main hands to `new ElectronCoreHost` at
+ * startup, and it is the only shape that may be given to `restartWithEnv`. It
+ * reads `process.env` at call time, so the provider store must have been applied
+ * first. Nothing here is returned to a renderer: these are main-process values,
+ * and the credential among them never crosses the bridge.
+ */
+function currentHostEnv(): HostEnv {
+  return {
+    NANOGPT_API_KEY: process.env.NANOGPT_API_KEY,
+    NANOGPT_BASE_URL: process.env.NANOGPT_BASE_URL,
+    NANOGPT_MODEL: process.env.NANOGPT_MODEL,
+    FREYA_ALLOW_LIVE_MODEL: process.env.FREYA_ALLOW_LIVE_MODEL,
+    BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY,
+    FREYA_ALLOW_WEB_SEARCH: process.env.FREYA_ALLOW_WEB_SEARCH,
+    FREYA_E2E: process.env.FREYA_E2E,
+    FREYA_E2E_RESEARCH: process.env.FREYA_E2E_RESEARCH,
+  }
+}
+
+/**
+ * Re-read the provider environment into Core after a settings save.
+ *
+ * A provider credential and model are read by Core at construction, so a saved
+ * setting only takes effect if the running Core is rebuilt. The stored config is
+ * overlaid onto `process.env` first (the same call the write handler already
+ * makes), then the host env is rebuilt and Core is restarted from it. This is
+ * main-process only: no renderer can name the env or ask for a rebuild, and the
+ * key never leaves this process.
+ */
+async function reEnvCore(): Promise<void> {
+  if (!providerStore) return
+  await providerStore.applyToEnv(process.env)
+  await coreHost?.restartWithEnv(currentHostEnv())
 }
 
 /**
@@ -636,7 +691,33 @@ function registerIpc(): void {
     dev: Boolean(DEV_SERVER),
   }))
 
+  // Provider settings. The read returns only the masked view — base URL, model,
+  // the live flag and whether a key exists. The write accepts the four named
+  // fields, stores the key in the OS wrapper and then re-reads the environment
+  // into Core. The raw key never appears in either direction: it goes into the
+  // store and into `process.env`, and nowhere else.
+  ipcMain.handle('freya:provider:read', () => requireProviderConfig().read())
+  ipcMain.handle('freya:provider:write', async (_event, input: ProviderConfigInput) => {
+    const saved = await requireProviderConfig().write(input)
+    await reEnvCore()
+    return saved
+  })
+
   ipcMain.handle('freya:workspace:load', () => requireWorkspace().load())
+  // The window is frameless, so the renderer drives these. Each acts on the
+  // window that asked, never another: a window can name no other window.
+  ipcMain.handle('freya:window:minimize', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize()
+  })
+  ipcMain.handle('freya:window:maximize', (event) => {
+    const target = BrowserWindow.fromWebContents(event.sender)
+    if (!target) return
+    if (target.isMaximized()) target.unmaximize()
+    else target.maximize()
+  })
+  ipcMain.handle('freya:window:close', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close()
+  })
   ipcMain.handle('freya:core:submit', (_event, envelope: CoreCommandEnvelope) => {
     const result = requireCore().submit(envelope)
     // The microphone gate follows Core's verdict rather than the request, so a
@@ -714,11 +795,18 @@ function registerIpc(): void {
   })
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (!ownsProfile) return
   workspace = new WorkspaceFile({
     path: join(app.getPath('userData'), WORKSPACE_FILE),
   })
+  // Created beside the workspace, and created before Core so the stored provider
+  // values can be applied to the process environment Core is then built from.
+  providerStore = new ProviderConfigStore(join(app.getPath('userData'), 'provider.json'))
+  // A credential saved through the Settings surface must be usable on the next
+  // launch, so it is applied here — before Core reads `process.env.NANOGPT_*`.
+  // A real launch environment still wins; the `.env` file does not.
+  await providerStore.applyToEnv(process.env, EXPLICIT_ENV)
   // The keys are fetched before the Core is constructed, and they are the only
   // secrets this process handles. A machine with no OS secure storage gets `null`
   // for both, which makes Core fall back to ephemeral stores that label themselves —

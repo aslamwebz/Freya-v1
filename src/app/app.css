@@ -1,0 +1,2452 @@
+/*
+ * Freya App Mode — the shell.
+ *
+ * v2 anatomy: a fixed rail, a header, a ticker, a body of three columns around a
+ * constant centre, and a global command bar. The centre is its own layer with a
+ * fixed size so no layout change can move it.
+ */
+
+/* The shell owns the viewport; nothing above it should scroll or add margins. */
+html, body { margin: 0; height: 100%; }
+body { overflow: hidden; }
+#root { height: 100%; }
+
+.freya-app {
+  --a-rail: 208px;
+  /* The layout gutter is constant: the rail may fold, but the body — and the
+     brain at its centre — must not move or resize when it does. */
+  --a-gutter: 208px;
+  --a-gap: 18px;
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--a-gutter) minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--f-bg);
+  color: var(--f-ink);
+  font-family: var(--f-font);
+}
+
+/* Background: obsidian ground with a faint horizon glow. */
+.a-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(120% 80% at 50% 120%, color-mix(in srgb, var(--f-action) 10%, transparent), transparent 60%),
+    radial-gradient(90% 60% at 50% -10%, color-mix(in srgb, var(--f-cognition) 8%, transparent), transparent 55%),
+    var(--f-bg);
+}
+.a-atmos { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+.a-atmos .a-stars {
+  position: absolute; inset: 0;
+  background-image: radial-gradient(1px 1px at 20% 30%, color-mix(in srgb, var(--f-ink) 40%, transparent), transparent),
+    radial-gradient(1px 1px at 70% 60%, color-mix(in srgb, var(--f-ink) 30%, transparent), transparent),
+    radial-gradient(1px 1px at 45% 80%, color-mix(in srgb, var(--f-ink) 25%, transparent), transparent);
+  opacity: .5;
+}
+
+/* Rail */
+.a-rail {
+  grid-column: 1; grid-row: 3 / -1;
+  position: relative; z-index: 2;
+  width: var(--a-rail);
+  min-width: 0;
+  display: flex; flex-direction: column; gap: .2rem;
+  padding: .7rem .7rem 1rem;
+  background: none;
+  border-right: 0;
+  transition: width var(--f-duration) var(--f-ease);
+}
+.a-mark { display: grid; place-items: center; width: 44px; height: 44px; margin: 0 .3rem; text-decoration: none; flex: none; }
+.a-orbit {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 1.5px solid var(--f-action);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--f-action) 45%, transparent), inset 0 0 8px color-mix(in srgb, var(--f-action) 35%, transparent);
+}
+.a-rail nav { display: flex; flex-direction: column; gap: .1rem; }
+/* Plain text items — no tab chrome. The current one is accent text with a leading bar. */
+.a-rail-item {
+  justify-content: flex-start; gap: .7rem; width: 100%;
+  padding: .5rem .6rem; border-radius: 0; border: 0; background: none;
+  color: var(--f-muted); font-size: .92rem;
+}
+.a-rail-item:hover { color: var(--f-ink); background: none; }
+.a-rail-item[aria-current='page'] {
+  color: var(--f-heading);
+  background: none;
+  box-shadow: inset 2px 0 0 var(--f-action);
+}
+.a-rail-toggle { justify-content: center; color: var(--f-muted); padding: .5rem; margin-bottom: .5rem; }
+.a-rail-toggle:hover { color: var(--f-ink); }
+.freya-app[data-rail='collapsed'] { --a-rail: 76px; }
+.freya-app[data-rail='collapsed'] .a-rail-item { justify-content: center; }
+.freya-app[data-rail='collapsed'] .a-rail-item span,
+.freya-app[data-rail='collapsed'] .a-online b,
+.freya-app[data-rail='collapsed'] .a-online small { display: none; }
+.a-online { margin-top: auto; display: grid; gap: .1rem; padding: .8rem .7rem 0; border-top: 1px solid var(--f-line); font-size: .78rem; }
+.a-online .a-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--f-positive); box-shadow: 0 0 8px var(--f-positive); }
+.a-online b { color: var(--f-ink); font-weight: 600; }
+.a-online small { color: var(--f-muted); }
+
+/* Header */
+.a-head {
+  grid-column: 1 / -1; grid-row: 1; position: relative; z-index: 3;
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: 1rem 1.6rem .4rem;
+}
+.a-head-left { display: flex; align-items: center; gap: .9rem; min-width: 0; }
+.a-brand { display: grid; grid-template-columns: auto auto auto; align-items: baseline; gap: .55rem; }
+.a-brand b { font-family: var(--f-narrative); font-size: 2.1rem; letter-spacing: .28em; font-weight: 400; }
+.a-brand i { color: var(--f-muted); font-style: normal; }
+.a-brand span { font-size: .72rem; letter-spacing: .28em; color: var(--f-heading); }
+.a-brand small { grid-column: 1 / -1; font-size: .62rem; letter-spacing: .22em; color: var(--f-muted); text-transform: uppercase; }
+.a-head-right { display: flex; align-items: center; gap: 1.2rem; }
+.a-head-right .f-clock { display: grid; justify-items: end; text-align: right; line-height: 1.15; }
+.a-head-right .f-clock small { font-size: .68rem; color: var(--f-muted); }
+.a-head-right .f-clock time { font-size: 1.45rem; letter-spacing: .04em; }
+.a-head-right blockquote { margin: 0; text-align: right; font-family: var(--f-narrative); font-size: 1.05rem; line-height: 1.25; color: var(--f-ink); }
+.a-head-right blockquote span { display: block; }
+.a-head-right blockquote em { display: block; color: var(--f-muted); font-style: italic; }
+.a-theme { padding: .5rem; border-radius: 50%; border: 1px solid var(--f-line); }
+
+/* Ticker */
+.a-ticker {
+  grid-column: 1 / -1; grid-row: 2; position: relative; z-index: 2;
+  display: flex; gap: .7rem; justify-content: flex-end;
+  padding: 0 1.6rem .5rem;
+  font-size: .6rem; letter-spacing: .24em; color: var(--f-muted);
+}
+
+/* Body: left · centre · right, with a lower row spanning left + centre. */
+.a-body {
+  grid-column: 2; grid-row: 3; position: relative; z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(280px, 22rem) minmax(0, 1fr) minmax(280px, 23rem);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--a-gap); padding: 1rem 1.6rem; min-width: 0; min-height: 0; overflow: hidden;
+}
+.a-col { display: flex; flex-direction: column; gap: var(--a-gap); overflow-y: auto; padding-right: .2rem; min-height: 0; min-width: 0; }
+.a-col-left { grid-column: 1; grid-row: 1; }
+.a-col-right { grid-column: 3; grid-row: 1 / span 2; }
+.a-bottom { grid-column: 1 / 3; grid-row: 2; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--a-gap); align-content: start; min-height: 0; max-height: min(30%, 18rem); overflow-y: auto; }
+.a-body[data-layout='wide'] { grid-template-columns: minmax(0, 1fr); }
+.a-body[data-layout='wide'] .a-centre { grid-column: 1 / -1; align-content: stretch; overflow: hidden; }
+.a-body[data-layout='wide'] .a-bottom { grid-column: 1 / -1; }
+
+/* The constant centre. Fixed size, its own stacking, never reflowed. */
+.a-centre { position: relative; display: grid; align-content: center; justify-items: center; gap: .8rem; min-width: 0; min-height: 0; container-type: size; }
+.a-planet {
+  position: absolute; left: -18%; bottom: -26%; width: 40rem; height: 40rem; border-radius: 50%;
+  background: radial-gradient(circle at 38% 38%, color-mix(in srgb, var(--f-action) 34%, transparent), transparent 60%), radial-gradient(circle at 62% 62%, #0b1c2c, #04080e 72%);
+  opacity: .55; z-index: -1; pointer-events: none;
+}
+.a-centre-stage {
+  position: relative; contain: layout size;
+  /* Square, and sized from the centre cell itself — never from the viewport or
+     the rail — so it can neither move nor be clipped as the shell changes. */
+  width: clamp(12rem, min(100cqw, calc(100cqh - 4.5rem), 36rem), 36rem);
+  height: auto; aspect-ratio: 1;
+  display: grid; place-items: center;
+}
+.a-centre-labels { position: absolute; inset: 0; pointer-events: none; }
+.a-cl { position: absolute; font-size: .58rem; letter-spacing: .3em; color: var(--f-muted); text-transform: uppercase; }
+.a-cl-top { top: 3%; left: 50%; transform: translateX(-50%); }
+.a-cl-left { top: 46%; left: 3%; }
+.a-cl-right { top: 46%; right: 3%; }
+.a-cl-bl { bottom: 14%; left: 6%; }
+.a-cl-br { bottom: 14%; right: 6%; }
+.a-centre-canvas { width: 100%; height: 100%; }
+.a-brain { position: relative; width: 100%; height: 100%; display: grid; place-items: center; }
+.a-brain-fallback { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; max-width: 15rem; margin: auto; color: var(--f-muted); font-size: .78rem; }
+.a-centre-note { color: var(--f-muted); font-size: .85rem; }
+.a-centre-caption { text-align: center; display: grid; gap: .15rem; }
+.a-centre-caption b { font-family: var(--f-narrative); letter-spacing: .3em; font-size: 1.1rem; font-weight: 400; }
+.a-centre-caption span { font-size: .58rem; letter-spacing: .3em; color: var(--f-heading); }
+.a-centre-caption small { font-size: .58rem; letter-spacing: .22em; color: var(--f-muted); }
+
+/* Screen title watermark */
+.a-screen-title {
+  position: fixed; left: calc(var(--a-gutter) + 1.6rem); bottom: 5.4rem; z-index: 2;
+  display: flex; align-items: center; gap: .5rem; color: transparent;
+  -webkit-text-stroke: 1px color-mix(in srgb, var(--f-muted) 55%, transparent);
+  font-size: 1.5rem; font-weight: 700; letter-spacing: .04em; pointer-events: none;
+  mask-image: linear-gradient(90deg, #000, transparent);
+}
+.a-screen-title svg { -webkit-text-stroke: 0; color: color-mix(in srgb, var(--f-muted) 60%, transparent); }
+
+/* Command bar */
+.a-cmd {
+  grid-column: 2; grid-row: 4; position: relative; z-index: 3;
+  display: grid; justify-items: center; gap: .35rem;
+  padding: .6rem 1.6rem 1.1rem;
+}
+.a-cmd form {
+  display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: .7rem;
+  width: min(60rem, 100%);
+  padding: .5rem .7rem; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--f-glass-edge) 45%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--f-ink) 6%, transparent), transparent 45%), var(--f-glass);
+  backdrop-filter: blur(20px) saturate(150%);
+  box-shadow: var(--f-shadow), inset 0 1px 0 color-mix(in srgb, var(--f-ink) 12%, transparent);
+}
+.a-voice { border-radius: 50%; padding: .55rem; }
+.a-cmd .f-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.a-cmd .f-field input {
+  width: 100%; background: transparent; border: 0; color: var(--f-ink);
+  font-size: 1.05rem; padding: .4rem .2rem;
+}
+.a-cmd .f-field input:focus { outline: none; }
+.a-intents { display: flex; gap: .3rem; }
+.a-intents .f-button { border: 1px solid var(--f-line); border-radius: 999px; padding: .35rem .8rem; color: var(--f-muted); }
+.a-intents .f-button[aria-pressed='true'] { color: var(--f-heading); border-color: var(--f-action); background: color-mix(in srgb, var(--f-action) 12%, transparent); }
+.a-cmd-status { font-size: .78rem; color: var(--f-muted); }
+
+@media (max-width: 1200px) {
+  .freya-app { --a-gutter: 74px; --a-rail: 74px; }
+  .a-rail-item span { display: none; }
+  .a-col-left, .a-col-right { display: none; }
+  .a-body { grid-template-columns: minmax(0, 1fr); }
+  .a-bottom { grid-column: 1 / -1; }
+}
+@media (max-width: 1100px) {
+  .a-head-right blockquote { display: none; }
+  .a-ticker { display: none; }
+}
+@media (max-width: 900px) {
+  .a-brand b { font-size: 1.6rem; letter-spacing: .18em; }
+  .a-intents { display: none; }
+  .a-cmd form { grid-template-columns: auto 1fr auto; }
+}
+
+/* Frameless window: the header drags; controls do not. */
+.a-head { -webkit-app-region: drag; }
+.a-head button, .a-head .a-theme, .a-head .a-win, .a-head .a-mark, .a-head .a-look { -webkit-app-region: no-drag; }
+.a-win { display: flex; align-items: center; gap: .15rem; }
+.a-win-btn { padding: .32rem .42rem; border-radius: 6px; color: var(--f-muted); }
+.a-win-btn:hover { color: var(--f-ink); background: color-mix(in srgb, var(--f-ink) 8%, transparent); }
+.a-win-close:hover { background: var(--f-danger); color: #fff; }
+
+/* The two looks: Home (blue) and Mind (violet). */
+
+/* --------------------------------------------------------------------------
+ * Home — Reference #1 fidelity pass.
+ * Keep the data real; reproduce the reference's composition, depth and presence.
+ * -------------------------------------------------------------------------- */
+.freya-app[data-screen='home'] {
+  --a-gutter: 184px;
+  --a-rail: 184px;
+  --a-gap: 14px;
+  grid-template-rows: 76px 0 minmax(0, 1fr) 88px;
+}
+.freya-app[data-screen='home'] .a-bg {
+  background:
+    linear-gradient(180deg, rgba(2, 8, 15, .58) 0%, rgba(2, 9, 17, .72) 50%, rgba(2, 8, 14, .88) 100%),
+    radial-gradient(55% 70% at 54% 38%, rgba(25, 128, 170, .12), transparent 72%),
+    url('./assets/city.jpg') center bottom / cover no-repeat;
+  filter: saturate(.78) contrast(1.12) brightness(.78);
+}
+.freya-app[data-screen='home'] .a-atmos {
+  background:
+    radial-gradient(circle at 54% 38%, rgba(80, 211, 255, .08), transparent 31%),
+    radial-gradient(circle at 55% 40%, rgba(178, 133, 255, .05), transparent 46%);
+}
+.freya-app[data-screen='home'] .a-head {
+  min-height: 76px;
+  padding: .7rem 1.35rem .55rem;
+  border-bottom: 1px solid rgba(129, 205, 235, .07);
+  background: linear-gradient(180deg, rgba(2, 9, 17, .44), transparent);
+}
+.freya-app[data-screen='home'] .a-brand b {
+  font-size: 1.75rem;
+  letter-spacing: .32em;
+  text-shadow: 0 0 20px rgba(123, 220, 255, .12);
+}
+.freya-app[data-screen='home'] .a-mark { width: 38px; height: 38px; }
+.freya-app[data-screen='home'] .a-orbit {
+  width: 25px; height: 25px;
+  border-color: rgba(115, 223, 255, .8);
+  box-shadow: 0 0 18px rgba(91, 219, 255, .36), inset 0 0 12px rgba(111, 209, 255, .16);
+}
+.freya-app[data-screen='home'] .a-head-right { gap: .65rem; }
+.freya-app[data-screen='home'] .a-theme {
+  background: transparent; border-color: rgba(129, 205, 235, .16);
+}
+.freya-app[data-screen='home'] .a-head-right .f-clock time { font-size: 1.3rem; }
+.freya-app[data-screen='home'] .a-head-right .f-clock small { font-size: .64rem; }
+
+.freya-app[data-screen='home'] .a-rail {
+  grid-row: 3 / -1;
+  padding: .45rem .55rem .8rem;
+  background: linear-gradient(90deg, rgba(3, 11, 20, .78), rgba(4, 13, 22, .42) 76%, transparent);
+  border-right: 1px solid rgba(118, 208, 238, .08);
+}
+.freya-app[data-screen='home'] .a-rail-toggle {
+  position: absolute;
+  top: .15rem; right: .15rem;
+  width: 26px; height: 26px; padding: 0;
+  opacity: .62; border: 0; background: transparent;
+}
+.freya-app[data-screen='home'] .a-rail nav { margin-top: 2rem; gap: .15rem; }
+.freya-app[data-screen='home'] .a-rail-item {
+  min-height: 43px; padding: .55rem .8rem; gap: .75rem;
+  border-radius: 8px; font-size: .86rem; color: rgba(203, 220, 232, .68);
+}
+.freya-app[data-screen='home'] .a-rail-item[aria-current='page'] {
+  color: #e7fbff;
+  background: linear-gradient(90deg, rgba(65, 196, 239, .18), rgba(65, 196, 239, .035));
+  box-shadow: inset 3px 0 0 #62dfff, 0 0 24px rgba(64, 197, 238, .05);
+}
+.freya-app[data-screen='home'] .a-online {
+  padding: .75rem .75rem 0;
+  border-top-color: rgba(126, 210, 238, .12);
+}
+.freya-app[data-screen='home'] .a-body {
+  grid-column: 2; grid-row: 3;
+  grid-template-columns: minmax(320px, 356px) minmax(500px, 1fr) minmax(320px, 372px);
+  grid-template-rows: minmax(0, 1fr) 214px;
+  gap: var(--a-gap);
+  padding: .65rem 1.35rem .35rem 1rem;
+  overflow: hidden;
+}
+.freya-app[data-screen='home'] .a-col {
+  gap: var(--a-gap); padding: 0; overflow: hidden;
+}
+.freya-app[data-screen='home'] .a-col-left > .c-card:first-child { flex: 0 0 43%; }
+.freya-app[data-screen='home'] .a-col-left > .c-card:last-child { flex: 1 1 auto; }
+.freya-app[data-screen='home'] .a-col-right > .c-card:nth-child(1) { flex: 1.25 1 0; }
+.freya-app[data-screen='home'] .a-col-right > .c-card:nth-child(2) { flex: .86 1 0; }
+.freya-app[data-screen='home'] .a-col-right > .c-card:nth-child(3) { flex: 1.34 1 0; }
+.freya-app[data-screen='home'] .a-bottom {
+  grid-column: 1 / 3; grid-row: 2;
+  gap: var(--a-gap); max-height: none; overflow: hidden;
+  grid-auto-columns: minmax(0, 1fr);
+}
+
+.freya-app[data-screen='home'] .a-centre {
+  position: relative; min-height: 0; overflow: visible;
+  align-content: center; justify-items: center;
+}
+.freya-app[data-screen='home'] .a-centre::after {
+  content: '';
+  position: absolute;
+  left: 50%; bottom: 3%;
+  width: 58%; height: 8%;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(78, 218, 255, .18), transparent 67%);
+  filter: blur(10px);
+  pointer-events: none;
+}
+.freya-app[data-screen='home'] .a-centre-stage {
+  width: min(100%, 40rem);
+  max-height: 100%;
+  aspect-ratio: 1;
+  overflow: visible;
+}
+.freya-app[data-screen='home'] .a-brain { z-index: 1; opacity: .95; }
+.freya-app[data-screen='home'] .a-home-presence {
+  position: absolute; z-index: 2; inset: 15%;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.freya-app[data-screen='home'] .a-home-presence-glass {
+  position: absolute; inset: 2%; border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(112, 224, 255, .14), transparent 50%),
+    radial-gradient(circle at 45% 66%, rgba(137, 106, 244, .11), transparent 64%),
+    rgba(4, 17, 29, .18);
+  border: 1px solid rgba(118, 223, 255, .36);
+  box-shadow:
+    inset 0 0 50px rgba(77, 203, 242, .10),
+    0 0 46px rgba(65, 196, 238, .11);
+}
+.freya-app[data-screen='home'] .a-home-presence img {
+  position: relative; z-index: 2;
+  width: 88%; height: 94%; object-fit: contain; object-position: 50% 51%;
+  filter: saturate(.82) contrast(1.04) brightness(.94)
+    drop-shadow(0 0 18px rgba(96, 218, 255, .24))
+    drop-shadow(0 0 34px rgba(145, 104, 246, .12));
+}
+.freya-app[data-screen='home'] .a-home-presence-rim {
+  position: absolute; z-index: 3; inset: -5%; border-radius: 50%;
+  border: 1px solid rgba(107, 220, 255, .35);
+  box-shadow:
+    0 0 0 18px rgba(86, 215, 255, .025),
+    0 0 0 32px rgba(144, 105, 245, .018),
+    0 0 42px rgba(69, 205, 247, .14);
+}
+.freya-app[data-screen='home'] .a-centre-labels { z-index: 4; inset: 1%; }
+.freya-app[data-screen='home'] .a-cl {
+  color: rgba(186, 226, 239, .70);
+  font-size: .55rem; letter-spacing: .28em;
+  text-shadow: 0 0 10px rgba(95, 214, 255, .28);
+}
+.freya-app[data-screen='home'] .a-screen-title { display: none; }
+
+.freya-app[data-screen='home'] .c-card {
+  gap: .55rem;
+  padding: .82rem .95rem .92rem;
+  border-radius: 15px;
+  background:
+    linear-gradient(150deg, rgba(13, 35, 52, .76), rgba(5, 17, 29, .67) 56%, rgba(8, 22, 36, .62));
+  backdrop-filter: blur(26px) saturate(132%);
+  box-shadow:
+    0 16px 48px rgba(0, 4, 10, .34),
+    inset 0 1px 0 rgba(151, 230, 255, .08);
+}
+.freya-app[data-screen='home'] .c-card::before {
+  background: linear-gradient(135deg,
+    rgba(149, 231, 255, .78),
+    rgba(89, 207, 244, .20) 25%,
+    transparent 48%,
+    rgba(126, 95, 235, .08) 72%,
+    rgba(103, 213, 245, .35));
+}
+.freya-app[data-screen='home'] .c-icon {
+  width: 29px; height: 29px;
+  background: rgba(62, 192, 232, .08);
+  border-color: rgba(107, 211, 243, .26);
+}
+.freya-app[data-screen='home'] .c-titles h2 {
+  color: #bfeeff; font-size: .70rem; letter-spacing: .20em;
+}
+.freya-app[data-screen='home'] .c-lead { font-size: 1.10rem; line-height: 1.25; }
+.freya-app[data-screen='home'] .c-sub { font-size: .80rem; line-height: 1.38; }
+.freya-app[data-screen='home'] .c-body { gap: .48rem; min-height: 0; }
+.freya-app[data-screen='home'] .c-row { padding: .28rem 0; }
+.freya-app[data-screen='home'] .c-row-text b { font-size: .82rem; }
+.freya-app[data-screen='home'] .c-row-text small { font-size: .72rem; }
+.freya-app[data-screen='home'] .c-checks { gap: .28rem; }
+.freya-app[data-screen='home'] .c-checks li { font-size: .83rem; }
+.freya-app[data-screen='home'] .c-world { grid-template-columns: 6.7rem 1fr; }
+.freya-app[data-screen='home'] .c-globe {
+  width: 6.7rem; height: 6.7rem;
+  background:
+    radial-gradient(circle at 38% 32%, rgba(96, 222, 255, .27), transparent 45%),
+    url('./assets/earth-night.jpg') 50% 50% / 180% 100% no-repeat;
+  box-shadow: inset -18px -12px 28px rgba(0, 2, 8, .72), 0 0 28px rgba(70, 190, 230, .09);
+}
+.freya-app[data-screen='home'] .a-cmd {
+  grid-column: 2; grid-row: 4;
+  padding: .5rem 1.35rem .8rem;
+}
+.freya-app[data-screen='home'] .a-cmd form {
+  width: min(68rem, 92%);
+  padding: .48rem .65rem;
+  border-color: rgba(122, 216, 247, .30);
+  background: linear-gradient(180deg, rgba(18, 40, 57, .74), rgba(4, 15, 27, .80));
+  box-shadow:
+    0 0 0 1px rgba(91, 195, 231, .05),
+    0 12px 36px rgba(0, 5, 12, .44),
+    inset 0 1px 0 rgba(166, 232, 255, .08);
+}
+.freya-app[data-screen='home'] .a-cmd .f-field input { font-size: 1rem; }
+.freya-app[data-screen='home'] .a-voice {
+  border: 1px solid rgba(104, 221, 255, .40);
+  box-shadow: 0 0 18px rgba(68, 205, 248, .12);
+}
+
+/* Reference #1 geometry refinement */
+@media (min-width: 1500px) {
+  .freya-app[data-screen='home'] {
+    --a-gutter: 156px;
+    --a-rail: 156px;
+    grid-template-rows: 76px 0 minmax(0, 1fr) 88px;
+  }
+  .freya-app[data-screen='home'] .a-body {
+    grid-template-columns: minmax(420px, 27vw) minmax(560px, 1fr) minmax(420px, 27vw);
+    grid-template-rows: minmax(0, 1fr) 224px;
+    padding: .65rem 1rem .35rem .65rem;
+  }
+  .freya-app[data-screen='home'] .a-centre-stage {
+    width: min(100%, 44rem);
+  }
+  .freya-app[data-screen='home'] .a-home-presence {
+    inset: 12.5%;
+  }
+  .freya-app[data-screen='home'] .a-home-presence img {
+    width: 92%; height: 97%;
+  }
+}
+.freya-app[data-screen='home'] .a-bottom > .c-card {
+  min-height: 0;
+}
+.freya-app[data-screen='home'] .a-bottom .c-body {
+  overflow: hidden;
+}
+.freya-app[data-screen='home'] .a-col-right .c-card {
+  min-height: 0;
+}
+.freya-app[data-screen='home'] .a-col-right .c-card .c-body {
+  overflow: hidden;
+}
+
+/* Reference #1 environment + shell lock */
+.freya-app[data-screen='home'] .a-bg {
+  background:
+    linear-gradient(180deg, rgba(1, 8, 15, .14) 0%, rgba(1, 8, 15, .20) 52%, rgba(1, 8, 15, .30) 100%),
+    url('../ui-v2/assets/panorama.webp') center center / cover no-repeat;
+  filter: saturate(.92) contrast(1.03) brightness(.88);
+}
+.freya-app[data-screen='home'] .a-head {
+  grid-column: 2 / -1;
+  padding-left: 1.05rem;
+  background: linear-gradient(180deg, rgba(2, 8, 14, .26), transparent);
+}
+.freya-app[data-screen='home'] .a-mark { display: none; }
+.freya-app[data-screen='home'] .a-head-left { gap: 0; }
+.freya-app[data-screen='home'] .a-brand b {
+  font-size: 1.82rem;
+  letter-spacing: .34em;
+}
+.freya-app[data-screen='home'] .a-theme,
+.freya-app[data-screen='home'] .a-win-btn {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.freya-app[data-screen='home'] .a-theme:hover,
+.freya-app[data-screen='home'] .a-win-btn:hover {
+  background: rgba(152, 225, 249, .06);
+}
+.freya-app[data-screen='home'] .c-card {
+  background:
+    linear-gradient(145deg, rgba(11, 32, 47, .53), rgba(5, 17, 29, .42) 58%, rgba(8, 22, 35, .38));
+  backdrop-filter: blur(18px) saturate(120%);
+  box-shadow:
+    0 14px 34px rgba(0, 5, 12, .19),
+    inset 0 1px 0 rgba(176, 235, 255, .06);
+}
+.freya-app[data-screen='home'] .c-card::before {
+  background: linear-gradient(135deg,
+    rgba(155, 233, 255, .64),
+    rgba(93, 208, 244, .10) 28%,
+    transparent 52%,
+    rgba(126, 95, 235, .05) 75%,
+    rgba(103, 213, 245, .26));
+}
+.freya-app[data-screen='home'] .a-centre-stage {
+  width: min(100%, 42rem);
+  transform: translateY(-1.2rem);
+}
+.freya-app[data-screen='home'] .a-home-presence {
+  inset: 13%;
+}
+.freya-app[data-screen='home'] .a-home-presence-glass {
+  background:
+    radial-gradient(circle at 50% 42%, rgba(110, 224, 255, .08), transparent 52%),
+    radial-gradient(circle at 48% 65%, rgba(142, 107, 247, .06), transparent 68%);
+  border-color: rgba(121, 225, 255, .22);
+  box-shadow: inset 0 0 48px rgba(80, 207, 245, .05), 0 0 38px rgba(68, 201, 241, .06);
+}
+.freya-app[data-screen='home'] .a-home-presence-rim {
+  border-color: rgba(110, 222, 255, .27);
+  box-shadow: 0 0 0 18px rgba(86, 215, 255, .014), 0 0 0 32px rgba(144, 105, 245, .010), 0 0 34px rgba(69, 205, 247, .08);
+}
+.freya-app[data-screen='home'] .a-bottom {
+  transform: translateY(-.25rem);
+}
+.freya-app[data-screen='home'] .a-cmd form {
+  backdrop-filter: blur(22px) saturate(125%);
+  background: linear-gradient(180deg, rgba(14, 35, 51, .55), rgba(4, 15, 27, .62));
+}
+
+/* Reference #1 light glass + requested rail/composer overrides */
+.freya-app[data-screen='home'] .c-card {
+  background:
+    linear-gradient(145deg, rgba(12, 32, 47, .34), rgba(5, 17, 29, .25) 58%, rgba(8, 22, 35, .22));
+  backdrop-filter: blur(13px) saturate(112%);
+  box-shadow:
+    0 12px 28px rgba(0, 5, 12, .12),
+    inset 0 1px 0 rgba(184, 239, 255, .055);
+}
+.freya-app[data-screen='home'] .c-card::before {
+  background: linear-gradient(135deg,
+    rgba(160, 235, 255, .50),
+    rgba(95, 210, 245, .07) 27%,
+    transparent 54%,
+    rgba(129, 97, 238, .035) 76%,
+    rgba(105, 215, 247, .18));
+}
+.freya-app[data-screen='home'] .a-rail {
+  background: linear-gradient(90deg, rgba(2, 9, 17, .56), rgba(4, 13, 22, .22) 78%, transparent);
+}
+.a-rail-foot { margin-top: auto; display: grid; gap: .55rem; }
+.a-rail-foot .a-online { margin-top: 0; }
+.a-user {
+  width: 100%;
+  justify-content: flex-start;
+  gap: .55rem;
+  padding: .48rem .55rem;
+  border: 0;
+  background: rgba(108, 211, 244, .035);
+  color: var(--f-muted);
+}
+.a-user:hover { color: var(--f-ink); background: rgba(108, 211, 244, .07); }
+.a-user-avatar {
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgba(118, 218, 247, .22);
+  background: rgba(100, 205, 240, .06);
+  color: #dff7ff;
+  font-size: .72rem;
+}
+.a-user-name { flex: 1; text-align: left; font-size: .8rem; }
+.freya-app[data-rail='collapsed'] .a-user-name { display: none; }
+
+.freya-app[data-screen='home'] .a-cmd form {
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr) auto auto;
+  width: min(70rem, 92%);
+  gap: .6rem;
+  padding: .48rem .58rem .48rem .68rem;
+  border-radius: 999px;
+  border: 1px solid rgba(135, 223, 250, .24);
+  background: linear-gradient(180deg, rgba(12, 32, 47, .42), rgba(4, 15, 27, .50));
+  backdrop-filter: blur(18px) saturate(120%);
+}
+.a-composer-brain {
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  color: #79dfff;
+  border: 1px solid rgba(119, 221, 252, .28);
+  background: rgba(74, 193, 232, .06);
+  box-shadow: inset 0 0 12px rgba(83, 206, 244, .06);
+}
+.a-composer-tools { display: flex; align-items: center; gap: .4rem; }
+.a-attach {
+  width: 32px; height: 32px; padding: 0;
+  border-radius: 50%; border: 1px solid rgba(131, 213, 240, .15);
+  background: transparent;
+}
+.a-model-select, .a-think-select {
+  appearance: none;
+  height: 32px;
+  padding: 0 1.8rem 0 .72rem;
+  border-radius: 999px;
+  border: 1px solid rgba(131, 213, 240, .15);
+  color: rgba(220, 239, 248, .78);
+  background:
+    linear-gradient(45deg, transparent 50%, rgba(184, 222, 235, .58) 50%) calc(100% - 12px) 13px / 5px 5px no-repeat,
+    linear-gradient(135deg, rgba(184, 222, 235, .58) 50%, transparent 50%) calc(100% - 8px) 13px / 5px 5px no-repeat,
+    rgba(8, 24, 37, .35);
+  font: inherit; font-size: .76rem;
+}
+.a-model-select option, .a-think-select option { background: #07131e; color: #d9eef7; }
+.a-send {
+  width: 38px; height: 38px;
+  padding: 0; border-radius: 50%;
+  display: grid; place-items: center;
+  box-shadow: 0 0 18px rgba(76, 208, 249, .18);
+}
+.a-send-loader {
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.25);
+  border-top-color: #fff;
+  animation: a-spin .8s linear infinite;
+}
+@keyframes a-spin { to { transform: rotate(360deg); } }
+
+.freya-app[data-screen='home'] .a-brand span {
+  font-size: .62rem;
+  letter-spacing: .22em;
+  color: rgba(198, 226, 237, .72);
+}
+@media (min-width: 1500px) {
+  .freya-app[data-screen='home'] .a-body {
+    grid-template-rows: minmax(0, 1fr) 252px;
+  }
+  .freya-app[data-screen='home'] .a-centre-stage {
+    transform: translateY(-.55rem);
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * Home orb-coupled surfaces.
+ * One glass template, shaped by its relationship to Freya rather than by card.
+ * -------------------------------------------------------------------------- */
+.freya-app[data-screen='home'] .a-col-left > .c-card,
+.freya-app[data-screen='home'] .a-col-right > .c-card,
+.freya-app[data-screen='home'] .a-bottom > .c-card {
+  --orb-edge: rgba(120, 228, 255, .66);
+  --orb-edge-soft: rgba(136, 101, 245, .20);
+  --orb-glow: rgba(78, 210, 250, .16);
+  isolation: isolate;
+}
+
+/* Left surfaces bow gently away from the orb: the right edge is concave. */
+.freya-app[data-screen='home'] .a-col-left > .c-card {
+  -webkit-mask-image:
+    radial-gradient(ellipse 72px 82% at calc(100% + 61px) 50%, transparent 0 97%, #000 100%);
+  mask-image:
+    radial-gradient(ellipse 72px 82% at calc(100% + 61px) 50%, transparent 0 97%, #000 100%);
+  border-top-right-radius: 28px;
+  border-bottom-right-radius: 28px;
+  box-shadow:
+    inset -1px 0 0 rgba(128, 229, 255, .26),
+    0 12px 28px rgba(0, 5, 12, .12),
+    inset 0 1px 0 rgba(184, 239, 255, .05);
+}
+
+/* Right surfaces mirror the same template. */
+.freya-app[data-screen='home'] .a-col-right > .c-card {
+  -webkit-mask-image:
+    radial-gradient(ellipse 72px 82% at -61px 50%, transparent 0 97%, #000 100%);
+  mask-image:
+    radial-gradient(ellipse 72px 82% at -61px 50%, transparent 0 97%, #000 100%);
+  border-top-left-radius: 28px;
+  border-bottom-left-radius: 28px;
+  box-shadow:
+    inset 1px 0 0 rgba(128, 229, 255, .26),
+    0 12px 28px rgba(0, 5, 12, .12),
+    inset 0 1px 0 rgba(184, 239, 255, .05);
+}
+
+/* The border is a faint shell everywhere, but brightens on the orb-facing side. */
+.freya-app[data-screen='home'] .a-col-left > .c-card::before {
+  background:
+    linear-gradient(90deg,
+      rgba(158, 232, 253, .24) 0%,
+      rgba(114, 218, 249, .08) 55%,
+      var(--orb-edge) 100%);
+}
+.freya-app[data-screen='home'] .a-col-right > .c-card::before {
+  background:
+    linear-gradient(90deg,
+      var(--orb-edge) 0%,
+      rgba(114, 218, 249, .08) 45%,
+      rgba(158, 232, 253, .24) 100%);
+}
+
+/* A moving-looking, but static, light falloff makes the orb feel like the source. */
+.freya-app[data-screen='home'] .a-col-left > .c-card::after,
+.freya-app[data-screen='home'] .a-col-right > .c-card::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: 12%;
+  bottom: 12%;
+  width: 24px;
+  pointer-events: none;
+  filter: blur(9px);
+  opacity: .62;
+}
+.freya-app[data-screen='home'] .a-col-left > .c-card::after {
+  right: -10px;
+  background: linear-gradient(180deg, transparent, var(--orb-glow) 28%, var(--orb-edge-soft) 66%, transparent);
+}
+.freya-app[data-screen='home'] .a-col-right > .c-card::after {
+  left: -10px;
+  background: linear-gradient(180deg, transparent, var(--orb-glow) 28%, var(--orb-edge-soft) 66%, transparent);
+}
+
+/* Bottom surfaces turn their inner shoulders upward toward the orb. */
+.freya-app[data-screen='home'] .a-bottom > .c-card:first-child {
+  -webkit-mask-image:
+    radial-gradient(ellipse 120px 58px at calc(100% + 88px) -31px, transparent 0 98%, #000 100%);
+  mask-image:
+    radial-gradient(ellipse 120px 58px at calc(100% + 88px) -31px, transparent 0 98%, #000 100%);
+  border-top-right-radius: 30px;
+  box-shadow:
+    inset 0 1px 0 rgba(124, 224, 253, .26),
+    inset -1px 0 0 rgba(113, 214, 246, .14),
+    0 12px 28px rgba(0, 5, 12, .11);
+}
+.freya-app[data-screen='home'] .a-bottom > .c-card:last-child {
+  -webkit-mask-image:
+    radial-gradient(ellipse 120px 58px at -88px -31px, transparent 0 98%, #000 100%);
+  mask-image:
+    radial-gradient(ellipse 120px 58px at -88px -31px, transparent 0 98%, #000 100%);
+  border-top-left-radius: 30px;
+  box-shadow:
+    inset 0 1px 0 rgba(124, 224, 253, .26),
+    inset 1px 0 0 rgba(113, 214, 246, .14),
+    0 12px 28px rgba(0, 5, 12, .11);
+}
+.freya-app[data-screen='home'] .a-bottom > .c-card:first-child::before {
+  background: linear-gradient(110deg,
+    rgba(153, 231, 253, .22),
+    rgba(112, 217, 248, .08) 58%,
+    var(--orb-edge) 100%);
+}
+.freya-app[data-screen='home'] .a-bottom > .c-card:last-child::before {
+  background: linear-gradient(70deg,
+    var(--orb-edge) 0%,
+    rgba(112, 217, 248, .08) 42%,
+    rgba(153, 231, 253, .22) 100%);
+}
+
+/* ==========================================================================
+   HOME GEOMETRY V2
+   Four fixed glass surfaces + one true circular centre cutout.
+   Content is payload. Geometry is the product.
+   ========================================================================== */
+.freya-app[data-screen='home'] .a-home-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 62px;
+  gap: 8px;
+  padding: .35rem 1rem .2rem .65rem;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.home-shell {
+  --home-cut: 260px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+
+/* The four panels are now the only real cards on Home. */
+.home-surface {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 15px;
+  background:
+    linear-gradient(145deg, rgba(11, 32, 47, .31), rgba(5, 16, 28, .20) 58%, rgba(7, 21, 34, .16));
+  backdrop-filter: blur(15px) saturate(116%);
+  filter:
+    drop-shadow(0 0 .85px rgba(158, 235, 255, .82))
+    drop-shadow(0 10px 24px rgba(0, 4, 11, .13));
+}
+
+/* Four quadrants; same circle, four different corners. */
+.home-surface-tl {
+  border-radius: 22px 22px 18px 22px;
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 100% 100%, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 100% 100%, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+}
+.home-surface-tr {
+  border-radius: 22px 22px 22px 18px;
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 0 100%, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 0 100%, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+}
+.home-surface-bl {
+  border-radius: 22px 18px 22px 22px;
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 100% 0, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 100% 0, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+}
+.home-surface-br {
+  border-radius: 18px 22px 22px 22px;
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 0 0, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 0 0, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+}
+
+/* Orb-side light: the circle itself appears to illuminate the cut edge. */
+.home-surface::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  width: calc(var(--home-cut) * 1.28);
+  height: calc(var(--home-cut) * 1.28);
+  border-radius: 50%;
+  opacity: .46;
+  filter: blur(14px);
+}
+.home-surface-tl::after { right: calc(var(--home-cut) * -.78); bottom: calc(var(--home-cut) * -.78); box-shadow: 0 0 38px 5px rgba(86, 218, 255, .24), 0 0 58px 8px rgba(151, 103, 244, .08); }
+.home-surface-tr::after { left: calc(var(--home-cut) * -.78); bottom: calc(var(--home-cut) * -.78); box-shadow: 0 0 38px 5px rgba(86, 218, 255, .24), 0 0 58px 8px rgba(151, 103, 244, .08); }
+.home-surface-bl::after { right: calc(var(--home-cut) * -.78); top: calc(var(--home-cut) * -.78); box-shadow: 0 0 38px 5px rgba(86, 218, 255, .24), 0 0 58px 8px rgba(151, 103, 244, .08); }
+.home-surface-br::after { left: calc(var(--home-cut) * -.78); top: calc(var(--home-cut) * -.78); box-shadow: 0 0 38px 5px rgba(86, 218, 255, .24), 0 0 58px 8px rgba(151, 103, 244, .08); }
+
+/* Existing Card components become content sections inside the four surface templates. */
+.freya-app[data-screen='home'] .home-surface > .c-card {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: .52rem .6rem;
+  gap: .42rem;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  box-shadow: none;
+  overflow: visible;
+}
+.freya-app[data-screen='home'] .home-surface > .c-card::before,
+.freya-app[data-screen='home'] .home-surface > .c-card::after {
+  display: none;
+}
+.home-surface-tl,
+.home-surface-tr {
+  display: flex;
+  flex-direction: column;
+}
+.home-surface-tl > .c-card + .c-card,
+.home-surface-tr > .c-card + .c-card {
+  border-top: 1px solid rgba(128, 219, 247, .10);
+}
+.home-surface-tl > .c-card:last-child { padding-right: 31%; }
+.home-surface-tr > .c-card:nth-last-child(-n+2) { padding-left: 31%; }
+.home-surface-bl > .c-card { padding-right: 27%; }
+.home-surface-br > .c-card { padding-left: 27%; }
+
+/* The orb is no longer a middle column. It owns the circular void. */
+.home-orb-slot {
+  position: absolute;
+  z-index: 6;
+  left: 50%;
+  top: 50%;
+  width: 540px;
+  height: 540px;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.home-orb-slot .a-centre-stage {
+  width: 100% !important;
+  height: 100%;
+  max-height: none;
+  transform: none !important;
+}
+.home-orb-slot .a-home-presence { inset: 12%; }
+
+/* Launcher is its own layer between dashboard geometry and conversation. */
+.home-launcher {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .7rem;
+  min-height: 54px;
+  padding: 3px 10px;
+}
+.home-launch {
+  min-width: 72px;
+  height: 48px;
+  display: grid;
+  grid-template-columns: 28px auto;
+  align-items: center;
+  justify-content: center;
+  gap: .38rem;
+  padding: 0 .72rem;
+  border-radius: 999px;
+  border: 1px solid rgba(130, 220, 248, .16);
+  color: rgba(213, 237, 246, .72);
+  background: rgba(5, 18, 30, .30);
+  backdrop-filter: blur(14px) saturate(115%);
+  box-shadow: inset 0 1px 0 rgba(181, 237, 255, .035);
+}
+.home-launch svg {
+  width: 27px; height: 27px;
+  padding: 5px;
+  border-radius: 50%;
+  color: #76dcfb;
+  border: 1px solid rgba(113, 219, 251, .16);
+  background: rgba(79, 199, 236, .04);
+}
+.home-launch span { font-size: .72rem; letter-spacing: .02em; }
+.home-launch:hover {
+  color: #e8fbff;
+  border-color: rgba(130, 224, 253, .32);
+  background: rgba(23, 63, 83, .25);
+  box-shadow: 0 0 20px rgba(76, 208, 249, .08), inset 0 1px 0 rgba(184, 240, 255, .06);
+}
+
+/* Home composer sits below launcher, not mixed with navigation. */
+.freya-app[data-screen='home'] .a-cmd {
+  padding-top: .28rem;
+  padding-bottom: .65rem;
+}
+.freya-app[data-screen='home'] .a-cmd form {
+  width: min(76rem, 94%);
+}
+
+@media (max-width: 1500px) {
+  .home-shell { --home-cut: 225px; }
+  .home-orb-slot { width: 470px; height: 470px; }
+  .home-launch { min-width: 48px; grid-template-columns: 28px; padding: 0 .5rem; }
+  .home-launch span { display: none; }
+}
+
+/* Home geometry V2 — refinement after live capture */
+.home-shell { --home-cut: 285px; }
+
+.home-surface {
+  background:
+    linear-gradient(145deg,
+      rgba(10, 28, 42, .20),
+      rgba(4, 15, 26, .13) 58%,
+      rgba(7, 20, 32, .10));
+  backdrop-filter: blur(10px) saturate(108%);
+  filter:
+    drop-shadow(0 0 .75px rgba(158, 235, 255, .62))
+    drop-shadow(0 10px 22px rgba(0, 4, 11, .08));
+}
+
+.home-orb-slot {
+  width: 590px;
+  height: 590px;
+}
+
+.home-surface-tl > .c-card:first-child { flex: .92 1 0; }
+.home-surface-tl > .c-card:last-child {
+  flex: 1.08 1 0;
+  padding-right: 37%;
+}
+
+.home-surface-tr > .c-card:nth-child(1) { flex: 1.08 1 0; }
+.home-surface-tr > .c-card:nth-child(2) {
+  flex: .72 1 0;
+  padding-left: 37%;
+}
+.home-surface-tr > .c-card:nth-child(3) {
+  flex: 1.18 1 0;
+  padding-left: 37%;
+}
+
+.home-surface-bl > .c-card {
+  height: 100%;
+  padding-top: 1rem;
+  padding-right: 33%;
+}
+.home-surface-br > .c-card {
+  height: 100%;
+  padding-top: 1rem;
+  padding-left: 33%;
+}
+
+.home-surface .c-head { min-height: 30px; }
+.home-surface .c-body { min-height: 0; overflow: hidden; }
+.home-surface .c-row { padding: .22rem 0; }
+.home-surface .c-row-text b { font-size: .80rem; }
+.home-surface .c-row-text small { font-size: .70rem; }
+.home-surface .c-lead { font-size: 1.02rem; }
+.home-surface .c-sub { font-size: .77rem; }
+
+.home-launcher {
+  gap: .55rem;
+}
+.home-launch {
+  min-width: 68px;
+  height: 44px;
+  background: rgba(5, 18, 30, .22);
+  border-color: rgba(130, 220, 248, .13);
+}
+.home-launch svg {
+  width: 25px;
+  height: 25px;
+}
+
+@media (max-width: 1500px) {
+  .home-shell { --home-cut: 245px; }
+  .home-orb-slot { width: 500px; height: 500px; }
+}
+
+/* ==========================================================================
+   HOME GLASS + ORB CURVE REFINEMENT
+   Four fixed surfaces, visually carved around Freya's centre.
+   ========================================================================== */
+.home-shell {
+  --home-cut: 305px;
+  gap: 12px;
+}
+
+.home-surface {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(145deg,
+      rgba(20, 46, 64, 0.18),
+      rgba(9, 24, 38, 0.11) 58%,
+      rgba(7, 18, 31, 0.08));
+  border: 1px solid rgba(150, 228, 255, 0.16);
+  backdrop-filter: blur(22px) saturate(135%);
+  -webkit-backdrop-filter: blur(22px) saturate(135%);
+  box-shadow:
+    0 10px 26px rgba(0, 5, 14, 0.10),
+    inset 0 1px 0 rgba(210, 244, 255, 0.07),
+    inset 0 0 40px rgba(80, 198, 244, 0.03);
+}
+
+.home-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255,255,255,.055) 0%,
+      rgba(255,255,255,.012) 14%,
+      transparent 34%
+    ),
+    radial-gradient(circle at 18% 14%, rgba(154,232,255,.08), transparent 32%),
+    radial-gradient(circle at 82% 22%, rgba(154,121,245,.05), transparent 34%);
+}
+
+/* Four quadrants around one circular void */
+.home-surface-tl {
+  border-radius: 24px 24px 18px 24px;
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 100% 100%, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 100% 100%, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+}
+.home-surface-tr {
+  border-radius: 24px 24px 24px 18px;
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 0 100%, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 0 100%, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+}
+.home-surface-bl {
+  border-radius: 24px 18px 24px 24px;
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 100% 0, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 100% 0, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+}
+.home-surface-br {
+  border-radius: 18px 24px 24px 24px;
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 0 0, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 0 0, transparent 0 calc(var(--home-cut) - 1px), #000 var(--home-cut));
+}
+
+/* orb-facing glow */
+.home-surface::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  width: calc(var(--home-cut) * 1.18);
+  height: calc(var(--home-cut) * 1.18);
+  border-radius: 50%;
+  opacity: .58;
+  filter: blur(14px);
+}
+.home-surface-tl::after {
+  right: calc(var(--home-cut) * -.70);
+  bottom: calc(var(--home-cut) * -.70);
+  box-shadow: 0 0 34px 5px rgba(89,221,255,.24), 0 0 58px 10px rgba(142,106,245,.07);
+}
+.home-surface-tr::after {
+  left: calc(var(--home-cut) * -.70);
+  bottom: calc(var(--home-cut) * -.70);
+  box-shadow: 0 0 34px 5px rgba(89,221,255,.24), 0 0 58px 10px rgba(142,106,245,.07);
+}
+.home-surface-bl::after {
+  right: calc(var(--home-cut) * -.70);
+  top: calc(var(--home-cut) * -.70);
+  box-shadow: 0 0 34px 5px rgba(89,221,255,.24), 0 0 58px 10px rgba(142,106,245,.07);
+}
+.home-surface-br::after {
+  left: calc(var(--home-cut) * -.70);
+  top: calc(var(--home-cut) * -.70);
+  box-shadow: 0 0 34px 5px rgba(89,221,255,.24), 0 0 58px 10px rgba(142,106,245,.07);
+}
+
+.freya-app[data-screen='home'] .home-surface > .c-card {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
+/* better content breathing room around the circular cut */
+.home-surface-tl > .c-card:last-child { padding-right: 39%; }
+.home-surface-tr > .c-card:nth-child(2),
+.home-surface-tr > .c-card:nth-child(3) { padding-left: 39%; }
+.home-surface-bl > .c-card { padding-right: 34%; }
+.home-surface-br > .c-card { padding-left: 34%; }
+
+.home-orb-slot {
+  width: 610px;
+  height: 610px;
+}
+.home-orb-slot .a-home-presence { inset: 11%; }
+.home-orb-slot .a-home-presence-glass {
+  background:
+    radial-gradient(circle at 50% 42%, rgba(118,228,255,.10), transparent 50%),
+    radial-gradient(circle at 48% 66%, rgba(149,110,246,.08), transparent 66%);
+  border: 1px solid rgba(130,228,255,.24);
+  box-shadow:
+    inset 0 0 55px rgba(80,208,245,.06),
+    0 0 36px rgba(84,215,255,.08);
+}
+
+.home-launch {
+  background: rgba(7,20,32,.20);
+  border: 1px solid rgba(139,224,250,.14);
+  backdrop-filter: blur(18px) saturate(125%);
+}
+.freya-app[data-screen='home'] .a-cmd form {
+  background: linear-gradient(180deg, rgba(15,34,48,.34), rgba(6,18,29,.24));
+  border: 1px solid rgba(138,224,250,.18);
+  backdrop-filter: blur(18px) saturate(125%);
+}
+
+/* ==========================================================================
+   HOME CUTAWAY — make the four glass surfaces visibly curve around the orb.
+   The cutout is deliberately larger than the orb so the bend is readable.
+   ========================================================================== */
+.home-shell {
+  --home-orb: 560px;
+  --home-cut: 338px; /* radius: gives ~58px breathing room around 560px orb */
+}
+
+.home-orb-slot {
+  width: var(--home-orb);
+  height: var(--home-orb);
+}
+
+/* A visible circular seam where all four glass surfaces terminate. */
+.home-cut-rim {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--home-cut) * 2);
+  height: calc(var(--home-cut) * 2);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+  border: 1px solid rgba(128, 228, 255, .30);
+  box-shadow:
+    0 0 0 1px rgba(101, 199, 236, .055),
+    0 0 26px rgba(80, 213, 255, .10),
+    inset 0 0 24px rgba(108, 218, 255, .055);
+  background:
+    conic-gradient(
+      from 18deg,
+      transparent 0 9%,
+      rgba(116, 224, 255, .11) 14%,
+      transparent 21% 36%,
+      rgba(153, 111, 245, .09) 43%,
+      transparent 50% 64%,
+      rgba(107, 224, 255, .10) 72%,
+      transparent 79% 91%,
+      rgba(143, 104, 245, .07) 96%,
+      transparent 100%
+    );
+  -webkit-mask:
+    radial-gradient(circle, transparent calc(50% - 10px), #000 calc(50% - 9px), #000 50%);
+  mask:
+    radial-gradient(circle, transparent calc(50% - 10px), #000 calc(50% - 9px), #000 50%);
+}
+
+/* Re-cut all four surfaces around the larger circle. */
+.home-surface-tl {
+  -webkit-mask-image:
+    radial-gradient(circle var(--home-cut) at 100% 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image:
+    radial-gradient(circle var(--home-cut) at 100% 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+.home-surface-tr {
+  -webkit-mask-image:
+    radial-gradient(circle var(--home-cut) at 0 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image:
+    radial-gradient(circle var(--home-cut) at 0 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+.home-surface-bl {
+  -webkit-mask-image:
+    radial-gradient(circle var(--home-cut) at 100% 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image:
+    radial-gradient(circle var(--home-cut) at 100% 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+.home-surface-br {
+  -webkit-mask-image:
+    radial-gradient(circle var(--home-cut) at 0 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image:
+    radial-gradient(circle var(--home-cut) at 0 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+
+/* Orb-facing glass edge becomes brighter as it approaches the circle. */
+.home-surface {
+  border-color: rgba(150, 228, 255, .14);
+}
+.home-surface-tl {
+  box-shadow:
+    inset -1px -1px 0 rgba(116, 225, 255, .16),
+    0 10px 26px rgba(0,5,14,.08);
+}
+.home-surface-tr {
+  box-shadow:
+    inset 1px -1px 0 rgba(116, 225, 255, .16),
+    0 10px 26px rgba(0,5,14,.08);
+}
+.home-surface-bl {
+  box-shadow:
+    inset -1px 1px 0 rgba(116, 225, 255, .16),
+    0 10px 26px rgba(0,5,14,.08);
+}
+.home-surface-br {
+  box-shadow:
+    inset 1px 1px 0 rgba(116, 225, 255, .16),
+    0 10px 26px rgba(0,5,14,.08);
+}
+
+/* Pull content away from the cut so the curve reads as intentional geometry. */
+.home-surface-tl > .c-card:last-child { padding-right: 44%; }
+.home-surface-tr > .c-card:nth-child(2),
+.home-surface-tr > .c-card:nth-child(3) { padding-left: 44%; }
+.home-surface-bl > .c-card { padding-right: 39%; }
+.home-surface-br > .c-card { padding-left: 39%; }
+
+@media (max-width: 1500px) {
+  .home-shell {
+    --home-orb: 500px;
+    --home-cut: 298px;
+  }
+}
+
+/* ==========================================================================
+   HOME CUTAWAY V3 — tight visible bend, not a dark disc behind the orb.
+   ========================================================================== */
+.home-shell {
+  --home-orb: 590px;
+  --home-cut: 319px; /* 24px visible moat around a 590px orb */
+}
+
+.home-orb-slot {
+  width: var(--home-orb);
+  height: var(--home-orb);
+}
+
+/* Make the cut edge read as the luminous rim of the four glass surfaces. */
+.home-cut-rim {
+  width: calc(var(--home-cut) * 2);
+  height: calc(var(--home-cut) * 2);
+  border: 2px solid rgba(139, 231, 255, .62);
+  background: none;
+  -webkit-mask: none;
+  mask: none;
+  box-shadow:
+    0 0 7px rgba(111, 224, 255, .30),
+    0 0 18px rgba(91, 211, 251, .14),
+    0 0 36px rgba(148, 104, 244, .055),
+    inset 0 0 10px rgba(126, 226, 255, .13);
+  opacity: .78;
+}
+
+/* Add four brighter arc accents so the seam belongs to the surfaces. */
+.home-cut-rim::before,
+.home-cut-rim::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.home-cut-rim::before {
+  border: 2px solid transparent;
+  border-top-color: rgba(111, 225, 255, .82);
+  border-bottom-color: rgba(123, 218, 250, .50);
+  transform: rotate(10deg);
+  filter: drop-shadow(0 0 5px rgba(98, 220, 255, .28));
+}
+.home-cut-rim::after {
+  inset: 5px;
+  border: 1px solid transparent;
+  border-left-color: rgba(160, 119, 246, .45);
+  border-right-color: rgba(104, 220, 255, .42);
+  transform: rotate(-12deg);
+  opacity: .78;
+}
+
+/* Re-cut surfaces to the tighter circle. */
+.home-surface-tl {
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 100% 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 100% 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+.home-surface-tr {
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 0 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 0 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+.home-surface-bl {
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 100% 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 100% 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+.home-surface-br {
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 0 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 0 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+
+/* Keep glass light but make the edge itself sparkle a little more. */
+.home-surface {
+  background:
+    linear-gradient(145deg,
+      rgba(19, 45, 63, .17),
+      rgba(9, 24, 38, .10) 58%,
+      rgba(7, 18, 31, .07));
+  border-color: rgba(160, 234, 255, .21);
+  box-shadow:
+    0 10px 24px rgba(0,5,14,.07),
+    inset 0 1px 0 rgba(218, 247, 255, .09);
+}
+
+/* Content follows the smaller cut, so it no longer disappears behind Freya. */
+.home-surface-tl > .c-card:last-child { padding-right: 39%; }
+.home-surface-tr > .c-card:nth-child(2),
+.home-surface-tr > .c-card:nth-child(3) { padding-left: 39%; }
+.home-surface-bl > .c-card { padding-right: 34%; }
+.home-surface-br > .c-card { padding-left: 34%; }
+
+@media (max-width: 1500px) {
+  .home-shell {
+    --home-orb: 500px;
+    --home-cut: 271px;
+  }
+}
+
+/* ==========================================================================
+   HOME CUTAWAY V4 — visibly sculpt the four panels around Freya.
+   ========================================================================== */
+.home-shell {
+  --home-orb: 510px;
+  --home-cut: 350px; /* ~95px of actual negative space around the orb */
+}
+
+/* Ambient light inside the carved void so it reads as space, not a dark disc. */
+.home-shell::before {
+  content: '';
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--home-cut) * 2);
+  height: calc(var(--home-cut) * 2);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+  background:
+    radial-gradient(circle,
+      transparent 0 61%,
+      rgba(71, 202, 243, .025) 66%,
+      rgba(89, 215, 251, .075) 76%,
+      rgba(147, 108, 245, .045) 84%,
+      transparent 94%);
+  box-shadow:
+    inset 0 0 62px rgba(72, 206, 247, .045),
+    0 0 46px rgba(68, 202, 242, .04);
+}
+
+.home-orb-slot {
+  width: var(--home-orb);
+  height: var(--home-orb);
+}
+
+/* The circular cut edge now sits clearly outside the orb. */
+.home-cut-rim {
+  width: calc(var(--home-cut) * 2);
+  height: calc(var(--home-cut) * 2);
+  border: 1px solid rgba(138, 230, 255, .44);
+  box-shadow:
+    0 0 6px rgba(111, 224, 255, .22),
+    0 0 18px rgba(91, 211, 251, .09),
+    inset 0 0 12px rgba(126, 226, 255, .06);
+  opacity: .72;
+}
+.home-cut-rim::before {
+  border-top-color: rgba(111, 225, 255, .62);
+  border-bottom-color: rgba(123, 218, 250, .34);
+}
+.home-cut-rim::after {
+  border-left-color: rgba(160, 119, 246, .30);
+  border-right-color: rgba(104, 220, 255, .30);
+}
+
+/* The surfaces are actually carved by a much larger circle now. */
+.home-surface-tl {
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 100% 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 100% 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+.home-surface-tr {
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 0 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 0 100%, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+.home-surface-bl {
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 100% 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 100% 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+.home-surface-br {
+  -webkit-mask-image: radial-gradient(circle var(--home-cut) at 0 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+  mask-image: radial-gradient(circle var(--home-cut) at 0 0, transparent 0 calc(var(--home-cut) - 2px), #000 var(--home-cut));
+}
+
+/* Let the sculpted inner corners remain empty; content occupies the outer body. */
+.home-surface-tl > .c-card:last-child { padding-right: 46%; }
+.home-surface-tr > .c-card:nth-child(2),
+.home-surface-tr > .c-card:nth-child(3) { padding-left: 46%; }
+.home-surface-bl > .c-card { padding-right: 42%; }
+.home-surface-br > .c-card { padding-left: 42%; }
+
+/* Slightly brighter glass perimeter so the shape itself reads first. */
+.home-surface {
+  border-color: rgba(164, 235, 255, .24);
+  background:
+    linear-gradient(145deg,
+      rgba(23, 51, 69, .19),
+      rgba(9, 24, 38, .105) 58%,
+      rgba(7, 18, 31, .075));
+  box-shadow:
+    0 10px 24px rgba(0,5,14,.07),
+    inset 0 1px 0 rgba(221, 248, 255, .10);
+}
+
+@media (max-width: 1500px) {
+  .home-shell {
+    --home-orb: 450px;
+    --home-cut: 305px;
+  }
+}
+
+/* ==========================================================================
+   HOME REFERENCE GLASS — shorter panels, clear glass, glowing corner strokes.
+   ========================================================================== */
+
+/* Shorter dashboard block: geometry stays fixed, content must fit it. */
+.freya-app[data-screen='home'] .home-shell {
+  height: 720px;
+  align-self: start;
+  --home-orb: 500px;
+  --home-cut: 304px;
+}
+
+/* Clear dark glass — not milky/fogged. */
+.freya-app[data-screen='home'] .home-surface {
+  border: 0;
+  background:
+    linear-gradient(150deg,
+      rgba(12, 30, 44, .42) 0%,
+      rgba(5, 18, 30, .30) 46%,
+      rgba(4, 14, 24, .24) 100%);
+  backdrop-filter: blur(9px) saturate(124%);
+  -webkit-backdrop-filter: blur(9px) saturate(124%);
+  box-shadow:
+    0 12px 28px rgba(0, 4, 10, .16),
+    inset 0 0 34px rgba(76, 192, 232, .018);
+}
+
+/* Reference-style border: only short luminous corner strokes, never a full outline. */
+.freya-app[data-screen='home'] .home-surface::before {
+  content: '';
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, rgba(239, 252, 255, .92), rgba(119, 224, 255, .38), transparent) left top / 46px 1px no-repeat,
+    linear-gradient(180deg, rgba(239, 252, 255, .92), rgba(119, 224, 255, .32), transparent) left top / 1px 46px no-repeat,
+    linear-gradient(270deg, rgba(239, 252, 255, .78), rgba(119, 224, 255, .26), transparent) right top / 46px 1px no-repeat,
+    linear-gradient(180deg, rgba(239, 252, 255, .78), rgba(119, 224, 255, .26), transparent) right top / 1px 46px no-repeat,
+    linear-gradient(90deg, rgba(229, 248, 255, .60), rgba(128, 214, 247, .18), transparent) left bottom / 38px 1px no-repeat,
+    linear-gradient(0deg, rgba(229, 248, 255, .60), rgba(128, 214, 247, .18), transparent) left bottom / 1px 38px no-repeat,
+    linear-gradient(270deg, rgba(229, 248, 255, .60), rgba(128, 214, 247, .18), transparent) right bottom / 38px 1px no-repeat,
+    linear-gradient(0deg, rgba(229, 248, 255, .60), rgba(128, 214, 247, .18), transparent) right bottom / 1px 38px no-repeat;
+  filter:
+    drop-shadow(0 0 3px rgba(207, 246, 255, .58))
+    drop-shadow(0 0 7px rgba(79, 205, 249, .28));
+  opacity: .88;
+}
+
+/* Very subtle top sheen only; preserve the clear glass beneath. */
+.freya-app[data-screen='home'] .home-surface {
+  background-image:
+    linear-gradient(180deg, rgba(233, 249, 255, .035), transparent 18%),
+    linear-gradient(150deg, rgba(12, 30, 44, .42), rgba(5, 18, 30, .30) 46%, rgba(4, 14, 24, .24));
+}
+
+/* Keep the circular carve visible without drawing a giant neon ring. */
+.freya-app[data-screen='home'] .home-cut-rim {
+  border: 1px solid rgba(186, 240, 255, .22);
+  box-shadow:
+    0 0 5px rgba(117, 224, 255, .16),
+    0 0 13px rgba(81, 203, 244, .07);
+  opacity: .54;
+}
+.freya-app[data-screen='home'] .home-cut-rim::before {
+  border-top-color: rgba(224, 250, 255, .42);
+  border-bottom-color: rgba(111, 217, 249, .18);
+  filter: drop-shadow(0 0 4px rgba(106, 221, 255, .16));
+}
+.freya-app[data-screen='home'] .home-cut-rim::after {
+  border-left-color: rgba(169, 127, 244, .20);
+  border-right-color: rgba(112, 221, 252, .19);
+}
+
+/* Compact content to the shorter fixed surfaces. */
+.freya-app[data-screen='home'] .home-surface > .c-card {
+  padding: .42rem .55rem;
+  gap: .30rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-head {
+  min-height: 25px;
+  gap: .4rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-icon {
+  width: 25px;
+  height: 25px;
+}
+.freya-app[data-screen='home'] .home-surface .c-titles h2 {
+  font-size: .64rem;
+  letter-spacing: .17em;
+}
+.freya-app[data-screen='home'] .home-surface .c-titles small {
+  font-size: .58rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-lead {
+  margin: .03rem 0;
+  font-size: .91rem;
+  line-height: 1.18;
+}
+.freya-app[data-screen='home'] .home-surface .c-sub {
+  margin: 0;
+  font-size: .69rem;
+  line-height: 1.28;
+}
+.freya-app[data-screen='home'] .home-surface .c-chips {
+  gap: .28rem;
+  margin-top: .12rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-chip {
+  min-height: 22px;
+  padding: .12rem .52rem;
+  font-size: .64rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-checks {
+  gap: .18rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-checks li {
+  font-size: .72rem;
+  line-height: 1.18;
+}
+.freya-app[data-screen='home'] .home-surface .c-row {
+  min-height: 25px;
+  padding: .16rem 0;
+}
+.freya-app[data-screen='home'] .home-surface .c-row-text b {
+  font-size: .71rem;
+  line-height: 1.1;
+}
+.freya-app[data-screen='home'] .home-surface .c-row-text small {
+  font-size: .62rem;
+  line-height: 1.1;
+}
+.freya-app[data-screen='home'] .home-surface .c-bars {
+  gap: .16rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-bar {
+  min-height: 18px;
+  gap: .35rem;
+  font-size: .62rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-ring {
+  width: 52px;
+  height: 52px;
+}
+.freya-app[data-screen='home'] .home-surface .c-attention {
+  gap: .55rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-attention-info b {
+  font-size: .78rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-attention-info small {
+  font-size: .62rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-world {
+  grid-template-columns: 5.35rem minmax(0,1fr);
+  gap: .55rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-globe {
+  width: 5.35rem;
+  height: 5.35rem;
+}
+
+/* Rebalance section heights inside the two stacked top surfaces. */
+.freya-app[data-screen='home'] .home-surface-tl > .c-card:first-child { flex: .86 1 0; }
+.freya-app[data-screen='home'] .home-surface-tl > .c-card:last-child { flex: 1.14 1 0; }
+.freya-app[data-screen='home'] .home-surface-tr > .c-card:nth-child(1) { flex: 1.08 1 0; }
+.freya-app[data-screen='home'] .home-surface-tr > .c-card:nth-child(2) { flex: .66 1 0; }
+.freya-app[data-screen='home'] .home-surface-tr > .c-card:nth-child(3) { flex: 1.26 1 0; }
+
+/* Shorter shell means the launcher should tuck immediately beneath it. */
+.freya-app[data-screen='home'] .home-launcher {
+  align-self: start;
+  min-height: 50px;
+  height: 50px;
+  padding-top: 2px;
+}
+
+/* HOME REFERENCE GLASS — final clarity/content fit refinement */
+.freya-app[data-screen='home'] .home-surface {
+  background-image:
+    linear-gradient(180deg, rgba(235, 250, 255, .022), transparent 14%),
+    linear-gradient(145deg,
+      rgba(5, 17, 29, .46) 0%,
+      rgba(3, 13, 23, .34) 52%,
+      rgba(3, 11, 20, .27) 100%);
+  backdrop-filter: blur(6px) saturate(118%);
+  -webkit-backdrop-filter: blur(6px) saturate(118%);
+  box-shadow:
+    0 12px 28px rgba(0, 4, 10, .13),
+    inset 0 0 28px rgba(69, 183, 224, .012);
+}
+
+/* Sharper little illuminated corner details like the reference render. */
+.freya-app[data-screen='home'] .home-surface::before {
+  background:
+    linear-gradient(90deg, #f5fdff, rgba(142,231,255,.58), transparent) left top / 58px 1px no-repeat,
+    linear-gradient(180deg, #f5fdff, rgba(142,231,255,.52), transparent) left top / 1px 58px no-repeat,
+    linear-gradient(270deg, rgba(245,253,255,.90), rgba(142,231,255,.48), transparent) right top / 58px 1px no-repeat,
+    linear-gradient(180deg, rgba(245,253,255,.90), rgba(142,231,255,.48), transparent) right top / 1px 58px no-repeat,
+    linear-gradient(90deg, rgba(235,250,255,.72), rgba(128,220,250,.30), transparent) left bottom / 48px 1px no-repeat,
+    linear-gradient(0deg, rgba(235,250,255,.72), rgba(128,220,250,.30), transparent) left bottom / 1px 48px no-repeat,
+    linear-gradient(270deg, rgba(235,250,255,.72), rgba(128,220,250,.30), transparent) right bottom / 48px 1px no-repeat,
+    linear-gradient(0deg, rgba(235,250,255,.72), rgba(128,220,250,.30), transparent) right bottom / 1px 48px no-repeat;
+  filter:
+    drop-shadow(0 0 2px rgba(235,252,255,.74))
+    drop-shadow(0 0 6px rgba(87,213,255,.38));
+  opacity: 1;
+}
+
+/* Every content section respects the circular void. */
+.freya-app[data-screen='home'] .home-surface-tl > .c-card {
+  padding-right: 39%;
+}
+.freya-app[data-screen='home'] .home-surface-tr > .c-card {
+  padding-left: 39%;
+}
+.freya-app[data-screen='home'] .home-surface-bl > .c-card {
+  padding-right: 37%;
+}
+.freya-app[data-screen='home'] .home-surface-br > .c-card {
+  padding-left: 37%;
+}
+
+/* Preserve usable horizontal room on outer edges. */
+.freya-app[data-screen='home'] .home-surface-tl > .c-card,
+.freya-app[data-screen='home'] .home-surface-bl > .c-card { padding-left: .65rem; }
+.freya-app[data-screen='home'] .home-surface-tr > .c-card,
+.freya-app[data-screen='home'] .home-surface-br > .c-card { padding-right: .65rem; }
+
+.freya-app[data-screen='home'] .home-surface .c-focus-line {
+  gap: .35rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-focus-line .c-meter {
+  min-width: 0;
+}
+.freya-app[data-screen='home'] .home-surface .c-attention {
+  grid-template-columns: 52px minmax(70px, .7fr) minmax(105px, 1.3fr);
+}
+
+/* ==========================================================================
+   HOME HERO ORB PASS
+   Bigger orb, smaller surrounding cards, stronger ring presence.
+   ========================================================================== */
+
+.freya-app[data-screen='home'] .a-home-body {
+  padding: .2rem .9rem .15rem .55rem;
+}
+
+/* Smaller overall dashboard block so the 4 cards feel secondary */
+.freya-app[data-screen='home'] .home-shell {
+  width: min(1280px, calc(100% - 24px));
+  height: 650px;
+  margin: 0 auto;
+  align-self: start;
+  gap: 14px;
+  --home-orb: 575px;
+  --home-cut: 334px;
+}
+
+/* Keep the orb dominant */
+.freya-app[data-screen='home'] .home-orb-slot {
+  width: var(--home-orb);
+  height: var(--home-orb);
+  z-index: 7;
+}
+
+.freya-app[data-screen='home'] .home-orb-slot .a-centre-stage {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Make the rings more luminous without turning into neon */
+.freya-app[data-screen='home'] .home-orb-slot .a-brain {
+  opacity: 1;
+  filter:
+    drop-shadow(0 0 8px rgba(92, 221, 255, .18))
+    drop-shadow(0 0 18px rgba(87, 208, 248, .14))
+    drop-shadow(0 0 34px rgba(155, 110, 245, .08));
+}
+
+.freya-app[data-screen='home'] .home-orb-slot .a-home-presence {
+  inset: 12.5%;
+}
+
+.freya-app[data-screen='home'] .home-orb-slot .a-home-presence-glass {
+  background:
+    radial-gradient(circle at 50% 42%, rgba(120, 229, 255, .10), transparent 49%),
+    radial-gradient(circle at 48% 66%, rgba(150, 112, 246, .08), transparent 65%);
+  border: 1px solid rgba(132, 229, 255, .26);
+  box-shadow:
+    inset 0 0 56px rgba(82, 210, 246, .06),
+    0 0 38px rgba(88, 217, 255, .08);
+}
+
+/* Four cards become smaller, clearer glass */
+.freya-app[data-screen='home'] .home-surface {
+  padding: 10px 12px;
+  background-image:
+    linear-gradient(180deg, rgba(235, 250, 255, .018), transparent 12%),
+    linear-gradient(145deg,
+      rgba(5, 17, 29, .48) 0%,
+      rgba(3, 13, 23, .35) 52%,
+      rgba(3, 11, 20, .28) 100%);
+  backdrop-filter: blur(6px) saturate(118%);
+  -webkit-backdrop-filter: blur(6px) saturate(118%);
+  box-shadow:
+    0 11px 26px rgba(0, 4, 10, .12),
+    inset 0 0 26px rgba(69, 183, 224, .01);
+}
+
+/* Keep only small luminous corner strokes */
+.freya-app[data-screen='home'] .home-surface::before {
+  background:
+    linear-gradient(90deg, #f6fdff, rgba(150,234,255,.62), transparent) left top / 54px 1px no-repeat,
+    linear-gradient(180deg, #f6fdff, rgba(150,234,255,.56), transparent) left top / 1px 54px no-repeat,
+    linear-gradient(270deg, rgba(246,253,255,.92), rgba(150,234,255,.52), transparent) right top / 54px 1px no-repeat,
+    linear-gradient(180deg, rgba(246,253,255,.92), rgba(150,234,255,.52), transparent) right top / 1px 54px no-repeat,
+    linear-gradient(90deg, rgba(236,250,255,.68), rgba(128,220,250,.28), transparent) left bottom / 42px 1px no-repeat,
+    linear-gradient(0deg, rgba(236,250,255,.68), rgba(128,220,250,.28), transparent) left bottom / 1px 42px no-repeat,
+    linear-gradient(270deg, rgba(236,250,255,.68), rgba(128,220,250,.28), transparent) right bottom / 42px 1px no-repeat,
+    linear-gradient(0deg, rgba(236,250,255,.68), rgba(128,220,250,.28), transparent) right bottom / 1px 42px no-repeat;
+  filter:
+    drop-shadow(0 0 2px rgba(235,252,255,.70))
+    drop-shadow(0 0 6px rgba(87,213,255,.34));
+}
+
+/* Compact card content */
+.freya-app[data-screen='home'] .home-surface > .c-card {
+  padding: .34rem .48rem;
+  gap: .24rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-head {
+  min-height: 22px;
+  gap: .32rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-icon {
+  width: 22px;
+  height: 22px;
+}
+.freya-app[data-screen='home'] .home-surface .c-titles h2 {
+  font-size: .60rem;
+  letter-spacing: .15em;
+}
+.freya-app[data-screen='home'] .home-surface .c-titles small {
+  font-size: .54rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-lead {
+  font-size: .86rem;
+  line-height: 1.16;
+}
+.freya-app[data-screen='home'] .home-surface .c-sub {
+  font-size: .66rem;
+  line-height: 1.23;
+}
+.freya-app[data-screen='home'] .home-surface .c-chip {
+  min-height: 20px;
+  padding: .10rem .46rem;
+  font-size: .60rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-row {
+  min-height: 22px;
+  padding: .12rem 0;
+}
+.freya-app[data-screen='home'] .home-surface .c-row-text b {
+  font-size: .68rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-row-text small {
+  font-size: .59rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-checks li,
+.freya-app[data-screen='home'] .home-surface .c-bar {
+  font-size: .66rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-world {
+  grid-template-columns: 4.8rem minmax(0,1fr);
+  gap: .46rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-globe {
+  width: 4.8rem;
+  height: 4.8rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-ring {
+  width: 46px;
+  height: 46px;
+}
+
+/* Keep all content away from the circular void */
+.freya-app[data-screen='home'] .home-surface-tl > .c-card { padding-right: 41%; }
+.freya-app[data-screen='home'] .home-surface-tr > .c-card { padding-left: 41%; }
+.freya-app[data-screen='home'] .home-surface-bl > .c-card { padding-right: 38%; }
+.freya-app[data-screen='home'] .home-surface-br > .c-card { padding-left: 38%; }
+
+/* Launcher tucks tighter below */
+.freya-app[data-screen='home'] .home-launcher {
+  width: min(980px, calc(100% - 40px));
+  margin: 0 auto;
+  min-height: 48px;
+  height: 48px;
+  gap: .48rem;
+  padding-top: 0;
+}
+.freya-app[data-screen='home'] .home-launch {
+  min-width: 62px;
+  height: 42px;
+}
+.freya-app[data-screen='home'] .home-launch svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* Composer follows tighter composition */
+.freya-app[data-screen='home'] .a-cmd {
+  padding-top: .15rem;
+}
+.freya-app[data-screen='home'] .a-cmd form {
+  width: min(70rem, 92%);
+}
+
+/* Keep the cutout close to the hero orb */
+.freya-app[data-screen='home'] .home-cut-rim {
+  width: calc(var(--home-cut) * 2);
+  height: calc(var(--home-cut) * 2);
+  border: 1px solid rgba(180, 239, 255, .24);
+  box-shadow:
+    0 0 5px rgba(117,224,255,.15),
+    0 0 14px rgba(80,205,247,.08);
+}
+
+@media (max-width: 1500px) {
+  .freya-app[data-screen='home'] .home-shell {
+    width: min(1180px, calc(100% - 18px));
+    height: 610px;
+    --home-orb: 520px;
+    --home-cut: 304px;
+  }
+  .freya-app[data-screen='home'] .home-surface-tl > .c-card { padding-right: 39%; }
+  .freya-app[data-screen='home'] .home-surface-tr > .c-card { padding-left: 39%; }
+  .freya-app[data-screen='home'] .home-surface-bl > .c-card { padding-right: 35%; }
+  .freya-app[data-screen='home'] .home-surface-br > .c-card { padding-left: 35%; }
+}
+
+/* ==========================================================================
+   HOME — REAL GLASS + STRONGER ORB LIGHT RINGS
+   Direct live pass
+   ========================================================================== */
+
+.freya-app[data-screen='home'] .home-surface {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(
+      160deg,
+      rgba(18, 38, 52, 0.20) 0%,
+      rgba(8, 22, 34, 0.14) 48%,
+      rgba(5, 14, 24, 0.10) 100%
+    );
+  border: 1px solid rgba(170, 235, 255, 0.10);
+  backdrop-filter: blur(16px) saturate(145%);
+  -webkit-backdrop-filter: blur(16px) saturate(145%);
+  box-shadow:
+    0 10px 30px rgba(0, 4, 12, 0.10),
+    inset 0 1px 0 rgba(240, 250, 255, 0.05),
+    inset 0 0 36px rgba(78, 198, 236, 0.03);
+}
+
+.freya-app[data-screen='home'] .home-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255,255,255,0.07) 0%,
+      rgba(255,255,255,0.018) 10%,
+      transparent 24%
+    ),
+    radial-gradient(circle at 18% 10%, rgba(210,245,255,0.08), transparent 28%),
+    radial-gradient(circle at 84% 18%, rgba(155,116,245,0.05), transparent 30%);
+  opacity: 0.9;
+}
+
+.freya-app[data-screen='home'] .home-surface::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.95), rgba(132,231,255,.55), transparent) left top / 52px 1px no-repeat,
+    linear-gradient(180deg, rgba(255,255,255,.95), rgba(132,231,255,.55), transparent) left top / 1px 52px no-repeat,
+    linear-gradient(270deg, rgba(255,255,255,.82), rgba(132,231,255,.40), transparent) right top / 52px 1px no-repeat,
+    linear-gradient(180deg, rgba(255,255,255,.82), rgba(132,231,255,.40), transparent) right top / 1px 52px no-repeat,
+    linear-gradient(90deg, rgba(235,249,255,.58), rgba(132,231,255,.16), transparent) left bottom / 38px 1px no-repeat,
+    linear-gradient(0deg, rgba(235,249,255,.58), rgba(132,231,255,.16), transparent) left bottom / 1px 38px no-repeat,
+    linear-gradient(270deg, rgba(235,249,255,.58), rgba(132,231,255,.16), transparent) right bottom / 38px 1px no-repeat,
+    linear-gradient(0deg, rgba(235,249,255,.58), rgba(132,231,255,.16), transparent) right bottom / 1px 38px no-repeat;
+  filter:
+    drop-shadow(0 0 3px rgba(230,250,255,.55))
+    drop-shadow(0 0 8px rgba(85,210,250,.22));
+}
+
+.freya-app[data-screen='home'] .home-orb-slot {
+  position: absolute;
+  z-index: 8;
+  width: 610px;
+  height: 610px;
+}
+
+.freya-app[data-screen='home'] .home-orb-slot .a-centre-stage {
+  position: relative;
+  width: 100% !important;
+  height: 100% !important;
+  isolation: isolate;
+}
+
+.freya-app[data-screen='home'] .home-orb-slot .a-centre-stage::before {
+  content: "";
+  position: absolute;
+  inset: 2.5%;
+  border-radius: 50%;
+  pointer-events: none;
+  border: 1px solid rgba(105, 223, 255, 0.56);
+  box-shadow:
+    0 0 8px rgba(95,218,255,0.34),
+    0 0 26px rgba(74,205,247,0.18),
+    0 0 48px rgba(80,180,255,.08),
+    inset 0 0 24px rgba(120,228,255,0.08);
+}
+
+.freya-app[data-screen='home'] .home-orb-slot .a-centre-stage::after {
+  content: "";
+  position: absolute;
+  inset: 10%;
+  border-radius: 50%;
+  pointer-events: none;
+  border: 1px solid rgba(118, 215, 255, 0.30);
+  box-shadow:
+    0 0 10px rgba(92,214,255,0.14),
+    0 0 24px rgba(137,105,245,.06),
+    inset 0 0 18px rgba(93,214,255,0.05);
+}
+
+.freya-app[data-screen='home'] .home-orb-slot .a-brain {
+  opacity: 1;
+  filter:
+    drop-shadow(0 0 8px rgba(99,221,255,.28))
+    drop-shadow(0 0 22px rgba(77,206,247,.18))
+    drop-shadow(0 0 38px rgba(154,111,245,.10));
+}
+
+.freya-app[data-screen='home'] .home-orb-slot .a-home-presence {
+  inset: 13%;
+}
+
+.freya-app[data-screen='home'] .home-orb-slot .a-home-presence-glass {
+  background:
+    radial-gradient(circle at 50% 42%, rgba(120,229,255,.14), transparent 50%),
+    radial-gradient(circle at 48% 66%, rgba(151,114,246,.10), transparent 66%);
+  border: 1px solid rgba(132,229,255,.28);
+  box-shadow:
+    inset 0 0 54px rgba(79,209,245,.07),
+    0 0 24px rgba(97,221,255,.10);
+}
+
+.freya-app[data-screen='home'] .home-orb-slot .a-home-presence-rim {
+  border-color: rgba(130, 229, 255, .32);
+  box-shadow:
+    0 0 0 10px rgba(103,221,255,.025),
+    0 0 0 22px rgba(149,108,245,.018),
+    0 0 30px rgba(82,211,251,.12);
+}
+
+.freya-app[data-screen='home'] .home-cut-rim {
+  border: 1px solid rgba(170, 236, 255, .18);
+  box-shadow:
+    0 0 6px rgba(118,223,255,.10),
+    inset 0 0 14px rgba(112,221,255,.04);
+}
+
+/* ==========================================================================
+   HOME REFERENCE MATERIAL + ORBIT CLEANUP
+   Clear dark glass; the Three.js orb owns the light-ring design.
+   ========================================================================== */
+.freya-app[data-screen='home'] .home-surface {
+  border: 0 !important;
+  background:
+    linear-gradient(145deg,
+      rgba(7, 20, 32, .27) 0%,
+      rgba(3, 13, 23, .19) 52%,
+      rgba(2, 10, 18, .15) 100%) !important;
+  backdrop-filter: blur(3px) saturate(108%) !important;
+  -webkit-backdrop-filter: blur(3px) saturate(108%) !important;
+  box-shadow:
+    0 12px 28px rgba(0, 3, 10, .14),
+    inset 0 1px 0 rgba(230, 248, 255, .028),
+    inset 0 0 24px rgba(72, 193, 231, .012) !important;
+}
+
+/* A very small specular wash — not frosted/milky. */
+.freya-app[data-screen='home'] .home-surface::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(244, 252, 255, .030), transparent 14%),
+    radial-gradient(circle at 12% 7%, rgba(202, 242, 255, .032), transparent 23%) !important;
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+/* Short glowing corner strokes only, like the reference. */
+.freya-app[data-screen='home'] .home-surface::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, rgba(250,254,255,.92), rgba(134,229,255,.50), transparent) left top / 42px 1px no-repeat,
+    linear-gradient(180deg, rgba(250,254,255,.92), rgba(134,229,255,.50), transparent) left top / 1px 42px no-repeat,
+    linear-gradient(270deg, rgba(250,254,255,.72), rgba(134,229,255,.34), transparent) right top / 38px 1px no-repeat,
+    linear-gradient(180deg, rgba(250,254,255,.72), rgba(134,229,255,.34), transparent) right top / 1px 38px no-repeat,
+    linear-gradient(90deg, rgba(240,252,255,.48), rgba(115,214,248,.18), transparent) left bottom / 30px 1px no-repeat,
+    linear-gradient(0deg, rgba(240,252,255,.48), rgba(115,214,248,.18), transparent) left bottom / 1px 30px no-repeat,
+    linear-gradient(270deg, rgba(240,252,255,.48), rgba(115,214,248,.18), transparent) right bottom / 30px 1px no-repeat,
+    linear-gradient(0deg, rgba(240,252,255,.48), rgba(115,214,248,.18), transparent) right bottom / 1px 30px no-repeat !important;
+  filter:
+    drop-shadow(0 0 2px rgba(232, 251, 255, .68))
+    drop-shadow(0 0 5px rgba(83, 211, 251, .25)) !important;
+  opacity: .92 !important;
+}
+
+/* Remove the extra CSS full circles; Three.js now renders the reference ring set. */
+.freya-app[data-screen='home'] .home-orb-slot .a-centre-stage::before,
+.freya-app[data-screen='home'] .home-orb-slot .a-centre-stage::after {
+  content: none !important;
+  display: none !important;
+}
+
+/* The card-cut helper should not masquerade as another orb ring. */
+.freya-app[data-screen='home'] .home-cut-rim {
+  opacity: .10 !important;
+  border-color: rgba(133, 224, 255, .14) !important;
+  box-shadow: none !important;
+}
+.freya-app[data-screen='home'] .home-cut-rim::before,
+.freya-app[data-screen='home'] .home-cut-rim::after {
+  opacity: 0 !important;
+}
+
+/* Keep the real Three.js orbit luminous but restrained. */
+.freya-app[data-screen='home'] .home-orb-slot .a-brain {
+  opacity: 1;
+  filter:
+    drop-shadow(0 0 5px rgba(91, 218, 255, .18))
+    drop-shadow(0 0 14px rgba(75, 204, 247, .11))
+    drop-shadow(0 0 22px rgba(153, 110, 245, .055)) !important;
+}
+
+/* Portrait glass itself stays crystal-clear. */
+.freya-app[data-screen='home'] .home-orb-slot .a-home-presence-glass {
+  background:
+    radial-gradient(circle at 50% 44%, rgba(115, 226, 255, .055), transparent 53%),
+    radial-gradient(circle at 48% 67%, rgba(149, 110, 245, .035), transparent 68%) !important;
+  border-color: rgba(122, 225, 255, .16) !important;
+  box-shadow:
+    inset 0 0 34px rgba(75, 205, 244, .025),
+    0 0 18px rgba(93, 216, 255, .035) !important;
+}
+
+/* HOME smoked-glass correction — darker tint, sharper scene, no milky wash */
+.freya-app[data-screen='home'] .home-surface {
+  background:
+    linear-gradient(145deg,
+      rgba(5, 17, 28, .58) 0%,
+      rgba(3, 13, 22, .48) 52%,
+      rgba(2, 10, 18, .40) 100%) !important;
+  backdrop-filter: blur(2px) saturate(104%) !important;
+  -webkit-backdrop-filter: blur(2px) saturate(104%) !important;
+  box-shadow:
+    0 12px 30px rgba(0, 3, 10, .20),
+    inset 0 1px 0 rgba(239, 251, 255, .032),
+    inset 0 0 26px rgba(70, 185, 225, .010) !important;
+}
+
+/* Keep the specular effect crisp and sparse. */
+.freya-app[data-screen='home'] .home-surface::before {
+  background:
+    linear-gradient(180deg, rgba(245, 252, 255, .024), transparent 11%),
+    radial-gradient(circle at 10% 6%, rgba(205, 244, 255, .025), transparent 18%) !important;
+}
+
+/* Let the Three.js inner cyan ring be the portrait ring; remove duplicate CSS circles. */
+.freya-app[data-screen='home'] .home-orb-slot .a-home-presence-glass {
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+.freya-app[data-screen='home'] .home-orb-slot .a-home-presence-rim {
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* ==========================================================================
+   HOME — SMALLER FOUR CARDS + TRUE SMOKED GLASS
+   Direct pass after reference comparison.
+   ========================================================================== */
+.freya-app[data-screen='home'] .home-shell {
+  width: min(1160px, calc(100% - 70px));
+  height: 560px;
+  gap: 26px;
+  margin: 0 auto;
+  align-self: start;
+  --home-orb: 560px;
+  --home-cut: 306px;
+}
+
+.freya-app[data-screen='home'] .home-orb-slot {
+  width: var(--home-orb);
+  height: var(--home-orb);
+  z-index: 8;
+}
+
+/* Dark crystal glass: low blur, high transparency, crisp specular reflection. */
+.freya-app[data-screen='home'] .home-surface {
+  position: relative;
+  overflow: hidden;
+  border: 0 !important;
+  background:
+    linear-gradient(145deg,
+      rgba(5, 16, 26, .54) 0%,
+      rgba(3, 12, 21, .42) 50%,
+      rgba(2, 9, 16, .34) 100%) !important;
+  backdrop-filter: blur(2px) saturate(106%) brightness(.96) !important;
+  -webkit-backdrop-filter: blur(2px) saturate(106%) brightness(.96) !important;
+  box-shadow:
+    0 16px 30px rgba(0, 3, 10, .18),
+    inset 0 1px 0 rgba(245, 253, 255, .030),
+    inset 0 0 24px rgba(73, 191, 230, .008) !important;
+}
+
+/* Narrow reflective sweep, not a fog layer. */
+.freya-app[data-screen='home'] .home-surface::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(113deg,
+      transparent 0 9%,
+      rgba(235, 250, 255, .035) 13%,
+      transparent 20% 73%,
+      rgba(119, 214, 247, .018) 78%,
+      transparent 84%) !important;
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+/* Reference-like corner highlights only. */
+.freya-app[data-screen='home'] .home-surface::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.97), rgba(143,231,255,.54), transparent) left top / 34px 1px no-repeat,
+    linear-gradient(180deg, rgba(255,255,255,.97), rgba(143,231,255,.54), transparent) left top / 1px 34px no-repeat,
+    linear-gradient(270deg, rgba(255,255,255,.77), rgba(143,231,255,.35), transparent) right top / 28px 1px no-repeat,
+    linear-gradient(180deg, rgba(255,255,255,.77), rgba(143,231,255,.35), transparent) right top / 1px 28px no-repeat,
+    linear-gradient(90deg, rgba(242,252,255,.40), rgba(121,216,249,.14), transparent) left bottom / 22px 1px no-repeat,
+    linear-gradient(0deg, rgba(242,252,255,.40), rgba(121,216,249,.14), transparent) left bottom / 1px 22px no-repeat,
+    linear-gradient(270deg, rgba(242,252,255,.40), rgba(121,216,249,.14), transparent) right bottom / 22px 1px no-repeat,
+    linear-gradient(0deg, rgba(242,252,255,.40), rgba(121,216,249,.14), transparent) right bottom / 1px 22px no-repeat !important;
+  filter:
+    drop-shadow(0 0 2px rgba(241,253,255,.60))
+    drop-shadow(0 0 5px rgba(82,210,251,.19)) !important;
+  opacity: .94 !important;
+}
+
+/* Make the four pieces feel independent, not one big divided slab. */
+.freya-app[data-screen='home'] .home-surface-tl,
+.freya-app[data-screen='home'] .home-surface-tr,
+.freya-app[data-screen='home'] .home-surface-bl,
+.freya-app[data-screen='home'] .home-surface-br {
+  border-radius: 18px;
+}
+
+/* Content fits the smaller pieces and stays clear of Freya. */
+.freya-app[data-screen='home'] .home-surface > .c-card {
+  padding: .30rem .42rem;
+  gap: .18rem;
+}
+.freya-app[data-screen='home'] .home-surface-tl > .c-card { padding-right: 46%; }
+.freya-app[data-screen='home'] .home-surface-tr > .c-card { padding-left: 46%; }
+.freya-app[data-screen='home'] .home-surface-bl > .c-card { padding-right: 41%; }
+.freya-app[data-screen='home'] .home-surface-br > .c-card { padding-left: 41%; }
+
+.freya-app[data-screen='home'] .home-surface .c-head { min-height: 20px; gap: .28rem; }
+.freya-app[data-screen='home'] .home-surface .c-icon { width: 20px; height: 20px; }
+.freya-app[data-screen='home'] .home-surface .c-titles h2 { font-size: .56rem; letter-spacing: .15em; }
+.freya-app[data-screen='home'] .home-surface .c-titles small { font-size: .50rem; }
+.freya-app[data-screen='home'] .home-surface .c-lead { font-size: .80rem; line-height: 1.14; }
+.freya-app[data-screen='home'] .home-surface .c-sub,
+.freya-app[data-screen='home'] .home-surface .c-row-text small,
+.freya-app[data-screen='home'] .home-surface .c-checks li,
+.freya-app[data-screen='home'] .home-surface .c-bar { font-size: .62rem; line-height: 1.18; }
+.freya-app[data-screen='home'] .home-surface .c-row { min-height: 20px; padding: .10rem 0; }
+.freya-app[data-screen='home'] .home-surface .c-row-text b { font-size: .64rem; }
+.freya-app[data-screen='home'] .home-surface .c-chip { min-height: 18px; padding: .08rem .40rem; font-size: .56rem; }
+.freya-app[data-screen='home'] .home-surface .c-world { grid-template-columns: 4.2rem minmax(0,1fr); gap: .38rem; }
+.freya-app[data-screen='home'] .home-surface .c-globe { width: 4.2rem; height: 4.2rem; }
+.freya-app[data-screen='home'] .home-surface .c-ring { width: 40px; height: 40px; }
+
+/* Quiet helper cut; the actual Three.js orbit is the visual centre. */
+.freya-app[data-screen='home'] .home-cut-rim {
+  opacity: .035 !important;
+  border-color: rgba(132, 225, 255, .08) !important;
+  box-shadow: none !important;
+}
+.freya-app[data-screen='home'] .home-cut-rim::before,
+.freya-app[data-screen='home'] .home-cut-rim::after { opacity: 0 !important; }
+
+/* Dock follows the smaller composition. */
+.freya-app[data-screen='home'] .home-launcher {
+  width: min(900px, calc(100% - 50px));
+  gap: .42rem;
+  min-height: 44px;
+  height: 44px;
+  margin: 0 auto;
+}
+.freya-app[data-screen='home'] .home-launch { height: 40px; min-width: 58px; }
+
+/* Keep chat below with more breathing room like the reference. */
+.freya-app[data-screen='home'] .a-cmd form {
+  width: min(68rem, 90%);
+}
+
+@media (max-width: 1500px) {
+  .freya-app[data-screen='home'] .home-shell {
+    width: min(1080px, calc(100% - 44px));
+    height: 530px;
+    --home-orb: 520px;
+    --home-cut: 286px;
+    gap: 22px;
+  }
+  .freya-app[data-screen='home'] .home-surface-tl > .c-card { padding-right: 43%; }
+  .freya-app[data-screen='home'] .home-surface-tr > .c-card { padding-left: 43%; }
+  .freya-app[data-screen='home'] .home-surface-bl > .c-card { padding-right: 38%; }
+  .freya-app[data-screen='home'] .home-surface-br > .c-card { padding-left: 38%; }
+}
+
+/* ==========================================================================
+   HOME — REFERENCE BALANCE PASS
+   Wider independent glass panels, hero orb, real smoked glass.
+   ========================================================================== */
+.freya-app[data-screen='home'] .home-shell {
+  width: min(1480px, calc(100% - 26px));
+  height: 610px;
+  gap: 16px;
+  margin: 0 auto;
+  --home-orb: 600px;
+  --home-cut: 320px;
+}
+
+.freya-app[data-screen='home'] .home-orb-slot {
+  width: var(--home-orb);
+  height: var(--home-orb);
+}
+
+/* Smoked crystal glass: translucent, crisp, not washed-out. */
+.freya-app[data-screen='home'] .home-surface {
+  background:
+    linear-gradient(145deg,
+      rgba(5, 16, 27, .62) 0%,
+      rgba(3, 12, 22, .53) 48%,
+      rgba(2, 9, 17, .45) 100%) !important;
+  backdrop-filter: blur(8px) saturate(112%) !important;
+  -webkit-backdrop-filter: blur(8px) saturate(112%) !important;
+  box-shadow:
+    0 15px 32px rgba(0, 3, 10, .20),
+    inset 0 1px 0 rgba(244, 252, 255, .038),
+    inset 0 0 24px rgba(72, 188, 227, .008) !important;
+}
+
+/* Crisp reflection only near top; no fog layer. */
+.freya-app[data-screen='home'] .home-surface::before {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.040), rgba(255,255,255,.008) 8%, transparent 16%),
+    linear-gradient(112deg, transparent 0 8%, rgba(205,244,255,.026) 12%, transparent 20%) !important;
+}
+
+/* Preserve short glowing corners. */
+.freya-app[data-screen='home'] .home-surface::after {
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.98), rgba(146,232,255,.58), transparent) left top / 40px 1px no-repeat,
+    linear-gradient(180deg, rgba(255,255,255,.98), rgba(146,232,255,.58), transparent) left top / 1px 40px no-repeat,
+    linear-gradient(270deg, rgba(255,255,255,.78), rgba(146,232,255,.36), transparent) right top / 34px 1px no-repeat,
+    linear-gradient(180deg, rgba(255,255,255,.78), rgba(146,232,255,.36), transparent) right top / 1px 34px no-repeat,
+    linear-gradient(90deg, rgba(240,252,255,.44), rgba(121,217,249,.16), transparent) left bottom / 26px 1px no-repeat,
+    linear-gradient(0deg, rgba(240,252,255,.44), rgba(121,217,249,.16), transparent) left bottom / 1px 26px no-repeat,
+    linear-gradient(270deg, rgba(240,252,255,.44), rgba(121,217,249,.16), transparent) right bottom / 26px 1px no-repeat,
+    linear-gradient(0deg, rgba(240,252,255,.44), rgba(121,217,249,.16), transparent) right bottom / 1px 26px no-repeat !important;
+}
+
+/* Stop crushing content. The mask handles the orb cut; content only needs modest clearance. */
+.freya-app[data-screen='home'] .home-surface-tl > .c-card { padding-right: 31%; }
+.freya-app[data-screen='home'] .home-surface-tr > .c-card { padding-left: 31%; }
+.freya-app[data-screen='home'] .home-surface-bl > .c-card { padding-right: 28%; }
+.freya-app[data-screen='home'] .home-surface-br > .c-card { padding-left: 28%; }
+
+.freya-app[data-screen='home'] .home-surface > .c-card {
+  padding-top: .38rem;
+  padding-bottom: .38rem;
+}
+.freya-app[data-screen='home'] .home-surface .c-lead { font-size: .86rem; }
+.freya-app[data-screen='home'] .home-surface .c-sub { font-size: .66rem; }
+.freya-app[data-screen='home'] .home-surface .c-row-text b { font-size: .68rem; }
+.freya-app[data-screen='home'] .home-surface .c-row-text small { font-size: .60rem; }
+
+/* Keep the orb ring system visually above glass, but not oversized. */
+.freya-app[data-screen='home'] .home-orb-slot .a-brain {
+  transform: scale(.985);
+  transform-origin: center;
+}
+
+/* Quiet launcher width in proportion to the dashboard. */
+.freya-app[data-screen='home'] .home-launcher {
+  width: min(940px, calc(100% - 44px));
+  height: 46px;
+}
+
+@media (max-width: 1500px) {
+  .freya-app[data-screen='home'] .home-shell {
+    width: min(1320px, calc(100% - 22px));
+    height: 570px;
+    --home-orb: 550px;
+    --home-cut: 296px;
+  }
+  .freya-app[data-screen='home'] .home-surface-tl > .c-card { padding-right: 29%; }
+  .freya-app[data-screen='home'] .home-surface-tr > .c-card { padding-left: 29%; }
+  .freya-app[data-screen='home'] .home-surface-bl > .c-card { padding-right: 26%; }
+  .freya-app[data-screen='home'] .home-surface-br > .c-card { padding-left: 26%; }
+}

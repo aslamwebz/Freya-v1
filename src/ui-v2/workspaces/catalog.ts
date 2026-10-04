@@ -1,5 +1,6 @@
 export const WORKSPACES = [
   { id: 'home', label: 'Home', symbol: 'home', description: 'A little clarity. A wider possibility.' },
+  { id: 'chat', label: 'Chat', symbol: 'chat', description: 'Talk with Freya. She thinks once and says what she actually has.' },
   { id: 'mind', label: 'Mind', symbol: 'mind', description: 'Understand the moment. See what matters.' },
   { id: 'mission', label: 'Mission', symbol: 'mission', description: 'From intention to meaningful progress.' },
   { id: 'forge', label: 'Forge', symbol: 'forge', description: 'From possibility to capability.' },
@@ -9,6 +10,7 @@ export const WORKSPACES = [
   { id: 'workforce', label: 'Workforce', symbol: 'workforce', description: 'People, ideas and execution in alignment.' },
   { id: 'widgets', label: 'Widgets', symbol: 'widgets', description: 'Keep what matters close.' },
   { id: 'brain-core', label: 'Brain / Core', symbol: 'core', description: 'The connections behind the intelligence.' },
+  { id: 'settings', label: 'Settings', symbol: 'settings', description: 'Appearance, provider and connection.' },
 ] as const
 export type WorkspaceId = (typeof WORKSPACES)[number]['id']
 export function isWorkspaceId(value: unknown): value is WorkspaceId {

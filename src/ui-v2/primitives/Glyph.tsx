@@ -5,6 +5,7 @@ const paths: Record<string, string> = {
   memory: 'M20 6c0 2-16 2-16 0s16-2 16 0ZM4 6v12c0 4 16 4 16 0V6M4 12c0 3 16 3 16 0',
   create: 'm12 3 2 7 7 2-7 2-2 7-2-7-7-2 7-2 2-7Z',
   home: 'M3 11 12 3l9 8M5 10v10h5v-6h4v6h5V10',
+  chat: 'M4 5h16v11H9l-4 4V5Zm3 4h10M7 12h6',
   mind: 'M9 18c-5 0-6-7-3-9 0-5 6-6 6-2 0-4 6-3 6 2 3 2 2 9-3 9M12 7v14M7 11l3 2m7-2-3 2',
   mission: 'M12 3 2 21h20L12 3Zm0 6v5m0 3h.01',
   forge: 'm12 3 10 6-10 6L2 9l10-6ZM2 13l10 6 10-6M2 17l10 6 10-6',
@@ -19,6 +20,14 @@ const paths: Record<string, string> = {
   mic: 'M9 4a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0V4Zm-3 7v1a6 6 0 0 0 12 0v-1m-6 7v4m-4 0h8',
   plus: 'M12 4v16M4 12h16',
   arrow: 'M4 12h16m-6-6 6 6-6 6',
+  'win-min': 'M5 12h14',
+  'win-max': 'M5 5h14v14H5z',
+  'win-close': 'M6 6l12 12M18 6 6 18',
+  attach: 'M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.2-9.19a4 4 0 0 1 5.65 5.66l-9.19 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48',
+  send: 'M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z',
+  chip: 'M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2M6 6h12v12H6zM9.5 9.5h5v5h-5z',
+  bolt: 'M13 2 4 14h6l-1 8 9-12h-6l1-8Z',
+  chevron: 'm6 9 6 6 6-6',
 }
 export function Glyph({ name, size = 20, style }: { name: string; size?: number; style?: CSSProperties }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"

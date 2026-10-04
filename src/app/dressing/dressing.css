@@ -1,0 +1,50 @@
+/* The dressing table. */
+.d-lab { position: fixed; right: 1.4rem; bottom: 5.6rem; z-index: 40; }
+.d-toggle {
+  display: inline-flex; align-items: center; gap: .5rem;
+  padding: .5rem .9rem; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--f-line); background: var(--f-dialog); color: var(--f-ink);
+  box-shadow: var(--f-shadow);
+}
+.d-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--f-cognition); box-shadow: 0 0 8px var(--f-cognition); }
+.d-scrim { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: color-mix(in srgb, #000 55%, transparent); }
+.d-panel {
+  width: min(36rem, 92vw); max-height: 82vh; overflow: auto;
+  padding: 1.2rem 1.4rem; border-radius: 16px;
+  border: 1px solid var(--f-line); background: var(--f-dialog);
+  box-shadow: var(--f-shadow);
+}
+.d-head { display: flex; align-items: center; justify-content: space-between; }
+.d-head b { font-size: 1.05rem; }
+.d-close, .d-opt { border: 1px solid var(--f-line); background: transparent; color: var(--f-muted); border-radius: 999px; padding: .3rem .75rem; cursor: pointer; }
+.d-note { color: var(--f-muted); font-size: .84rem; margin: .35rem 0 .9rem; }
+.d-panel h3 { margin: .9rem 0 .3rem; font-size: .68rem; letter-spacing: .18em; text-transform: uppercase; color: var(--f-heading); }
+.d-row { display: flex; align-items: center; gap: .8rem; margin: .3rem 0; }
+.d-row > span { width: 6.2rem; flex: none; color: var(--f-muted); font-size: .84rem; }
+.d-opts { display: flex; flex-wrap: wrap; gap: .35rem; }
+.d-opt[aria-pressed='true'] { color: var(--f-heading); border-color: var(--f-action); background: color-mix(in srgb, var(--f-action) 12%, transparent); }
+.d-foot { margin-top: 1rem; display: flex; justify-content: flex-end; }
+
+/* Backgrounds. */
+.freya-app[data-background='obsidian'] .a-bg {
+  background: radial-gradient(120% 85% at 50% 118%, color-mix(in srgb, var(--f-action) 22%, transparent), transparent 62%), radial-gradient(90% 60% at 50% -10%, color-mix(in srgb, var(--f-cognition) 16%, transparent), transparent 55%), var(--f-bg);
+}
+.freya-app[data-background='space'] .a-bg { background: linear-gradient(180deg, transparent 35%, color-mix(in srgb, var(--f-bg) 88%, transparent)), url('../assets/earth-night.jpg') center 60% / cover no-repeat, #01030a; }
+.freya-app[data-background='aurora'] .a-bg { background: radial-gradient(120% 90% at 20% 110%, color-mix(in srgb, var(--f-cognition) 26%, transparent), transparent 55%), radial-gradient(120% 90% at 80% 120%, color-mix(in srgb, var(--f-positive) 18%, transparent), transparent 55%), var(--f-bg); }
+.freya-app[data-background='grid'] .a-bg { background-image: linear-gradient(color-mix(in srgb, var(--f-line) 55%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--f-line) 55%, transparent) 1px, transparent 1px); background-size: 46px 46px; background-color: var(--f-bg); }
+.freya-app[data-background='city'] .a-bg {
+  background:
+    radial-gradient(85% 55% at 50% 6%, color-mix(in srgb, var(--f-action) 18%, transparent), transparent 60%),
+    linear-gradient(180deg, transparent 20%, color-mix(in srgb, var(--f-bg) 66%, transparent)),
+    url('../assets/city.jpg') center 60% / cover no-repeat,
+    var(--f-bg);
+}
+
+/* Freya's dashboard side presence (chibi/adult placeholder). */
+.a-side-presence {
+  position: fixed; right: 1.4rem; bottom: 9rem; z-index: 30;
+  width: 8.5rem; display: grid; justify-items: center; gap: .3rem;
+  pointer-events: none;
+}
+.a-side-presence img { width: 100%; border-radius: 14px; border: 1px solid var(--f-line); box-shadow: var(--f-shadow); opacity: .95; }
+.a-side-presence span { font-size: .62rem; letter-spacing: .2em; color: var(--f-muted); text-transform: uppercase; }

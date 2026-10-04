@@ -22,13 +22,14 @@ describe('Home presentation state', () => {
     expect(within(screen.getByRole('region', { name: 'Workforce' })).getByText('1 in preview')).toBeInTheDocument()
     expect(screen.getByText('New preview team')).toBeInTheDocument()
   })
-  it('changes the attention view and Freya presence when selecting a focus', () => {
+  it('changes the attention view when selecting a focus, leaving the Brain as the centre', () => {
     mount()
     const focus = screen.getByRole('region', { name: 'Current focus' })
     fireEvent.click(within(focus).getByRole('button', { name: 'Strategy' }))
     expect(within(focus).getByRole('button', { name: 'Strategy' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('region', { name: 'Attention' })).toHaveTextContent('Strategic work')
-    expect(screen.getByLabelText('Freya workspace identity')).toHaveAttribute('data-presence', 'planning')
+    // The centre is the Brain (cognition), not a focus-driven presence portrait.
+    expect(screen.getByRole('img', { name: /Freya cognition/ })).toBeInTheDocument()
   })
   it('shows unavailable activity instead of fabricated entries', () => {
     const publish = mount()

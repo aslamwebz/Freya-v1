@@ -1,7 +1,10 @@
 import { Badge, Panel, Progress, Button, EmptyState } from '../primitives/Controls'
 import { Avatar } from '../primitives/Avatar'
 import { Glyph } from '../primitives/Glyph'
-import { Compass, AttentionRing } from './Presence'
+import { AttentionRing } from './Presence'
+import { Presence } from '../presence/Presence'
+import { brainState } from '../presence/state'
+import { selectForm } from '../presence/form'
 import { DataView, isLiveMode, type WorkspaceProps } from './shared'
 import type { WorkspaceId } from './catalog'
 import { useState } from 'react'
@@ -22,6 +25,18 @@ export function Home({ snapshot, view, update, open, panels }: WorkspaceProps & 
   const live = attention.status === 'ready' || attention.status === 'stale' ? attention.data : null
   const liveMode = isLiveMode(snapshot)
   const panelOrder = view.panelOrder.length > 0 ? view.panelOrder : panels
+  // The centre is the Brain, and its state is read from Core — never inferred from
+  // the panel's own motion. Idle Core is a calm Brain; nothing claims cognition.
+  const core = snapshot.core.status === 'ready' || snapshot.core.status === 'stale' ? snapshot.core.data : null
+  const workforce = snapshot.workforce.status === 'ready' || snapshot.workforce.status === 'stale' ? snapshot.workforce.data : null
+  const cognition = brainState({
+    activeRequests: core?.activeRequests ?? 0,
+    working: workforce?.working ?? 0,
+    faultCount: core?.faultCount ?? 0,
+    lifecycle: core?.lifecycle ?? 'booting',
+  })
+  // App Mode is always the Brain; the form is chosen here and nowhere else.
+  const form = selectForm({ mode: 'app', hasWork: cognition !== 'calm' })
 
   const handleDragStart = (panelId: string) => setDraggedPanel(panelId)
   const handleDragOver = (e: React.DragEvent<HTMLElement>, panelId: string) => {
@@ -67,7 +82,7 @@ export function Home({ snapshot, view, update, open, panels }: WorkspaceProps & 
           <span>{goal.text}</span></label>)}</div>}
       </Panel>}
     </div>
-    <div className="f-home-centre"><Compass presence={mode.presence} onFocus={home.attention.profiles.length > 0 ? selectFocus : undefined} /></div>
+    <div className="f-home-centre"><Presence form={form} state={cognition} /></div>
     <div className="f-home-right">
       {panelOrder.includes('attention') && <Panel title="Attention" className="f-attention-panel" draggable onDragStart={() => handleDragStart('attention')} onDragOver={(e) => handleDragOver(e, 'attention')} onDragEnd={handleDragEnd} style={{ opacity: draggedPanel === 'attention' ? 0.5 : 1 }}>
         {home.attention.profiles.length > 0 ? <div className="f-attention">

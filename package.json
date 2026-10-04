@@ -13,6 +13,7 @@
     "start": "npm run build && node scripts/launch.mjs 2",
     "start:display2": "npm run build && node scripts/launch.mjs 2",
     "electron:dev": "node scripts/build-electron.mjs && electron . --dev",
+    "dev:desktop": "node scripts/dev-desktop.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.core.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",

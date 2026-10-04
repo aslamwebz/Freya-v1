@@ -1,8 +1,10 @@
-// Legacy UI is the default. Phase 19 ui-v2 is opt-in via ?ui=phase19, because the
-// real Core wiring it needs is deferred until after the Vault correction and the
-// adapted Phases 21/22/20 (PLAN Step G).
-if (new URLSearchParams(window.location.search).get('ui') === 'phase19') {
+// The from-scratch App Mode is the default. The previous ui-v2 shell and the
+// Phase ≤18 legacy UI remain reachable for comparison and rollback.
+const ui = new URLSearchParams(window.location.search).get('ui')
+if (ui === 'legacy') {
+  void import('./legacyEntry')
+} else if (ui === 'v2') {
   void import('./ui-v2/entry')
 } else {
-  void import('./legacyEntry')
+  void import('./app/entry')
 }

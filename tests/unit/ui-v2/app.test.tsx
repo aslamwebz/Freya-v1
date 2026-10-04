@@ -25,13 +25,13 @@ describe('fresh Freya website shell', () => {
   it('customizes all three themes and resets appearance', () => {
     const { preferences } = mount()
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
-    fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'pearl' } })
-    expect(document.querySelector('.freya-v2')).toHaveAttribute('data-theme', 'pearl')
-    fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'midnight' } })
+    fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'dawn' } })
+    expect(document.querySelector('.freya-v2')).toHaveAttribute('data-theme', 'dawn')
+    fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'vessel' } })
     fireEvent.change(screen.getByLabelText('Density'), { target: { value: 'compact' } })
-    expect(preferences.getSnapshot()).toMatchObject({ theme: 'midnight', density: 'compact' })
+    expect(preferences.getSnapshot()).toMatchObject({ theme: 'vessel', density: 'compact' })
     fireEvent.click(screen.getByRole('button', { name: 'Reset appearance' }))
-    expect(document.querySelector('.freya-v2')).toHaveAttribute('data-theme', 'aurora')
+    expect(document.querySelector('.freya-v2')).toHaveAttribute('data-theme', 'abyss')
   })
   it('preserves a draft and selected workspace across App and immersive modes', () => {
     mount()

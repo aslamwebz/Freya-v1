@@ -34,6 +34,7 @@ import type { ConsciousContextProjection } from '../core/protocol/consciousness'
 import type { LifeLoopProjection } from '../core/protocol/lifeloop'
 import { SKILL_NO_PAYLOAD } from '../core/protocol/skills'
 import { SKILL_LIMITS } from '../core/skills/types'
+import type { ProviderConfig, ProviderConfigInput } from './providerConfig'
 import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
 
 export interface RuntimeInfo {
@@ -68,6 +69,31 @@ const api = {
   loadWorkspace: (): Promise<unknown> => ipcRenderer.invoke('freya:workspace:load'),
   saveWorkspace: (payload: unknown): Promise<boolean> =>
     ipcRenderer.invoke('freya:workspace:save', payload),
+
+  // Frameless-window controls. Each acts on the window that asked.
+  windowMinimize: (): Promise<void> => ipcRenderer.invoke('freya:window:minimize'),
+  windowMaximize: (): Promise<void> => ipcRenderer.invoke('freya:window:maximize'),
+  windowClose: (): Promise<void> => ipcRenderer.invoke('freya:window:close'),
+
+  /**
+   * Provider settings, and the one place a credential crosses this bridge — in
+   * one direction only.
+   *
+   * `providerConfig` returns the masked view: base URL, model, the live flag and
+   * whether a key is stored. It never returns the key, because the key never
+   * leaves the main process and there is no field on the response for it.
+   *
+   * `saveProviderConfig` accepts the four named fields, rebuilt here from bounded
+   * values exactly like a Core command payload. The key goes in and a masked view
+   * comes back, so a window can set a credential and confirm it was stored without
+   * ever being able to read it back.
+   */
+  providerConfig: (): Promise<ProviderConfig> => ipcRenderer.invoke('freya:provider:read'),
+  saveProviderConfig: (input: unknown): Promise<ProviderConfig> => {
+    const bounded = rendererProviderPayload(input)
+    if (!bounded.ok) return Promise.reject(new Error(bounded.reason))
+    return ipcRenderer.invoke('freya:provider:write', bounded.payload)
+  },
 
   /**
    * A dumb relay. The host asks once, as the window is closing, and the
@@ -809,6 +835,55 @@ const MAX_SOURCE_URL_CHARS = 2_048
 const MAX_RESEARCH_QUESTION_CHARS = 4_096
 const MAX_STOP_REASON_CHARS = 1_000
 const MAX_COMMAND_ORIGIN_CHARS = 128
+/** A provider base URL is a URL, bounded like one. */
+const MAX_PROVIDER_URL_CHARS = 2_048
+/** A provider model id is bounded like Core's own model id. */
+const MAX_PROVIDER_MODEL_CHARS = 256
+/** A provider credential, with generous headroom over any real key. */
+const MAX_PROVIDER_KEY_CHARS = 4_096
+
+/**
+ * The provider settings a window may set, rebuilt from named fields.
+ *
+ * Same discipline as `rendererPayload`: an unrecognised field is dropped rather
+ * than forwarded, so a compromised window cannot attach an unbounded blob to a
+ * settings save. `apiKey` may be an explicit empty string — that is how a stored
+ * credential is cleared — but it is never part of what comes back.
+ */
+function rendererProviderPayload(
+  raw: unknown,
+): { ok: true; payload: ProviderConfigInput } | { ok: false; reason: string } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, reason: 'provider configuration is invalid' }
+  }
+  const record = raw as Record<string, unknown>
+  const payload: ProviderConfigInput = {}
+  if (record.baseUrl !== undefined) {
+    if (typeof record.baseUrl !== 'string' || record.baseUrl.length > MAX_PROVIDER_URL_CHARS) {
+      return { ok: false, reason: 'provider base URL is too large or invalid' }
+    }
+    payload.baseUrl = record.baseUrl
+  }
+  if (record.model !== undefined) {
+    if (typeof record.model !== 'string' || record.model.length > MAX_PROVIDER_MODEL_CHARS) {
+      return { ok: false, reason: 'provider model is too large or invalid' }
+    }
+    payload.model = record.model
+  }
+  if (record.liveEnabled !== undefined) {
+    if (typeof record.liveEnabled !== 'boolean') {
+      return { ok: false, reason: 'provider live flag is invalid' }
+    }
+    payload.liveEnabled = record.liveEnabled
+  }
+  if (record.apiKey !== undefined) {
+    if (typeof record.apiKey !== 'string' || record.apiKey.length > MAX_PROVIDER_KEY_CHARS) {
+      return { ok: false, reason: 'provider key is too large or invalid' }
+    }
+    payload.apiKey = record.apiKey
+  }
+  return { ok: true, payload }
+}
 
 
 /**

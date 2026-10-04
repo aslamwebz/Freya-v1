@@ -21,6 +21,23 @@ export interface WorkforceView { readonly rows: readonly WorkerRow[]; readonly t
 export interface ActivityRow { readonly id: string; readonly text: string; readonly at: number; readonly sequence: number; readonly tone: string }
 
 /**
+ * What the Settings surface may say about the nano-gpt provider.
+ *
+ * The key itself is deliberately absent: `hasKey` is the whole of what a window is
+ * told about the credential, and there is no field a raw key could occupy. `detail`
+ * is a closed sentence — `connected`, `not configured` or `live-disabled` — so the
+ * surface reports the real state in Core's own terms rather than inferring one.
+ */
+export interface ProviderView {
+  readonly connected: boolean
+  readonly baseUrl: string
+  readonly model: string
+  readonly liveEnabled: boolean
+  readonly hasKey: boolean
+  readonly detail: string
+}
+
+/**
  * What Core's Attention domain actually reports.
  *
  * There is no percentage here, and that is the point. `focus` is Core's own closed
@@ -78,6 +95,7 @@ export interface UiSnapshot {
   readonly core: Resource<CoreView>; readonly mission: Resource<MissionView>
   readonly workforce: Resource<WorkforceView>; readonly activity: Resource<readonly ActivityRow[]>
   readonly attention: Resource<AttentionView>
+  readonly provider: Resource<ProviderView>
 }
 export interface UiAdapter {
   getSnapshot(): UiSnapshot

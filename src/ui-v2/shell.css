@@ -6,8 +6,8 @@ body { background: #040910; }
 .freya-v2[data-workspace='workforce'] .f-atmosphere { background-image: url('./assets/office.webp'); }
 .freya-v2[data-workspace='forge'] .f-atmosphere { background-image: url('./assets/foundry.webp'); }
 .freya-v2[data-workspace='mind'] .f-atmosphere::after, .freya-v2[data-workspace='relay'] .f-atmosphere::after, .freya-v2[data-workspace='life'] .f-atmosphere::after { background: linear-gradient(145deg, #2c104127, transparent 55%, #51236127); }
-.freya-v2[data-theme='pearl'] .f-atmosphere::after { background: #e9f2fbd6; }
-.freya-v2[data-theme='midnight'] .f-atmosphere::after { background: #02081180; }
+.freya-v2[data-theme='dawn'] .f-atmosphere::after { background: #e9f2fbd6; }
+.freya-v2[data-theme='abyss'] .f-atmosphere::after { background: #02081180; }
 .freya-v2[data-backdrop='quiet'] .f-atmosphere::after { background: color-mix(in srgb, var(--f-bg) 55%, transparent); }
 .freya-v2[data-backdrop='solid'] .f-atmosphere { background: var(--f-bg); }
 .f-horizon, .f-stars { display: none; }
@@ -191,3 +191,20 @@ body { background: #040910; }
 .f-focus-panel>.f-muted { margin-top:.3rem; margin-bottom:.2rem; }
 .f-focus-panel .f-progress-line { margin-top:.45rem; }
 .f-focus-panel .f-tags { margin-top:.4rem; }
+
+/* Settings reads as one calm column rather than a wall of panels. */
+.f-settings { max-width:46rem; display:grid; gap:1rem; }
+.f-settings .f-panel { display:grid; gap:.85rem; }
+.f-settings-actions { display:flex; gap:.6rem; flex-wrap:wrap; margin-top:.3rem; }
+
+/* Chat — the transcript, and only the states Core actually reported. */
+.f-chat { display:grid; gap:.8rem; max-width:52rem; }
+.f-chat-log { display:grid; gap:.7rem; overflow-y:auto; max-height:min(60vh, 34rem); padding-right:.3rem; }
+.f-chat-empty { color:var(--f-muted); }
+.f-chat-turn { display:grid; gap:.2rem; padding:.7rem .9rem; border:1px solid var(--f-line); border-radius:var(--f-radius-small); background:var(--f-panel); }
+.f-chat-turn[data-role='user'] { border-color:var(--f-action); }
+.f-chat-turn[data-state='generating'] { opacity:.8; }
+.f-chat-turn b { font-size:.72em; letter-spacing:.12em; text-transform:uppercase; color:var(--f-heading); }
+.f-chat-turn span { white-space:pre-wrap; word-break:break-word; }
+.f-chat-boundary { color:var(--f-attention); border-left:2px solid var(--f-attention); padding-left:.6rem; }
+.f-chat-stop { justify-self:start; }

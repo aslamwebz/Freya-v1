@@ -1,0 +1,80 @@
+/* The Brain. A stable cognition orb; motion is internal and state-driven. */
+.f-brain {
+  position: relative;
+  display: grid;
+  place-items: center;
+  contain: layout size;
+  --brain-intelligence: var(--f-action);
+  --brain-cognition: var(--f-cognition);
+  --brain-spin: 52s;
+}
+
+.f-brain-field {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  mix-blend-mode: screen;
+}
+
+.f-brain-ring {
+  fill: none;
+  stroke: var(--brain-intelligence);
+  stroke-width: 1;
+  opacity: 0.4;
+}
+
+.f-brain-ring--dim {
+  stroke: var(--brain-cognition);
+  opacity: 0.32;
+}
+
+.f-brain-lattice {
+  transform-origin: 120px 120px;
+  animation: f-brain-spin var(--brain-spin) linear infinite;
+}
+
+.f-brain-node {
+  fill: var(--brain-intelligence);
+  opacity: 0.72;
+}
+
+.f-brain-core {
+  fill: var(--brain-cognition);
+  opacity: 0.9;
+}
+
+/* Idle is quiet: less emission, slower motion. */
+.f-brain[data-state='calm'] { opacity: 0.82; }
+.f-brain[data-state='calm'] .f-brain-core { opacity: 0.5; }
+.f-brain[data-state='calm'] { --brain-spin: 90s; }
+
+/* Activity is visible, and only activity glows. */
+.f-brain[data-state='thinking'] .f-brain-field,
+.f-brain[data-state='delegating'] .f-brain-field,
+.f-brain[data-state='researching'] .f-brain-field,
+.f-brain[data-state='load'] .f-brain-field {
+  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--brain-intelligence) 45%, transparent));
+}
+.f-brain[data-state='thinking'] { --brain-spin: 26s; }
+.f-brain[data-state='researching'] { --brain-spin: 18s; }
+.f-brain[data-state='delegating'] { --brain-spin: 22s; }
+.f-brain[data-state='load'] { --brain-spin: 10s; }
+
+/* Outcome and uncertainty read on the core, not the whole object. */
+.f-brain[data-state='success'] .f-brain-core { fill: var(--f-positive); }
+.f-brain[data-state='uncertainty'] .f-brain-core { fill: var(--f-attention); }
+
+@keyframes f-brain-spin {
+  to { transform: rotate(360deg); }
+}
+
+.frey-v2[data-effects='reduced'] .f-brain-lattice {
+  animation: none;
+}
+.frey-v2[data-effects='reduced'] .f-brain-field {
+  filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .f-brain-lattice { animation: none; }
+}

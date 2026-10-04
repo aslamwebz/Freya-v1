@@ -38,6 +38,7 @@ function liveSnapshot(overrides: Partial<UiSnapshot> = {}): UiSnapshot {
     workforce: live({ rows: [{ id: 'worker-real-1', state: 'Researching', specialization: 'Research agent' }], total: 1, working: 1 }),
     activity: live([{ id: 'act-1', text: 'Core reported a verified outcome', at: 1790956800000, sequence: 42, tone: 'good' }]),
     attention: live({ focus: 'focused', ingested: 10, decisions: 4, cued: 2, spoke: 1, interrupted: 0, budgetExceeded: 0, inboxCount: 2 }),
+    provider: live({ connected: true, baseUrl: 'https://nano-gpt.com/api/v1', model: 'openai/gpt-4.1-nano', liveEnabled: true, hasKey: true, detail: 'connected' }),
     ...overrides,
   }
 }

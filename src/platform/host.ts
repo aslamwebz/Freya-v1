@@ -53,6 +53,28 @@ export interface RuntimeInfo {
   dev: boolean
 }
 
+/**
+ * The masked provider view a window may read.
+ *
+ * Structurally the same shape `electron/providerConfig.ts` returns: the non-secret
+ * companions plus `hasKey`. The key itself is not named here, because the renderer
+ * has no field for it and this declaration is the whole of what the bridge admits.
+ */
+export interface ProviderConfigView {
+  baseUrl: string
+  model: string
+  liveEnabled: boolean
+  hasKey: boolean
+}
+
+/** The provider fields a window may set. `apiKey` is write-only and optional. */
+export interface ProviderConfigPatch {
+  baseUrl?: string
+  model?: string
+  liveEnabled?: boolean
+  apiKey?: string
+}
+
 export interface FreyaHostBridge {
   isDesktop: true
 
@@ -61,6 +83,27 @@ export interface FreyaHostBridge {
   saveWorkspace(payload: unknown): Promise<boolean>
   /** The host asks for the current layout as the window is closing. */
   onCollect(handler: () => unknown): void
+
+  /** Frameless-window controls. Each acts on the window that calls. */
+  windowMinimize(): Promise<void>
+  windowMaximize(): Promise<void>
+  windowClose(): Promise<void>
+
+  /**
+   * The provider settings, and the one place a credential crosses this bridge — in
+   * one direction only.
+   *
+   * `providerConfig` returns the masked view: base URL, model, the live flag and
+   * whether a key is stored. It never returns the key, because the key never leaves
+   * the main process and there is no field on the response for it.
+   *
+   * `saveProviderConfig` accepts the four named fields. The key goes in and a masked
+   * view comes back, so a window can set a credential and confirm it was stored
+   * without ever being able to read it back. The main process saves first and then
+   * rebuilds Core's environment, so a saved setting takes effect without a relaunch.
+   */
+  providerConfig(): Promise<ProviderConfigView>
+  saveProviderConfig(input: ProviderConfigPatch): Promise<ProviderConfigView>
 
   coreSubmit(command: CoreCommandName, payload?: unknown): Promise<CoreCommandResult>
   coreStatus(): Promise<CoreStatus>

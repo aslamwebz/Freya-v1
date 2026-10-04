@@ -13,7 +13,13 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // no longer describe the canonical Phase 31 binary. These bounds retain only
   // modest headroom over the measured Phase 31 artifacts (~1.76MB / ~109KB), so
   // future growth still has to be explained rather than silently accumulating.
-  mainBytes: 1_900_000,
+  //
+  // Phase 42 Device Hands is the next explained growth: activating Phase 35 in the
+  // main process bundles its runtime — the ten-gate pipeline, the fold, the four
+  // surface policies and the host adapters — into `main.cjs`, measured at ~1.99MB.
+  // The bound keeps modest headroom over that, and the host stays unminified on
+  // purpose so its security-critical source can be audited in the shipped artifact.
+  mainBytes: 2_100_000,
   preloadBytes: 120_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,
@@ -21,7 +27,9 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // the three.js presence stage. The old 1.5MB ceiling predated that surface, so the
   // budget tracks the shipped design with headroom for its next iteration rather than
   // forcing the concept art out to satisfy a number that never accounted for it.
-  rendererTotalBytes: 3_500_000,
+  // The App Mode / persistent-board merge pushed the measured total to ~3.57MB, so the
+  // bound is raised to keep headroom over the shipped design rather than trimming it.
+  rendererTotalBytes: 3_650_000,
 })
 
 export function inspectLockfile(pkg, lock) {

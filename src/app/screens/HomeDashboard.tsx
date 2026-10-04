@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
+import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { UiSnapshot } from '../../ui-v2/state/contract'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { Clock } from '../../ui-v2/primitives/Clock'
@@ -102,12 +102,6 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 export function HomeDashboard({ screen, slots, snapshot, draft, generating, notice, dressing, onOpenDressing, onDraft, onSend, onNavigate }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
-  // The board is *contained*: scaled to fit fully inside the viewport so no
-  // content goes past the screen edge. Seeded from the window so the first paint
-  // is already correct (no letterbox flash before the ResizeObserver runs).
-  const [scale, setScale] = useState(() => typeof window === 'undefined'
-    ? 1
-    : Math.max(.4, Math.min(window.innerWidth / 1672, window.innerHeight / 941)))
   const [voiceNotice, setVoiceNotice] = useState('')
   const [menu, setMenu] = useState<string | null>(null)
   const [models, setModels] = useState<readonly ModelEntry[]>([])
@@ -116,15 +110,6 @@ export function HomeDashboard({ screen, slots, snapshot, draft, generating, noti
   const [thinkLevel, setThinkLevel] = useState<typeof THINK[number]>('Think')
   const [collapsed, setCollapsed] = useState(false)
   const [listening, setListening] = useState(false)
-  useEffect(() => {
-    const node = viewport.current
-    if (!node) return
-    const measure = () => setScale(Math.max(.4, Math.min(node.clientWidth / 1672, node.clientHeight / 941)))
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [])
   const home = ready(snapshot.home)
   const focus = home?.focus
   const attention = home?.attention.profiles[0]
@@ -160,10 +145,9 @@ export function HomeDashboard({ screen, slots, snapshot, draft, generating, noti
     void selectModel(id)
   }
   const activeModel = model ?? provider?.model ?? 'provider default'
-  const style = { '--hd-scale': scale, width: 1672 * scale, height: 941 * scale } as CSSProperties
 
   return <div className="freya-v2 hd-viewport" data-theme="abyss" ref={viewport}>
-    <div className="hd-frame" style={style}><div className="hd-dashboard" data-screen={screen} data-background={design.background}>
+    <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-background={design.background}>
       <header className="hd-header">
         <div className="hd-clock">
           <Clock />

@@ -1375,6 +1375,16 @@ class FreyaCore implements Core {
 
     this.guard = this.buildGuard()
 
+    // The encrypted Vault is opened **once**, here, before any durable store is built.
+    //
+    // It used to be opened lazily by the first store that wanted it — the Mission store
+    // — which meant the Life store, built earlier in this same method, found no Vault
+    // handle and silently fell back to memory. A Core with a reachable, correctly
+    // configured database was therefore reporting its autobiographical layer as
+    // ephemeral, and nothing about that fallback was visible unless the owner looked.
+    // Opening it up front makes "durable" mean what the configuration says it means.
+    await this.ensureVault()
+
     this.gateway = new ModelGateway({
       providers: this.buildProviders(),
       recorder: this.fabricRecorder(),
@@ -7078,6 +7088,15 @@ class FreyaCore implements Core {
           faultReason: `Life History could not be encrypted: ${describe(error)}`,
         })
       }
+    }
+    if (this.options.vault) {
+      return new MemoryLifeStore({
+        mode: 'ephemeral',
+        faultReason:
+          this.vaultFault ??
+          'no encrypted Vault is available on this machine, so Freya is keeping her ' +
+            'autobiographical layer in memory only and it will not survive a restart',
+      })
     }
     return new MemoryLifeStore({
       mode: 'ephemeral',

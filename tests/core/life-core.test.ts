@@ -225,6 +225,9 @@ describe('life history in Core', () => {
     const dir = fixture.dir
     await fixture.core.stop('restart for withdrawal test')
 
+    // The restart must reopen the **same Vault**: durable stores moved to the canonical
+    // SQLCipher database in the SQLCipher correction, so a Core started without one has
+    // nothing to restore from. Restarting in memory would pass by asserting nothing.
     const fake = new FakeModelProvider()
     const reopened = createCore({
       dataPath,
@@ -235,6 +238,8 @@ describe('life history in Core', () => {
     await reopened.start()
     try {
       const projection = reopened.life()
+      expect(projection.persistence.mode).toBe('encrypted')
+      expect(projection.persistence.durable).toBe(true)
       expect(projection.counts.withdrawn).toBe(1)
       const timeline = await reopened.handleCommand({ command: 'life.timeline.read', requestId: 't1' })
       expect(timeline.life?.timeline?.items.some((item) => item.entryId === entryId)).toBe(false)

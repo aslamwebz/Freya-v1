@@ -747,6 +747,17 @@ const PAYLOAD_RULES: {
     (p.turnId === null || isEventId(p.turnId)),
 
   'brain.degraded': (p) => isNonEmptyString(p.reason),
+
+  /**
+   * Life History (Phase 21).
+   *
+   * Three types the Life engine emits, declared here because an event type the engine can
+   * write and the journal cannot parse ends the log on the next start. Metadata only:
+   * ids, closed labels, a revision number and the measured lengths of the three
+   * text-bearing fields. There is no slot for an entry's title, summary or body, so
+   * neither the engine nor a hand-edited line can put a day of someone's life into the
+   * journal's most-read file.
+   */
   'life.entry.recorded': (p) =>
     isEventId(p.entryId) &&
     isNonEmptyString(p.kind) &&
@@ -760,11 +771,13 @@ const PAYLOAD_RULES: {
     typeof p.occurredAtKnown === 'boolean' &&
     isNonNegativeInt(p.titleLength) &&
     isNonNegativeInt(p.summaryLength) &&
-    isNonNegativeInt(p.bodyLength),
+    isNonNegativeInt(p.bodyLength) &&
+    isNonNegativeInt(p.referenceCount) &&
+    isNonNegativeInt(p.conflictCount),
   'life.entry.withdrawn': (p) =>
     isEventId(p.entryId) &&
     isPositiveInt(p.revision) &&
-    isNonEmptyString(p.reason),
+    isBoundedText(p.reason, 500),
   'life.conflict.detected': (p) =>
     isEventId(p.conflictId) &&
     isEventId(p.entryA) &&

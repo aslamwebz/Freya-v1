@@ -1,7 +1,13 @@
 import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'
 import { join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
-import { ElectronCoreHost, type HostEnv } from './coreHost'
+import { ElectronCoreHost, type HostEnv, type DeviceHandsHostOptions } from './coreHost'
+import {
+  createElectronDeviceHandsEffects,
+  denyAllAuthority,
+  openDeviceHandsJournal,
+} from './devicehands'
 import { loadKeyring } from './keyring'
 import { ProviderConfigStore } from './providerConfig'
 import { createFreyaVaultBinding } from './vaultBinding'
@@ -13,6 +19,7 @@ import { installSingleInstanceGuard } from './startup/singleInstance'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ProviderConfigInput } from './providerConfig'
 import type { ModelProvider } from '../core/model/provider'
+import type { GrantFact } from '../core/devicehands'
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
@@ -55,6 +62,73 @@ let attentionTimer: ReturnType<typeof setInterval> | null = null
 /** Resolves when the renderer has answered the closing-time request. */
 let pendingCollect: (() => void) | null = null
 let quitting = false
+
+/**
+ * Phase 42 Device Hands: the production composition.
+ *
+ * Off unless `FREYA_DEVICE_HANDS=1` is set in the main-process environment, so a
+ * build that was not deliberately opted in has no Device Hands runtime at all. When
+ * it is on, the surface policy is assembled from the environment, the grants are read
+ * from an owner-authored file in the profile, and the authority denies every owner
+ * approval — so only the three actions Phase 35 does not require approval for
+ * (`browser.navigate`, `browser.read-text`, `transfer.download`) can run, and only
+ * against roots, hosts and commands the owner named. Everything else is refused.
+ *
+ * This is the unresolved seam stated plainly: there is no Core-owned Device Hands
+ * grant-minter or owner-approval channel in this architecture, so this host reads an
+ * owner-authored grant file rather than minting one, and it denies approvals rather
+ * than fabricating an owner. A surface that needs an approval therefore stays blocked.
+ */
+function splitDeviceHandsList(value: string | undefined): string[] {
+  if (value === undefined) return []
+  return value
+    .split(';')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+}
+
+function readDeviceHandsGrants(path: string): GrantFact[] {
+  if (!existsSync(path)) return []
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (entry): entry is GrantFact => typeof entry === 'object' && entry !== null && !Array.isArray(entry),
+    )
+  } catch {
+    // A grant file that cannot be parsed is no grants, not a permissive default.
+    return []
+  }
+}
+
+function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
+  if (process.env.FREYA_DEVICE_HANDS !== '1') return undefined
+  const userData = app.getPath('userData')
+  const grants = readDeviceHandsGrants(join(userData, 'device-hands.grants.json'))
+  const journal = openDeviceHandsJournal(join(userData, 'device-hands.jsonl'))
+  const effects = createElectronDeviceHandsEffects()
+  const authority = denyAllAuthority({
+    enabled: () => true,
+    activeGrant: (principalId, scope) =>
+      grants.find(
+        (grant) => grant.principalId === principalId && grant.scope === scope && grant.revokedAt === null,
+      ) ?? null,
+  })
+  return {
+    effects,
+    journal,
+    authority,
+    policy: {
+      allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
+      deniedRoots: [join(userData, 'vault')],
+      allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+      allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
+      allowedEnvNames: [],
+    },
+    grants,
+    enabled: true,
+  }
+}
 
 // The E2E harness sometimes opens two throwaway processes against the same
 // temporary profile to prove session cleanup. Production never does: both explicit
@@ -925,6 +999,7 @@ app.whenReady().then(async () => {
     const vaultBinding = process.platform === 'win32'
       ? createFreyaVaultBinding(join(ROOT, 'native', 'sqlcipher', 'win32-x64', 'better_sqlite3-electron44.node'))
       : undefined
+    const deviceHandsSeam = buildDeviceHandsSeam()
     coreHost = new ElectronCoreHost(
       dataPath,
       {
@@ -973,6 +1048,10 @@ app.whenReady().then(async () => {
         // The *entire* provider set when the research fixtures are gated on, so an
         // E2E run cannot fall through to a real provider.
         ...(fixtureProvider ? { providers: [fixtureProvider] } : {}),
+        // Phase 42. Off unless the main process was deliberately opted in. The seam
+        // carries the real adapters, a durable journal and an owner-authored grant
+        // file; Core's own STOP ALL is composed on top of it by the host.
+        ...(deviceHandsSeam ? { deviceHands: deviceHandsSeam } : {}),
       },
     )
     registerIpc()

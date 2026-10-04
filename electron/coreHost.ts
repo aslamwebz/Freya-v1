@@ -28,6 +28,15 @@ import { SafeHttpTransport } from '../core/research/transport'
 import type { SearchProvider } from '../core/research/types'
 import type { ModelProvider } from '../core/model/provider'
 import type { BrowserTargetFactory } from '../core/research/browser'
+import { randomUUID } from 'node:crypto'
+import {
+  createDeviceHandsActivation,
+  type DeviceHandsActivation,
+  type DeviceHandsActivationStatus,
+  type DeviceHandsAuthority,
+  type DeviceHandsEffects,
+  type DeviceHandsJournal,
+} from './devicehands'
 
 /**
  * The environment the host reads, main-process only.
@@ -457,6 +466,33 @@ consciousness(): ConsciousContextProjection | null
   stop(reason?: string): Promise<void>
 }
 
+/**
+ * The Phase 42 Device Hands seam.
+ *
+ * This is the whole of what the host must supply to switch Phase 35 on: the real
+ * effect adapters, a durable journal, and an authority Core policy already backs
+ * (STOP ALL, the owner switch, the grants and the owner's approvals). The host does
+ * not mint any of them here — Core's STOP ALL latch is composed in on top of whatever
+ * the authority reports, so the latch always wins.
+ *
+ * `enabled` defaults to false. A host that supplies the seam and forgets to opt in
+ * gets an opened, policy-loaded, grant-registered runtime that refuses every action at
+ * its own `enabled` gate — which is the fail-closed reading, not a broken one.
+ */
+export interface DeviceHandsHostOptions {
+  readonly effects: DeviceHandsEffects
+  readonly journal: DeviceHandsJournal
+  readonly authority: DeviceHandsAuthority
+  /** The surface policy. Must name the Vault and keyring roots among its denied roots. */
+  readonly policy?: unknown
+  /** Grants Core policy already authorized. Registered here, never minted here. */
+  readonly grants?: readonly unknown[]
+  /** Whether to switch the phase on at start. Default false. */
+  readonly enabled?: boolean
+  /** Whether a journal that does not chain refuses to open. Default true. */
+  readonly requireTrustworthyJournal?: boolean
+}
+
 export interface CoreHostOptions {
   /**
    * The conversation master key, from the OS secure storage.
@@ -577,6 +613,12 @@ export interface CoreHostOptions {
     adapters: RelayAdapterSet
     allowlistedRepos?: readonly string[]
   }
+  /**
+   * The Phase 42 Device Hands activation seam. Absent — the state of every build
+   * until the owner supplies real adapters and an authority — the runtime is never
+   * constructed, and no surface exists to reach.
+   */
+  deviceHands?: DeviceHandsHostOptions
 }
 
 export class ElectronCoreHost implements CoreHost {
@@ -638,6 +680,15 @@ export class ElectronCoreHost implements CoreHost {
   private reconfiguring: Promise<void> | null = null
   /** The newest environment a rebuild has not yet been started for. */
   private pendingReconfig: HostEnv | null = null
+  /**
+   * The Phase 42 Device Hands activation, or null when the seam was not supplied.
+   *
+   * Built and torn down with the Core, because its authority reads Core's own STOP ALL
+   * latch: an activation that outlived the Core it reads would be reading a stopped
+   * latch forever, which is safe but useless, and one built before the Core would have
+   * nothing to read.
+   */
+  private deviceHands: DeviceHandsActivation | null = null
 
   constructor(
     private readonly dataPath: string,
@@ -735,7 +786,7 @@ export class ElectronCoreHost implements CoreHost {
     // that had gone away, and a renderer reload is not something to require here.
     this.releaseWindowObservation()
     this.contextChannel.unbind()
-
+    this.releaseDeviceHands()
     this.env = env
     this.stopRequested = false
     // The settled startup promise would be returned by `start()` unchanged, so it is
@@ -778,6 +829,55 @@ export class ElectronCoreHost implements CoreHost {
     this.windowObservation = null
     this.windowLane = null
     this.observedContextId = null
+  }
+
+  /**
+   * Build the Phase 42 activation, if the seam was supplied, and switch it on only
+   * when the owner explicitly asked.
+   *
+   * The authority's `stopAllActive` is composed with Core's own latch rather than
+   * replacing it: Core's STOP ALL always wins, whatever the supplied authority says.
+   * That is the one precedence rule this wiring must not be able to get wrong.
+   */
+  private async startDeviceHands(): Promise<void> {
+    const seam = this.options.deviceHands
+    if (seam === undefined) return
+    const authority: DeviceHandsAuthority = {
+      ...seam.authority,
+      stopAllActive: () => (this.core?.status().stopAll.active ?? false) || seam.authority.stopAllActive(),
+    }
+    const activation = createDeviceHandsActivation({
+      effects: seam.effects,
+      journal: seam.journal,
+      authority,
+      now: () => new Date().toISOString(),
+      newId: () => randomUUID(),
+      ...(seam.requireTrustworthyJournal === undefined
+        ? {}
+        : { requireTrustworthyJournal: seam.requireTrustworthyJournal }),
+    })
+    await activation.open()
+    if (seam.enabled === true && seam.policy !== undefined) {
+      const result = await activation.activate({ policy: seam.policy, grants: seam.grants ?? [] })
+      if (!result.ok) {
+        // A seam that could not be activated is left open but off: every action is
+        // refused at its own gates, which is the safe direction.
+        console.error(`[freya] device hands did not activate: ${result.reason}`)
+      }
+    }
+    this.deviceHands = activation
+  }
+
+  /** Deactivate and release the Device Hands activation, if one was built. */
+  private releaseDeviceHands(): void {
+    const activation = this.deviceHands
+    this.deviceHands = null
+    if (activation !== null) void activation.dispose()
+  }
+
+  /** The activation's own status, or null when the seam was not supplied. */
+  deviceHandsStatus(): DeviceHandsActivationStatus | null {
+    return this.deviceHands?.status() ?? null
   }
 
   async start(): Promise<void> {
@@ -881,6 +981,7 @@ export class ElectronCoreHost implements CoreHost {
         })
         this.windowObservation.start()
       }
+      await this.startDeviceHands()
     })()
     try {
       await this.starting
@@ -1052,6 +1153,7 @@ export class ElectronCoreHost implements CoreHost {
     this.stopRequested = true
     try { await this.starting } catch { /* The start caller receives its own failure. */ }
     this.releaseWindowObservation()
+    this.releaseDeviceHands()
     const core = this.core
     this.core = null
     this.windows.clear()

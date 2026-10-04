@@ -7,8 +7,10 @@ import * as THREE from 'three'
  * on every launch. Freya's appearance is its identity, not a lottery.
  */
 
-export const GOLD = new THREE.Color('#ffbf62')
-export const GOLD_HI = new THREE.Color('#fff0cc')
+// Freya's accent is violet + cyan. These were the old gold pair; the gold is
+// gone — ACCENT is the violet, ACCENT_HI its pale highlight.
+export const ACCENT = new THREE.Color('#9b6bff')
+export const ACCENT_HI = new THREE.Color('#d9c7ff')
 export const BLUE = new THREE.Color('#3f96ff')
 export const BLUE_HI = new THREE.Color('#bfe2ff')
 export const CYAN = new THREE.Color('#7fdcff')

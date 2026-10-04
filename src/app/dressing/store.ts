@@ -7,7 +7,7 @@
  * preferences.
  */
 
-export const CENTRES = ['brain', 'orb', 'reactor', 'tesseract', 'galaxy'] as const
+export const CENTRES = ['freya', 'brain', 'orb', 'reactor', 'tesseract', 'galaxy'] as const
 export type Centre = (typeof CENTRES)[number]
 
 export const CENTRE_STYLES = ['lattice', 'slices', 'flow'] as const
@@ -22,25 +22,20 @@ export type Rings = (typeof RINGS)[number]
 export const FORMS = ['brain', 'chibi', 'adult'] as const
 export type Form = (typeof FORMS)[number]
 
-export const IMAGES = ['portrait', 'none'] as const
-export type DressingImage = (typeof IMAGES)[number]
-
 export interface DressingState {
   readonly centre: Centre
   readonly style: CentreStyle
   readonly background: Background
   readonly rings: Rings
   readonly form: Form
-  readonly image: DressingImage
 }
 
 export const DEFAULT_DRESSING: DressingState = Object.freeze({
-  centre: 'brain',
+  centre: 'freya',
   style: 'lattice',
   background: 'city',
   rings: 'on',
   form: 'brain',
-  image: 'portrait',
 })
 
 export const DRESSING_KEY = 'freya.dressing.v1'
@@ -61,7 +56,6 @@ export function parseDressing(input: unknown): DressingState {
     background: pick(BACKGROUNDS, value.background, DEFAULT_DRESSING.background),
     rings: pick(RINGS, value.rings, DEFAULT_DRESSING.rings),
     form: pick(FORMS, value.form, DEFAULT_DRESSING.form),
-    image: pick(IMAGES, value.image, DEFAULT_DRESSING.image),
   })
 }
 

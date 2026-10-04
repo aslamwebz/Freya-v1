@@ -1,0 +1,32 @@
+/* Shell chrome unified with the Home dashboard — loaded after app.css.
+ * The rail is full height with FREYA at its top; the header holds the clock and
+ * window controls. This chrome is persistent; only the main content swaps. */
+
+.a-rail { grid-column: 1; grid-row: 1 / -1; padding: 0; background: none; border: 0; gap: 0; }
+.a-head { grid-column: 2; grid-row: 1; justify-content: flex-end; padding: 1rem 1.6rem .4rem; }
+.a-screen-title { grid-column: 2; }
+.a-cmd { grid-column: 2; }
+
+.a-rail-top { display: flex; align-items: center; justify-content: space-between; padding: 1.6rem 1.1rem .9rem 1.6rem; }
+.a-rail-top .a-brand { display: block; }
+.a-rail-top .a-brand b { font-size: 1.45rem; letter-spacing: .4em; font-weight: 400; }
+
+.a-rail-toggle { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; color: var(--f-muted); background: none; }
+.a-rail-toggle:hover { color: var(--f-ink); background: color-mix(in srgb, var(--f-ink) 8%, transparent); }
+
+.a-rail nav { margin-top: 1.2rem; gap: .1rem; }
+.a-rail-item { justify-content: flex-start; gap: .8rem; width: 100%; padding: .6rem 1.6rem; border-radius: 0; border: 0; background: none; color: var(--f-muted); font-size: .92rem; }
+.a-rail-item:hover { color: var(--f-ink); background: none; }
+.a-rail-item[aria-current='page'] { color: #b6f6ff; background: none; box-shadow: none; text-shadow: 0 0 12px #59e0ff, 0 0 3px #bdf6ff; }
+.a-rail-item[aria-current='page'] svg { filter: drop-shadow(0 0 7px #4fe6ff); }
+
+.a-rail-foot { margin-top: auto; display: grid; gap: .6rem; padding: 0 1.4rem 1.2rem 1.6rem; }
+.a-online { margin-top: 0; display: grid; grid-template-columns: 9px 1fr; gap: .3rem .5rem; padding: 0; border: 0; font-size: .78rem; color: var(--f-positive); }
+.a-online .a-dot { width: 8px; height: 8px; margin-top: .2rem; border-radius: 50%; background: var(--f-positive); box-shadow: 0 0 8px var(--f-positive); }
+.a-online > span:not(.a-dot) { color: var(--f-ink); }
+.a-online small { grid-column: 2; color: var(--f-muted); font-size: .68rem; line-height: 1.6; }
+
+.a-user { width: 100%; justify-content: flex-start; gap: .6rem; padding: 6px 8px; border: 0; border-radius: 9px; background: #6cd3f409; color: var(--f-muted); }
+.a-user:hover { color: var(--f-ink); background: #6cd3f414; }
+
+.a-head-right { display: flex; align-items: center; gap: 1rem; }

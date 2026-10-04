@@ -1,7 +1,11 @@
 /* Reference 01: a single desktop composition. All rules are Home-only. */
-.hd-viewport { width: 100%; height: 100dvh; overflow: auto; background: #030911; display: grid; place-items: center; }
+.hd-viewport { width: 100%; height: 100dvh; overflow: hidden; background: #030911; display: grid; place-items: center; }
 .hd-frame { position: relative; flex: none; }
 .hd-dashboard { position: absolute; top: 0; left: 0; width: 1672px; height: 941px; transform: scale(var(--hd-scale)); transform-origin: top left; overflow: hidden; color: #d4e6f5; font: 14px 'Segoe UI', sans-serif; background: linear-gradient(180deg, #01070c24, transparent 60%, #02081215), url('../../ui-v2/assets/panorama.webp') center / cover; }
+.hd-dashboard[data-background='space'] { background: linear-gradient(180deg, transparent 35%, #020812cc), url('../assets/earth-night.jpg') center 60% / cover no-repeat, #01030a; }
+.hd-dashboard[data-background='aurora'] { background: radial-gradient(120% 90% at 20% 110%, #c8b2e63d, transparent 55%), radial-gradient(120% 90% at 80% 120%, #7ff0c02e, transparent 55%), #030911; }
+.hd-dashboard[data-background='grid'] { background-image: linear-gradient(#8fa4a82e 1px, transparent 1px), linear-gradient(90deg, #8fa4a82e 1px, transparent 1px); background-size: 46px 46px; background-color: #030911; }
+.hd-dashboard[data-background='obsidian'] { background: radial-gradient(120% 85% at 50% 118%, #7fe3c438, transparent 62%), radial-gradient(90% 60% at 50% -10%, #c8b2e629, transparent 55%), #030911; }
 .hd-dashboard button { color: inherit; background: none; border: 0; padding: 0; }
 .hd-dashboard button:focus-visible { outline: 2px solid #91ecff; outline-offset: 4px; }
 .hd-dashboard button:hover { color: #fff; }
@@ -52,6 +56,18 @@
 .hd-win-close:hover { background: #e0556b !important; color: #fff !important; }
 .hd-main { position: absolute; inset: 0; pointer-events: none; }
 .hd-main > * { pointer-events: auto; -webkit-app-region: no-drag; }
+
+/* The swappable main region for every non-Home tab: left cards · Freya centre ·
+   right cards, with an optional lower row. Same board coordinates as Home. */
+.hd-tab-body { position: absolute; left: 150px; right: 22px; top: 90px; bottom: 104px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 16px; }
+.hd-tab-body[data-layout='wide'] { grid-template-columns: minmax(0, 1fr); }
+.hd-col { display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow: hidden; }
+.hd-col-l { grid-column: 1; grid-row: 1; }
+.hd-col-r { grid-column: 3; grid-row: 1; }
+.hd-tab-centre { grid-column: 2; grid-row: 1; display: grid; place-items: center; min-height: 0; }
+.hd-tab-body[data-layout='wide'] .hd-tab-centre { grid-column: 1; }
+.hd-col-b { grid-column: 1 / -1; grid-row: 2; display: flex; gap: 16px; min-height: 0; overflow: hidden; }
+.hd-col-b > * { flex: 1 1 0; min-width: 0; }
 .hd-panel { position: absolute; border: 1px solid #b0daf0bd; border-radius: 12px; padding: 15px 20px 17px; background: linear-gradient(125deg, #2442587d, #06101ada 43%, #08131eca 71%, #4264806b); box-shadow: inset 1px 1px 1px #dcf1ff60, inset -1px -1px 1px #c0e5ff38, inset 0 -9px 18px #90b9e116, 0 7px 24px #0003, 0 0 9px #66c9ff15; backdrop-filter: blur(9px); }
 .hd-contoured { isolation: isolate; border: 0; background: none; box-shadow: none; backdrop-filter: none; }
 .hd-panel-contour { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; filter: drop-shadow(0 0 2px #b0e2ff33); }
@@ -83,8 +99,6 @@
 .hd-check { flex: none; width: 18px; height: 18px; border: 1px solid #7d9eafa1; border-radius: 50%; }
 .hd-checked { display: grid; place-items: center; color: #0c524d; border-color: #85ffe6; background: #65f5d2; box-shadow: 0 0 12px #5af3d780; font: 13px 'Segoe UI', sans-serif; }
 .hd-presence { position: absolute; top: 23px; left: 589px; width: 540px; height: 529px; pointer-events: auto; -webkit-app-region: no-drag; }
-.hd-orbits { position: absolute; inset: 0; width: 100%; height: 100%; }
-.hd-portrait { position: absolute; top: 43px; left: 49px; width: 447px; height: 405px; object-fit: fill; filter: saturate(.7) brightness(.92); mask-image: linear-gradient(#000 80%, transparent 99%); }
 .hd-dress { position: absolute; top: 38px; right: 46px; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 1px solid #8fc8e64d; background: #0a1826cc; color: #cfe6f7; box-shadow: 0 0 12px #66c9ff22; pointer-events: auto; -webkit-app-region: no-drag; z-index: 4; }
 .hd-dress:hover { color: #fff; background: #12324ae6; }
 .hd-orbit-label { position: absolute; font-size: 10px; letter-spacing: 1.55px; color: #b4dcf4; text-shadow: 0 0 8px #64bde455; }
@@ -93,10 +107,6 @@
 .hd-create { right: 14px; top: 262px; }
 .hd-remember { left: 93px; bottom: 73px; }
 .hd-act { right: 37px; bottom: 73px; }
-.hd-presence-name { position: absolute; left: 148px; right: 105px; bottom: 34px; display: grid; justify-items: center; gap: 1px; text-shadow: 0 1px 8px #06101c; }
-.hd-presence-name b { font-size: 29px; letter-spacing: 7px; font-weight: 400; color: #f2f6ff; }
-.hd-presence-name > span { font-size: 9px; letter-spacing: 2px; }
-.hd-presence-name small { font-size: 8px; letter-spacing: 1.2px; padding-top: 6px; white-space: nowrap; color: #9dc5e0; }
 .hd-attention { left: 1113px; top: 127px; width: 539px; height: 176px; }
 .hd-attention .hd-panel-head { gap: 23px; }
 .hd-attention .hd-panel-body { margin: 9px 0 0 33px; }
@@ -198,6 +208,5 @@
 .hd-send-orb { width: 18px; height: 18px; border-radius: 50%; background: conic-gradient(from 0deg, #8fe9ff, #b79cff, #8fe9ff); box-shadow: 0 0 12px #6fd8ffaa; animation: hd-spin .9s linear infinite; }
 @keyframes hd-spin { to { transform: rotate(360deg); } }
 .hd-notice { position: absolute; bottom: 66px; left: 18px; margin: 0; border: 1px solid #6fb6d559; border-radius: 10px; padding: 10px 16px; background: #071320f0; font-size: 13px; }
-.hd-chat-shortcut { position: absolute; right: 23px; bottom: 21px; text-align: right; font-size: 8px !important; letter-spacing: 1.35px; line-height: 1.7; color: #bcc9d7 !important; }
 .hd-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 1086px), (max-height: 611px) { .hd-viewport { place-items: start center; } }

@@ -12,6 +12,7 @@ import './chat/chat.css'
 import './dressing/dressing.css'
 import './screens/screens.css'
 import './app.css'
+import './shell-chrome.css'
 
 /**
  * Design phase: the App renders the labelled preview fixtures so the composition

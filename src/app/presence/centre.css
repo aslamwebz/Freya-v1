@@ -1,0 +1,32 @@
+/* The shared middle: rings + piece + Freya, one centre, used by every screen. */
+.freya-centre { position: relative; width: 100%; height: 100%; }
+
+.freya-centre .a-brain { position: absolute; inset: 0; }
+
+/* The rings frame Freya/the piece, whose centre sits a few percent above the box
+   centre (the stage camera looks slightly below the centrepiece). The offset is
+   a percentage so it scales with the box on every screen. */
+.freya-centre .hd-orbits { position: absolute; inset: 0; width: 100%; height: 100%; transform: translateY(-3.6%); }
+
+.freya-centre .hd-orbits .hd-spin,
+.freya-centre .hd-orbits .hd-rim,
+.freya-centre .hd-orbits .hd-beacon { transform-box: fill-box; transform-origin: center; }
+.freya-centre .hd-orbits .hd-spin-a { animation: hd-orbit-spin 70s linear infinite; }
+.freya-centre .hd-orbits .hd-spin-b { animation: hd-orbit-spin 110s linear infinite reverse; }
+.freya-centre .hd-orbits .hd-rim { animation: hd-rim-pulse 7s ease-in-out infinite; }
+.freya-centre .hd-orbits .hd-beacon { animation: hd-beacon-pulse 3.6s ease-in-out infinite; }
+@keyframes hd-orbit-spin { to { transform: rotate(360deg); } }
+@keyframes hd-rim-pulse { 0%, 100% { opacity: .95; } 50% { opacity: .55; } }
+@keyframes hd-beacon-pulse { 0%, 100% { opacity: .95; } 50% { opacity: .4; } }
+
+.freya-centre-portrait {
+  position: absolute;
+  top: 8.1%;
+  left: 50%;
+  width: 82.8%;
+  height: auto;
+  transform: translateX(-50%);
+  object-fit: fill;
+  filter: saturate(.7) brightness(.92);
+  mask-image: linear-gradient(#000 80%, transparent 99%);
+}

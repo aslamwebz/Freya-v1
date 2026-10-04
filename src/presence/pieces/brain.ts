@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js'
-import { BLUE, BLUE_HI, CYAN, GOLD, GOLD_HI, U, ghostMaterial, pointCloud, rand, smooth, type PointSeed } from '../stage/primitives'
+import { ACCENT, ACCENT_HI, BLUE, BLUE_HI, CYAN, U, ghostMaterial, pointCloud, rand, smooth, type PointSeed } from '../stage/primitives'
 import type { Centerpiece, BuildContext } from './types'
 import type { BrainStyle } from '../labState'
 
@@ -168,7 +168,7 @@ export function buildBrain(ctx: BuildContext): Brain {
       uScan: scanUniform,
       uBlue: { value: BLUE },
       uCyan: { value: CYAN },
-      uGold: { value: GOLD },
+      uAccent: { value: ACCENT },
     },
     vertexShader: /* glsl */ `
       attribute float fold; varying vec3 vN, vV, vW; varying float vFold;
@@ -179,14 +179,14 @@ export function buildBrain(ctx: BuildContext): Brain {
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: /* glsl */ `
-      uniform float uTime, uScan; uniform vec3 uBlue, uCyan, uGold;
+      uniform float uTime, uScan; uniform vec3 uBlue, uCyan, uAccent;
       varying vec3 vN, vV, vW; varying float vFold;
       void main() {
         float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.4);
         float sulcus = 1.0 - smoothstep(0.0, 0.4, vFold);
         vec3 c = uBlue * (0.012 + 0.55 * fres) + uCyan * sulcus * (0.07 + 0.38 * fres);
         float scan = exp(-pow((vW.y - uScan) / 0.06, 2.0));
-        c += (uCyan * 0.5 + uGold * 0.4 * sulcus) * scan;
+        c += (uCyan * 0.5 + uAccent * 0.4 * sulcus) * scan;
         c *= 0.8 + 0.2 * step(0.45, fract(vW.y * 55.0 - uTime * 0.6));
         gl_FragColor = vec4(c, 1.0);
       }`,
@@ -233,13 +233,13 @@ export function buildBrain(ctx: BuildContext): Brain {
       x: v.x,
       y: v.y,
       z: v.z,
-      c: GOLD.clone().lerp(BLUE, random() * 0.5).multiplyScalar(0.3),
+      c: ACCENT.clone().lerp(BLUE, random() * 0.5).multiplyScalar(0.3),
       s: rand(random, 0.5, 1.2),
     })
   }
   group.add(pointCloud(core, 0.5, pixelRatio))
 
-  // Neural network: gold nodes, connections carrying light pulses.
+  // Neural network: violet nodes, connections carrying light pulses.
   const nodes: PointSeed[] = []
   for (let i = 0; i < NODES; i += 1) {
     const v = inside(0.45, 1.0)
@@ -247,7 +247,7 @@ export function buildBrain(ctx: BuildContext): Brain {
       x: v.x,
       y: v.y,
       z: v.z,
-      c: GOLD.clone().lerp(GOLD_HI, random() * 0.7),
+      c: ACCENT.clone().lerp(ACCENT_HI, random() * 0.7),
       s: rand(random, 1.4, 3.8),
     })
   }
@@ -286,7 +286,7 @@ export function buildBrain(ctx: BuildContext): Brain {
     uniforms: {
       uTime: { value: 0 },
       uBase: { value: new THREE.Color('#4b7fc4') },
-      uPulse: { value: new THREE.Color(GOLD_HI) },
+      uPulse: { value: new THREE.Color(ACCENT_HI) },
     },
     vertexShader: /* glsl */ `
       attribute float aT, aSeed; varying float vT, vSeed;
@@ -377,8 +377,8 @@ export function buildBrain(ctx: BuildContext): Brain {
         float depth = 0.25 + 0.75 * smoothstep(-0.7, 0.7, front);
         float shimmer = 0.55 + 0.45 * sin(vLevel * 0.55 - uTime * 1.6);
         float crest = 0.55 + 0.45 * smoothstep(0.2, 0.9, vFold);
-        vec3 gold = vec3(1.0, 0.68, 0.3);
-        vec3 c = gold * 0.2 * shimmer * crest * depth * depth;
+        vec3 accent = vec3(1.0, 0.68, 0.3);
+        vec3 c = accent * 0.2 * shimmer * crest * depth * depth;
         float scan = exp(-pow((vW.y - uScan) / 0.07, 2.0));
         c += vec3(0.55, 0.85, 1.0) * scan * 1.3 * depth;
         gl_FragColor = vec4(c, 1.0);
@@ -387,7 +387,7 @@ export function buildBrain(ctx: BuildContext): Brain {
   for (const geometry of surfaces) {
     styles.slices.add(new THREE.LineSegments(contours(geometry, 40, -0.72, 0.82), sliceMaterial))
   }
-  const sliceGhost = ghostMaterial('#ffb350', 0.12)
+  const sliceGhost = ghostMaterial('#9b6bff', 0.12)
   for (const geometry of surfaces) styles.slices.add(new THREE.Mesh(geometry, sliceGhost))
 
   /* ---- B · flow: particles streaming over the folded surface ---- */
@@ -435,7 +435,7 @@ export function buildBrain(ctx: BuildContext): Brain {
     speed[i] = rand(random, 0.012, 0.035) * (band[i] === 1 ? -1 : 1)
     fsize[i] = rand(random, 0.45, 1.15)
     fseed[i] = random() * 100
-    const colour = random() < 0.06 ? GOLD_HI.clone().multiplyScalar(0.8) : BLUE_HI.clone().lerp(CYAN, random() * 0.6).multiplyScalar(0.5)
+    const colour = random() < 0.06 ? ACCENT_HI.clone().multiplyScalar(0.8) : BLUE_HI.clone().lerp(CYAN, random() * 0.6).multiplyScalar(0.5)
     fcolor.set([colour.r, colour.g, colour.b], i * 3)
   }
   flowGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(FLOW * 3), 3))
@@ -487,7 +487,7 @@ export function buildBrain(ctx: BuildContext): Brain {
   const flowGhost = ghostMaterial('#3f96ff', 0.14)
   for (const geometry of surfaces) styles.flow.add(new THREE.Mesh(geometry, flowGhost))
 
-  /* ---- C · glass: amber glass cortex, blue reserved for data ---- */
+  /* ---- C · glass: violet glass cortex, blue reserved for data ---- */
 
   const glassMaterial = new THREE.ShaderMaterial({
     transparent: true,
@@ -511,8 +511,8 @@ export function buildBrain(ctx: BuildContext): Brain {
         float diff = max(dot(N, L), 0.0);
         float spec = pow(max(dot(N, normalize(L + V)), 0.0), 48.0);
         float gyrus = smoothstep(0.25, 1.0, vFold);
-        vec3 amber = vec3(1.0, 0.6, 0.22);
-        vec3 c = amber * (0.006 + 0.05 * diff * gyrus) + amber * fres * 0.32 + vec3(1.0, 0.88, 0.62) * spec * 0.55 * gyrus;
+        vec3 accent = vec3(1.0, 0.6, 0.22);
+        vec3 c = accent * (0.006 + 0.05 * diff * gyrus) + accent * fres * 0.32 + vec3(1.0, 0.88, 0.62) * spec * 0.55 * gyrus;
         float scan = exp(-pow((vW.y - uScan) / 0.06, 2.0));
         c += vec3(0.45, 0.8, 1.0) * scan * (0.35 + 0.5 * fres);
         gl_FragColor = vec4(c, 1.0);
@@ -521,10 +521,10 @@ export function buildBrain(ctx: BuildContext): Brain {
   for (const geometry of surfaces) styles.glass.add(new THREE.Mesh(geometry, glassMaterial))
 
   const STYLE_NET: Record<BrainStyle, [string, string]> = {
-    current: ['#4b7fc4', '#fff0cc'],
-    slices: ['#6a4a20', '#fff0cc'],
-    flow: ['#3a6fb0', '#ffd88a'],
-    glass: ['#5a3a18', '#bfe8ff'],
+    current: ['#4b7fc4', '#d9c7ff'],
+    slices: ['#2f2a52', '#d9c7ff'],
+    flow: ['#3a6fb0', '#b79cff'],
+    glass: ['#2a2450', '#bfe8ff'],
   }
 
   // Brain stem, descending into the beam.
@@ -537,7 +537,7 @@ export function buildBrain(ctx: BuildContext): Brain {
       x: Math.cos(a) * r,
       y: -0.35 - t * 0.9,
       z: Math.sin(a) * r - 0.2,
-      c: BLUE_HI.clone().lerp(GOLD, random() * 0.4).multiplyScalar(0.4),
+      c: BLUE_HI.clone().lerp(ACCENT, random() * 0.4).multiplyScalar(0.4),
       s: rand(random, 0.5, 1.2),
     })
   }

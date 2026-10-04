@@ -3,7 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
-import { GOLD_HI, U, flatMaterial, lineMaterial, lineSegments, makeRandom, pointCloud, type PointSeed } from './primitives'
+import { ACCENT_HI, U, flatMaterial, lineMaterial, lineSegments, makeRandom, pointCloud, type PointSeed } from './primitives'
 import type { LabState, Piece } from '../labState'
 import type { Centerpiece, Readout, VoiceLevels } from '../pieces/types'
 import { buildBrain } from '../pieces/brain'
@@ -69,8 +69,6 @@ export class PresenceStage {
   private readonly hud = new THREE.Group()
   private readonly hudSpin: { object: THREE.Object3D; speed: number }[] = []
   private readonly gyro = new THREE.Group()
-  private readonly scanner = new THREE.Group()
-  private scannerTicks: THREE.Object3D | null = null
   private readonly beacons: THREE.Points
   private readonly beaconAttribute: THREE.BufferAttribute
 
@@ -144,8 +142,6 @@ export class PresenceStage {
     this.hud.position.y = CENTRE_Y
     this.world.add(this.hud)
     this.buildHud()
-    this.scanner.visible = false
-    this.hud.add(this.scanner)
 
 
     this.beacons = this.buildBeacons(pixelRatio)
@@ -167,7 +163,7 @@ export class PresenceStage {
     equator.add(tickA)
     this.hudSpin.push({ object: tickA, speed: 0.05 })
 
-    const arcB = this.arcRing(2.32, 0.025, [[0, 1.4], [1.7, 0.5], [2.5, 2.1], [4.9, 0.9]], '#ffc46b', 0.7)
+    const arcB = this.arcRing(2.32, 0.025, [[0, 1.4], [1.7, 0.5], [2.5, 2.1], [4.9, 0.9]], '#9b6bff', 0.7)
     equator.add(arcB)
     this.hudSpin.push({ object: arcB, speed: -0.09 })
 
@@ -181,34 +177,9 @@ export class PresenceStage {
     const g1 = this.circle(2.0, '#4fa6ff', 0.25)
     g1.rotation.set(Math.PI / 2, 0, 0.5)
     this.gyro.add(g1)
-    const g2 = this.tickRing(1.9, 96, 0.035, '#ffc46b', 0.3)
+    const g2 = this.tickRing(1.9, 96, 0.035, '#9b6bff', 0.3)
     g2.rotation.set(Math.PI / 2 - 0.4, 0.3, 0)
     this.gyro.add(g2)
-
-    this.scanner.add(this.arcRing(1.7, 0.012, [[0, Math.PI * 2]], '#9fe4ff', 0.8))
-    this.scannerTicks = this.tickRing(1.72, 72, 0.05, '#9fe4ff', 0.6)
-    this.scanner.add(this.scannerTicks)
-    this.scanner.add(
-      new THREE.Mesh(
-        new THREE.CircleGeometry(1.7, 72),
-        new THREE.ShaderMaterial({
-          transparent: true,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-          side: THREE.DoubleSide,
-          vertexShader: /* glsl */ `
-            varying vec2 vUv;
-            void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-          fragmentShader: /* glsl */ `
-            varying vec2 vUv;
-            void main() {
-              float d = length(vUv - 0.5) * 2.0;
-              float a = smoothstep(0.55, 1.0, d) * (1.0 - smoothstep(0.97, 1.0, d)) * 0.35;
-              gl_FragColor = vec4(vec3(0.45, 0.8, 1.0) * a, a);
-            }`,
-        }),
-      ),
-    )
   }
 
   private buildBeacons(pixelRatio: number): THREE.Points {
@@ -216,7 +187,7 @@ export class PresenceStage {
       x: 0,
       y: 0,
       z: 0,
-      c: (i === 1 ? GOLD_HI : new THREE.Color('#bfe2ff')).clone(),
+      c: (i === 1 ? ACCENT_HI : new THREE.Color('#bfe2ff')).clone(),
       s: 4.5,
     }))
     const beacons = pointCloud(seeds, 0.3, pixelRatio)
@@ -274,7 +245,6 @@ export class PresenceStage {
     }
     this.brain.setStyle(lab.style)
     this.hud.visible = this.pieces[lab.piece].hud
-    this.scanner.visible = lab.piece === 'brain'
 
     this.nextReadout = 0
     if (!this.running) this.draw(0)
@@ -363,11 +333,6 @@ export class PresenceStage {
     for (const material of this.materials) {
       if (U(material).uTime) U(material).uTime!.value = time
     }
-
-    const scanY = Math.sin(time * 0.6) * 1.05
-    this.scanner.position.y = scanY
-    this.scanner.scale.setScalar(0.75 + 0.25 * Math.cos((scanY / 1.05) * (Math.PI / 2)))
-    if (this.scannerTicks) this.scannerTicks.rotation.y = time * 0.4
 
     for (const { object, speed } of this.hudSpin) object.rotation.y += speed * delta
     this.gyro.rotation.y = time * 0.15

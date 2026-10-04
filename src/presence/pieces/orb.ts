@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { CYAN, GOLD_HI, SNOISE, U, pointCloud, rand, type PointSeed } from '../stage/primitives'
+import { CYAN, ACCENT_HI, SNOISE, U, pointCloud, rand, type PointSeed } from '../stage/primitives'
 import type { Centerpiece, BuildContext } from './types'
 
 const VOICE_BARS = 128
@@ -47,7 +47,7 @@ export function buildOrb(ctx: BuildContext): Centerpiece {
           vec3 iri = pal(f * 0.7 + vD * 0.45 + uTime * 0.04 + uHue);
           vec3 base = mix(vec3(0.38, 0.2, 0.95), vec3(0.2, 0.85, 1.0), f);
           vec3 c = base * (0.03 + 0.8 * f) * mix(vec3(1.0), iri, 0.55);
-          c += vec3(1.0, 0.8, 0.5) * pow(f, 7.0) * 0.5;
+          c += vec3(0.61, 0.42, 1.0) * pow(f, 7.0) * 0.5;
           gl_FragColor = vec4(c * uGain, 1.0);
         }`,
     })
@@ -64,7 +64,7 @@ export function buildOrb(ctx: BuildContext): Centerpiece {
     pointCloud(
       [
         { x: 0, y: 0, z: 0, c: new THREE.Color('#9b6bff').multiplyScalar(0.3), s: 90 },
-        { x: 0, y: 0, z: 0, c: GOLD_HI.clone().multiplyScalar(0.5), s: 26 },
+        { x: 0, y: 0, z: 0, c: ACCENT_HI.clone().multiplyScalar(0.5), s: 26 },
       ],
       0.3,
       pixelRatio,
@@ -106,7 +106,7 @@ export function buildOrb(ctx: BuildContext): Centerpiece {
       uniform float uLevel, uSpk; varying float vE, vA;
       void main(){
         vec3 c = mix(vec3(0.3, 0.85, 1.0), vec3(0.65, 0.4, 1.0), 0.5 + 0.5 * sin(vA * 2.0));
-        c = mix(c, vec3(1.0, 0.85, 0.55), uSpk * 0.6);
+        c = mix(c, vec3(0.72, 0.55, 1.0), uSpk * 0.6);
         gl_FragColor = vec4(c * (0.2 + 0.8 * abs(vE)) * (0.45 + uLevel * 0.9), 1.0);
       }`,
   })

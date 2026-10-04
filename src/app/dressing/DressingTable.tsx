@@ -4,7 +4,6 @@ import {
   CENTRES,
   CENTRE_STYLES,
   FORMS,
-  IMAGES,
   RINGS,
   type DressingStore,
 } from './store'
@@ -22,11 +21,10 @@ import {
  */
 
 const LABELS: Record<string, string> = {
-  brain: 'Brain', orb: 'Orb', reactor: 'Reactor', tesseract: 'Tesseract', galaxy: 'Galaxy',
+  freya: 'Freya', brain: 'Brain', orb: 'Orb', reactor: 'Reactor', tesseract: 'Tesseract', galaxy: 'Galaxy',
   lattice: 'Lattice', slices: 'Slices', flow: 'Flow',
   obsidian: 'Obsidian', space: 'Deep space', city: 'City', aurora: 'Aurora', grid: 'Grid',
   on: 'On', off: 'Off', chibi: 'Chibi', adult: 'Adult',
-  portrait: 'Portrait', none: 'None',
 }
 
 function Group({ label, options, value, onPick }: { label: string; options: readonly string[]; value: string; onPick: (value: string) => void }) {
@@ -63,7 +61,6 @@ export function DressingTable({ store, open, onOpenChange }: { store: DressingSt
 
         <h3>Freya</h3>
         <Group label="Form" options={FORMS} value={state.form} onPick={(value) => store.update({ form: value as typeof state.form })} />
-        <Group label="Image" options={IMAGES} value={state.image} onPick={(value) => store.update({ image: value as typeof state.image })} />
 
         <footer className="d-foot"><button type="button" className="d-opt" onClick={() => store.reset()}>Reset</button></footer>
       </div>

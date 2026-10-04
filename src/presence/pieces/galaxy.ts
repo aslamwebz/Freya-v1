@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { GOLD_HI, U, pointCloud, rand, smooth, tickPoints, type PointSeed } from '../stage/primitives'
+import { ACCENT_HI, U, pointCloud, rand, smooth, tickPoints, type PointSeed } from '../stage/primitives'
 import type { Centerpiece, BuildContext } from './types'
 
 const STARS = 26000
@@ -30,7 +30,7 @@ export function buildGalaxy(ctx: BuildContext): Centerpiece {
   const seed = new Float32Array(STARS)
   const color = new Float32Array(STARS * 3)
 
-  const inner = new THREE.Color('#ffd9a0')
+  const inner = new THREE.Color('#c9b4ff')
   const mid = new THREE.Color('#7f9dff')
   const outer = new THREE.Color('#a070ff')
   const c = new THREE.Color()
@@ -89,7 +89,7 @@ export function buildGalaxy(ctx: BuildContext): Centerpiece {
 
   // The bright nucleus, and a scatter of named stars. Both are ordinary point
   // clouds; the only special case is one very large point at the origin.
-  const core = pointCloud([{ x: 0, y: 0, z: 0, c: new THREE.Color('#ffcf8a').multiplyScalar(0.8), s: 70 }], 0.1, pixelRatio)
+  const core = pointCloud([{ x: 0, y: 0, z: 0, c: new THREE.Color('#b79cff').multiplyScalar(0.8), s: 70 }], 0.1, pixelRatio)
   disc.add(core)
 
   const starSeeds: PointSeed[] = []
@@ -100,7 +100,7 @@ export function buildGalaxy(ctx: BuildContext): Centerpiece {
       x: Math.cos(a) * r,
       y: (random() - 0.5) * 0.05,
       z: Math.sin(a) * r,
-      c: GOLD_HI.clone().multiplyScalar(0.8),
+      c: ACCENT_HI.clone().multiplyScalar(0.8),
       s: rand(random, 2.5, 5),
     })
   }

@@ -365,6 +365,25 @@ describe('the goal engine', () => {
     expect(outcome.ok).toBe(false)
   })
 
+  it('refuses to record a checkpoint outcome against a goal it does not belong to', async () => {
+    const { engine } = await openEngine()
+    const a = await engine.createGoal({ title: 'A', description: 'a' })
+    const b = await engine.createGoal({ title: 'B', description: 'b' })
+    await engine.activateGoal(a.goalId!)
+    await engine.activateGoal(b.goalId!)
+    const started = await engine.startCheckpoint(a.goalId!, 'test')
+    if (!started.ok) throw new Error('checkpoint start failed')
+    const checkpointId = started.checkpointId
+
+    await engine.recordCheckpointOutcome(b.goalId!, checkpointId, 'passed', null, 1)
+
+    const projection = engine.projection()
+    const goalA = projection.goals.find((g) => g.goalId === a.goalId!)
+    const goalB = projection.goals.find((g) => g.goalId === b.goalId!)
+    expect(goalA?.counts.verified).toBe(0)
+    expect(goalB?.counts.verified).toBe(0)
+  })
+
   it('produces a projection with counts', async () => {
     const { engine } = await openEngine()
     await engine.createGoal({ title: 'Test', description: 'A test goal' })

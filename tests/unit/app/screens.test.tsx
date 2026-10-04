@@ -11,11 +11,20 @@ import { Focus } from '../../../src/app/screens/Focus'
 import { People } from '../../../src/app/screens/People'
 import { Memory } from '../../../src/app/screens/Memory'
 import { Settings } from '../../../src/app/screens/Settings'
+import { PreferencesStore } from '../../../src/ui-v2/theme/preferences'
+import type { UiSnapshot } from '../../../src/ui-v2/state/contract'
 
 /**
- * Every tab screen must mount and produce content. These are sample-data
- * screens with no props, so a smoke test is the honest floor: it catches a
- * screen that throws on render without pretending to verify its design.
+ * Every tab screen must mount and produce content.
+ *
+ * Most of these are still sample-data screens with no props, so a smoke test is the
+ * honest floor for them: it catches a screen that throws on render without
+ * pretending to verify its design.
+ *
+ * Settings is not one of those. It reads a live snapshot, so it is mounted against
+ * the state a window is actually in when no Core is attached — every resource
+ * `unavailable` — which is the case most likely to throw, since it is the branch
+ * that renders reasons instead of data.
  */
 
 afterEach(cleanup)
@@ -34,8 +43,18 @@ const SCREENS: readonly (readonly [string, () => ScreenSlots])[] = [
   ['Focus', Focus],
   ['People', People],
   ['Memory', Memory],
-  ['Settings', Settings],
 ]
+
+/** Every resource absent: the shape of a window with no Core behind it. */
+const NO_CORE = {
+  home: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
+  core: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
+  mission: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
+  workforce: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
+  activity: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
+  attention: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
+  provider: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
+} as unknown as UiSnapshot
 
 describe('app tab screens', () => {
   for (const [name, build] of SCREENS) {
@@ -44,4 +63,17 @@ describe('app tab screens', () => {
       expect((container.textContent ?? '').trim().length).toBeGreaterThan(0)
     })
   }
+
+  it('mounts Settings with content when no Core is reachable', () => {
+    const preferences = new PreferencesStore()
+    const { container } = render(
+      <Slots slots={Settings({
+        snapshot: NO_CORE,
+        preferences,
+        category: 'appearance',
+        onCategory: () => {},
+      })} />,
+    )
+    expect((container.textContent ?? '').trim().length).toBeGreaterThan(0)
+  })
 })

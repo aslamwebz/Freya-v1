@@ -16,7 +16,7 @@ import { Relay } from './screens/Relay'
 import { Focus } from './screens/Focus'
 import { People } from './screens/People'
 import { Memory } from './screens/Memory'
-import { Settings } from './screens/Settings'
+import { Settings, type SettingsCategory } from './screens/Settings'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
@@ -72,6 +72,17 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
   }, [])
 
   const current = screen === 'settings' ? { id: 'settings', label: 'Settings', symbol: 'settings' } : RAIL.find((item) => item.id === screen) ?? RAIL[0]!
+  /**
+   * The selected Settings category lives here rather than in the screen.
+   *
+   * `App.tsx` calls every screen as a plain function, so a `useState` inside one
+   * would run outside a component render and React would reject it. Lifting the one
+   * piece of shared state to the component that owns the board keeps the screen a
+   * pure function of its props — and keeps the rail's active row and the rendered
+   * cards reading the same value rather than two that drift.
+   */
+  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('appearance')
+
   const slots: ScreenSlots = current.id === 'home'
     ? { left: null, right: null, bottom: null }
     : current.id === 'mind'
@@ -93,7 +104,7 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
                     : current.id === 'memory'
                       ? Memory()
                       : current.id === 'settings'
-                        ? Settings()
+                        ? Settings({ snapshot, preferences, category: settingsCategory, onCategory: setSettingsCategory })
                         : placeholder(current.label, current.symbol, 'This screen is next in the build.')
 
   const send = () => {

@@ -218,3 +218,39 @@
   .wf-office { min-height: 22rem; }
   .l-timeline { grid-auto-columns: minmax(7rem, 1fr); }
 }
+
+/* ------------------------------------------------------ settings: real form */
+/* The provider form is the first interactive Settings surface, so it carries the
+   same glass, border and radius vocabulary as every other control here rather
+   than a new one. Colours are inherited tokens only. */
+
+.st-form { display: grid; gap: .6rem; margin-top: .75rem; }
+.st-field { display: grid; gap: .3rem; font-size: .78rem; color: var(--f-muted); }
+.st-field > span { letter-spacing: .04em; text-transform: uppercase; font-size: .66rem; }
+.st-field > input {
+  font: inherit; font-size: .82rem; color: var(--f-heading);
+  background: color-mix(in srgb, var(--f-panel) 70%, transparent);
+  border: 1px solid var(--f-line); border-radius: 10px;
+  padding: .45rem .6rem; min-width: 0;
+}
+.st-field > input:focus-visible { outline: 2px solid var(--f-action); outline-offset: 1px; }
+.st-field > input::placeholder { color: var(--f-muted); opacity: .7; }
+
+.st-check { display: flex; align-items: center; gap: .5rem; font-size: .8rem; color: var(--f-heading); cursor: pointer; }
+.st-check > input { accent-color: var(--f-action); }
+
+.st-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.st-mini, .st-save, .st-forget {
+  font: inherit; font-size: .76rem; cursor: pointer;
+  border-radius: 999px; padding: .3rem .7rem;
+  border: 1px solid var(--f-line); background: none; color: var(--f-muted);
+}
+.st-mini[aria-pressed='true'] { color: var(--f-heading); border-color: var(--f-action); background: color-mix(in srgb, var(--f-action) 12%, transparent); }
+.st-save { color: var(--f-heading); border-color: var(--f-action); background: color-mix(in srgb, var(--f-action) 14%, transparent); }
+.st-forget { color: var(--f-muted); }
+.st-mini:hover, .st-save:hover, .st-forget:hover { color: var(--f-heading); }
+.st-mini:disabled, .st-save:disabled, .st-forget:disabled { opacity: .5; cursor: not-allowed; }
+.st-save:focus-visible, .st-forget:focus-visible, .st-mini:focus-visible { outline: 2px solid var(--f-action); outline-offset: 1px; }
+
+.st-note { margin: 0; font-size: .72rem; color: var(--f-muted); }
+.st-notice { margin: .5rem 0 0; font-size: .76rem; color: var(--f-heading); }

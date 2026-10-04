@@ -2,6 +2,7 @@ import { safeStorage } from 'electron'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { checkProviderBaseUrl } from '../core/model/provider-endpoint'
 
 /**
  * The provider config store — the main process's secure home for the nano-gpt
@@ -38,12 +39,39 @@ export const PROVIDER_ENV_NAMES = [
   'FREYA_ALLOW_LIVE_MODEL',
 ] as const
 
+/**
+ * Why the credential is in the state it is in.
+ *
+ * This exists because `hasKey: false` was carrying four different meanings at once,
+ * and a person cannot act on any of them. "You never set a key", "this machine
+ * cannot protect a key", "a key is stored but this process cannot unwrap it" and
+ * "the provider is not reachable" all rendered as the same sentence, so the only
+ * visible remedy for all four was "check the docs".
+ *
+ * - `none` — nothing has been stored. The remedy is to enter a key.
+ * - `stored` — a key is stored and unwraps. `hasKey` is true.
+ * - `storage-unavailable` — the OS secure storage cannot be used on this machine, so
+ *   no key can be stored at all. The remedy is different and it is not "try again":
+ *   the keyring backend has to change, or the key lives in `.env` deliberately.
+ * - `unreadable` — a key **is** on disk but this process cannot unwrap it. Typically
+ *   the OS account changed, or the machine was restored. The remedy is to re-enter it.
+ */
+export type ProviderCredentialState = 'none' | 'stored' | 'storage-unavailable' | 'unreadable'
+
 /** The non-secret half a window is allowed to see. Never carries the key. */
 export interface ProviderConfig {
   baseUrl: string
   model: string
   liveEnabled: boolean
   hasKey: boolean
+  /** Which of the four credential situations this is. Never collapsed to a boolean. */
+  credentialState: ProviderCredentialState
+  /**
+   * A fixed sentence explaining `credentialState`, or null when there is nothing to
+   * explain. Never contains a value, and never contains an OS error verbatim — those
+   * can echo the plaintext.
+   */
+  credentialReason: string | null
 }
 
 /** What a window may ask to change. `apiKey` is optional and write-only. */
@@ -85,11 +113,37 @@ export class ProviderConfigStore {
   }
 
   private viewOf(file: ProviderConfigFile, key: string | null): ProviderConfig {
+    const hasKey = key !== null && key.length > 0
+    /**
+     * `stored` is decided by what is on disk *and* what this process can do with it,
+     * so the two failure modes stay distinguishable.
+     *
+     * A wrapped blob that will not unwrap is reported as `unreadable` rather than as
+     * `none`, because the difference decides what the person does next: `none` means
+     * "enter a key", and telling somebody to re-enter a key they already entered,
+     * because the OS account changed under them, is worse than saying nothing at all.
+     */
+    const blocked = this.unavailableReason()
+    const credentialState: ProviderCredentialState = hasKey
+      ? 'stored'
+      : blocked !== null
+        ? 'storage-unavailable'
+        : file.wrappedKey !== null
+          ? 'unreadable'
+          : 'none'
     return {
       baseUrl: file.baseUrl,
       model: file.model,
       liveEnabled: file.liveEnabled,
-      hasKey: key !== null && key.length > 0,
+      hasKey,
+      credentialState,
+      credentialReason: credentialState === 'stored'
+        ? null
+        : credentialState === 'none'
+          ? 'No provider API key is stored.'
+          : credentialState === 'storage-unavailable'
+            ? `This machine cannot protect an API key: ${blocked}`
+            : 'A provider API key is stored but could not be read on this machine. Enter it again.',
     }
   }
 
@@ -103,12 +157,48 @@ export class ProviderConfigStore {
   async write(input: ProviderConfigInput): Promise<ProviderConfig> {
     const existing = (await this.readFile()) ?? EMPTY
     let wrappedKey = existing.wrappedKey
+    /**
+     * The base URL is validated on the way to disk as well as on the way in.
+     *
+     * The file is the durable record, and a value already in it outlives the process
+     * that would have refused it: a config written by an older build, or edited by
+     * hand, or restored from a backup, is read back at the next launch without ever
+     * passing through the preload check. Persisting an unapproved origin would leave
+     * the only place that can still catch it being a file nobody re-validates.
+     */
+    const baseUrl = input.baseUrl ?? existing.baseUrl
+    if (baseUrl.length > 0) {
+      const endpoint = checkProviderBaseUrl(baseUrl)
+      if (!endpoint.ok) throw new Error(endpoint.refusal?.reason ?? 'provider base URL is not permitted')
+    }
     if (input.apiKey !== undefined) {
-      wrappedKey = input.apiKey.length > 0 ? this.wrap(input.apiKey) : null
+      if (input.apiKey.length === 0) {
+        // An explicit empty string is the one way to forget a stored credential, and
+        // it is honoured unconditionally — including on a machine where the OS
+        // secure storage is currently unavailable.
+        wrappedKey = null
+      } else {
+        const wrapped = this.wrap(input.apiKey)
+        /**
+         * A failed wrap must not overwrite a good key with nothing.
+         *
+         * `wrap` returns null both when there is nothing to store and when it
+         * *refused* — no secure storage, or the OS threw. Assigning that null
+         * unconditionally meant one transient `isEncryptionAvailable() === false`, or
+         * one failed `encryptString`, silently and permanently destroyed a credential
+         * that was stored correctly a moment earlier. There is no second copy and no
+         * recovery, so that is not a recoverable error; it is data loss caused by a
+         * settings write that was supposed to be adding a key.
+         *
+         * Leaving the existing blob untouched is the safe direction: the new key is
+         * not saved, which is reported, and the old one still works.
+         */
+        if (wrapped !== null) wrappedKey = wrapped
+      }
     }
     const file: ProviderConfigFile = {
       version: PROVIDER_CONFIG_VERSION,
-      baseUrl: input.baseUrl ?? existing.baseUrl,
+      baseUrl,
       model: input.model ?? existing.model,
       liveEnabled: input.liveEnabled ?? existing.liveEnabled,
       wrappedKey,

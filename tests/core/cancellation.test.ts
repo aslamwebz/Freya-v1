@@ -713,7 +713,7 @@ describe('H — no provider contact', () => {
     // not the cancel, not the shutdown.
     let fetches = 0
     const nanogpt = new NanoGptProvider({
-      config: { apiKey: 'not-a-real-key', baseUrl: 'https://example.invalid', model: 'm', liveEnabled: true },
+      config: { apiKey: 'not-a-real-key', baseUrl: 'https://nano-gpt.com/api/v1', model: 'm', liveEnabled: true },
       fetchImpl: (async () => {
         fetches += 1
         throw new Error('the network must not be reachable from a test')
@@ -739,7 +739,7 @@ describe('H — no provider contact', () => {
     // nothing depends on the gateway having refused first.
     let fetches = 0
     const nanogpt = new NanoGptProvider({
-      config: { apiKey: 'k', baseUrl: 'https://example.invalid', model: 'm', liveEnabled: false },
+      config: { apiKey: 'k', baseUrl: 'https://nano-gpt.com/api/v1', model: 'm', liveEnabled: false },
       fetchImpl: (async () => {
         fetches += 1
         throw new Error('unreachable')
@@ -757,7 +757,7 @@ describe('H — no provider contact', () => {
 
   it('records a provider timeout as failure, not owner cancellation', async () => {
     const nanogpt = new NanoGptProvider({
-      config: { apiKey: 'k', baseUrl: 'https://example.invalid', model: 'm', liveEnabled: true },
+      config: { apiKey: 'k', baseUrl: 'https://nano-gpt.com/api/v1', model: 'm', liveEnabled: true },
       timeoutMs: 5,
       fetchImpl: ((_url: string, init: { signal: AbortSignal }) =>
         new Promise<never>((_resolve, reject) => {
@@ -790,7 +790,7 @@ describe('H — no provider contact', () => {
     // end the same request, and neither turns into another call.
     let fetches = 0
     const nanogpt = new NanoGptProvider({
-      config: { apiKey: 'k', baseUrl: 'https://example.invalid', model: 'm', liveEnabled: true },
+      config: { apiKey: 'k', baseUrl: 'https://nano-gpt.com/api/v1', model: 'm', liveEnabled: true },
       // Stands in for a request in flight: honours the signal, never answers,
       // and would be the thing a retry would call a second time.
       fetchImpl: ((_url: string, init: { signal: AbortSignal }) => {

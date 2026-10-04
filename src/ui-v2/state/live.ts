@@ -4,6 +4,7 @@ import { missionMirror } from '../../platform/missionClient'
 import { workforceMirror } from '../../platform/workforceClient'
 import { attentionMirror } from '../../platform/attentionClient'
 import { hostBridge, type ProviderConfigView } from '../../platform/host'
+import { checkProviderBaseUrl } from '../../../core/model/provider-endpoint'
 
 /**
  * The Phase 19.1 live adapter: the UI's first real projection of Phases 0–18.
@@ -58,13 +59,34 @@ function countPhrase(count: number, singular: string, plural = `${singular}s`): 
  */
 function providerView(config: ProviderConfigView): ProviderView {
   const connected = config.hasKey
+  /**
+   * The endpoint is re-checked here rather than trusted, because the value came off
+   * disk and a file can predate this build, be restored from a backup, or be edited
+   * by hand. A renderer must never have to wonder whether the host it is talking to
+   * applied the same rule it did.
+   */
+  const endpointApproved = config.baseUrl.length === 0 || checkProviderBaseUrl(config.baseUrl).ok
+  const detail = !endpointApproved
+    ? 'endpoint not approved'
+    : config.credentialState === 'storage-unavailable'
+      ? 'secure storage unavailable'
+      : config.credentialState === 'unreadable'
+        ? 'stored key unreadable'
+        : !connected
+          ? 'not configured'
+          : config.liveEnabled
+            ? 'connected'
+            : 'live-disabled'
   return {
     connected,
     baseUrl: config.baseUrl,
     model: config.model,
     liveEnabled: config.liveEnabled,
     hasKey: config.hasKey,
-    detail: connected ? (config.liveEnabled ? 'connected' : 'live-disabled') : 'not configured',
+    credentialState: config.credentialState,
+    credentialReason: config.credentialReason,
+    endpointApproved,
+    detail,
   }
 }
 

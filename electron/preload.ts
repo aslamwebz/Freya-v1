@@ -35,6 +35,7 @@ import type { LifeLoopProjection } from '../core/protocol/lifeloop'
 import { SKILL_NO_PAYLOAD } from '../core/protocol/skills'
 import { SKILL_LIMITS } from '../core/skills/types'
 import type { ProviderConfig, ProviderConfigInput } from './providerConfig'
+import { checkProviderBaseUrl } from '../core/model/provider-endpoint'
 import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
 
 export interface RuntimeInfo {
@@ -862,6 +863,23 @@ function rendererProviderPayload(
     if (typeof record.baseUrl !== 'string' || record.baseUrl.length > MAX_PROVIDER_URL_CHARS) {
       return { ok: false, reason: 'provider base URL is too large or invalid' }
     }
+    /**
+     * The base URL is where the stored key is sent, so it is validated here against
+     * the shared provider endpoint policy rather than only for length.
+     *
+     * This is the renderer boundary, which makes it the most likely place for a
+     * compromised window to aim a credential at a host of its choosing: it needs
+     * nothing but a call to `saveProviderConfig`, and it never has to read the key
+     * back. The canonical policy lives in `core/model/provider-endpoint.ts` and is
+     * the same object the provider itself uses, so there is no second, weaker rule
+     * for a renderer to be held to.
+     *
+     * The same check runs again when the value is persisted and again on the
+     * transport. This one exists to refuse *here*, with a reason a person can read,
+     * instead of surfacing later as a provider that mysteriously cannot be reached.
+     */
+    const endpoint = checkProviderBaseUrl(record.baseUrl)
+    if (!endpoint.ok) return { ok: false, reason: endpoint.refusal?.reason ?? 'provider base URL is not permitted' }
     payload.baseUrl = record.baseUrl
   }
   if (record.model !== undefined) {

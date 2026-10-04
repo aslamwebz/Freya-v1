@@ -34,6 +34,27 @@ export interface ProviderView {
   readonly model: string
   readonly liveEnabled: boolean
   readonly hasKey: boolean
+  /**
+   * The credential situation, kept as four distinct states.
+   *
+   * `detail` is a closed sentence for display, but it is not enough on its own:
+   * "not configured" covers a person who never set a key, a machine that cannot
+   * protect one, and a key that is on disk but will not unwrap — three situations
+   * whose remedies are entirely different. A surface that has to show the right
+   * instruction needs the state, not just the sentence.
+   */
+  readonly credentialState: 'none' | 'stored' | 'storage-unavailable' | 'unreadable'
+  /** Why the credential is in that state, in the host's words. Null when stored. */
+  readonly credentialReason: string | null
+  /**
+   * Whether the configured base URL would actually be usable.
+   *
+   * False when the stored host is not an approved provider origin, which is a
+   * misconfiguration rather than an absence: a key exists, and it would be sent
+   * somewhere it must not go. Reported separately so a surface can say "this
+   * endpoint is not approved" instead of implying the provider is simply unset.
+   */
+  readonly endpointApproved: boolean
   readonly detail: string
 }
 

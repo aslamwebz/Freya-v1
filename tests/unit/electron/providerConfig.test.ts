@@ -73,7 +73,7 @@ describe('provider config', () => {
 
   it('never writes the raw key to disk and reads it back only as hasKey', async () => {
     const saved = await store().write({
-      baseUrl: 'https://x/v1',
+      baseUrl: 'https://nano-gpt.com/api/v1',
       model: 'm',
       liveEnabled: false,
       apiKey: 'sk-test',
@@ -86,7 +86,7 @@ describe('provider config', () => {
 
   it('never writes the raw key bytes to the settings file', async () => {
     await store().write({
-      baseUrl: 'https://x/v1',
+      baseUrl: 'https://nano-gpt.com/api/v1',
       model: 'm',
       liveEnabled: true,
       apiKey: 'sk-secret-value',
@@ -106,10 +106,10 @@ describe('provider config', () => {
   it('assembles the exact env Core reads', () => {
     const env = resolveProviderEnv(
       {},
-      { apiKey: 'k', baseUrl: 'https://x/v1', model: 'm', liveEnabled: true },
+      { apiKey: 'k', baseUrl: 'https://nano-gpt.com/api/v1', model: 'm', liveEnabled: true },
     )
     expect(env.NANOGPT_API_KEY).toBe('k')
-    expect(env.NANOGPT_BASE_URL).toBe('https://x/v1')
+    expect(env.NANOGPT_BASE_URL).toBe('https://nano-gpt.com/api/v1')
     expect(env.NANOGPT_MODEL).toBe('m')
     expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
   })
@@ -117,10 +117,10 @@ describe('provider config', () => {
   it('omits the live flag but keeps base values when no key is stored', () => {
     const env = resolveProviderEnv(
       { FREYA_ALLOW_LIVE_MODEL: '1' },
-      { apiKey: null, baseUrl: 'https://x/v1', model: 'm', liveEnabled: true },
+      { apiKey: null, baseUrl: 'https://nano-gpt.com/api/v1', model: 'm', liveEnabled: true },
     )
     expect(env.NANOGPT_API_KEY).toBeUndefined()
-    expect(env.NANOGPT_BASE_URL).toBe('https://x/v1')
+    expect(env.NANOGPT_BASE_URL).toBe('https://nano-gpt.com/api/v1')
     expect(env.NANOGPT_MODEL).toBe('m')
     expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
   })
@@ -128,7 +128,7 @@ describe('provider config', () => {
   it('degrades to hasKey false with no key when the OS has no secure storage', async () => {
     secure.available = false
     const saved = await store().write({
-      baseUrl: 'https://x/v1',
+      baseUrl: 'https://nano-gpt.com/api/v1',
       model: 'm',
       liveEnabled: true,
       apiKey: 'sk-test',
@@ -137,7 +137,7 @@ describe('provider config', () => {
     const env: NodeJS.ProcessEnv = {}
     await store().applyToEnv(env)
     expect(env.NANOGPT_API_KEY).toBeUndefined()
-    expect(env.NANOGPT_BASE_URL).toBe('https://x/v1')
+    expect(env.NANOGPT_BASE_URL).toBe('https://nano-gpt.com/api/v1')
     // No openable key means the store does not own the live decision.
     expect(env.FREYA_ALLOW_LIVE_MODEL).toBeUndefined()
   })
@@ -145,7 +145,7 @@ describe('provider config', () => {
   it('refuses the key on the insecure basic_text backend', async () => {
     secure.backend = 'basic_text'
     const saved = await store().write({
-      baseUrl: 'https://x/v1',
+      baseUrl: 'https://nano-gpt.com/api/v1',
       model: 'm',
       liveEnabled: true,
       apiKey: 'sk-test',
@@ -161,37 +161,37 @@ describe('provider config', () => {
 
   it('writes the decrypted key into an env only when one exists', async () => {
     const env: NodeJS.ProcessEnv = {}
-    await store().write({ baseUrl: 'https://x/v1', model: 'm', liveEnabled: true, apiKey: 'sk-test' })
+    await store().write({ baseUrl: 'https://nano-gpt.com/api/v1', model: 'm', liveEnabled: true, apiKey: 'sk-test' })
     await store().applyToEnv(env)
     expect(env.NANOGPT_API_KEY).toBe('sk-test')
-    expect(env.NANOGPT_BASE_URL).toBe('https://x/v1')
+    expect(env.NANOGPT_BASE_URL).toBe('https://nano-gpt.com/api/v1')
     expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
   })
 
   it('lets an explicit launch environment win over the stored config', async () => {
     await store().write({
-      baseUrl: 'https://stored/v1',
+      baseUrl: 'https://nano-gpt.com/api/v1',
       model: 'stored-model',
       liveEnabled: true,
       apiKey: 'sk-stored',
     })
     const env: NodeJS.ProcessEnv = {
       NANOGPT_API_KEY: 'sk-explicit',
-      NANOGPT_BASE_URL: 'https://explicit/v1',
+      NANOGPT_BASE_URL: 'https://www.nano-gpt.com/api/v1',
       FREYA_ALLOW_LIVE_MODEL: '0',
     }
     await store().applyToEnv(env, {
       NANOGPT_API_KEY: 'sk-explicit',
-      NANOGPT_BASE_URL: 'https://explicit/v1',
+      NANOGPT_BASE_URL: 'https://www.nano-gpt.com/api/v1',
       FREYA_ALLOW_LIVE_MODEL: '0',
     })
     expect(env.NANOGPT_API_KEY).toBe('sk-explicit')
-    expect(env.NANOGPT_BASE_URL).toBe('https://explicit/v1')
+    expect(env.NANOGPT_BASE_URL).toBe('https://www.nano-gpt.com/api/v1')
     expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('0')
   })
 
   it('preserves a base environment credential and live flag when the store has no key', async () => {
-    await store().write({ baseUrl: 'https://stored/v1', model: 'stored-model', liveEnabled: true })
+    await store().write({ baseUrl: 'https://nano-gpt.com/api/v1', model: 'stored-model', liveEnabled: true })
     const env: NodeJS.ProcessEnv = {
       NANOGPT_API_KEY: 'sk-env',
       FREYA_ALLOW_LIVE_MODEL: '1',
@@ -200,13 +200,13 @@ describe('provider config', () => {
     expect(env.NANOGPT_API_KEY).toBe('sk-env')
     expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
     // The non-secret names the store does provide are still overlaid.
-    expect(env.NANOGPT_BASE_URL).toBe('https://stored/v1')
+    expect(env.NANOGPT_BASE_URL).toBe('https://nano-gpt.com/api/v1')
     expect(env.NANOGPT_MODEL).toBe('stored-model')
   })
 
   it('overlays the stored key and live flag when the store has a key', async () => {
     await store().write({
-      baseUrl: 'https://stored/v1',
+      baseUrl: 'https://nano-gpt.com/api/v1',
       model: 'stored-model',
       liveEnabled: false,
       apiKey: 'sk-stored',
@@ -220,13 +220,13 @@ describe('provider config', () => {
   it('leaves the environment untouched when no config has been stored', async () => {
     const env: NodeJS.ProcessEnv = {
       NANOGPT_API_KEY: 'sk-env',
-      NANOGPT_BASE_URL: 'https://env/v1',
+      NANOGPT_BASE_URL: 'https://nano-gpt.com/api/v1',
       NANOGPT_MODEL: 'env-model',
       FREYA_ALLOW_LIVE_MODEL: '1',
     }
     await store().applyToEnv(env)
     expect(env.NANOGPT_API_KEY).toBe('sk-env')
-    expect(env.NANOGPT_BASE_URL).toBe('https://env/v1')
+    expect(env.NANOGPT_BASE_URL).toBe('https://nano-gpt.com/api/v1')
     expect(env.NANOGPT_MODEL).toBe('env-model')
     expect(env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
   })
@@ -291,11 +291,11 @@ describe('provider configuration precedence (explicit > stored > .env)', () => {
       await writeFile(envPath, 'NANOGPT_API_KEY=sk-file\nFREYA_ALLOW_LIVE_MODEL=1\n', 'utf8')
       loadLocalEnv(envPath)
 
-      await store().write({ baseUrl: 'https://stored/v1' })
+      await store().write({ baseUrl: 'https://nano-gpt.com/api/v1' })
       await store().applyToEnv(process.env, {})
 
       expect(process.env.NANOGPT_API_KEY).toBe('sk-file')
-      expect(process.env.NANOGPT_BASE_URL).toBe('https://stored/v1')
+      expect(process.env.NANOGPT_BASE_URL).toBe('https://nano-gpt.com/api/v1')
       expect(process.env.FREYA_ALLOW_LIVE_MODEL).toBe('1')
     })
   })

@@ -382,7 +382,7 @@ describe('providers', () => {
         providers: undefined,
         env: {
           NANOGPT_API_KEY: 'secret-value',
-          NANOGPT_BASE_URL: 'https://example.invalid',
+          NANOGPT_BASE_URL: 'https://nano-gpt.com/api/v1',
           NANOGPT_MODEL: 'some-model',
         },
       }),

@@ -66,6 +66,17 @@ export interface ProviderConfigView {
   model: string
   liveEnabled: boolean
   hasKey: boolean
+  /**
+   * Which of four credential situations this is.
+   *
+   * `hasKey` alone could not carry the difference between "never set a key", "this
+   * machine cannot protect a key" and "a key is stored but will not unwrap", and each
+   * of those needs a different thing from the person reading it. The bridge reports
+   * which one it is rather than making a surface infer it.
+   */
+  credentialState: 'none' | 'stored' | 'storage-unavailable' | 'unreadable'
+  /** A fixed sentence explaining the state, or null. Never carries a value. */
+  credentialReason: string | null
 }
 
 /** The provider fields a window may set. `apiKey` is write-only and optional. */

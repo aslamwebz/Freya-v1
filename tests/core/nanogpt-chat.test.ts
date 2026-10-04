@@ -100,6 +100,10 @@ function recordingFetch(
       ok: answer.ok,
       status: answer.status,
       json: async () => answer.json,
+      // A real Response always carries headers, and the provider now reads
+      // `location` to decide whether it was redirected. A fake without it would
+      // make every request look like a crash rather than a missing redirect.
+      headers: new Headers(),
     } as unknown as Response
   }) as unknown as typeof fetch
   return { calls, impl }
@@ -164,17 +168,27 @@ function turnOf(result: CoreCommandResult): ConversationTurnView {
 
 describe('readNanoGptConfig', () => {
   it('needs all three values and never guesses one', () => {
+    // The base is the approved origin. It has to be: an unapproved host is now also a
+    // reason to return null, so a `https://x` fixture would make every assertion below
+    // pass for the wrong reason and stop testing whether a value was guessed.
+    const AT = 'https://nano-gpt.com/api/v1'
     expect(readNanoGptConfig({})).toBeNull()
-    expect(readNanoGptConfig({ NANOGPT_API_KEY: 'k', NANOGPT_BASE_URL: 'https://x' })).toBeNull()
+    expect(readNanoGptConfig({ NANOGPT_API_KEY: 'k', NANOGPT_BASE_URL: AT })).toBeNull()
     expect(
-      readNanoGptConfig({ NANOGPT_API_KEY: 'k', NANOGPT_BASE_URL: 'https://x', NANOGPT_MODEL: 'm' }),
+      readNanoGptConfig({ NANOGPT_API_KEY: 'k', NANOGPT_BASE_URL: AT, NANOGPT_MODEL: 'm' }),
     ).not.toBeNull()
     // Whitespace-only is absence, and the live flag is exact.
-    expect(readNanoGptConfig({ NANOGPT_API_KEY: '  ', NANOGPT_BASE_URL: 'https://x', NANOGPT_MODEL: 'm' })).toBeNull()
+    expect(readNanoGptConfig({ NANOGPT_API_KEY: '  ', NANOGPT_BASE_URL: AT, NANOGPT_MODEL: 'm' })).toBeNull()
     expect(
-      readNanoGptConfig({ NANOGPT_API_KEY: 'k', NANOGPT_BASE_URL: 'https://x', NANOGPT_MODEL: 'm', FREYA_ALLOW_LIVE_MODEL: 'yes' })!
+      readNanoGptConfig({ NANOGPT_API_KEY: 'k', NANOGPT_BASE_URL: AT, NANOGPT_MODEL: 'm', FREYA_ALLOW_LIVE_MODEL: 'yes' })!
         .liveEnabled,
     ).toBe(false)
+    // A complete, well-formed configuration pointing somewhere unapproved is also
+    // null. Covered exhaustively in providerEndpoint.test.ts; asserted here so the
+    // shape of this function's contract is visible where it is defined.
+    expect(
+      readNanoGptConfig({ NANOGPT_API_KEY: 'k', NANOGPT_BASE_URL: 'https://elsewhere.test', NANOGPT_MODEL: 'm' }),
+    ).toBeNull()
   })
 })
 

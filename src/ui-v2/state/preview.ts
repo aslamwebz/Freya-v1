@@ -30,7 +30,7 @@ export function createPreviewAdapter(): UiAdapter {
     }),
     core: sample({ lifecycle: 'ready', sequence: 19, activeRequests: 0, stopped: false, integrity: 'ok', faultCount: 0 }),
     attention: sample({ focus: 'focused', ingested: 42, decisions: 18, cued: 12, spoke: 4, interrupted: 1, budgetExceeded: 0, inboxCount: 3 }),
-    provider: sample({ connected: true, baseUrl: 'https://nano-gpt.com/api/v1', model: 'openai/gpt-4.1-nano', liveEnabled: true, hasKey: true, detail: 'preview — sample provider configuration' }),
+    provider: sample({ connected: true, baseUrl: 'https://nano-gpt.com/api/v1', model: 'openai/gpt-4.1-nano', liveEnabled: true, hasKey: true, credentialState: 'stored', credentialReason: null, endpointApproved: true, detail: 'preview — sample provider configuration' }),
     mission: sample({
       rows: [
         { id: 'mission-roadmap', status: 'active', runs: 8, verifiedRuns: 5, needsAttention: false },

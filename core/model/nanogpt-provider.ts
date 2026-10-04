@@ -9,6 +9,7 @@ import {
   type ModelResult,
 } from './provider'
 import type { ProviderStatus } from '../protocol/core-protocol'
+import { assertProviderBaseUrl, assertProviderRedirectTarget, checkProviderBaseUrl } from './provider-endpoint'
 
 /**
  * The NanoGPT provider.
@@ -56,9 +57,35 @@ export function readNanoGptConfig(env: NanoGptEnv): NanoGptConfig | null {
   const baseUrl = env.NANOGPT_BASE_URL?.trim()
   const model = env.NANOGPT_MODEL?.trim()
   if (!apiKey || !baseUrl || !model) return null
+  /**
+   * The base URL is where the key will be sent, so it is checked here and not only
+   * at the point of entry.
+   *
+   * `NANOGPT_BASE_URL` reaches this function from three places — a launch
+   * environment, a `.env` file, and the persisted provider config — and the third of
+   * those is reachable from a renderer. Validating only at the boundary that writes
+   * it would leave this function trusting a value that anything with write access to
+   * `provider.json`, or anything that set the variable before launch, could aim at
+   * an arbitrary host.
+   *
+   * A URL that fails the policy yields `null`, which is the same result as an absent
+   * configuration: the provider reports `unconfigured` and the gateway will not
+   * select it. That is the truthful outcome — the provider cannot be reached as
+   * configured — and it fails closed, because an unconfigured provider cannot be
+   * called at all.
+   *
+   * The non-throwing form is used deliberately. Throwing here would propagate out of
+   * provider construction and take down `Core.start()` for a bad *setting*, which
+   * would mean one mistyped URL makes the whole application unlaunchable. A setting
+   * that cannot be honoured disables the thing it configures.
+   */
+  const approved = checkProviderBaseUrl(baseUrl)
+  if (!approved.ok) return null
   return {
     apiKey,
-    baseUrl: baseUrl.replace(/\/+$/, ''),
+    // The path is preserved because it is part of the endpoint (`/api/v1`), but it
+    // comes from the parsed URL rather than from string surgery on the raw input.
+    baseUrl: `${approved.url!.origin}${approved.url!.pathname}`.replace(/\/+$/, ''),
     model,
     liveEnabled: env.FREYA_ALLOW_LIVE_MODEL === '1',
   }
@@ -117,6 +144,62 @@ export class NanoGptProvider implements ModelProvider {
   }
 
   /**
+   * Send a request to the provider, attaching the API key only to an approved host.
+   *
+   * This is the boundary that actually holds the property. Everything upstream of it
+   * — the bridge check, the config check on load — is an early refusal that produces
+   * a better message; a check that existed only there would still be one refactor
+   * away from being bypassed, because the value on this line arrives as a plain
+   * string from a configuration source the renderer can influence.
+   *
+   * So the sequence here is deliberate and ordered:
+   *
+   *   1. Validate the URL that is about to be contacted.
+   *   2. Ask `fetch` **not** to follow redirects.
+   *   3. Attach the `Authorization` header.
+   *   4. On a redirect, validate the new target against the policy before repeating.
+   *
+   * Step 2 is the one that is easy to get wrong. With the default
+   * `redirect: 'follow'`, a provider that answers `302 Location: https://x/` causes
+   * the runtime to re-issue the request — and the header with the key in it — to
+   * wherever it was told, with no opportunity to object. Hand-following keeps the
+   * decision in code where a refusal can be recorded.
+   *
+   * The header is attached per hop rather than once, so a hop that fails validation
+   * is never sent at all. There is no code path that reaches `fetchImpl` with an
+   * unvalidated URL and a non-empty `authorization`.
+   */
+  private async send(url: string, init: {
+    method: string
+    headers: Record<string, string>
+    body?: string
+    signal: AbortSignal
+  }): Promise<Response> {
+    const MAX_REDIRECTS = 3
+    let target = url
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+      // Re-validated on every hop, including the first. Cheap, and it means a future
+      // caller cannot skip it by routing through a different method.
+      assertProviderBaseUrl(target)
+      const response = await this.fetchImpl(target, {
+        method: init.method,
+        signal: init.signal,
+        redirect: 'manual',
+        headers: init.headers,
+        ...(init.body === undefined ? {} : { body: init.body }),
+      })
+      const location = response.headers.get('location')
+      if (!response.status.toString().startsWith('3') || location === null) return response
+      // Validate before resolving against it, so a relative Location cannot walk the
+      // request off the approved host by pointing at an absolute URL elsewhere.
+      const next = new URL(location, target).href
+      assertProviderRedirectTarget(next)
+      target = next
+    }
+    throw new Error('nanogpt redirected too many times')
+  }
+
+  /**
    * Whether this provider would accept `model` on a chat completion.
    *
    * True for the configured default, and for anything the last successful
@@ -145,7 +228,7 @@ export class NanoGptProvider implements ModelProvider {
     if (this.config === null) throw new Error('nanogpt provider is not configured')
     throwIfAborted(options.signal, 'cancelled before the model catalogue was requested')
 
-    const response = await this.fetchImpl(this.endpoint('models'), {
+    const response = await this.send(this.endpoint('models'), {
       method: 'GET',
       signal: options.signal,
       headers: { authorization: `Bearer ${this.config.apiKey}` },
@@ -264,7 +347,7 @@ export class NanoGptProvider implements ModelProvider {
     unref(timer)
 
     try {
-      const response = await this.fetchImpl(this.endpoint('chat/completions'), {
+      const response = await this.send(this.endpoint('chat/completions'), {
         method: 'POST',
         signal: controller.signal,
         headers: {

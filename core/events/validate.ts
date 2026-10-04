@@ -53,6 +53,7 @@ function isDeadlineType(value: unknown): boolean {
 }
 import { DEFAULT_MISSION_LIMITS, MISSION_REASONS } from '../missions/types'
 import { DEFAULT_GOAL_LIMITS, GOAL_REASONS } from '../longhorizon/types'
+import { RUNTIME_STATUSES } from '../runtime/types'
 import {
   DEFAULT_WORKER_BUDGET,
   WORKFORCE_LIMITS,
@@ -2424,6 +2425,65 @@ const PAYLOAD_RULES: {
       !targetIsProtected(p.targetRef) &&
       (p.reason === 'runtime-promotion-unavailable' || p.reason === 'artifact-refused' || p.reason === 'boundary-violation'),
   ),
+
+  // Runtime Activation (Phase 40). Metadata only: ids, closed statuses, closed
+  // outcomes, a readable reason and a bounded list of dependency labels. No
+  // payload here can carry a secret or mint authority.
+  'runtime.activation.decided': workRule(
+    ['domainId', 'outcome', 'status', 'reason', 'missing', 'requestedAt'],
+    (p) =>
+      isEventId(p.domainId) &&
+      (p.outcome === 'allowed' || p.outcome === 'blocked') &&
+      isRuntimeStatusValue(p.status) &&
+      isBoundedReason(p.reason) &&
+      isBoundedLabelList(p.missing) &&
+      isInstant(p.requestedAt),
+  ),
+  'runtime.activation.changed': workRule(
+    ['domainId', 'from', 'to', 'reason', 'missing'],
+    (p) =>
+      isEventId(p.domainId) &&
+      isRuntimeStatusValue(p.from) &&
+      isRuntimeStatusValue(p.to) &&
+      isBoundedReason(p.reason) &&
+      isBoundedLabelList(p.missing),
+  ),
+  'runtime.activation.stopped': workRule(
+    ['domainId', 'reason', 'missing'],
+    (p) =>
+      isEventId(p.domainId) && isBoundedReason(p.reason) && isBoundedLabelList(p.missing),
+  ),
+  'runtime.activation.reconciled': workRule(
+    ['domainId', 'previousStatus', 'status', 'reason', 'missing'],
+    (p) =>
+      isEventId(p.domainId) &&
+      isRuntimeStatusValue(p.previousStatus) &&
+      isRuntimeStatusValue(p.status) &&
+      isBoundedReason(p.reason) &&
+      isBoundedLabelList(p.missing),
+  ),
+}
+
+const RUNTIME_STATUS_SET: ReadonlySet<string> = new Set<string>(RUNTIME_STATUSES)
+
+function isRuntimeStatusValue(value: unknown): boolean {
+  return typeof value === 'string' && RUNTIME_STATUS_SET.has(value)
+}
+
+/** A sentence a person can read. Bounded so a payload cannot become prose. */
+function isBoundedReason(value: unknown): boolean {
+  return typeof value === 'string' && value.length > 0 && value.length <= 400
+}
+
+/** A bounded list of short dependency labels. Never content, never a secret. */
+function isBoundedLabelList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= 32 &&
+    value.every(
+      (item) => typeof item === 'string' && item.length > 0 && item.length <= 200,
+    )
+  )
 }
 
 /** A bounded, control-character-free label. A name, never prose. */

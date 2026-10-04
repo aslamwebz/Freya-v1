@@ -1030,6 +1030,18 @@ export function describeActivity(event: {
         tone: 'warn',
       }
 
+    // Runtime activation decisions are bookkeeping, not news. They describe
+    // which domains Core did or did not bring up, and a person watching the
+    // activity feed does not need one line per domain on every start. They are
+    // served in full through `Core.runtime()`, which is the surface built for
+    // them, so the feed deliberately has no row for them rather than a row that
+    // says the event's own type name.
+    case 'runtime.activation.decided':
+    case 'runtime.activation.changed':
+    case 'runtime.activation.stopped':
+    case 'runtime.activation.reconciled':
+      return null
+
     default:
       // Kept, but not promoted to a headline: an event type nobody has given a
       // sentence yet still deserves a row rather than a silent gap.

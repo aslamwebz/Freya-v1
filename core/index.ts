@@ -215,6 +215,16 @@ import type {
   JournalFault,
   PrincipalId,
 } from './protocol/core-protocol'
+import {
+  EMPTY_COUNTS,
+  RUNTIME_REGISTRY,
+  RuntimeActivationController,
+  type RuntimeEventType,
+  type RuntimeFacts,
+  type RuntimeJournalEntry,
+  type RuntimePayload,
+  type RuntimeProjection,
+} from './runtime'
 
 /** A journal nobody has damaged. Stated, not assumed. */
 const HEALTHY_JOURNAL: JournalFault = {
@@ -931,6 +941,18 @@ attentionTick(now?: Date): Promise<number>
   consciousness(now?: Date): ConsciousContextProjection
   /** Subscribe to the conscious context. Same mirror semantics as the others. */
   onConsciousness(listener: (projection: ConsciousContextProjection) => void): () => void
+  /**
+   * Core's account of which implemented domains are actually active.
+   *
+   * Read-only and derived from the activation journal plus the live fact set.
+   * There is no method on this interface that activates, deactivates or
+   * reconfigures a domain: activation is a lifecycle concern owned by Core, not a
+   * command a window may issue. The shape of the read is the whole policy — every
+   * domain states its status, its reason and the dependency that is missing.
+   */
+  runtime(): RuntimeProjection
+  /** Subscribe to the runtime activation projection. Same mirror semantics. */
+  onRuntime(listener: (projection: RuntimeProjection) => void): () => void
   readonly lifecycle: CoreLifecycle
 }
 
@@ -1058,6 +1080,17 @@ class FreyaCore implements Core {
   private personalityDegradedReported = false
   private readonly attentionListeners = new Set<(projection: AttentionProjection) => void>()
   private readonly lifeLoopListeners = new Set<(projection: LifeLoopProjection) => void>()
+  private readonly runtimeListeners = new Set<(projection: RuntimeProjection) => void>()
+  /**
+   * The Phase 40 runtime activation controller.
+   *
+   * The one owner of the activation record and the lifecycle decisions of the
+   * domains registered in `core/runtime/registry.ts`. It holds no authority of
+   * its own: every status it reports is a dependency measurement or a journaled
+   * decision, and the only side effect it can cause is calling a registered
+   * handler's `start` or `stop`.
+   */
+  private activation: RuntimeActivationController | undefined
   /**
    * The Phase 23 Continuous Life Loop, built and owned by Core.
    *
@@ -1960,7 +1993,50 @@ class FreyaCore implements Core {
       )
     }
 
+    // Runtime activation is the last step of start, after the durable `ready`
+    // (or `degraded`) line, so a reader of the journal sees the Core reach a
+    // posture before it sees which domains that posture activated. The
+    // controller is the single owner of the activation record; Core built its
+    // subsystems above and the controller records what that means, truthfully.
+    this.activation = new RuntimeActivationController({
+      journal: this.runtimeJournal(),
+      now: () => this.nowIso(),
+      onChange: () => this.publishRuntime(),
+    })
+    this.activation.register(RUNTIME_REGISTRY)
+    await this.activation.load(this.runtimeFacts())
+    this.publishRuntime()
+
     return this.status()
+  }
+
+  /**
+   * The activation journal, backed by Core's one durable event log.
+   *
+   * Only `runtime.*` entries are replayed, so the fold cannot be perturbed by
+   * any other event family, and an append here is exactly as durable as any
+   * other Core event.
+   */
+  private runtimeJournal(): {
+    append(type: RuntimeEventType, payload: RuntimePayload): Promise<void>
+    replay(): Promise<readonly RuntimeJournalEntry[]>
+  } {
+    return {
+      append: async (type, payload) => {
+        await this.fabric.append(type, payload as never, { actor: 'system' })
+      },
+      replay: async () => {
+        const events = await this.fabric.readAll()
+        return events
+          .filter((event) => event.type.startsWith('runtime.'))
+          .map((event) => ({
+            sequence: event.sequence,
+            type: event.type as RuntimeEventType,
+            payload: event.payload as RuntimePayload,
+            recordedAt: event.occurredAt,
+          }))
+      },
+    }
   }
 
   /**
@@ -2007,6 +2083,11 @@ class FreyaCore implements Core {
       // honest answer, and the recovery reconciler turns it into a position.
       await this.lifeLoopRuntime?.close()
       if (this.fabric) {
+        // The activation controller stops every domain it started, in reverse
+        // order, and records the reason while the journal is still open. A domain
+        // that was activated must not be left recorded as active after the Core
+        // that activated it has gone.
+        await this.activation?.shutdown(`core stopping: ${reason}`)
         // A microphone must not outlive the Core that opened it.
         await this.voiceService?.abandon('the application is shutting down')
         this.gateway?.cancelAll(`core stopping: ${reason}`)
@@ -2849,6 +2930,121 @@ class FreyaCore implements Core {
         this.consciousnessListeners.delete(listener)
       }
     }
+  }
+
+  runtime(): RuntimeProjection {
+    if (this.activation === undefined) {
+      // Before start, every registered domain is reported as registered rather
+      // than as an empty list: "this build implements these, and none has been
+      // evaluated yet" is a different and more useful fact than "there are none".
+      return {
+        lifecycle: 'unstarted',
+        generatedAt: this.nowIso(),
+        stopAllActive: false,
+        counts: { ...EMPTY_COUNTS, registered: RUNTIME_REGISTRY.length },
+        domains: RUNTIME_REGISTRY.map((descriptor) => ({
+          id: descriptor.id,
+          family: descriptor.family,
+          title: descriptor.title,
+          module: descriptor.module,
+          kind: descriptor.kind,
+          activation: descriptor.activation,
+          status: 'registered' as const,
+          reason: 'registered but Core has not started',
+          missing: [],
+          evidence: [],
+          activatedAt: null,
+          changedAt: null,
+          lastOutcome: null,
+          note: descriptor.note,
+        })),
+        active: [],
+        blocked: [],
+        degraded: [],
+        lastStopReason: null,
+        lastReconciledAt: null,
+        recoveredDomains: [],
+      }
+    }
+    return this.activation.projection()
+  }
+
+  onRuntime(listener: (projection: RuntimeProjection) => void): () => void {
+    this.runtimeListeners.add(listener)
+    try {
+      listener(this.runtime())
+    } catch (error) {
+      console.error('[freya.core] runtime subscriber threw', error)
+      this.runtimeListeners.delete(listener)
+    }
+    return () => {
+      this.runtimeListeners.delete(listener)
+    }
+  }
+
+  private publishRuntime(): void {
+    if (this.runtimeListeners.size === 0) return
+    const projection = this.runtime()
+    for (const listener of [...this.runtimeListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] runtime listener threw', error)
+        this.runtimeListeners.delete(listener)
+      }
+    }
+  }
+
+  /**
+   * The live fact set the activation controller evaluates against.
+   *
+   * Plain data, read fresh at each lifecycle event. No callback is handed to the
+   * controller, so it cannot pull a fact Core did not choose to publish.
+   */
+  private runtimeFacts(): RuntimeFacts {
+    const options = this.options
+    const keyringKeys: string[] = []
+    if (options.conversationKey !== undefined && options.conversationKey !== null) keyringKeys.push('conversation')
+    if (options.brainKey !== undefined && options.brainKey !== null) keyringKeys.push('brain')
+    if (options.personalityKey !== undefined && options.personalityKey !== null) keyringKeys.push('personality')
+
+    const hostAdapters: string[] = []
+    if (options.research !== undefined) hostAdapters.push('research')
+    if (options.relay !== undefined) hostAdapters.push('relay')
+    if (options.voiceTranscriber !== undefined || options.voiceSynthesizer !== undefined) hostAdapters.push('voice')
+
+    const connectors: string[] = []
+    if (options.relay !== undefined) {
+      for (const name of Object.keys(options.relay.adapters)) connectors.push(name)
+    }
+
+    const providers = this.gateway === undefined ? [] : this.gateway.statuses()
+
+    return {
+      coreLifecycle: this.currentLifecycle,
+      journalTrustworthy: this.integrity.integrity === 'ok',
+      stopAllActive: this.state.stopAll.active,
+      vaultOpen: this.vault !== null,
+      keyringKeys,
+      providerConfigured: providers.length > 0,
+      providerCount: providers.length,
+      hostAdapters,
+      connectors,
+      ownerApprovals: [],
+      // Cognition grants authorise a *cause*, not a capability name, so there is
+      // deliberately nothing here that could be mistaken for a capability grant.
+      capabilityGrants: [],
+      trustedDevices: 0,
+      transportAvailable: false,
+      budgetRemainingUnits: 0,
+      policyPresent: false,
+      recoveryJournalReady: false,
+      continuationReady: false,
+    }
+  }
+
+  private nowIso(): string {
+    return (this.options.now ?? (() => new Date()))().toISOString()
   }
 
 
@@ -4934,6 +5130,12 @@ class FreyaCore implements Core {
             // told yet. The gate itself was closed synchronously above, so nothing could
             // slip in while this ran.
             await this.workforceEngine?.settled()
+            // And the runtime activation system, after the latch is durable and
+            // before the answer: STOP ALL stops every activated domain except the
+            // security spine, in reverse order, and records the reason. A stop a
+            // caller was told about must not leave a domain recorded as active.
+            await this.activation?.stopAll(reason)
+            this.publishRuntime()
             // The conversation projection reports whether Freya is stopped and
             // whether she can think, so a stop has to refresh it. Without this a
             // Chat window keeps a composer it believes is still open.
@@ -4993,6 +5195,12 @@ class FreyaCore implements Core {
           // action is an external request, and one refused at the door during a stop
           // must not silently become allowed the instant the latch clears.
           this.relayAdmissionOpen = true
+          // And the runtime activation system, last: it re-evaluates every domain
+          // against the now-cleared latch and records which of them came back. A
+          // domain whose dependency was lost during the stop stays blocked; only
+          // the ones that can honestly run again do.
+          await this.activation?.resume(this.runtimeFacts())
+          this.publishRuntime()
           // As above: a resume has to reach the surfaces that report it, or Chat
           // stays visibly locked after Core has reopened.
           this.conversations?.publish()

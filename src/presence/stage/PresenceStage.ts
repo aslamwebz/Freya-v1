@@ -33,7 +33,10 @@ const CENTRE_Y = 0.95
  * can see the difference past 2x.
  */
 function renderPixelRatio(): number {
-  return Math.min(window.devicePixelRatio || 1, 2)
+  // The centre is ambient UI. Athena caps its hologram at 1.5 and it stays
+  // sharp; matching that cuts the backing pixel count by about 44% versus DPR 2
+  // on a high-DPI display, which materially reduces every bloom pass.
+  return Math.min(window.devicePixelRatio || 1, 1.5)
 }
 
 export interface StageOptions {
@@ -87,6 +90,12 @@ export class PresenceStage {
   private elapsed = 0
   private disposed = false
   private nextReadout = 0
+  // Frame budget: the centre is ambient UI, so it targets 60 FPS rather than
+  // saturating a 120/144/165 Hz display. Frames that arrive early are skipped
+  // without drawing; the clock delta simply grows to the next drawn frame.
+  private readonly minFrameInterval = 1000 / 60
+  private lastFrameAt = 0
+  private onVisibility?: () => void
 
   private voice: VoiceLevels = { user: 0, ai: 0, morph: 0 }
   private activity = 0
@@ -150,6 +159,12 @@ export class PresenceStage {
     this.lab = { bg: 'space', piece: 'orb', style: 'current', rings: '1' }
     this.applyLab(this.lab)
 
+    // Draw nothing while nobody is looking: a hidden tab/minimised window stops
+    // the bloom pipeline outright and resumes cleanly (clock reset in `start`).
+    if (typeof document !== 'undefined') {
+      this.onVisibility = () => { if (document.hidden) this.stop(); else this.start() }
+      document.addEventListener('visibilitychange', this.onVisibility)
+    }
   }
 
   /* ------------------------------------------------------------- pieces */
@@ -297,6 +312,7 @@ export class PresenceStage {
     if (this.running || this.disposed || this.reducedMotion || !this.visible) return
     this.running = true
     this.clock.getDelta()
+    this.lastFrameAt = 0
     this.raf = requestAnimationFrame(this.frame)
   }
 
@@ -309,6 +325,7 @@ export class PresenceStage {
   dispose(): void {
     this.disposed = true
     this.stop()
+    if (this.onVisibility && typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.onVisibility)
     this.scene.traverse((object) => {
       const mesh = object as THREE.Mesh
       mesh.geometry?.dispose()
@@ -320,6 +337,13 @@ export class PresenceStage {
 
   private frame = (): void => {
     if (!this.running) return
+    if (typeof document !== 'undefined' && document.hidden) { this.stop(); return }
+    const now = performance.now()
+    if (now - this.lastFrameAt < this.minFrameInterval) {
+      this.raf = requestAnimationFrame(this.frame)
+      return
+    }
+    this.lastFrameAt = now
     this.draw(Math.min(this.clock.getDelta(), 0.05))
     this.raf = requestAnimationFrame(this.frame)
   }

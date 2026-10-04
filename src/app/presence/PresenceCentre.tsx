@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import type { PresenceStage } from '../../presence/stage/PresenceStage'
 import type { Piece } from '../../presence/labState'
 import type { Centre, CentreStyle } from '../dressing/store'
@@ -52,7 +52,7 @@ interface Props {
   state?: string
 }
 
-export function PresenceCentre({ centre, style, rings, state }: Props) {
+export const PresenceCentre = memo(function PresenceCentre({ centre, style, rings, state }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
   const stageRef = useRef<PresenceStage | null>(null)
@@ -94,8 +94,19 @@ export function PresenceCentre({ centre, style, rings, state }: Props) {
         const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(sync)
         observer?.observe(host)
 
+        // Unlike document visibility, this also catches a centre that remains
+        // mounted but is outside the visible workspace. Bloom should never burn
+        // GPU time for a zero-value/offscreen surface.
+        const visibilityObserver = typeof IntersectionObserver === 'undefined'
+          ? null
+          : new IntersectionObserver(([entry]) => {
+              stage.setVisible(Boolean(entry?.isIntersecting) && host.offsetParent !== null && !document.hidden)
+            }, { threshold: 0.01 })
+        visibilityObserver?.observe(host)
+
         cleanup = () => {
           observer?.disconnect()
+          visibilityObserver?.disconnect()
           stage.dispose()
           stageRef.current = null
         }
@@ -126,4 +137,4 @@ export function PresenceCentre({ centre, style, rings, state }: Props) {
       ) : null}
     </div>
   )
-}
+})

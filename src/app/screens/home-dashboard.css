@@ -225,8 +225,23 @@
 .hd-menu b { display: block; font-weight: 400; }
 .hd-menu small { display: block; color: #8aa6bd; font-size: 10px; }
 .hd-menu-note { padding: 8px 10px; font-size: 11px; line-height: 1.35; color: #e6b38a; }
+
+/* Model selector: a search over the model name, favourites pinned to the top. */
+.hd-menu-model { min-width: 264px; max-height: 328px; }
+.hd-search { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; margin: -6px -6px 4px; padding: 9px 12px; background: #0a1a28f5; border-bottom: 1px solid #5f89a685; }
+.hd-search svg { flex: none; color: #7f9bb3; }
+.hd-search input { flex: 1; min-width: 0; border: 0; outline: none; background: none; color: #edf6ff; font-size: 12px; }
+.hd-search input::placeholder { color: #7f9bb3; }
+.hd-dashboard .hd-menu .hd-model-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 2px; }
+.hd-dashboard .hd-menu .hd-fav { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border-radius: 7px; color: #5f7d97; }
+.hd-dashboard .hd-menu .hd-fav:hover { color: #ffd98a; background: #1a2f4466; }
+.hd-dashboard .hd-menu .hd-fav[aria-pressed='true'] { color: #ffd98a; }
+.hd-dashboard .hd-menu .hd-model-pick { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hd-dashboard .hd-menu .hd-model-pick[aria-pressed='true'] { background: #12324a99; color: #fff; }
 .hd-send { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(#3f6f8c, #1c3346) !important; box-shadow: inset 0 1px 2px #cdeaff33, 0 0 12px #4fd8ff33; }
 .hd-send:disabled { opacity: .55; }
+.hd-stop-response { border-color: #ffb2b266 !important; background: linear-gradient(#633743, #3d2029) !important; box-shadow: inset 0 1px 2px #ffd4d433, 0 0 12px #ff707033; }
+.hd-stop-square { width: 10px; height: 10px; border-radius: 2px; background: #ffd9d9; box-shadow: 0 0 8px #ff9e9e88; }
 .hd-send-orb { width: 18px; height: 18px; border-radius: 50%; background: conic-gradient(from 0deg, #8fe9ff, #b79cff, #8fe9ff); box-shadow: 0 0 12px #6fd8ffaa; animation: hd-spin .9s linear infinite; }
 @keyframes hd-spin { to { transform: rotate(360deg); } }
 .hd-notice { position: absolute; bottom: 62px; left: 18px; margin: 0; border: 1px solid #6fb6d559; border-radius: 10px; padding: 10px 16px; background: #071320f0; font-size: 13px; }

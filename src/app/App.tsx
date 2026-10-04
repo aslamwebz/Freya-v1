@@ -21,18 +21,6 @@ import { setAppLayout, type AppLayout } from './state/workspace'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
-import { ChatPanel } from './chat/ChatPanel'
-
-/**
- * Freya App Mode — the shell.
- *
- * One continuous shell around one continuous centre. The rail switches which
- * cards surround the centre; it never replaces the centre. The command bar is
- * global: every screen sends to the same conversation.
- *
- * The centre (the Brain) is deliberately its own component in its own layer, so
- * a layout change — folding the rail, opening a panel — can never move it.
- */
 
 interface RailItem {
   readonly id: string
@@ -40,9 +28,9 @@ interface RailItem {
   readonly symbol: string
 }
 
-/** The rail, from the v2 renders: one list, the current domain highlighted. */
 const RAIL: readonly RailItem[] = [
   { id: 'home', label: 'Home', symbol: 'home' },
+  { id: 'chat', label: 'Chats', symbol: 'chat' },
   { id: 'mind', label: 'Mind', symbol: 'mind' },
   { id: 'focus', label: 'Focus', symbol: 'focus' },
   { id: 'people', label: 'People', symbol: 'people' },
@@ -54,33 +42,35 @@ const RAIL: readonly RailItem[] = [
   { id: 'relay', label: 'Relay', symbol: 'relay' },
 ]
 
-export function App({ preferences, dressing, adapter, initialLayout }: { preferences: PreferencesStore; dressing: DressingStore; adapter: UiAdapter; initialLayout?: AppLayout | null }) {
+export function App({
+  preferences,
+  dressing,
+  adapter,
+  initialLayout,
+}: {
+  preferences: PreferencesStore
+  dressing: DressingStore
+  adapter: UiAdapter
+  initialLayout?: AppLayout | null
+}) {
   const settings = useSyncExternalStore(preferences.subscribe, preferences.getSnapshot, preferences.getSnapshot)
   const snapshot = useUiState(adapter)
 
-  // Restored from the layout the host hands over at boot, so the shell opens on the
-  // screen the person left rather than flashing Home and then moving. Read before the
-  // first render, so there is no visible jump.
-  const [screen, setScreen] = useState(initialLayout?.nav && initialLayout.nav !== 'home' ? initialLayout.nav : 'home')
-  const [chatOpen, setChatOpen] = useState(false)
+  // Restore the last workspace before first paint, but keep Home as the safe
+  // default when the persisted route is missing or invalid.
+  const restoredNav = initialLayout?.nav && (initialLayout.nav === 'settings' || RAIL.some((item) => item.id === initialLayout.nav))
+    ? initialLayout.nav
+    : 'home'
+  const [screen, setScreen] = useState(restoredNav)
   const [dressingOpen, setDressingOpen] = useState(false)
-  const [draft, setDraft] = useState('')
   const [notice, setNotice] = useState('')
+  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('appearance')
 
   const mirror = conversationMirror()
   const conversation = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
   const generating = conversation?.activeTurn != null
+  const activeTurnId = conversation?.activeTurn?.turnId ?? null
 
-  /**
-   * Publish what the host asks for at close, so a close resolves immediately instead
-   * of waiting out the collect timeout.
-   *
-   * `navCollapsed` is written as `false` deliberately. It is part of the shared
-   * workspace file because the legacy shell has a collapsible rail; App Mode's
-   * persistent board does not, and it has no control that could change it. Writing
-   * the field this shell actually has — rather than restoring and re-publishing a
-   * value with no UI behind it — is what keeps the file describing it truthfully.
-   */
   useEffect(() => {
     setAppLayout({
       nav: screen,
@@ -93,19 +83,11 @@ export function App({ preferences, dressing, adapter, initialLayout }: { prefere
     void ensureConversationAttached()
   }, [])
 
-  const current = screen === 'settings' ? { id: 'settings', label: 'Settings', symbol: 'settings' } : RAIL.find((item) => item.id === screen) ?? RAIL[0]!
-  /**
-   * The selected Settings category lives here rather than in the screen.
-   *
-   * `App.tsx` calls every screen as a plain function, so a `useState` inside one
-   * would run outside a component render and React would reject it. Lifting the one
-   * piece of shared state to the component that owns the board keeps the screen a
-   * pure function of its props — and keeps the rail's active row and the rendered
-   * cards reading the same value rather than two that drift.
-   */
-  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('appearance')
+  const current = screen === 'settings'
+    ? { id: 'settings', label: 'Settings', symbol: 'settings' }
+    : RAIL.find((item) => item.id === screen) ?? RAIL[0]!
 
-  const slots: ScreenSlots = current.id === 'home'
+  const slots: ScreenSlots = current.id === 'home' || current.id === 'chat'
     ? { left: null, right: null, bottom: null }
     : current.id === 'mind'
       ? Mind()
@@ -126,48 +108,46 @@ export function App({ preferences, dressing, adapter, initialLayout }: { prefere
                     : current.id === 'memory'
                       ? Memory()
                       : current.id === 'settings'
-                        ? Settings({ snapshot, preferences, category: settingsCategory, onCategory: setSettingsCategory })
+                        ? Settings({
+                            snapshot,
+                            preferences,
+                            category: settingsCategory,
+                            onCategory: setSettingsCategory,
+                          })
                         : placeholder(current.label, current.symbol, 'This screen is next in the build.')
 
-  const send = () => {
-    const text = draft
-    if (!text.trim()) return
+  const send = async (text: string): Promise<boolean> => {
+    if (!text.trim()) return false
     if (!hostBridge()) {
       setNotice('This window cannot reach Freya Core.')
-      return
+      return false
     }
-    setDraft('')
+
     setNotice('')
-    setChatOpen(true)
-    void sendMessage(mirror, conversation?.activeConversationId ?? null, text).then((result) => {
-      setNotice(result.ok ? '' : result.notice)
-    })
+    setScreen('chat')
+    const result = await sendMessage(mirror, conversation?.activeConversationId ?? null, text)
+    setNotice(result.ok ? '' : result.notice)
+    return result.ok
   }
 
+  const stopResponse = () => {
+    if (activeTurnId) void mirror.cancelTurn(activeTurnId)
+  }
 
   return <>
-    {/* One persistent board for every tab: the rail, header and composer mount
-        once and never unmount. Only the main region swaps — Home's panels, or the
-        active screen's slots — so switching tabs is fluid and the chrome is still. */}
-    <HomeDashboard screen={current.id} slots={slots} snapshot={snapshot} draft={draft} generating={generating} notice={notice}
-      dressing={dressing} onOpenDressing={() => setDressingOpen(true)}
-      onDraft={setDraft} onSend={send} onNavigate={setScreen} />
-    {/*
-      `data-app-shell` and `data-ui-mode` are read by the desktop E2E suite, and they
-      are worth having for the same reason the shell labels itself honestly in the UI:
-      a window must be able to be told apart from a design preview by something other
-      than somebody's recollection.
-
-      `uiMode` is the contract's own provenance read — it is `preview` only when
-      *every* resource is a preview fixture, and the moment any resource is a live
-      projection it reads `live`. So this attribute cannot claim `preview` while real
-      data is on screen, and cannot claim `live` while fixtures are. Deriving it from
-      the snapshot rather than setting it by hand is the whole point; a hardcoded
-      `data-ui-mode="live"` would be exactly the kind of assertion this codebase
-      refuses to make.
-    */}
+    <HomeDashboard
+      screen={current.id}
+      slots={slots}
+      snapshot={snapshot}
+      generating={generating}
+      notice={notice}
+      dressing={dressing}
+      onOpenDressing={() => setDressingOpen(true)}
+      onSend={send}
+      onStopResponse={stopResponse}
+      onNavigate={setScreen}
+    />
     <div className="freya-v2" data-theme={settings.theme} data-app-shell="app" data-ui-mode={uiMode(snapshot)}>
-      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
       <DressingTable store={dressing} open={dressingOpen} onOpenChange={setDressingOpen} />
     </div>
   </>

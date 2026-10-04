@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import type { Centre, CentreStyle } from '../dressing/store'
 import { Orbits } from './Orbits'
 import { PresenceCentre } from './PresenceCentre'
@@ -19,7 +20,12 @@ interface Props {
   state?: string
 }
 
-export function FreyaCentre({ centre, style, rings, state }: Props) {
+/**
+ * Memoised on its four primitive props, so ordinary board state changes —
+ * opening the sidebar, the model picker, typing in the composer — never touch
+ * the centre's React tree and, crucially, never remount `PresenceStage`.
+ */
+export const FreyaCentre = memo(function FreyaCentre({ centre, style, rings, state }: Props) {
   return (
     <div className="freya-centre">
       <Orbits />
@@ -27,4 +33,4 @@ export function FreyaCentre({ centre, style, rings, state }: Props) {
       {centre === 'freya' && <img className="freya-centre-portrait" src={portrait} alt="" />}
     </div>
   )
-}
+})

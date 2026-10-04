@@ -5,8 +5,9 @@ import { Clock } from '../../ui-v2/primitives/Clock'
 import { ready } from '../state/view'
 import type { ScreenSlots } from './Home'
 import { FreyaCentre } from '../presence/FreyaCentre'
+import { Chats } from '../chat/Chats'
 import { brainState, type BrainState } from '../presence/state'
-import { readModelCatalog, selectModel } from '../../platform/modelClient'
+import { GlobalComposer } from './GlobalComposer'
 import { hostBridge } from '../../platform/host'
 import type { DressingStore, DressingState } from '../dressing/store'
 import './home-dashboard.css'
@@ -15,25 +16,19 @@ interface Props {
   screen: string
   slots?: ScreenSlots
   snapshot: UiSnapshot
-  draft: string
   generating: boolean
   notice: string
   dressing: DressingStore
   onOpenDressing: () => void
-  onDraft: (value: string) => void
-  onSend: () => void
+  onSend: (text: string) => Promise<boolean>
+  onStopResponse: () => void
   onNavigate: (screen: string) => void
 }
 
-const NAV = [['home', 'Home', 'home'], ['mind', 'Mind', 'mind'], ['focus', 'Focus', 'focus'],
+const NAV = [['home', 'Home', 'home'], ['chat', 'Chats', 'chat'], ['mind', 'Mind', 'mind'], ['focus', 'Focus', 'focus'],
   ['people', 'People', 'people'], ['workforce', 'Workforce', 'workforce'], ['world', 'World', 'world'],
   ['memory', 'Memory', 'memory'], ['life', 'Life', 'life'], ['create', 'Foundry', 'forge'],
   ['relay', 'Relay', 'relay']] as const
-
-// The thinking levels the composer offers. The model list is never hard-coded:
-// it is read from the configured provider through Core's catalogue command.
-const THINK = ['None', 'Think', 'Deep', 'Fast'] as const
-type ModelEntry = { readonly id: string; readonly ownedBy: string | null }
 
 // Existing reference artwork supplies decorative face thumbnails, never UI text.
 const FACES = [[290, 219], [378, 236], [291, 310], [470, 199]] as const
@@ -99,17 +94,10 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slots, snapshot, draft, generating, notice, dressing, onOpenDressing, onDraft, onSend, onNavigate }: Props) {
+export function HomeDashboard({ screen, slots, snapshot, generating, notice, dressing, onOpenDressing, onSend, onStopResponse, onNavigate }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
-  const [voiceNotice, setVoiceNotice] = useState('')
-  const [menu, setMenu] = useState<string | null>(null)
-  const [models, setModels] = useState<readonly ModelEntry[]>([])
-  const [model, setModel] = useState<string | null>(null)
-  const [catalogNote, setCatalogNote] = useState('')
-  const [thinkLevel, setThinkLevel] = useState<typeof THINK[number]>('Think')
   const [collapsed, setCollapsed] = useState(false)
-  const [listening, setListening] = useState(false)
   const home = ready(snapshot.home)
   const focus = home?.focus
   const attention = home?.attention.profiles[0]
@@ -126,25 +114,6 @@ export function HomeDashboard({ screen, slots, snapshot, draft, generating, noti
     lifecycle: core?.lifecycle ?? 'booting',
   })
   const open = (screen: string) => () => onNavigate(screen)
-
-  // The catalogue is a provider read, asked for only when the selector opens —
-  // never cached, never invented. A refusal is shown in Core's own words.
-  const toggleModelMenu = () => {
-    const next = menu === 'model' ? null : 'model'
-    setMenu(next)
-    if (next !== 'model') return
-    setCatalogNote('')
-    void readModelCatalog().then(outcome => {
-      if (outcome.operation === 'catalog' && outcome.models) setModels(outcome.models)
-      else { setModels([]); setCatalogNote(outcome.reason ?? 'The model catalogue is unavailable.') }
-    })
-  }
-  const chooseModel = (id: string) => {
-    setModel(id)
-    setMenu(null)
-    void selectModel(id)
-  }
-  const activeModel = model ?? provider?.model ?? 'provider default'
 
   return <div className="freya-v2 hd-viewport" data-theme="abyss" ref={viewport}>
     <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-background={design.background}>
@@ -218,30 +187,9 @@ export function HomeDashboard({ screen, slots, snapshot, draft, generating, noti
             ['Product strategy review completed', '2h ago'], ['Drafted Phase 19 launch plan', '4h ago'], ['Spoke with Alex about partnership idea', '6h ago'], ['Researched EU AI regulatory updates', '12h ago'], ['Created visual concepts for new workspace', '1d ago'],
           ] : activity?.slice(0, 5).map(item => [item.text, new Date(item.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })]) ?? []).map(([text, time], i) => <button key={text} onClick={open('memory')}><span className={`hd-memory-icon hd-memory-icon-${i}`}><Glyph name={['mind', 'mission', 'relay', 'people', 'create'][i]!} size={17} /></span><span>{text}</span><small>{time}</small></button>)}</div>
         </Panel>
-        </>) : <TabBody slots={slots} design={design} cognition={cognition} />}
+        </>) : screen === 'chat' ? <Chats /> : <TabBody slots={slots} design={design} cognition={cognition} />}
       </main>
-      <footer className="hd-dock" data-state={listening ? 'listening' : generating ? 'responding' : 'idle'}><form aria-label="Freya composer" onSubmit={event => { event.preventDefault(); onSend() }}>
-        <button type="button" className="hd-mic" aria-pressed={listening} aria-label={listening ? 'Stop listening' : 'Start voice input'} onClick={() => { setListening(value => !value); setVoiceNotice('Voice capture is not connected yet. You can type to Freya.') }}><Glyph name="mic" size={22} /></button>
-        <label className="hd-input"><span className="hd-sr-only">Ask Freya</span><input value={draft} onChange={event => onDraft(event.target.value)} placeholder={listening ? 'Listening…' : generating ? 'Freya is responding…' : 'Ask Freya...'} /></label>
-        <span className="hd-wave" aria-hidden="true">{Array.from({ length: 5 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 0.13}s` }} />)}</span>
-        <div className="hd-tools">
-          <button type="button" className="hd-tool" aria-label="Attach a file" onClick={() => setVoiceNotice('Attachments are not connected yet.')}><Glyph name="attach" size={18} /></button>
-          <div className="hd-select">
-            <button type="button" className="hd-tool hd-tool-model" aria-label="Choose model" aria-haspopup="listbox" aria-expanded={menu === 'model'} onClick={toggleModelMenu}><Glyph name="chip" size={17} /><span>{activeModel}</span><Glyph name="chevron" size={13} /></button>
-            {menu === 'model' && <ul className="hd-menu" role="listbox" aria-label="Provider models">
-              {catalogNote && <li className="hd-menu-note">{catalogNote}</li>}
-              {models.map(entry => <li key={entry.id}><button type="button" role="option" aria-selected={entry.id === activeModel} onClick={() => chooseModel(entry.id)}><b>{entry.id}</b>{entry.ownedBy && <small>{entry.ownedBy}</small>}</button></li>)}
-            </ul>}
-          </div>
-          <div className="hd-select">
-            <button type="button" className="hd-tool hd-tool-think" aria-label="Thinking level" aria-haspopup="listbox" aria-expanded={menu === 'think'} onClick={() => setMenu(menu === 'think' ? null : 'think')}><Glyph name="mind" size={18} /><span>{thinkLevel}</span><Glyph name="chevron" size={13} /></button>
-            {menu === 'think' && <ul className="hd-menu" role="listbox" aria-label="Thinking level">
-              {THINK.map(level => <li key={level}><button type="button" role="option" aria-selected={level === thinkLevel} onClick={() => { setThinkLevel(level); setMenu(null) }}>{level}</button></li>)}
-            </ul>}
-          </div>
-        </div>
-        <button className="hd-send" type="submit" aria-label={generating ? 'Freya is thinking' : 'Send message'} disabled={!draft.trim() || generating}>{generating ? <span className="hd-send-orb" aria-hidden="true" /> : <Glyph name="send" size={20} />}</button>
-      </form>{(notice || voiceNotice || generating) && <p className="hd-notice" role="status">{notice || voiceNotice || 'Freya is thinking…'}</p>}</footer>
+      <GlobalComposer generating={generating} notice={notice} defaultModel={provider?.model ?? null} onSend={onSend} onStopResponse={onStopResponse} />
     </div></div>
 
   </div>

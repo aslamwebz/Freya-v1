@@ -28,6 +28,7 @@ const paths: Record<string, string> = {
   chip: 'M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2M6 6h12v12H6zM9.5 9.5h5v5h-5z',
   bolt: 'M13 2 4 14h6l-1 8 9-12h-6l1-8Z',
   chevron: 'm6 9 6 6 6-6',
+  star: 'm12 3 2.55 5.9 6.45.55-4.9 4.2 1.5 6.35L12 16.9 6.4 20l1.5-6.35-4.9-4.2 6.45-.55L12 3Z',
   dress: 'M8 3h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm4 12v4m-3 0h6',
 }
 export function Glyph({ name, size = 20, style }: { name: string; size?: number; style?: CSSProperties }) {

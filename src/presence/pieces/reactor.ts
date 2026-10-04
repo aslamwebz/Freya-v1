@@ -66,10 +66,10 @@ export function buildReactor(ctx: BuildContext): Centerpiece {
 
   const housing = new THREE.Group()
   face.add(housing)
-  housing.add(new THREE.Mesh(new THREE.RingGeometry(0.98, 1.02, 128), flatMaterial('#ffc46b', 0.75)))
-  housing.add(facing(tickRing(1.08, 120, 0.035, '#ffc46b', 0.6)))
+  housing.add(new THREE.Mesh(new THREE.RingGeometry(0.98, 1.02, 128), flatMaterial('#9b6bff', 0.75)))
+  housing.add(facing(tickRing(1.08, 120, 0.035, '#9b6bff', 0.6)))
 
-  const outerArcs = facing(arcsXY(1.3, 0.03, [[0.2, 1.2], [1.6, 0.4], [2.3, 1.7], [4.3, 0.5], [5.0, 1.0]], '#ffb450', 0.6))
+  const outerArcs = facing(arcsXY(1.3, 0.03, [[0.2, 1.2], [1.6, 0.4], [2.3, 1.7], [4.3, 0.5], [5.0, 1.0]], '#8a6bff', 0.6))
   face.add(outerArcs)
   const outerThin = facing(arcsXY(1.4, 0.008, [[0, 2.8], [3.2, 2.7]], '#9fd8ff', 0.5))
   face.add(outerThin)
@@ -77,7 +77,7 @@ export function buildReactor(ctx: BuildContext): Centerpiece {
   const gyros = [0, 1, 2].map((i) => {
     const mesh = new THREE.Mesh(
       new THREE.TorusGeometry(1.55 + i * 0.06, 0.005, 6, 180),
-      flatMaterial(i === 1 ? '#ffc46b' : '#6fc3ff', 0.45),
+      flatMaterial(i === 1 ? '#9b6bff' : '#6fc3ff', 0.45),
     )
     group.add(mesh)
     return mesh

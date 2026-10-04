@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import {
-  GOLD,
-  GOLD_HI,
+  ACCENT,
+  ACCENT_HI,
   flatMaterial,
   ghostMaterial,
   lineMaterial,
@@ -40,13 +40,13 @@ export function buildTesseract(ctx: BuildContext): Centerpiece {
 
   const cylinder = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true)
   const struts = edges.map(() => {
-    const mesh = new THREE.Mesh(cylinder, flatMaterial('#ffcf80', 0.8))
+    const mesh = new THREE.Mesh(cylinder, flatMaterial('#b79cff', 0.8))
     group.add(mesh)
     return mesh
   })
 
   const vertexPoints = pointCloud(
-    corners.map(() => ({ x: 0, y: 0, z: 0, c: GOLD_HI.clone().multiplyScalar(0.9), s: 5 })),
+    corners.map(() => ({ x: 0, y: 0, z: 0, c: ACCENT_HI.clone().multiplyScalar(0.9), s: 5 })),
     0.4,
     pixelRatio,
   )
@@ -57,11 +57,11 @@ export function buildTesseract(ctx: BuildContext): Centerpiece {
   group.add(shell)
   const ico = new THREE.IcosahedronGeometry(1.6, 0)
   shell.add(new THREE.LineSegments(new THREE.EdgesGeometry(ico), lineMaterial('#6fc3ff', 0.4)))
-  shell.add(new THREE.Mesh(ico, ghostMaterial('#ffb350', 0.25)))
+  shell.add(new THREE.Mesh(ico, ghostMaterial('#9b6bff', 0.25)))
 
   const octahedron = new THREE.LineSegments(
     new THREE.EdgesGeometry(new THREE.OctahedronGeometry(0.28, 0)),
-    lineMaterial('#fff0cc', 0.9),
+    lineMaterial('#d9c7ff', 0.9),
   )
   group.add(octahedron)
 
@@ -75,7 +75,7 @@ export function buildTesseract(ctx: BuildContext): Centerpiece {
       x: Math.cos(th) * s2 * r,
       y: u * r,
       z: Math.sin(th) * s2 * r,
-      c: GOLD.clone().multiplyScalar(0.4),
+      c: ACCENT.clone().multiplyScalar(0.4),
       s: rand(random, 0.4, 1.2),
     })
   }

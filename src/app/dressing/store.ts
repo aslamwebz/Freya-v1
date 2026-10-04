@@ -7,7 +7,7 @@
  * preferences.
  */
 
-export const CENTRES = ['brain', 'orb', 'reactor', 'tesseract', 'galaxy'] as const
+export const CENTRES = ['freya', 'brain', 'orb', 'reactor', 'tesseract', 'galaxy'] as const
 export type Centre = (typeof CENTRES)[number]
 
 export const CENTRE_STYLES = ['lattice', 'slices', 'flow'] as const
@@ -31,7 +31,7 @@ export interface DressingState {
 }
 
 export const DEFAULT_DRESSING: DressingState = Object.freeze({
-  centre: 'brain',
+  centre: 'freya',
   style: 'lattice',
   background: 'city',
   rings: 'on',

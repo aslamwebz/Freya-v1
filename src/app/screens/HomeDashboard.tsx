@@ -1,23 +1,28 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import type { UiSnapshot } from '../../ui-v2/state/contract'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { Clock } from '../../ui-v2/primitives/Clock'
 import { ready } from '../state/view'
+import type { ScreenSlots } from './Home'
+import { FreyaCentre } from '../presence/FreyaCentre'
+import { brainState, type BrainState } from '../presence/state'
 import { readModelCatalog, selectModel } from '../../platform/modelClient'
 import { hostBridge } from '../../platform/host'
-import portrait from '../../ui-v2/assets/freya-portrait.webp'
+import type { DressingStore, DressingState } from '../dressing/store'
 import './home-dashboard.css'
 
 interface Props {
+  screen: string
+  slots?: ScreenSlots
   snapshot: UiSnapshot
   draft: string
   generating: boolean
   notice: string
+  dressing: DressingStore
+  onOpenDressing: () => void
   onDraft: (value: string) => void
   onSend: () => void
   onNavigate: (screen: string) => void
-  onChat: () => void
-
 }
 
 const NAV = [['home', 'Home', 'home'], ['mind', 'Mind', 'mind'], ['focus', 'Focus', 'focus'],
@@ -63,30 +68,41 @@ function Panel({ name, title, icon, children, onOpen, meta }: {
   </section>
 }
 
-function Orbits() {
-  return <svg className="hd-orbits" viewBox="0 0 550 550" fill="none" aria-hidden="true">
-    <defs><linearGradient id="hd-orbit-color" x1="0" y1="0" x2="550" y2="550" gradientUnits="userSpaceOnUse"><stop stopColor="#96d9fa" /><stop offset=".5" stopColor="#6593c1" stopOpacity=".24" /><stop offset="1" stopColor="#ac9bff" /></linearGradient>
-      <filter id="hd-star-glow" x="-300%" y="-300%" width="700%" height="700%"><feGaussianBlur stdDeviation="3.2" /></filter></defs>
-    {/* Two faint outer instrument rings, then a dotted guidance ring. */}
-    <circle cx="275" cy="275" r="262" stroke="url(#hd-orbit-color)" strokeWidth=".8" opacity=".38" />
-    <circle cx="275" cy="275" r="240" stroke="url(#hd-orbit-color)" strokeWidth=".9" opacity=".42" />
-    <circle cx="275" cy="275" r="214" stroke="#82c7f0" strokeDasharray="1 14" opacity=".5" />
-    {/* The single bright rim that frames Freya, brightest across the top. */}
-    <circle cx="275" cy="275" r="190" stroke="#8fe9ff" strokeWidth="2.2" opacity=".92" />
-    <path d="M85 275a190 190 0 0 1 380 0" stroke="#c9f8ff" strokeWidth="2.6" />
-    <circle cx="275" cy="275" r="176" stroke="#7ca7cb" strokeWidth=".8" opacity=".3" />
-    {/* Sparse beacons ride the outer orbit, not the bright rim. */}
-    {[[494, 173], [358, 48], [173, 56], [48, 358], [56, 377], [192, 502], [377, 494], [502, 192]].map(([x, y], i) => <g key={i}>
-      <circle cx={x} cy={y} r={i % 2 ? 7 : 5} fill={i % 2 ? '#b79cff' : '#8cedff'} filter="url(#hd-star-glow)" opacity=".95" />
-      <circle cx={x} cy={y} r={i % 2 ? 3.2 : 2.4} fill={i % 2 ? '#e1ceff' : '#b6f7ff'} />
-    </g>)}
-  </svg>
+/**
+ * The main region for every non-Home tab.
+ *
+ * Same board, same chrome — only this swaps. A screen may supply left/right/
+ * bottom cards or replace the centre entirely (a graph, a timeline); otherwise
+ * the shared Freya centre is drawn. `layout: 'wide'` drops the side columns.
+ */
+function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: DressingState; cognition: BrainState }) {
+  if (!slots) return null
+  const wide = slots.layout === 'wide'
+  return (
+    <div className="hd-tab-body" data-layout={wide ? 'wide' : 'standard'}>
+      {wide ? null : <div className="hd-col hd-col-l">{slots.left}</div>}
+      {/* Freya is always the centre. A screen may overlay its own geometry (the
+          World graph, a timeline) on top of her rather than replacing her. */}
+      <div className="hd-tab-centre">
+        <FreyaCentre centre={design.centre} style={design.style} rings={design.rings === 'on'} state={cognition} />
+        {slots.centre ? <div className="hd-tab-overlay">{slots.centre}</div> : null}
+      </div>
+      {wide ? null : <div className="hd-col hd-col-r">{slots.right}</div>}
+      {slots.bottom ? <div className="hd-col-b">{slots.bottom}</div> : null}
+    </div>
+  )
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, onSend, onNavigate, onChat }: Props) {
+export function HomeDashboard({ screen, slots, snapshot, draft, generating, notice, dressing, onOpenDressing, onDraft, onSend, onNavigate }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
-  const [scale, setScale] = useState(1)
+  const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
+  // The board fills the viewport (cover). Seed the scale from the window so the
+  // very first paint is already correct — otherwise it renders at scale 1 for a
+  // tick and shows the letterbox bar before the ResizeObserver measures.
+  const [scale, setScale] = useState(() => typeof window === 'undefined'
+    ? 1
+    : Math.max(.65, Math.max(window.innerWidth / 1672, window.innerHeight / 941)))
   const [voiceNotice, setVoiceNotice] = useState('')
   const [menu, setMenu] = useState<string | null>(null)
   const [models, setModels] = useState<readonly ModelEntry[]>([])
@@ -97,7 +113,7 @@ export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, on
   useEffect(() => {
     const node = viewport.current
     if (!node) return
-    const measure = () => setScale(Math.max(.65, Math.min(node.clientWidth / 1672, node.clientHeight / 941)))
+    const measure = () => setScale(Math.max(.65, Math.max(node.clientWidth / 1672, node.clientHeight / 941)))
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(node)
@@ -112,6 +128,12 @@ export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, on
   const workers = ready(snapshot.workforce)
   const activity = ready(snapshot.activity)
   const provider = ready(snapshot.provider)
+  const cognition = brainState({
+    activeRequests: core?.activeRequests ?? 0,
+    working: workers?.working ?? 0,
+    faultCount: core?.faultCount ?? 0,
+    lifecycle: core?.lifecycle ?? 'booting',
+  })
   const open = (screen: string) => () => onNavigate(screen)
 
   // The catalogue is a provider read, asked for only when the selector opens —
@@ -135,7 +157,7 @@ export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, on
   const style = { '--hd-scale': scale, width: 1672 * scale, height: 941 * scale } as CSSProperties
 
   return <div className="freya-v2 hd-viewport" data-theme="abyss" ref={viewport}>
-    <div className="hd-frame" style={style}><div className="hd-dashboard" data-screen="home">
+    <div className="hd-frame" style={style}><div className="hd-dashboard" data-screen={screen} data-background={design.background}>
       <header className="hd-header">
         <div className="hd-clock">
           <Clock />
@@ -152,13 +174,14 @@ export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, on
           <div className="hd-brand"><b>FREYA</b></div>
           <button className="hd-rail-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={() => setCollapsed(value => !value)}><Glyph name="arrow" size={16} /></button>
         </div>
-        <nav aria-label="Freya">{NAV.map(([id, label, icon]) => <button key={id} aria-label={label} aria-current={id === 'home' ? 'page' : undefined} onClick={open(id)}><Glyph name={icon} size={23} /><span>{label}</span></button>)}</nav>
+        <nav aria-label="Freya">{NAV.map(([id, label, icon]) => <button key={id} aria-label={label} aria-current={id === screen ? 'page' : undefined} onClick={open(id)}><Glyph name={icon} size={23} /><span>{label}</span></button>)}</nav>
         <div className="hd-rail-foot">
           <div className="hd-online" title={preview ? 'Design preview · Sample data' : undefined}><span className="hd-status-dot" /><span>{online ? 'Freya Online' : 'Freya Offline'}</span><small>Phase 19<br />Build 19.0.1</small></div>
           <button className="hd-user" aria-label="Open your profile" onClick={open('settings')}><span className="hd-user-avatar">A</span><span className="hd-user-name">Aslam</span><Glyph name="settings" size={15} /></button>
         </div>
       </aside>
       <main className="hd-main" aria-label={preview ? 'Freya dashboard · Sample data' : 'Freya dashboard'}>
+        {screen === 'home' ? (<>
         <Panel name="focus" title="Current focus" icon="focus" onOpen={open('focus')}>
           <h3>{focus?.title ?? 'No focus reported'}</h3>
           <p className="hd-description">{preview ? 'Finalizing system architecture, workspace designs, and go-to-market plan.' : focus?.detail}</p>
@@ -170,9 +193,9 @@ export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, on
           <ul className="hd-goals">{home?.goals?.map((goal, i) => <li key={goal.id}><span className={preview && i === 0 ? 'hd-check hd-checked' : 'hd-check'} aria-hidden="true">{preview && i === 0 ? '✓' : ''}</span>{goal.text}</li>)}</ul>
         </Panel>
         <div className="hd-presence" role="img" aria-label="Freya surrounded by luminous orbital rings">
-          <Orbits /><img src={portrait} alt="" className="hd-portrait" />
+          <FreyaCentre centre={design.centre} style={design.style} rings={design.rings === 'on'} state={cognition} />
+          <button className="hd-dress" aria-label="Dressing table" aria-haspopup="dialog" onClick={onOpenDressing}><Glyph name="dress" size={15} /></button>
           <span className="hd-orbit-label hd-understand">UNDERSTAND</span><span className="hd-orbit-label hd-plan">PLAN</span><span className="hd-orbit-label hd-create">CREATE</span><span className="hd-orbit-label hd-remember">REMEMBER</span><span className="hd-orbit-label hd-act">ACT</span>
-          <div className="hd-presence-name"><b>FREYA</b><span>PHASE 19</span><small>SAME MIND. A BRIGHTER TOMORROW.</small></div>
         </div>
         <Panel name="attention" title="Attention" icon="life" onOpen={open('focus')}>
           <div className="hd-attention-content"><div className="hd-attention-ring" role="meter" aria-label="Attention" aria-valuemin={0} aria-valuemax={100} aria-valuenow={attention?.focused}><svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="43" className="hd-ring-track" /><circle cx="50" cy="50" r="43" className="hd-ring-fill" pathLength="100" strokeDasharray={`${attention?.focused ?? 0} 100`} /></svg><b>{attention ? `${attention.focused}%` : '—'}</b></div>
@@ -205,6 +228,7 @@ export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, on
             ['Product strategy review completed', '2h ago'], ['Drafted Phase 19 launch plan', '4h ago'], ['Spoke with Alex about partnership idea', '6h ago'], ['Researched EU AI regulatory updates', '12h ago'], ['Created visual concepts for new workspace', '1d ago'],
           ] : activity?.slice(0, 5).map(item => [item.text, new Date(item.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })]) ?? []).map(([text, time], i) => <button key={text} onClick={open('memory')}><span className={`hd-memory-icon hd-memory-icon-${i}`}><Glyph name={['mind', 'mission', 'relay', 'people', 'create'][i]!} size={17} /></span><span>{text}</span><small>{time}</small></button>)}</div>
         </Panel>
+        </>) : <TabBody slots={slots} design={design} cognition={cognition} />}
       </main>
       <footer className="hd-dock"><form aria-label="Freya composer" onSubmit={event => { event.preventDefault(); onSend() }}>
         <button type="button" className="hd-mic" aria-label="Voice input unavailable" onClick={() => setVoiceNotice('Voice input is not connected yet. You can type to Freya.')}><Glyph name="mic" size={27} /></button>
@@ -227,7 +251,6 @@ export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, on
         </div>
         <button className="hd-send" type="submit" aria-label={generating ? 'Freya is thinking' : 'Send message'} disabled={!draft.trim() || generating}>{generating ? <span className="hd-send-orb" aria-hidden="true" /> : <Glyph name="send" size={20} />}</button>
       </form>{(notice || voiceNotice || generating) && <p className="hd-notice" role="status">{notice || voiceNotice || 'Freya is thinking…'}</p>}</footer>
-      <button className="hd-chat-shortcut" onClick={onChat} aria-label="Open chat">HIGHER<br />CAPABILITIES<br />KINDER OUTCOMES<br />A BRIGHTER TOMORROW</button>
     </div></div>
 
   </div>

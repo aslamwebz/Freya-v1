@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_DRESSING, DRESSING_KEY, DressingStore, parseDressing } from '../../../src/app/dressing/store'
 
 describe('dressing table store', () => {
-  it('defaults to the brain on the city backdrop, rings on, in app form', () => {
-    expect(DEFAULT_DRESSING).toMatchObject({ centre: 'brain', background: 'city', rings: 'on', form: 'brain' })
+  it('defaults to Freya on the city backdrop, rings on, in app form', () => {
+    expect(DEFAULT_DRESSING).toMatchObject({ centre: 'freya', style: 'lattice', background: 'city', rings: 'on', form: 'brain' })
   })
 
   it('rejects unknown values and keeps the known ones', () => {
     const parsed = parseDressing({ centre: 'nope', style: 'flow', background: 'city', rings: 'off', form: 'chibi' })
-    expect(parsed.centre).toBe('brain')
+    expect(parsed.centre).toBe('freya')
     expect(parsed.style).toBe('flow')
     expect(parsed.background).toBe('city')
     expect(parsed.rings).toBe('off')

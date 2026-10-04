@@ -13,6 +13,7 @@ import './chat/chat.css'
 import './dressing/dressing.css'
 import './screens/screens.css'
 import './app.css'
+import './shell-chrome.css'
 
 let storage: PreferenceStorage | undefined
 try {

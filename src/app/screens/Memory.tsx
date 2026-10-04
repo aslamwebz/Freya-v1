@@ -26,6 +26,27 @@ const REVIEW = [['Duplicate memory detected', 'Merge two similar decisions'], ['
 export function Memory(): ScreenSlots {
   return {
     sample: 'Memory composition — the Brain has not reported any memories.',
+    presence: 'none',
+    centre: (
+      <div className="mm-centre" aria-label="Memory constellation">
+        <div className="mm-ring mm-ring-1" aria-hidden="true" />
+        <div className="mm-ring mm-ring-2" aria-hidden="true" />
+        <div className="mm-ring mm-ring-3" aria-hidden="true" />
+        <div className="mm-core">
+          <small>MEMORY</small>
+          <b>1,925</b>
+          <span>formed entries</span>
+        </div>
+        {CATEGORIES.map(([label, value], index) => (
+          <span key={label} className={`mm-node mm-node-${index + 1}`}>
+            <i /><b>{label}</b><small>{value.toLocaleString()}</small>
+          </span>
+        ))}
+        <div className="mm-pulse mm-pulse-a" aria-hidden="true" />
+        <div className="mm-pulse mm-pulse-b" aria-hidden="true" />
+        <div className="mm-caption"><small>RECALL FIELD</small><span>Recent, related and unresolved memories surface closest to the centre.</span></div>
+      </div>
+    ),
     left: (
       <Card title="Memory" icon="memory" subtitle="Stored and recallable">
         <div className="l-glance">

@@ -25,6 +25,26 @@ const WEEK = [['Mon', 80], ['Tue', 65], ['Wed', 90], ['Thu', 72], ['Fri', 84], [
 export function Focus(): ScreenSlots {
   return {
     sample: 'Focus composition — Core reports no focus measurement yet.',
+    presence: 'none',
+    centre: (
+      <div className="fx-centre" aria-label="Focus map">
+        <div className="fx-axis fx-axis-h" aria-hidden="true" />
+        <div className="fx-axis fx-axis-v" aria-hidden="true" />
+        <div className="fx-orbit fx-orbit-a" aria-hidden="true" />
+        <div className="fx-orbit fx-orbit-b" aria-hidden="true" />
+        <div className="fx-core">
+          <small>NOW</small>
+          <b>72<span>%</span></b>
+          <strong>Product Roadmap</strong>
+          <em>Deep work</em>
+        </div>
+        <span className="fx-node fx-node-a"><i />Strategy<small>28%</small></span>
+        <span className="fx-node fx-node-b"><i />Creative<small>42%</small></span>
+        <span className="fx-node fx-node-c"><i />Communication<small>18%</small></span>
+        <span className="fx-node fx-node-d"><i />Operations<small>8%</small></span>
+        <div className="fx-caption"><small>FOCUS FIELD</small><span>One thing at a time. Everything else stays at the edge.</span></div>
+      </div>
+    ),
     left: (
       <>
         <Card title="Current focus" icon="focus" subtitle="72%">

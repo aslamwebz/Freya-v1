@@ -24,6 +24,31 @@ const INTERACTIONS = [['Sarah Chen', 'Reviewed the launch plan', '2h ago'], ['Al
 export function People(): ScreenSlots {
   return {
     sample: 'People composition — no relationship projection exists yet.',
+    presence: 'none',
+    centre: (
+      <div className="pp-centre" aria-label="Relationship map">
+        <svg className="pp-links" viewBox="0 0 500 500" aria-hidden="true">
+          <line x1="250" y1="250" x2="250" y2="72" />
+          <line x1="250" y1="250" x2="412" y2="165" />
+          <line x1="250" y1="250" x2="390" y2="360" />
+          <line x1="250" y1="250" x2="110" y2="360" />
+          <line x1="250" y1="250" x2="88" y2="165" />
+        </svg>
+        <div className="pp-hub">
+          <span className="pp-hub-avatar">S</span>
+          <strong>Sarah Chen</strong>
+          <small>KEY COLLABORATOR</small>
+          <b>92% trust</b>
+        </div>
+        {PEOPLE.slice(1).map((person, index) => (
+          <span key={person.name} className={`pp-node pp-node-${index + 1}`}>
+            <i>{person.initial}</i><b>{person.name}</b><small>{person.role.split(' · ')[0]}</small>
+          </span>
+        ))}
+        <span className="pp-node pp-node-5"><i>+</i><b>13 more</b><small>connected people</small></span>
+        <div className="pp-centre-caption"><small>RELATIONSHIP MAP</small><span>Context lives between people, not in a list.</span></div>
+      </div>
+    ),
     left: (
       <Card title="People" icon="people" subtitle="18 connected">
         <div className="pp-list">{PEOPLE.map((person, index) => (

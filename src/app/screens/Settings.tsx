@@ -105,8 +105,43 @@ function errorMessage(error: unknown): string {
   return 'the reason was not reported'
 }
 
+function SettingsCentre({ preferences, category }: { preferences: PreferencesStore; category: SettingsCategory }) {
+  const current = preferences.getSnapshot()
+  const label = CATEGORIES.find(([id]) => id === category)?.[1] ?? 'Settings'
+  const accent = THEME_SWATCH[current.theme]
+
+  return (
+    <div className="st-centre" aria-label="Settings preview">
+      <div className="st-preview" style={{ borderColor: accent }}>
+        <div className="st-preview-rail">
+          <span className="st-preview-brand">F</span>
+          <i data-active />
+          <i />
+          <i />
+          <i />
+        </div>
+        <div className="st-preview-stage">
+          <header><small>LIVE PREVIEW</small><b>{label}</b></header>
+          <div className="st-preview-card">
+            <span className="st-preview-orb" style={{ boxShadow: `0 0 24px ${accent}66`, borderColor: accent }} />
+            <div><b>{current.theme}</b><small>{Math.round(current.textScale * 100)}% text · {current.reducedEffects ? 'reduced effects' : 'system effects'}</small></div>
+          </div>
+          <div className="st-preview-lines"><i /><i /><i /></div>
+          <div className="st-preview-dock"><span /><b style={{ background: accent }} /></div>
+        </div>
+      </div>
+      <div className="st-centre-caption">
+        <small>SETTINGS · {label.toUpperCase()}</small>
+        <span>Changes on the right are reflected here without turning Settings into another Freya portrait screen.</span>
+      </div>
+    </div>
+  )
+}
+
 export function Settings({ snapshot, preferences, category, onCategory }: SettingsProps): ScreenSlots {
   return {
+    presence: 'none',
+    centre: <SettingsCentre preferences={preferences} category={category} />,
     left: (
       <Card title="Settings" icon="settings">
         <nav className="st-nav">

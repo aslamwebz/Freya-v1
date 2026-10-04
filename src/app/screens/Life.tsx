@@ -66,19 +66,22 @@ export function Life(): ScreenSlots {
             `data-sample` is also what the truthfulness gate asserts, so removing this
             line without wiring a real projection fails a test.
           */}
-          <p className="c-sample-note">Sample timeline — Freya's own history is not connected yet.</p>
-          <span className="l-line" aria-hidden="true" />
-          <span className="l-today" aria-hidden="true">TODAY · Living and creating together</span>
-          {/* Events flank a centre gap so Freya stays clear, as the reference shows. */}
-          <div className="l-side l-side-l">
-            {EVENTS.slice(0, 4).map((event, index) => (
-              <article key={`${event.date}-${index}`} className="l-event"><small>{event.when}</small><div className="l-card"><span className="l-date">{event.date}</span><h4>{event.title}</h4><p>{event.detail}</p></div></article>
-            ))}
+          <div className="l-timeline-head">
+            <p className="c-sample-note">Sample timeline — Freya's own history is not connected yet.</p>
+            <span className="l-today">TODAY · Living and creating together</span>
           </div>
-          <span className="l-centre-gap" aria-hidden="true" />
-          <div className="l-side l-side-r">
-            {EVENTS.slice(4).map((event, index) => (
-              <article key={`${event.date}-${index}`} className="l-event"><small>{event.when}</small><div className="l-card"><span className="l-date">{event.date}</span><h4>{event.title}</h4><p>{event.detail}</p></div></article>
+          <div className="l-events">
+            <span className="l-line" aria-hidden="true" />
+            {EVENTS.map((event, index) => (
+              <article key={`${event.date}-${index}`} className="l-event" data-today={event.when === 'Today' || undefined}>
+                <small>{event.when}</small>
+                <span className="l-event-dot" aria-hidden="true" />
+                <div className="l-card">
+                  <span className="l-date">{event.date}</span>
+                  <h4>{event.title}</h4>
+                  <p>{event.detail}</p>
+                </div>
+              </article>
             ))}
           </div>
         </div>

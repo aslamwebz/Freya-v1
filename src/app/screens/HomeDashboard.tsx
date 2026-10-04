@@ -81,7 +81,7 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
           her. The overlay is absolute, so DOM order puts Freya on top. */}
       <div className="hd-tab-centre">
         {slots.centre ? <div className="hd-tab-overlay">{slots.centre}</div> : null}
-        <FreyaCentre centre={design.centre} style={design.style} rings={design.rings === 'on'} state={cognition} />
+        {slots.presence === 'none' ? null : <FreyaCentre centre={design.centre} style={design.style} rings={design.rings === 'on'} state={cognition} />}
       </div>
       {wide ? null : <div className="hd-col hd-col-r">{slots.right}</div>}
       {slots.bottom ? <div className="hd-col-b">{slots.bottom}</div> : null}

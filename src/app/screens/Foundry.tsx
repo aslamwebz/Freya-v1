@@ -43,6 +43,7 @@ export function Foundry(): ScreenSlots {
     left: null,
     right: null,
     layout: 'wide',
+    presence: 'none',
     centre: (
       <div className="fd-view">
         <div className="fd-hero">

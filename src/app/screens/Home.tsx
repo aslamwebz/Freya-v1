@@ -16,16 +16,16 @@ export interface ScreenSlots {
    *
    * A screen that takes no props cannot read a projection, so before its real data is
    * bound it has nothing honest to show. That is a legitimate design-preview state —
-   * what is not legitimate is showing it *silently*, in the same visual language as
-   * the live screens, with numbers formatted like measurements.
-   *
-   * Declaring it here rather than stamping a badge on each screen means one visible
-   * element in the shell, consistent across every screen, and impossible to forget:
-   * `tests/unit/app/truthfulness.test.ts` fails if a no-props screen renders without
-   * one. The string names what is missing, so the note is diagnostic rather than a
-   * generic disclaimer.
+   * what is not legitimate is showing it silently, in the same visual language as
+   * live data.
    */
   readonly sample?: string
+  /**
+   * Most workspaces keep Freya visibly present in the shared centre. A screen
+   * that already contains its own dedicated Freya composition can opt out so
+   * the shell never draws a second portrait on top of it.
+   */
+  readonly presence?: 'shared' | 'none'
 }
 
 /** A small attention ring. A null value renders as an em dash, never a 0%. */

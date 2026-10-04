@@ -12,7 +12,7 @@
 .hd-rail-toggle { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: #a9c1d6; }
 .hd-rail-toggle:hover { color: #fff; background: #9ce1ff14; }
 .hd-rail[data-collapsed] { width: 66px; }
-.hd-rail[data-collapsed] .hd-rail-top { justify-content: center; padding: 20px 0 12px; }
+.hd-rail[data-collapsed] .hd-rail-top { justify-content: center; padding: 26px 0 12px; }
 .hd-rail[data-collapsed] .hd-brand { display: none; }
 .hd-rail nav { display: grid; gap: 2px; margin-top: 20px; }
 .hd-rail nav button { width: 100%; height: 42px; display: flex; align-items: center; gap: 13px; padding: 0 18px; text-align: left; color: #9fb4c7; font-size: 14px; border: 0; background: none; }
@@ -51,7 +51,7 @@
 .hd-win button:hover { color: #fff; background: #9ce1ff14; }
 .hd-win-close:hover { background: #e0556b !important; color: #fff !important; }
 .hd-main { position: absolute; inset: 0; pointer-events: none; }
-.hd-main > * { pointer-events: auto; }
+.hd-main > * { pointer-events: auto; -webkit-app-region: no-drag; }
 .hd-panel { position: absolute; border: 1px solid #b0daf0bd; border-radius: 12px; padding: 15px 20px 17px; background: linear-gradient(125deg, #2442587d, #06101ada 43%, #08131eca 71%, #4264806b); box-shadow: inset 1px 1px 1px #dcf1ff60, inset -1px -1px 1px #c0e5ff38, inset 0 -9px 18px #90b9e116, 0 7px 24px #0003, 0 0 9px #66c9ff15; backdrop-filter: blur(9px); }
 .hd-contoured { isolation: isolate; border: 0; background: none; box-shadow: none; backdrop-filter: none; }
 .hd-panel-contour { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; filter: drop-shadow(0 0 2px #b0e2ff33); }
@@ -82,9 +82,11 @@
 .hd-goals li { display: flex; align-items: center; gap: 20px; white-space: nowrap; font: 16px/1.25 'Times New Roman', Georgia, serif; color: #b6cadd; }
 .hd-check { flex: none; width: 18px; height: 18px; border: 1px solid #7d9eafa1; border-radius: 50%; }
 .hd-checked { display: grid; place-items: center; color: #0c524d; border-color: #85ffe6; background: #65f5d2; box-shadow: 0 0 12px #5af3d780; font: 13px 'Segoe UI', sans-serif; }
-.hd-presence { position: absolute; top: 23px; left: 589px; width: 540px; height: 529px; pointer-events: none; }
+.hd-presence { position: absolute; top: 23px; left: 589px; width: 540px; height: 529px; pointer-events: auto; -webkit-app-region: no-drag; }
 .hd-orbits { position: absolute; inset: 0; width: 100%; height: 100%; }
 .hd-portrait { position: absolute; top: 43px; left: 49px; width: 447px; height: 405px; object-fit: fill; filter: saturate(.7) brightness(.92); mask-image: linear-gradient(#000 80%, transparent 99%); }
+.hd-dress { position: absolute; top: 38px; right: 46px; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 1px solid #8fc8e64d; background: #0a1826cc; color: #cfe6f7; box-shadow: 0 0 12px #66c9ff22; pointer-events: auto; -webkit-app-region: no-drag; z-index: 4; }
+.hd-dress:hover { color: #fff; background: #12324ae6; }
 .hd-orbit-label { position: absolute; font-size: 10px; letter-spacing: 1.55px; color: #b4dcf4; text-shadow: 0 0 8px #64bde455; }
 .hd-understand { top: 28px; left: 233px; }
 .hd-plan { left: 23px; top: 262px; }

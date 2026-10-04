@@ -74,6 +74,7 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
   const [screen, setScreen] = useState('home')
   const [collapsed, setCollapsed] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
+  const [dressingOpen, setDressingOpen] = useState(false)
   const [draft, setDraft] = useState('')
   const [intent, setIntent] = useState('Think')
   const [notice, setNotice] = useState('')
@@ -141,6 +142,7 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
   return <>
     {screen === 'home' ? (
       <HomeDashboard snapshot={snapshot} draft={draft} generating={generating} notice={notice}
+        dressing={dressing} onOpenDressing={() => setDressingOpen(true)}
         onDraft={setDraft} onSend={send} onNavigate={setScreen} onChat={() => setChatOpen(true)} />
     ) : (
     <div className="freya-v2 freya-app" data-theme={settings.theme} data-background={design.background} data-rail={collapsed ? 'collapsed' : 'expanded'} data-screen={current.id}>
@@ -170,6 +172,7 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
         <div className="a-head-left">
           <a className="a-mark" href="#a-main" aria-label="Freya Home" onClick={() => setScreen('home')}><span className="a-orbit" aria-hidden="true" /></a>
           <div className="a-brand"><b>FREYA</b><span>PHASE 19</span></div>
+          <button className="a-look" type="button" aria-label="Dressing table" aria-haspopup="dialog" onClick={() => setDressingOpen(true)}><Glyph name="dress" size={16} /></button>
         </div>
         <div className="a-head-right">
           <Clock />
@@ -237,12 +240,11 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
           <span>{design.form}</span>
         </div>
       ) : null}
-
-      <DressingTable store={dressing} />
     </div>
     )}
     <div className="freya-v2" data-theme={settings.theme}>
       <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+      <DressingTable store={dressing} open={dressingOpen} onOpenChange={setDressingOpen} />
     </div>
   </>
 }

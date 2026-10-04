@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import type { UiSnapshot } from '../../ui-v2/state/contract'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { Clock } from '../../ui-v2/primitives/Clock'
 import { ready } from '../state/view'
 import { readModelCatalog, selectModel } from '../../platform/modelClient'
 import { hostBridge } from '../../platform/host'
+import type { DressingStore } from '../dressing/store'
 import portrait from '../../ui-v2/assets/freya-portrait.webp'
 import './home-dashboard.css'
 
@@ -13,6 +14,8 @@ interface Props {
   draft: string
   generating: boolean
   notice: string
+  dressing: DressingStore
+  onOpenDressing: () => void
   onDraft: (value: string) => void
   onSend: () => void
   onNavigate: (screen: string) => void
@@ -84,8 +87,9 @@ function Orbits() {
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, onSend, onNavigate, onChat }: Props) {
+export function HomeDashboard({ snapshot, draft, generating, notice, dressing, onOpenDressing, onDraft, onSend, onNavigate, onChat }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
+  const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   const [scale, setScale] = useState(1)
   const [voiceNotice, setVoiceNotice] = useState('')
   const [menu, setMenu] = useState<string | null>(null)
@@ -170,7 +174,8 @@ export function HomeDashboard({ snapshot, draft, generating, notice, onDraft, on
           <ul className="hd-goals">{home?.goals?.map((goal, i) => <li key={goal.id}><span className={preview && i === 0 ? 'hd-check hd-checked' : 'hd-check'} aria-hidden="true">{preview && i === 0 ? '✓' : ''}</span>{goal.text}</li>)}</ul>
         </Panel>
         <div className="hd-presence" role="img" aria-label="Freya surrounded by luminous orbital rings">
-          <Orbits /><img src={portrait} alt="" className="hd-portrait" />
+          <Orbits />{design.image === 'portrait' && <img src={portrait} alt="" className="hd-portrait" />}
+          <button className="hd-dress" aria-label="Dressing table" aria-haspopup="dialog" onClick={onOpenDressing}><Glyph name="dress" size={15} /></button>
           <span className="hd-orbit-label hd-understand">UNDERSTAND</span><span className="hd-orbit-label hd-plan">PLAN</span><span className="hd-orbit-label hd-create">CREATE</span><span className="hd-orbit-label hd-remember">REMEMBER</span><span className="hd-orbit-label hd-act">ACT</span>
           <div className="hd-presence-name"><b>FREYA</b><span>PHASE 19</span><small>SAME MIND. A BRIGHTER TOMORROW.</small></div>
         </div>

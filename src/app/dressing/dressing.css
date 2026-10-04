@@ -1,12 +1,4 @@
 /* The dressing table. */
-.d-lab { position: fixed; right: 1.4rem; bottom: 5.6rem; z-index: 40; }
-.d-toggle {
-  display: inline-flex; align-items: center; gap: .5rem;
-  padding: .5rem .9rem; border-radius: 999px; cursor: pointer;
-  border: 1px solid var(--f-line); background: var(--f-dialog); color: var(--f-ink);
-  box-shadow: var(--f-shadow);
-}
-.d-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--f-cognition); box-shadow: 0 0 8px var(--f-cognition); }
 .d-scrim { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: color-mix(in srgb, #000 55%, transparent); }
 .d-panel {
   width: min(36rem, 92vw); max-height: 82vh; overflow: auto;

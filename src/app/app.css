@@ -111,6 +111,8 @@ body { overflow: hidden; }
 .a-head-right blockquote span { display: block; }
 .a-head-right blockquote em { display: block; color: var(--f-muted); font-style: italic; }
 .a-theme { padding: .5rem; border-radius: 50%; border: 1px solid var(--f-line); }
+.a-look { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; border: 0; background: none; color: var(--f-muted); }
+.a-look:hover { color: var(--f-ink); background: color-mix(in srgb, var(--f-ink) 8%, transparent); }
 
 /* Ticker */
 .a-ticker {

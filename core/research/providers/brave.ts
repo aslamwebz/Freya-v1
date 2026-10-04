@@ -1,6 +1,6 @@
 import { withResearchAbort } from '../async'
 import { ResearchError, safeResearchError } from '../errors'
-import { boundedSearchLimit, normalizeSearchResults, validateSearchQuery } from '../searcher'
+import { boundedSearchLimit, boundedSearchOffset, normalizeSearchResults, validateSearchQuery } from '../searcher'
 import { SafeHttpTransport, type HttpTransport } from '../transport'
 import type { SearchProvider, SearchResult } from '../types'
 
@@ -27,16 +27,18 @@ export class BraveSearchProvider implements SearchProvider {
     return { ready: true, reason: 'ready' }
   }
 
-  async search(query: string, options: { signal: AbortSignal; limit: number }): Promise<SearchResult[]> {
+  async search(query: string, options: { signal: AbortSignal; limit: number; offset?: number }): Promise<SearchResult[]> {
     const validated = validateSearchQuery(query)
     const status = this.status()
     if (!status.ready) throw new ResearchError(status.reason === 'disabled' ? 'disabled' : 'unconfigured')
     const limit = boundedSearchLimit(options.limit)
+    const offset = boundedSearchOffset(options.offset)
     try {
       return await withResearchAbort(options.signal, 10000, async (signal) => {
         const url = new URL('https://api.search.brave.com/res/v1/web/search')
         url.searchParams.set('q', validated)
         url.searchParams.set('count', String(limit))
+        if (offset > 0) url.searchParams.set('offset', String(offset))
         url.searchParams.set('text_decorations', 'false')
         url.searchParams.set('result_filter', 'web')
         const response = await this.transport.get(url.href, {

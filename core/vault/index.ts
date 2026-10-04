@@ -25,3 +25,7 @@ export {
 } from './path-policy'
 export { VaultMissionStore, MAX_VAULT_MISSION_BYTES } from './repositories/mission-store'
 export { VaultWorldStore } from './repositories/world-store'
+export {
+  VaultResearchSessionStore,
+  MAX_VAULT_SEARCH_SESSION_BYTES,
+} from './repositories/research-session-store'

@@ -20,6 +20,11 @@ import { RESEARCH_LIMITS } from './research/schemas'
 import { safeResearchError } from './research/errors'
 import type { BrowserTargetFactory } from './research/browser'
 import type { SearchProvider } from './research/types'
+import {
+  MemorySearchSessionStore,
+  type SearchSession,
+  type SearchSessionStore,
+} from './research/sessions'
 import type { ResearchResult } from './research/coordinator'
 import type { BrainStore } from './brain/store'
 import { EncryptedBrainStore } from './brain/encrypted-store'
@@ -46,7 +51,14 @@ import { ALL_CAPABILITIES } from './protocol/core-protocol'
 import type { MissionStore } from './missions/store'
 import { EncryptedMissionStore } from './missions/encrypted-store'
 import { MemoryMissionStore } from './missions/memory-store'
-import { Vault, VaultMissionStore, VaultWorldStore, type VaultBinding, type VaultKeyProvider } from './vault'
+import {
+  Vault,
+  VaultMissionStore,
+  VaultResearchSessionStore,
+  VaultWorldStore,
+  type VaultBinding,
+  type VaultKeyProvider,
+} from './vault'
 import { WorkEngine, type WorkCommandOutcome } from './work/engine'
 import { ABSENT_WORK_PROJECTION, type WorkProjection } from './work/projection'
 import {
@@ -527,7 +539,12 @@ export interface CoreOptions {
    * search is enabled. Absent — the normal case for a Core built without research —
    * every research command is refused with a stated reason and nothing is called.
    */
-  research?: { searchProvider: SearchProvider; browserFactory: BrowserTargetFactory }
+  research?: {
+    searchProvider: SearchProvider
+    browserFactory: BrowserTargetFactory
+    /** Test/embedding seam. Production uses the canonical encrypted Vault when available. */
+    sessionStore?: SearchSessionStore
+  }
   /** A local speech-to-text engine. Absent means none is configured. */
   voiceTranscriber?: VoiceTranscriber
   /** A local text-to-speech engine. Absent means none is configured. */
@@ -1482,9 +1499,11 @@ class FreyaCore implements Core {
     // stack is opened here and never again: research starts only on an explicit
     // owner request, so boot does no network, browser or model work at all.
     if (this.options.research) {
+      const sessionStore = await this.buildResearchSessionStore()
       this.researchIntegration = new ResearchIntegration({
         searchProvider: this.options.research.searchProvider,
         browserFactory: this.options.research.browserFactory,
+        sessionStore,
         authority: this.service.ownerAuthority(),
         guard: this.guard,
         principal: this.owner,
@@ -6300,6 +6319,206 @@ class FreyaCore implements Core {
           }
         }
 
+        /* ---------------------------------------------------- Freya's Eye */
+
+        case 'research.session.create': {
+          const request = readString(envelope.payload, 'request')
+          if (request === null || request.trim().length === 0) {
+            return { requestId, ok: false, refusal: { reason: 'a search request is required' } }
+          }
+          const refused = this.refuseResearch(requestId)
+          if (refused !== null) return refused
+          try {
+            const session = await this.researchIntegration!.sessions.create(request)
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              research: {
+                operation: 'session-created',
+                session: projectSearchSession(session, this.researchIntegration!.sessions.store),
+              },
+            }
+          } catch (error) {
+            return this.researchFailure(requestId, this.newId(), 'research.session.create', error)
+          }
+        }
+
+        case 'research.session.list': {
+          if (this.researchIntegration === null) return this.refuseResearch(requestId)!
+          try {
+            const sessions = await this.researchIntegration.sessions.list()
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              research: {
+                operation: 'session-list',
+                sessions: sessions.slice(0, 100).map((session) => ({
+                  sessionId: session.sessionId,
+                  state: session.state,
+                  subject: session.intent.subject,
+                  targetCount: session.intent.targetCount,
+                  mediaType: session.intent.mediaType,
+                  resultCount: session.results.length,
+                  updatedAt: session.updatedAt,
+                })),
+              },
+            }
+          } catch (error) {
+            return this.researchFailure(requestId, this.newId(), 'research.session.list', error)
+          }
+        }
+
+        case 'research.session.read': {
+          if (this.researchIntegration === null) return this.refuseResearch(requestId)!
+          const sessionId = readString(envelope.payload, 'sessionId')
+          if (sessionId === null) {
+            return { requestId, ok: false, refusal: { reason: 'a search session id is required' } }
+          }
+          try {
+            const session = await this.researchIntegration.sessions.read(sessionId)
+            if (session === null) {
+              return { requestId, ok: false, refusal: { reason: 'that search session does not exist' } }
+            }
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              research: {
+                operation: 'session-read',
+                session: projectSearchSession(session, this.researchIntegration.sessions.store),
+              },
+            }
+          } catch (error) {
+            return this.researchFailure(requestId, sessionId, 'research.session.read', error)
+          }
+        }
+
+        case 'research.session.followup': {
+          const refused = this.refuseResearch(requestId)
+          if (refused !== null) return refused
+          const sessionId = readString(envelope.payload, 'sessionId')
+          const text = readString(envelope.payload, 'text')
+          if (sessionId === null || text === null || text.trim().length === 0) {
+            return { requestId, ok: false, refusal: { reason: 'a search session id and follow-up are required' } }
+          }
+          try {
+            const outcome = await this.researchIntegration!.sessions.patchFollowUp(sessionId, text)
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              research: {
+                operation: 'session-updated',
+                session: projectSearchSession(outcome.session, this.researchIntegration!.sessions.store),
+                ambiguous: outcome.ambiguous,
+              },
+            }
+          } catch (error) {
+            return this.researchFailure(requestId, sessionId, 'research.session.followup', error)
+          }
+        }
+
+        case 'research.session.collect': {
+          const refused = this.refuseResearch(requestId)
+          if (refused !== null) return refused
+          const sessionId = readString(envelope.payload, 'sessionId')
+          if (sessionId === null) {
+            return { requestId, ok: false, refusal: { reason: 'a search session id is required' } }
+          }
+          try {
+            const session = await this.researchIntegration!.sessions.collect(sessionId)
+            // Content stays in the private session store. The journal gets only a
+            // bounded count and state-equivalent stage, never query text or URLs.
+            await this.emitResearch(
+              'research.search_completed',
+              session.sessionId,
+              'searching',
+              session.lastError,
+              { results: session.results.length, queries: session.page },
+            )
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              research: {
+                operation: 'session-collected',
+                session: projectSearchSession(session, this.researchIntegration!.sessions.store),
+              },
+            }
+          } catch (error) {
+            return this.researchFailure(requestId, sessionId, 'research.session.collect', error)
+          }
+        }
+
+        case 'research.session.pause': {
+          if (this.researchIntegration === null) return this.refuseResearch(requestId)!
+          const sessionId = readString(envelope.payload, 'sessionId')
+          if (sessionId === null) {
+            return { requestId, ok: false, refusal: { reason: 'a search session id is required' } }
+          }
+          try {
+            const session = await this.researchIntegration.sessions.pause(sessionId)
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              research: {
+                operation: 'session-paused',
+                session: projectSearchSession(session, this.researchIntegration.sessions.store),
+              },
+            }
+          } catch (error) {
+            return this.researchFailure(requestId, sessionId, 'research.session.pause', error)
+          }
+        }
+
+        case 'research.session.resume': {
+          const refused = this.refuseResearch(requestId)
+          if (refused !== null) return refused
+          const sessionId = readString(envelope.payload, 'sessionId')
+          if (sessionId === null) {
+            return { requestId, ok: false, refusal: { reason: 'a search session id is required' } }
+          }
+          try {
+            const session = await this.researchIntegration!.sessions.resume(sessionId)
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              research: {
+                operation: 'session-resumed',
+                session: projectSearchSession(session, this.researchIntegration!.sessions.store),
+              },
+            }
+          } catch (error) {
+            return this.researchFailure(requestId, sessionId, 'research.session.resume', error)
+          }
+        }
+
+        case 'research.session.cancel': {
+          if (this.researchIntegration === null) return this.refuseResearch(requestId)!
+          const sessionId = readString(envelope.payload, 'sessionId')
+          if (sessionId === null) {
+            return { requestId, ok: false, refusal: { reason: 'a search session id is required' } }
+          }
+          try {
+            const session = await this.researchIntegration.sessions.cancel(sessionId)
+            return {
+              requestId,
+              ok: true,
+              status: this.status(),
+              research: {
+                operation: 'session-cancelled',
+                session: projectSearchSession(session, this.researchIntegration.sessions.store),
+              },
+            }
+          } catch (error) {
+            return this.researchFailure(requestId, sessionId, 'research.session.cancel', error)
+          }
+        }
+
 
         /* -------------------------------------------------------------- work */
 
@@ -7264,6 +7483,32 @@ class FreyaCore implements Core {
       console.error('[freya.core] encrypted Vault unavailable', describe(error))
       return null
     }
+  }
+
+  /**
+   * Build Freya's Eye / research search-session persistence.
+   *
+   * Private queries, URLs and result collections live only in the encrypted
+   * Vault when it is available. If encryption cannot be established, sessions
+   * remain explicitly ephemeral; there is no second durable file and no
+   * plaintext fallback.
+   */
+  private async buildResearchSessionStore(): Promise<SearchSessionStore> {
+    const injected = this.options.research?.sessionStore
+    if (injected) return injected
+
+    const vault = await this.ensureVault()
+    if (vault !== null) return new VaultResearchSessionStore(vault)
+
+    if (this.options.vault !== undefined) {
+      return new MemorySearchSessionStore(
+        `Search sessions are held in memory only: ${this.vaultFault ?? 'the encrypted Vault is unavailable'}.`,
+      )
+    }
+
+    return new MemorySearchSessionStore(
+      'Search sessions are held in memory only because no encrypted Vault is configured.',
+    )
   }
 
   /**
@@ -8556,6 +8801,46 @@ export type { AnyCoreEvent }
  * that cannot be followed is decoration. Failures keep a closed code, never the
  * message a provider threw — which may carry a credential or a path.
  */
+function projectSearchSession(
+  session: SearchSession,
+  store: SearchSessionStore,
+): NonNullable<ResearchCommandOutcome['session']> {
+  return {
+    sessionId: session.sessionId,
+    state: session.state,
+    intentVersion: session.intentVersion,
+    intent: {
+      subject: session.intent.subject,
+      targetCount: session.intent.targetCount,
+      mediaType: session.intent.mediaType,
+      constraints: [...session.intent.constraints],
+      exclusions: [...session.intent.exclusions],
+      site: session.intent.site,
+    },
+    page: session.page,
+    resultCount: session.results.length,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    lastError: session.lastError,
+    persistence: {
+      mode: store.mode,
+      durable: store.durable,
+      reason: store.reason,
+    },
+    results: session.results.slice(0, 100).map((result) => ({
+      resultId: result.resultId,
+      rank: result.rank,
+      title: result.title,
+      url: result.url,
+      snippet: result.snippet,
+      sourceDomain: result.sourceDomain,
+      mediaType: result.mediaType,
+      confidence: result.confidence,
+      collection: result.collection,
+    })),
+  }
+}
+
 function projectResearch(result: ResearchResult): NonNullable<ResearchCommandOutcome['result']> {
   return {
     id: result.id,

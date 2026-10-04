@@ -6,6 +6,10 @@ import { ManagedBrowserService, type BrowserTargetFactory } from './browser'
 import { ResearchCoordinator, type ResearchEvent } from './coordinator'
 import { RESEARCH_LIMITS } from './schemas'
 import { Searcher } from './searcher'
+import {
+  SearchSessionManager,
+  type SearchSessionStore,
+} from './sessions'
 import type { SearchProvider } from './types'
 
 /**
@@ -65,6 +69,8 @@ export interface ResearchIntegrationOptions {
   /** True when the durable stop latch is set. */
   stopped: () => boolean
   limits?: Partial<typeof RESEARCH_LIMITS>
+  /** Private search-session persistence. Production supplies the SQLCipher Vault store. */
+  sessionStore?: SearchSessionStore
 }
 
 /**
@@ -136,10 +142,17 @@ export class ResearchIntegration {
   readonly searcher: Searcher
   readonly browser: ManagedBrowserService
   readonly coordinator: ResearchCoordinator
+  readonly sessions: SearchSessionManager
 
   constructor(private readonly options: ResearchIntegrationOptions) {
     this.searcher = new Searcher({ provider: options.searchProvider })
     this.browser = new ManagedBrowserService(options.browserFactory)
+    this.sessions = new SearchSessionManager({
+      searcher: {
+        searchWeb: (query, searchOptions) => this.guardedSearchWeb(query, searchOptions),
+      },
+      ...(options.sessionStore ? { store: options.sessionStore } : {}),
+    })
     this.coordinator = new ResearchCoordinator({
       searcher: this.searcher,
       browser: this.browser,
@@ -182,12 +195,19 @@ export class ResearchIntegration {
     // during the durable write below prevents the provider call that would follow.
   }
 
-  /** One guarded web search. No model is involved, so this costs nothing. */
-  async searchWeb(query: string, signal?: AbortSignal): Promise<unknown[]> {
+  private async guardedSearchWeb(
+    query: string,
+    options: { signal?: AbortSignal; limit?: number; offset?: number } = {},
+  ) {
     if (this.options.stopped()) throw new Error('Core is stopped.')
     const verdict = this.options.guard.evaluate(this.options.principal, 'search.web')
     if (!verdict.allowed) throw new Error(verdict.reason)
-    return this.searcher.searchWeb(query, signal ? { signal } : {})
+    return this.searcher.searchWeb(query, options)
+  }
+
+  /** One guarded web search. No model is involved, so this costs nothing. */
+  async searchWeb(query: string, signal?: AbortSignal): Promise<unknown[]> {
+    return this.guardedSearchWeb(query, signal ? { signal } : {})
   }
 
   /** One guarded page read. Creates and closes its own session. */
@@ -216,6 +236,7 @@ export class ResearchIntegration {
    */
   closeAdmission(reason: string): void {
     this.coordinator.cancelAll()
+    this.sessions.cancelAll()
     void this.browser.closeAll().catch(() => {})
     void reason
   }

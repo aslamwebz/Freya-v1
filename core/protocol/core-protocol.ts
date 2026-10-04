@@ -515,6 +515,15 @@ export type CoreCommandName =
   | 'research.start'
   | 'research.cancel'
   | 'research.status.read'
+  /* Freya's Eye: persistent, bounded search sessions. */
+  | 'research.session.create'
+  | 'research.session.list'
+  | 'research.session.read'
+  | 'research.session.followup'
+  | 'research.session.collect'
+  | 'research.session.pause'
+  | 'research.session.resume'
+  | 'research.session.cancel'
 
   /* --------------------------------------------------------------- work */
   /** Read-only. Reports the board: tasks, runs, approvals and progress. */
@@ -1033,7 +1042,21 @@ export interface ModelCommandOutcome {
  * and counts.
  */
 export interface ResearchCommandOutcome {
-  operation: 'search' | 'read' | 'research' | 'cancelled' | 'status' | 'refused'
+  operation:
+    | 'search'
+    | 'read'
+    | 'research'
+    | 'cancelled'
+    | 'status'
+    | 'session-created'
+    | 'session-list'
+    | 'session-read'
+    | 'session-updated'
+    | 'session-collected'
+    | 'session-paused'
+    | 'session-resumed'
+    | 'session-cancelled'
+    | 'refused'
   reason?: string
   operationId?: string
   limits?: {
@@ -1080,6 +1103,47 @@ export interface ResearchCommandOutcome {
     usage: Record<string, number>
   }
   status?: { operationId: string; stage: string } | null
+  /** Freya's Eye sessions. Queries/results are private response data, never journal fields. */
+  session?: {
+    sessionId: string
+    state: 'active' | 'paused' | 'completed' | 'partial' | 'cancelled' | 'failed'
+    intentVersion: number
+    intent: {
+      subject: string
+      targetCount: number
+      mediaType: 'auto' | 'web' | 'image' | 'video' | 'audio' | 'document' | 'file'
+      constraints: string[]
+      exclusions: string[]
+      site: string | null
+    }
+    page: number
+    resultCount: number
+    createdAt: string
+    updatedAt: string
+    lastError: string | null
+    persistence: { mode: 'encrypted' | 'ephemeral'; durable: boolean; reason: string | null }
+    results: readonly {
+      resultId: string
+      rank: number
+      title: string
+      url: string
+      snippet: string
+      sourceDomain: string
+      mediaType: 'web' | 'image' | 'video' | 'audio' | 'document' | 'file'
+      confidence: 'exact' | 'probable' | 'weak'
+      collection: 'Videos Found' | 'Images Found' | 'Audio Found' | 'Files Found' | 'Sources'
+    }[]
+  }
+  sessions?: readonly {
+    sessionId: string
+    state: 'active' | 'paused' | 'completed' | 'partial' | 'cancelled' | 'failed'
+    subject: string
+    targetCount: number
+    mediaType: 'auto' | 'web' | 'image' | 'video' | 'audio' | 'document' | 'file'
+    resultCount: number
+    updatedAt: string
+  }[]
+  ambiguous?: boolean
 }
 
 /**

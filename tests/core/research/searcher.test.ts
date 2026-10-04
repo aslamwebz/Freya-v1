@@ -19,6 +19,19 @@ describe('provider neutral searcher', () => {
     await expect(new Searcher({ provider: provider(search) }).searchWeb(query)).rejects.toMatchObject({ code: 'invalid_query' })
     expect(search).not.toHaveBeenCalled()
   })
+  it('clamps provider pagination to ten bounded pages', async () => {
+    const offsets: Array<number | undefined> = []
+    const searcher = new Searcher({
+      provider: provider(async (_query, options) => {
+        offsets.push(options.offset)
+        return [result(`https://example.com/page-${options.offset ?? 0}`)]
+      }),
+    })
+    await searcher.searchWeb('page one', { offset: -99 })
+    await searcher.searchWeb('page ten', { offset: 999 })
+    expect(offsets).toEqual([0, 9])
+  })
+
   it('caps per-query results and cleans malformed and duplicate provider data', async () => {
     let limit: number | undefined
     let query: string | undefined

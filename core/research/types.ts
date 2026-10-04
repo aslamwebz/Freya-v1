@@ -11,5 +11,5 @@ export interface SearchResult {
 export interface SearchProvider {
   readonly id: string
   status(): { ready: boolean; reason: string }
-  search(query: string, options: { signal: AbortSignal; limit: number }): Promise<SearchResult[]>
+  search(query: string, options: { signal: AbortSignal; limit: number; offset?: number }): Promise<SearchResult[]>
 }

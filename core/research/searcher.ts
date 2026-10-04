@@ -12,6 +12,15 @@ export function boundedSearchLimit(limit = 10): number {
   return Number.isFinite(limit) ? Math.max(1, Math.min(10, Math.floor(limit))) : 10
 }
 
+/**
+ * Providers that support pagination receive only a small page index. Ten pages
+ * at ten results each is enough for Freya's Eye to collect 100 results without
+ * ever weakening the low-level ten-results-per-request boundary.
+ */
+export function boundedSearchOffset(offset = 0): number {
+  return Number.isFinite(offset) ? Math.max(0, Math.min(9, Math.floor(offset))) : 0
+}
+
 /** Rebuild provider data, including when a replacement provider is malformed. */
 export function normalizeSearchResults(data: unknown, limit: number, retrievedAt: string): SearchResult[] {
   if (!Array.isArray(data)) throw new ResearchError('invalid_response')
@@ -51,14 +60,15 @@ export class Searcher {
     this.now = options.now ?? (() => new Date())
   }
 
-  async searchWeb(query: string, options: { signal?: AbortSignal; limit?: number } = {}): Promise<SearchResult[]> {
+  async searchWeb(query: string, options: { signal?: AbortSignal; limit?: number; offset?: number } = {}): Promise<SearchResult[]> {
     const validated = validateSearchQuery(query)
     const limit = boundedSearchLimit(options.limit)
+    const offset = boundedSearchOffset(options.offset)
     try {
       return await withResearchAbort(options.signal, 10000, async (signal) => {
         const status = this.provider.status()
         if (!status.ready) throw new ResearchError(status.reason === 'disabled' ? 'disabled' : 'unconfigured')
-        const data = await this.provider.search(validated, { signal, limit })
+        const data = await this.provider.search(validated, { signal, limit, offset })
         return normalizeSearchResults(data, limit, this.now().toISOString())
       })
     } catch (error) { throw safeResearchError(error, 'provider_error') }

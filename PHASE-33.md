@@ -1,24 +1,22 @@
 # Phase 33 — Autonomous Enterprise / Webzone
 
-**Status:** PREPARATION ONLY — NOT PRODUCTION  
-**Branch:** `prep/phase33-enterprise`  
-**Blocked on:** Phase 32 and earlier integrations green  
+**Status:** RUNTIME IMPLEMENTED — FAIL-CLOSED / CORE ACTIVATION PENDING  
+**Branch:** `runtime/phase33-enterprise`  
+**Blocked on:** deliberate Core activation/integration only  
 **Required outcome:** owner-controlled business environment with explicit enterprise boundaries, task/mission orchestration, web presence interfaces, auditability, approvals, spending gates, external-action verification, and rollback/recovery — no hidden spending, no autonomous real-money actions, no authority widening
 
 ---
 
 ## 1. What this document is
 
-This is a **preparation specification** for Phase 33. It defines the architecture,
-interfaces, business environment, enterprise boundaries, task/mission orchestration,
-web presence/workzone interfaces, auditability, approvals, spending gates,
-external-action verification, rollback/recovery, test plans, red-team cases and
-acceptance criteria for Autonomous Enterprise / Webzone. It does **not** implement
-production runtime behavior.
+This document now accompanies the implemented Phase 33 Autonomous Enterprise / Webzone runtime.
+The domain state machine, boundaries, approvals, spending gates, external-action verification,
+rollback/recovery, enterprise protocol surface, and red-team coverage are implemented.
 
-**Phase 33 cannot start until Phase 32 and earlier integrations are green.**
-This branch exists so that when the gate passes, implementation can begin
-immediately without re-deriving the design.
+Core does **not** activate the runtime yet. No `core/index.ts` path instantiates the enterprise
+runtime, so the feature remains fail-closed until deliberate Core integration is added. This is
+an explicit activation boundary; it does not grant spending authority or widen any existing
+Guard, Governor, STOP ALL, approval, or budget rule.
 
 ---
 

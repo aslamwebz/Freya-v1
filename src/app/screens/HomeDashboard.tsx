@@ -102,12 +102,11 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 export function HomeDashboard({ screen, slots, snapshot, draft, generating, notice, dressing, onOpenDressing, onDraft, onSend, onNavigate }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
-  // The board is *contained* — scaled to fit fully inside the viewport so nothing
-  // is cropped on any edge. Seed it from the window so the first paint is already
-  // correct (no letterbox flash before the ResizeObserver measures).
+  // The board fills the screen (cover). Seed it from the window so the first
+  // paint is already correct (no letterbox flash before the ResizeObserver runs).
   const [scale, setScale] = useState(() => typeof window === 'undefined'
     ? 1
-    : Math.max(.4, Math.min(window.innerWidth / 1672, window.innerHeight / 941)))
+    : Math.max(.4, Math.max(window.innerWidth / 1672, window.innerHeight / 941)))
   const [voiceNotice, setVoiceNotice] = useState('')
   const [menu, setMenu] = useState<string | null>(null)
   const [models, setModels] = useState<readonly ModelEntry[]>([])
@@ -115,10 +114,11 @@ export function HomeDashboard({ screen, slots, snapshot, draft, generating, noti
   const [catalogNote, setCatalogNote] = useState('')
   const [thinkLevel, setThinkLevel] = useState<typeof THINK[number]>('Think')
   const [collapsed, setCollapsed] = useState(false)
+  const [listening, setListening] = useState(false)
   useEffect(() => {
     const node = viewport.current
     if (!node) return
-    const measure = () => setScale(Math.max(.4, Math.min(node.clientWidth / 1672, node.clientHeight / 941)))
+    const measure = () => setScale(Math.max(.4, Math.max(node.clientWidth / 1672, node.clientHeight / 941)))
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(node)
@@ -235,9 +235,10 @@ export function HomeDashboard({ screen, slots, snapshot, draft, generating, noti
         </Panel>
         </>) : <TabBody slots={slots} design={design} cognition={cognition} />}
       </main>
-      <footer className="hd-dock"><form aria-label="Freya composer" onSubmit={event => { event.preventDefault(); onSend() }}>
-        <button type="button" className="hd-mic" aria-label="Voice input unavailable" onClick={() => setVoiceNotice('Voice input is not connected yet. You can type to Freya.')}><Glyph name="mic" size={27} /></button>
-        <label className="hd-input"><span className="hd-sr-only">Ask Freya</span><input value={draft} onChange={event => onDraft(event.target.value)} placeholder={generating ? 'Freya is answering…' : 'Ask Freya...'} /></label>
+      <footer className="hd-dock" data-state={listening ? 'listening' : generating ? 'responding' : 'idle'}><form aria-label="Freya composer" onSubmit={event => { event.preventDefault(); onSend() }}>
+        <button type="button" className="hd-mic" aria-pressed={listening} aria-label={listening ? 'Stop listening' : 'Start voice input'} onClick={() => { setListening(value => !value); setVoiceNotice('Voice capture is not connected yet. You can type to Freya.') }}><Glyph name="mic" size={22} /></button>
+        <label className="hd-input"><span className="hd-sr-only">Ask Freya</span><input value={draft} onChange={event => onDraft(event.target.value)} placeholder={listening ? 'Listening…' : generating ? 'Freya is responding…' : 'Ask Freya...'} /></label>
+        <span className="hd-wave" aria-hidden="true">{Array.from({ length: 5 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 0.13}s` }} />)}</span>
         <div className="hd-tools">
           <button type="button" className="hd-tool" aria-label="Attach a file" onClick={() => setVoiceNotice('Attachments are not connected yet.')}><Glyph name="attach" size={18} /></button>
           <div className="hd-select">

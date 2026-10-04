@@ -321,7 +321,23 @@ export const RUNTIME_REGISTRY: readonly RuntimeDomainDescriptor[] = Object.freez
     title: 'Device Hands (browser, terminal, clipboard, transfer)',
     module: 'core/devicehands',
     kind: 'phase-runtime',
-    activation: 'blocked',
+    /**
+     * `activatable`, not `blocked`.
+     *
+     * Phase 40 registered this `blocked`, which in the controller is
+     * *unconditional* — it short-circuits before requirements are even consulted, so
+     * no host wiring could ever move it. That was right while nothing supplied an
+     * adapter. Phase 42 now does.
+     *
+     * The note has always been conditional — "without a truthful adapter and grants"
+     * — and an unconditional block contradicted it: the domain would report blocked
+     * even with both present. Requirements now govern it, which is what the note
+     * describes and what makes the projection worth reading.
+     *
+     * STOP ALL is still checked *before* this branch in the controller, so the latch
+     * outranks a satisfied requirement set. Nothing here weakens that ordering.
+     */
+    activation: 'activatable',
     requirements: [
       require('journal', 'the durable event journal'),
       require('host-adapter', 'the Device Hands host adapter', 'device-hands'),
@@ -393,12 +409,13 @@ export const RUNTIME_REGISTRY: readonly RuntimeDomainDescriptor[] = Object.freez
     title: 'Browser extension bridge',
     module: 'core/browserext',
     kind: 'phase-runtime',
-    // Fail-closed rather than blocked: the bridge, the pairing and the read-only
-    // observations are real and work, while every *act* is refused unless Device
-    // Hands is switched on and holds a grant. Reporting it as blocked would hide a
-    // domain that is genuinely half-available; reporting it as core-owned would
-    // imply it needs nothing.
-    activation: 'fail-closed',
+    // Phase 43 registered this `fail-closed` while Phase 42 was absent, which is
+    // also unconditional — the bridge, pairing and reads worked and every act was
+    // refused. Phase 42 is now in main, so requirements govern it: with the hands
+    // adapter absent or no grant it still reports blocked, and with both present it
+    // can act. Keeping it `fail-closed` would leave the extension permanently unable
+    // to do anything, which is the stale-block this branch exists to close.
+    activation: 'activatable',
     requirements: [
       require('journal', 'the durable event journal'),
       // The extension is a *port* onto Device Hands, not a second capability. It

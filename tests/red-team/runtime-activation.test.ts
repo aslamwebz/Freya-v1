@@ -68,12 +68,76 @@ describe('the activation system holds no authority', () => {
 })
 
 describe('the fail-closed and gated domains', () => {
-  it('keeps Device Hands blocked without a host adapter and a grant', () => {
+  /**
+   * Device Hands is gated, not switched off.
+   *
+   * It used to be declared `blocked`, which the controller treats as a hard gate
+   * evaluated *after* requirements — so it could never activate even once a host
+   * adapter and a grant existed. That declaration was stale once Phase 42 wired a
+   * real host. `activatable` is the honest mode, and the risk it introduces is that a
+   * mode change could quietly weaken the gate. So this asserts the gate itself rather
+   * than the label: with no adapter and no grant the domain must stay blocked and no
+   * handler may run, and only both facts together may open it.
+   */
+  it('keeps Device Hands blocked without a host adapter and a grant', async () => {
     const hands = registryById('core.device-hands')
-    expect(hands?.activation).toBe('blocked')
+    expect(hands?.activation).toBe('activatable')
     const kinds = hands?.requirements.map((requirement) => requirement.kind) ?? []
     expect(kinds).toContain('host-adapter')
     expect(kinds).toContain('capability-grant')
+
+    // No adapter, no grant: blocked, and the reason names what is missing so the
+    // projection is not merely pessimistic but diagnosable.
+    const bare = new RuntimeActivationController({ journal: makeJournal() })
+    const bareLog: string[] = []
+    bare.register([hands!], [makeHandler(hands!.id, bareLog)])
+    const bareView = (
+      await bare.load(facts({ capabilityGrants: [] }))
+    ).domains.find((entry) => entry.id === hands!.id)
+    expect(bareView?.status).toBe('blocked')
+    expect(bareView?.lastOutcome).toBe('blocked')
+    expect(bareLog).toEqual([])
+
+    // An adapter alone is not enough, and a grant alone is not enough. Each missing
+    // half must still block, so neither fact can be traded for the other.
+    for (const partial of [{ hostAdapters: ['device-hands'] }, { capabilityGrants: ['device.hands'] }]) {
+      const partialController = new RuntimeActivationController({ journal: makeJournal() })
+      const partialLog: string[] = []
+      partialController.register([hands!], [makeHandler(hands!.id, partialLog)])
+      const view = (
+        await partialController.load(facts({ hostAdapters: [], capabilityGrants: [], ...partial }))
+      ).domains.find((entry) => entry.id === hands!.id)
+      expect(view?.status, JSON.stringify(partial)).toBe('blocked')
+      expect(partialLog, JSON.stringify(partial)).toEqual([])
+    }
+
+    // Only both together may activate, and STOP ALL outranks both.
+    const full = new RuntimeActivationController({ journal: makeJournal() })
+    full.register([hands!], [makeHandler(hands!.id, bareLog)])
+    const ready = (
+      await full.load(facts({ hostAdapters: ['device-hands'], capabilityGrants: ['device.hands'] }))
+    ).domains.find((entry) => entry.id === hands!.id)
+    expect(ready?.status).not.toBe('blocked')
+
+    const latched = new RuntimeActivationController({ journal: makeJournal() })
+    const latchedLog: string[] = []
+    latched.register([hands!], [makeHandler(hands!.id, latchedLog)])
+    const stoppedView = (
+      await latched.load(
+        facts({
+          hostAdapters: ['device-hands'],
+          capabilityGrants: ['device.hands'],
+          stopAllActive: true,
+        }),
+      )
+    ).domains.find((entry) => entry.id === hands!.id)
+    expect(stoppedView?.status).toBe('blocked')
+    expect(stoppedView?.lastOutcome).toBe('blocked')
+    // The reason must name the latch rather than the missing facts, because the
+    // facts are all present here. A reason that still blamed a dependency would mean
+    // the stop branch never ran and something else happened to block it.
+    expect(stoppedView?.reason).toMatch(/stop all/i)
+    expect(latchedLog).toEqual([])
   })
 
   it('keeps Multi-Device blocked without a transport and a trusted device', () => {

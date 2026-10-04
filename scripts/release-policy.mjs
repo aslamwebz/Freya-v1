@@ -16,10 +16,15 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   //
   // Phase 42 Device Hands is the next explained growth: activating Phase 35 in the
   // main process bundles its runtime — the ten-gate pipeline, the fold, the four
-  // surface policies and the host adapters — into `main.cjs`, measured at ~1.99MB.
+  // surface policies and the host adapters — into `main.cjs`, measured at ~2.10MB.
   // The bound keeps modest headroom over that, and the host stays unminified on
   // purpose so its security-critical source can be audited in the shipped artifact.
-  mainBytes: 2_100_000,
+  //
+  // Raised from 2.1MB for the Phase 43 browser-extension host, which mounts against
+  // the Phase 42 Device Hands seam and so lands in the main process rather than in a
+  // separate bundle. 2.1MB was already exceeded at the start of that work, so this
+  // records the real size rather than absorbing the overrun.
+  mainBytes: 2_110_000,
   preloadBytes: 120_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,

@@ -391,6 +391,20 @@ export interface HostHarnessOptions {
   readonly enabled?: boolean
   readonly terminalTimeoutMs?: number
   readonly transferTimeoutMs?: number
+  /**
+   * Replace the authority wholesale.
+   *
+   * Added because the harness otherwise hardcodes `authorityFake()`, whose
+   * `activeGrant` always answers with the default unrevoked grant. That made two
+   * real properties untestable from outside: that an action is refused when **no**
+   * grant exists, and that a latched STOP ALL refuses an action a grant would
+   * otherwise permit. Both are gate behaviour, and the gate only asks the authority
+   * — so the authority has to be the thing a test varies.
+   *
+   * `HostHarness.authority` remains mutable, so a test can also flip the latch
+   * between two actions on one harness.
+   */
+  readonly authority?: AuthorityFake
 }
 
 export interface HostHarness {
@@ -416,7 +430,7 @@ export async function hostHarness(options: HostHarnessOptions = {}): Promise<Hos
   const browser = browserFake()
   const transfer = transferFake()
   const journal = memoryJournal()
-  const authority = authorityFake()
+  const authority = options.authority ?? authorityFake()
   const counts = zeroCounts()
   let clock = T0
   let ids = 0

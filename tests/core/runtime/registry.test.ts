@@ -42,7 +42,13 @@ describe('the canonical runtime registry', () => {
     const kinds = hands!.requirements.map((requirement) => requirement.kind)
     expect(kinds).toContain('host-adapter')
     expect(kinds).toContain('capability-grant')
-    expect(hands!.activation).toBe('blocked')
+    // `activatable`, not `blocked`. This was `blocked` when Phase 40 landed, which in
+    // the controller is unconditional — it short-circuits before requirements are
+    // consulted, so Phase 42's wiring could never move it. The note has always been
+    // conditional ("without a truthful adapter and grants"), and now the requirement
+    // set is what decides. STOP ALL is checked before this branch, so the latch
+    // still outranks a satisfied requirement set.
+    expect(hands!.activation).toBe('activatable')
   })
 
   it('requires a transport and a trusted device before Multi-Device could activate', () => {
@@ -109,9 +115,9 @@ describe('the canonical runtime registry', () => {
   it('registers the browser extension as a port onto the hands, not its own capability', () => {
     const browserext = registryById('core.browserext')
     expect(browserext).toBeDefined()
-    // Fail-closed rather than blocked: the bridge, pairing and reads are real, and the
-    // acts are refused. Reporting `blocked` would hide a half-available domain.
-    expect(browserext!.activation).toBe('fail-closed')
+    // Requirement-governed for the same reason as Device Hands: it shipped
+    // `fail-closed` while Phase 42 was absent, which blocked it unconditionally.
+    expect(browserext!.activation).toBe('activatable')
     // It requires the *same* adapter and a grant, so an extension cannot hold authority
     // the hands themselves lack. This is the whole safety argument for the entry.
     expect(browserext!.requirements.map((r) => r.kind).sort()).toEqual(

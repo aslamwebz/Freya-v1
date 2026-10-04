@@ -7036,7 +7036,6 @@ class FreyaCore implements Core {
    * worse than no Mission at all — it is a promise the engine cannot keep, made
    * quietly, about the user's own words.
    */
-  /**
   private async buildMissionStore(): Promise<MissionStore> {
     if (this.options.missionStore) return this.options.missionStore
     // When a Vault is configured, Mission content lives in the one encrypted SQLCipher

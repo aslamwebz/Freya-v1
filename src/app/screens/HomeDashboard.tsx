@@ -89,6 +89,10 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
       </div>
       {wide ? null : <div className="hd-col hd-col-r">{slots.right}</div>}
       {slots.bottom ? <div className="hd-col-b">{slots.bottom}</div> : null}
+      {/*
+        One visible statement, for every screen that declares it.
+        */}
+      {slots.sample ? <p className="hd-sample-note" role="status">{slots.sample}</p> : null}
     </div>
   )
 }

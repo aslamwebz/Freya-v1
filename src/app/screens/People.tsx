@@ -23,6 +23,7 @@ const INTERACTIONS = [['Sarah Chen', 'Reviewed the launch plan', '2h ago'], ['Al
 
 export function People(): ScreenSlots {
   return {
+    sample: 'People composition — no relationship projection exists yet.',
     left: (
       <Card title="People" icon="people" subtitle="18 connected">
         <div className="pp-list">{PEOPLE.map((person, index) => (

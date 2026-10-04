@@ -11,6 +11,21 @@ export interface ScreenSlots {
   readonly centre?: ReactNode
   /** 'wide' spans the centre across the side columns. */
   readonly layout?: 'standard' | 'wide'
+  /**
+   * Set by a screen that is still showing invented content.
+   *
+   * A screen that takes no props cannot read a projection, so before its real data is
+   * bound it has nothing honest to show. That is a legitimate design-preview state —
+   * what is not legitimate is showing it *silently*, in the same visual language as
+   * the live screens, with numbers formatted like measurements.
+   *
+   * Declaring it here rather than stamping a badge on each screen means one visible
+   * element in the shell, consistent across every screen, and impossible to forget:
+   * `tests/unit/app/truthfulness.test.ts` fails if a no-props screen renders without
+   * one. The string names what is missing, so the note is diagnostic rather than a
+   * generic disclaimer.
+   */
+  readonly sample?: string
 }
 
 /** A small attention ring. A null value renders as an em dash, never a 0%. */

@@ -25,6 +25,7 @@ const REVIEW = [['Duplicate memory detected', 'Merge two similar decisions'], ['
 
 export function Memory(): ScreenSlots {
   return {
+    sample: 'Memory composition — the Brain has not reported any memories.',
     left: (
       <Card title="Memory" icon="memory" subtitle="Stored and recallable">
         <div className="l-glance">

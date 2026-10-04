@@ -24,6 +24,7 @@ const WEEK = [['Mon', 80], ['Tue', 65], ['Wed', 90], ['Thu', 72], ['Fri', 84], [
 
 export function Focus(): ScreenSlots {
   return {
+    sample: 'Focus composition — Core reports no focus measurement yet.',
     left: (
       <>
         <Card title="Current focus" icon="focus" subtitle="72%">

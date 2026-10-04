@@ -119,26 +119,116 @@ async function launch(
   })
 
   /**
+   * Assert the **shipping** shell before replacing it.
+   *
+   * `firstWindow()` loads the default entry, which is App Mode — the shell that
+   * actually ships. Everything below then navigates to `?ui=legacy` and spends the
+   * rest of the suite there, which is correct for the behavioural checks but left the
+   * default shell with **no e2e at all**. A suite can be entirely green while the
+   * thing a person launches every day is untested, and that is exactly the shape of
+   * failure this block exists to prevent: it is free (the window is already open and
+   * already booted) and it is the only place the default entry point is exercised.
+   *
+   * What is checked is deliberately narrow and structural rather than visual, because
+   * this suite has no business pinning App Mode's layout:
+   *
+   *   - the default entry mounts App Mode at all, not a fallback or an error;
+   *   - it reaches Core — a live `freyaHost` bridge and a `ready` lifecycle;
+   *   - the presence is mounted alongside it;
+   *   - it is wired to the **live** adapter, not the preview fixtures, so a window
+   *     that quietly fell back to sample data would be caught here.
+   *
+   * A failure throws with the same diagnostic snapshot the legacy boot uses, so a
+   * broken default shell reports what was on screen rather than a bare timeout.
+   */
+  try {
+    // The live adapter publishes `ready` only once a Core status has arrived over the
+    // bridge; the preview adapter publishes `preview`. This is the difference between
+    // "this window shows Freya" and "this window shows fixtures", read off the DOM
+    // the shell itself sets.
+    // `attached`, not `visible`: this element is App Mode's panel wrapper, which holds
+    // the chat and dressing overlays and so has no visible box while both are closed.
+    // Visibility is asserted where it is meaningful — on `.presence`, below.
+    await page.waitForSelector('.freya-v2[data-app-shell="app"]', { state: 'attached', timeout: 20_000 })
+    // No `.presence` wait here. App Mode's presence is a **separate BrowserWindow**
+    // (`electron/presence/window.ts`), not an element inside this one, so waiting for
+    // it in the main window would always time out. The legacy lane below asserts the
+    // in-window canvas that shell does render, and the presence window itself is
+    // covered by its own dedicated checks further down.
+    const shell = await page.evaluate(() => {
+      // Scoped to the marker, not to `.freya-v2`: HomeDashboard also renders a
+      // `.freya-v2` viewport, and a bare class query returns that one first — which
+      // carries no provenance attributes and would read as a missing shell.
+      const root = document.querySelector('.freya-v2[data-app-shell]')
+      return {
+        shell: root?.getAttribute('data-app-shell') ?? null,
+        live: root?.getAttribute('data-ui-mode') ?? null,
+        hasBridge: typeof (window as unknown as { freyaHost?: unknown }).freyaHost === 'object',
+        hasPreviewBadge: /design preview|sample data/i.test(document.body?.innerText ?? ''),
+      }
+    })
+    if (shell.shell !== 'app') {
+      throw new Error(`the default entry mounted ${String(shell.shell)} rather than App Mode`)
+    }
+    if (!shell.hasBridge) {
+      throw new Error('App Mode mounted with no host bridge, so it cannot reach Core')
+    }
+    if (shell.live !== 'live') {
+      throw new Error(
+        `App Mode is running the ${String(shell.live)} adapter; the shipping window must project Core, not fixtures`,
+      )
+    }
+    if (shell.hasPreviewBadge) {
+      throw new Error('App Mode labelled itself as design preview or sample data in a live desktop window')
+    }
+  } catch (error) {
+    const snapshot = await page
+      .evaluate(() => ({
+        url: location.href,
+        shell: document.querySelector('.freya-v2[data-app-shell]')?.getAttribute('data-app-shell') ?? null,
+        mode: document.querySelector('.freya-v2[data-app-shell]')?.getAttribute('data-ui-mode') ?? null,
+        hasBridge: typeof (window as unknown as { freyaHost?: unknown }).freyaHost === 'object',
+        body: document.body?.innerText?.slice(0, 1200) ?? '',
+      }))
+      .catch(() => ({ url: 'unavailable', shell: null, mode: null, hasBridge: false, body: '' }))
+    throw new Error(
+      `the shipping App Mode shell did not come up: ${error instanceof Error ? error.message : String(error)}\n` +
+        `boot snapshot: ${JSON.stringify(snapshot)}\n` +
+        `renderer diagnostics: ${diagnostics.join(' | ') || 'none'}`,
+      { cause: error },
+    )
+  }
+
+  /**
    * Pin this window to the legacy shell.
    *
-   * The default entry is now the from-scratch App Mode, but this suite was written
-   * against the legacy shell and drives it through named surfaces — openChat,
-   * openMission, openWork, openPersonality, openVault and the rest — each of which
-   * launches a surface by id from the Surface Manager. App Mode has its own screens
-   * and does not expose those ids, so without this the suite would boot a shell it
-   * cannot operate and fail on its first selector with nothing to say why.
+   * The default entry is App Mode, but this suite was written against the legacy
+   * shell and drives it through named surfaces — openChat, openMission, openWork,
+   * openPersonality, openVault and the rest — each of which launches a surface by id
+   * from the Surface Manager. App Mode has its own screens and does not expose those
+   * ids, so without this the suite would boot a shell it cannot operate and fail on
+   * its first selector with nothing to say why.
    *
-   * Retargeting the suite at App Mode is a rewrite of all 2,700 lines against a UI
-   * that is still being built, which would leave the Core behaviours it covers —
-   * mission persistence across a relaunch, approval ordering, STOP ALL surviving a
-   * restart — untested in the meantime. So the suite names the shell it needs.
+   * This is a deliberate division of labour, and the App Mode block above is its
+   * other half:
    *
-   * Navigating after `firstWindow()` rather than at launch keeps the production
-   * entry point free of a test-only switch, and it works precisely because of the
-   * property this architecture is built on: the renderer is disposable. A reload
-   * re-reads the workspace and re-attaches to the Core that is already running,
-   * with the same event sequence and the same latched security state, so the
-   * replacement body loses no history and starts no second Core.
+   *   - **legacy lane** — the behavioural depth. Mission persistence across a
+   *     relaunch, approval ordering, STOP ALL surviving a restart, surface geometry.
+   *     Real coverage of real Core behaviour, and the shell stays the rollback path.
+   *   - **App Mode lane** — the shipping default. Boots, reaches Core, runs live, and
+   *     is asserted before this navigation replaces it.
+   *
+   * Retargeting the behavioural suite at App Mode is a rewrite of all 2,700 lines
+   * against a UI that is still being built, which would leave those Core behaviours
+   * untested in the meantime. So each lane tests the shell it can actually drive, and
+   * the default shell is not left untested as a result.
+   *
+   * Navigating after `firstWindow()` rather than at launch keeps the production entry
+   * point free of a test-only switch, and it works precisely because of the property
+   * this architecture is built on: the renderer is disposable. A reload re-reads the
+   * workspace and re-attaches to the Core that is already running, with the same event
+   * sequence and the same latched security state, so the replacement body loses no
+   * history and starts no second Core.
    */
   await page.goto(`${page.url()}?ui=legacy`)
   try {

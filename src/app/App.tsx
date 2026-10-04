@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { type UiAdapter } from '../ui-v2/state/contract'
+import { type UiAdapter, uiMode } from '../ui-v2/state/contract'
 import { useUiState } from '../ui-v2/state/useUiState'
 import { type PreferencesStore } from '../ui-v2/theme/preferences'
 import { conversationMirror, ensureConversationAttached } from '../platform/conversationClient'
@@ -130,7 +130,21 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
     <HomeDashboard screen={current.id} slots={slots} snapshot={snapshot} draft={draft} generating={generating} notice={notice}
       dressing={dressing} onOpenDressing={() => setDressingOpen(true)}
       onDraft={setDraft} onSend={send} onNavigate={setScreen} />
-    <div className="freya-v2" data-theme={settings.theme}>
+    {/*
+      `data-app-shell` and `data-ui-mode` are read by the desktop E2E suite, and they
+      are worth having for the same reason the shell labels itself honestly in the UI:
+      a window must be able to be told apart from a design preview by something other
+      than somebody's recollection.
+
+      `uiMode` is the contract's own provenance read — it is `preview` only when
+      *every* resource is a preview fixture, and the moment any resource is a live
+      projection it reads `live`. So this attribute cannot claim `preview` while real
+      data is on screen, and cannot claim `live` while fixtures are. Deriving it from
+      the snapshot rather than setting it by hand is the whole point; a hardcoded
+      `data-ui-mode="live"` would be exactly the kind of assertion this codebase
+      refuses to make.
+    */}
+    <div className="freya-v2" data-theme={settings.theme} data-app-shell="app" data-ui-mode={uiMode(snapshot)}>
       <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
       <DressingTable store={dressing} open={dressingOpen} onOpenChange={setDressingOpen} />
     </div>

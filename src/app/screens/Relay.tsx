@@ -45,6 +45,7 @@ const SERVICES = ['G', 'O', 'D', 'S', 'A', 'L', 'H', 'F']
 
 export function Relay(): ScreenSlots {
   return {
+    sample: 'Relay composition — no connector is configured.',
     left: null,
     right: null,
     layout: 'wide',

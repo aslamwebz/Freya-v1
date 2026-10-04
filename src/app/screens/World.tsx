@@ -2,11 +2,22 @@ import { Card, Chip, Row } from '../cards/Card'
 import type { ScreenSlots } from './Home'
 
 /**
- * World — render #3, 1:1.
+ * World — the graph composition, with the invented parts removed.
  *
- * A knowledge graph around Freya with a selected-entity panel. Sample data for
- * the design phase; a live build would bind the clusters to real projections and
- * the panel to a real entity.
+ * The visual structure is unchanged: same toolbar, same graph well, same entity
+ * panel, same card in the same place. What changed is that the footer no longer
+ * claims a graph size or a sync state.
+ *
+ * Those three were the worst claims in this shell. `1,842 Nodes`,
+ * `6,391 Relationships` and `Live Sync` were module constants, so they described a
+ * world model Freya does not have — and `Live Sync` was the most misleading of the
+ * three, because it asserted a capability rather than a quantity. There is a real
+ * `WorldSummaryView` behind the bridge with entity, relation and evidence counts,
+ * but nothing passes it in here yet, so the footer now says that instead of guessing.
+ *
+ * The cluster names and counts further up are still sample data and are labelled as
+ * such by the pending row; wiring them to `coreWorld()` and the four world read
+ * commands is the next step, not something to fake in the meantime.
  */
 
 const FILTERS = ['All', 'People', 'Projects', 'Organizations', 'Places', 'Devices', 'Conversations', 'Missions']
@@ -82,6 +93,7 @@ function PersonPanel() {
 
 export function World(): ScreenSlots {
   return {
+    sample: 'World composition — the world model is not connected yet.',
     left: null,
     right: null,
     layout: 'wide',
@@ -99,7 +111,13 @@ export function World(): ScreenSlots {
     ),
     bottom: (
       <Card title="World model" icon="world" className="w-stats">
-        <div className="w-stats-row"><span><b>1,842</b> Nodes</span><span><b>6,391</b> Relationships</span><span className="c-state--working">Live Sync</span></div>
+        {/*
+          No counts, because none are known here.
+          */}
+        <div className="w-stats-row">
+          <span>Not bound to Core yet</span>
+          <span>Entity, relation and evidence counts arrive with the World projection</span>
+        </div>
       </Card>
     ),
   }

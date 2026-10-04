@@ -254,3 +254,15 @@
 
 .st-note { margin: 0; font-size: .72rem; color: var(--f-muted); }
 .st-notice { margin: .5rem 0 0; font-size: .76rem; color: var(--f-heading); }
+
+/* A screen that is still showing invented content says so, once, here. Styled to sit
+   quietly under the tab body: it is a statement of fact about the window, not an
+   alert, and it must not be the thing the eye goes to. */
+.hd-sample-note {
+  grid-column: 1 / -1;
+  margin: .5rem 0 0;
+  font-size: .74rem;
+  color: var(--f-muted);
+  border-top: 1px solid var(--f-line);
+  padding-top: .5rem;
+}

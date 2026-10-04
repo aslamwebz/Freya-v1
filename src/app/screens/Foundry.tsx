@@ -39,6 +39,7 @@ const statusClass = (status: string) => (status === 'Deployed' ? 'c-state--worki
 
 export function Foundry(): ScreenSlots {
   return {
+    sample: 'Foundry composition — no artifacts have been built or verified.',
     left: null,
     right: null,
     layout: 'wide',

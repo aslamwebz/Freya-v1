@@ -60,6 +60,7 @@ const BOTTOM = [
 
 export function Mind(): ScreenSlots {
   return {
+    sample: 'Mind composition — no self-model is bound yet.',
     left: (
       <>
         <Card title="Self" icon="core" subtitle="Who I am now">

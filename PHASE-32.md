@@ -1,22 +1,22 @@
 # Phase 32 — Economic Intelligence
 
-**Status:** PREPARATION ONLY — NOT PRODUCTION  
-**Branch:** `prep/phase32-economic-intelligence`  
-**Blocked on:** Phase 31 and earlier integrations green  
+**Status:** RUNTIME IMPLEMENTED — FAIL-CLOSED / CORE ACTIVATION PENDING  
+**Branch:** `runtime/phase32-economic-intelligence`  
+**Blocked on:** deliberate Core/Phase-31 seam activation only  
 **Required outcome:** research, simulation/paper experiments and measured economic evidence — no real money
 
 ---
 
 ## 1. What this document is
 
-This is a **preparation specification** for Phase 32. It defines the architecture,
-interfaces, research/simulation/paper-trading semantics, test plans, red-team
-cases and acceptance criteria for Economic Intelligence. It does **not**
-implement production runtime behavior.
+This document now accompanies the implemented Phase 32 Economic Intelligence runtime.
+The domain runtime, event vocabulary, validation, protocol surface, simulations,
+paper experiments, recovery logic, and red-team coverage are implemented.
 
-**Phase 32 cannot start until Phase 31 and earlier integrations are green.**
-This branch exists so that when the gate passes, implementation can begin
-immediately without re-deriving the design.
+Core does **not** activate the runtime yet. `NO_LONG_HORIZON_SEAM` remains the
+default and no `core/index.ts` path instantiates Economic Intelligence, so the
+feature is fail-closed until a deliberate Phase-31/Core seam is supplied. This is
+an explicit integration boundary, not an implicit permission to execute.
 
 ---
 

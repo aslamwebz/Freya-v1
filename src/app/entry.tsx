@@ -6,6 +6,8 @@ import { DressingStore } from './dressing/store'
 import { createPreviewAdapter } from '../ui-v2/state/preview'
 import { createLiveAdapter, isElectron } from '../ui-v2/state/live'
 import type { UiAdapter } from '../ui-v2/state/contract'
+import { attachAppOps } from './state/ops'
+import { armAppWorkspace, loadAppLayout, setAppLayout, type AppLayout } from './state/workspace'
 import '../ui-v2/theme/tokens.css'
 import '../ui-v2/primitives/controls.css'
 import './cards/cards.css'
@@ -25,8 +27,8 @@ const root = document.getElementById('root')
 if (!root) throw new Error('Freya: root element is missing')
 
 /**
- * Which adapter this window gets, decided by *where* it runs — not by whether a bridge
- * happens to be present.
+ * Which adapter this window gets, decided by *where* it runs — not by whether a
+ * bridge happens to be present.
  *
  * A browser (`npm run dev`, a test, a build preview) has no Core and never will, so it
  * uses the preview fixtures, which are labelled as sample data everywhere they appear.
@@ -44,11 +46,35 @@ const adapter: UiAdapter = live ?? createPreviewAdapter()
 // the first status arrives through them rather than being fetched here.
 if (live) void live.attach()
 
+// App Mode answers the host's closing-time layout request through the one workspace
+// mechanism, so a close resolves immediately instead of waiting out the timeout.
+armAppWorkspace()
+
 const preferences = new PreferencesStore(storage)
 const dressing = new DressingStore(storage)
 
-createRoot(root).render(
-  <StrictMode>
-    <App preferences={preferences} dressing={dressing} adapter={adapter} />
-  </StrictMode>,
-)
+/**
+ * The layout is read before the first render so the shell opens on the screen the
+ * person left, rather than flashing Home and then moving. A browser read is a
+ * localStorage read that cannot reject; a desktop read resolves through the bridge.
+ */
+async function start(): Promise<void> {
+  let initialLayout: AppLayout | null = null
+  if (live) {
+    try {
+      initialLayout = await loadAppLayout()
+    } catch {
+      initialLayout = null
+    }
+    if (initialLayout) setAppLayout(initialLayout)
+    void attachAppOps()
+  }
+  if (root === null) throw new Error('Freya: #root is missing from the document')
+  createRoot(root).render(
+    <StrictMode>
+      <App preferences={preferences} dressing={dressing} adapter={adapter} initialLayout={initialLayout} />
+    </StrictMode>,
+  )
+}
+
+void start()

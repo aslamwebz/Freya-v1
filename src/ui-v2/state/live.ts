@@ -164,6 +164,8 @@ export function createLiveAdapter(): LiveAdapter {
         stopped: status.stopAll.active,
         integrity: status.integrity.integrity,
         faultCount: status.faults.length,
+        sessionUsage: status.sessionUsage,
+        durableUsage: status.durableUsage,
       },
     }
   }

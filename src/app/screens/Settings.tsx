@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Card, Chip, Row } from '../cards/Card'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { hostBridge } from '../../platform/host'
+import { coreMirror } from '../../platform/coreClient'
 import { THEMES, type ThemeId } from '../../ui-v2/theme/tokens'
 import type { PreferencesStore } from '../../ui-v2/theme/preferences'
 import type { CoreView, ProviderView, Resource } from '../../ui-v2/state/contract'
@@ -355,6 +356,52 @@ function PrivacyCard() {
 
 function SecurityCard({ snapshot }: { snapshot: SettingsProps['snapshot'] }) {
   const core = ready(snapshot.core)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+
+  /**
+   * Stop and resume Freya, through Core's existing command surface.
+   *
+   * There is no second stop system here and no local boolean pretending Freya is
+   * stopped. `security.stopAll` is the same command the legacy Security surface
+   * issues; it latches durably in the journal, cancels in-flight provider calls,
+   * closes research, Relay and the workforce, and survives a restart. The only way
+   * back is an explicit `security.resume`.
+   *
+   * Two rules this deliberately keeps:
+   *
+   *   - **The button reflects Core, not the click.** `stopped` comes from
+   *     `snapshot.core`, so a refused stop leaves STOP ALL available rather than
+   *     latching a control that only looks engaged.
+   *   - **A refusal is shown as a refusal.** Core's own reason is rendered verbatim.
+   *     There is no branch that turns a refusal into a success sentence, because a
+   *     person who pressed the most serious button in the application must never be
+   *     told it worked when it did not.
+   */
+  const submit = async (command: 'security.stopAll' | 'security.resume'): Promise<void> => {
+    if (hostBridge() === undefined) {
+      setNotice('This window cannot reach the host, so nothing was changed.')
+      return
+    }
+    setBusy(true)
+    setNotice('')
+    try {
+      const result = await coreMirror().submit(
+        command,
+        command === 'security.stopAll' ? { reason: 'requested from App Mode' } : undefined,
+      )
+      setNotice(result.ok
+        ? command === 'security.stopAll'
+          ? 'Core accepted STOP ALL. Nothing runs until it is cleared.'
+          : 'Core accepted the resume. Cognition may run again.'
+        : (result.refusal?.reason ?? result.error?.message ?? 'Core refused the command.'))
+    } catch (error) {
+      setNotice(`Core could not be reached — ${errorMessage(error)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (core === null) {
     return (
       <Card title="Security" icon="settings" subtitle="Core's own report">
@@ -362,13 +409,28 @@ function SecurityCard({ snapshot }: { snapshot: SettingsProps['snapshot'] }) {
       </Card>
     )
   }
+
+  const stopped = core.stopped
   return (
     <Card title="Security" icon="settings" subtitle="Core's own report">
       <div className="c-rows">
         <Row title="Freya is" detail={core.lifecycle} />
-        <Row title="Stop authority" detail={core.stopped ? 'LATCHED — Freya will not think' : 'Not latched'} />
+        <Row title="Stop authority" detail={stopped ? 'LATCHED — Freya will not think' : 'Not latched'} />
         <Row title="Journal integrity" detail={core.integrity} />
         <Row title="Recorded faults" detail={core.faultCount === 0 ? 'None' : `${core.faultCount}`} />
+      </div>
+      <div className="st-form">
+        <div className="st-actions">
+          <button type="button" className="st-save" disabled={busy || stopped}
+            onClick={() => { void submit('security.stopAll') }}>STOP ALL</button>
+          <button type="button" className="st-forget" disabled={busy || !stopped}
+            onClick={() => { void submit('security.resume') }}>Resume</button>
+        </div>
+        <p className="st-note">
+          STOP ALL latches in Core: it cancels in-flight provider calls, closes research,
+          Relay and the workforce, and survives a restart. Only an explicit resume clears it.
+        </p>
+        {notice.length > 0 && <p className="st-notice" role="status">{notice}</p>}
       </div>
     </Card>
   )

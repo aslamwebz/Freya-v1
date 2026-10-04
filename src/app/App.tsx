@@ -17,6 +17,7 @@ import { Focus } from './screens/Focus'
 import { People } from './screens/People'
 import { Memory } from './screens/Memory'
 import { Settings, type SettingsCategory } from './screens/Settings'
+import { setAppLayout, type AppLayout } from './state/workspace'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
@@ -53,11 +54,14 @@ const RAIL: readonly RailItem[] = [
   { id: 'relay', label: 'Relay', symbol: 'relay' },
 ]
 
-export function App({ preferences, dressing, adapter }: { preferences: PreferencesStore; dressing: DressingStore; adapter: UiAdapter }) {
+export function App({ preferences, dressing, adapter, initialLayout }: { preferences: PreferencesStore; dressing: DressingStore; adapter: UiAdapter; initialLayout?: AppLayout | null }) {
   const settings = useSyncExternalStore(preferences.subscribe, preferences.getSnapshot, preferences.getSnapshot)
   const snapshot = useUiState(adapter)
 
-  const [screen, setScreen] = useState('home')
+  // Restored from the layout the host hands over at boot, so the shell opens on the
+  // screen the person left rather than flashing Home and then moving. Read before the
+  // first render, so there is no visible jump.
+  const [screen, setScreen] = useState(initialLayout?.nav && initialLayout.nav !== 'home' ? initialLayout.nav : 'home')
   const [chatOpen, setChatOpen] = useState(false)
   const [dressingOpen, setDressingOpen] = useState(false)
   const [draft, setDraft] = useState('')
@@ -66,6 +70,24 @@ export function App({ preferences, dressing, adapter }: { preferences: Preferenc
   const mirror = conversationMirror()
   const conversation = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
   const generating = conversation?.activeTurn != null
+
+  /**
+   * Publish what the host asks for at close, so a close resolves immediately instead
+   * of waiting out the collect timeout.
+   *
+   * `navCollapsed` is written as `false` deliberately. It is part of the shared
+   * workspace file because the legacy shell has a collapsible rail; App Mode's
+   * persistent board does not, and it has no control that could change it. Writing
+   * the field this shell actually has — rather than restoring and re-publishing a
+   * value with no UI behind it — is what keeps the file describing it truthfully.
+   */
+  useEffect(() => {
+    setAppLayout({
+      nav: screen,
+      navCollapsed: false,
+      conversationId: conversation?.activeConversationId ?? null,
+    })
+  }, [screen, conversation?.activeConversationId])
 
   useEffect(() => {
     void ensureConversationAttached()

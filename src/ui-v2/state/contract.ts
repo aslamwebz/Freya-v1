@@ -8,6 +8,9 @@ export type Resource<T> =
 export interface CoreView {
   readonly lifecycle: string; readonly sequence: number; readonly activeRequests: number
   readonly stopped: boolean; readonly integrity: string; readonly faultCount: number
+  /** Reported provider usage. Optional: a preview or an older projection may omit it. */
+  readonly sessionUsage?: { readonly calls: number; readonly inputTokens: number | null; readonly outputTokens: number | null; readonly unknownUsageCalls: number }
+  readonly durableUsage?: { readonly calls: number; readonly inputTokens: number | null; readonly outputTokens: number | null; readonly unknownUsageCalls: number }
 }
 export interface MissionRow {
   readonly id: string; readonly status: string; readonly runs: number

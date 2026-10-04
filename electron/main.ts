@@ -594,6 +594,21 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:lifeloop', projection)
   })
 
+  /**
+   * Life History: Freya's own autobiographical record.
+   *
+   * Push-only, like every other Core projection here. An entry carries a kind, a
+   * salience, a derivation and a bounded summary — not a narrative, and not a place
+   * a window can write one. There is deliberately no `freya:core:life:write` channel
+   * and no preload method that accepts an entry body: the only way a Life entry
+   * exists is Core's own `admitLifeEntry`, which caps confidence, refuses
+   * secret-shaped text and refuses a derived entry with no evidence. A bridge door
+   * would be a second admission path around all three of those checks.
+   */
+  const detachLife = coreHost?.onLife((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:life', projection)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
@@ -612,6 +627,7 @@ function createWindow(): BrowserWindow {
     detachWorld?.()
     detachConsciousness?.()
     detachLifeLoop?.()
+    detachLife?.()
   })
 
   if (DEV_SERVER) {
@@ -780,6 +796,7 @@ function registerIpc(): void {
   // could ask Core to build wrongly, and there is no command behind it to refuse.
   ipcMain.handle('freya:core:consciousness', () => requireCore().consciousness())
   ipcMain.handle('freya:core:lifeloop', () => requireCore().lifeLoop())
+  ipcMain.handle('freya:core:life', () => requireCore().life())
 
   ipcMain.handle('freya:workspace:save', (_event, payload: unknown) => {
     const accepted = requireWorkspace().schedule(payload)

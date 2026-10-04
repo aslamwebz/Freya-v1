@@ -19,6 +19,7 @@ import type { SkillProjection } from '../../core/protocol/skills'
 import type { LifeProjection } from '../../core/protocol/life'
 import type { ConsciousContextProjection } from '../../core/protocol/consciousness'
 import type { LifeLoopProjection } from '../../core/protocol/lifeloop'
+import type { WorldSummaryView } from '../../core/protocol/world'
 
 /**
  * The shape of the desktop bridge, declared once.
@@ -282,6 +283,24 @@ export interface FreyaHostBridge {
    */
   coreLifeLoop(): Promise<LifeLoopProjection | null>
   onCoreLifeLoop(handler: (projection: LifeLoopProjection) => void): () => void
+
+  /**
+   * The World & self summary.
+   *
+   * The narrowest lane in this file, and it is declared rather than left out for
+   * the same reason the Life Loop lane is. Only the *summary* crosses here: the
+   * entity graph, the relation walk, the inspector and the self status are all
+   * reached through `coreSubmit` with a read command, which Core Guard-evaluates.
+   *
+   * There is deliberately no method here that submits a claim. The two owner-facing
+   * world commands exist in Core and are owner-only through Guard, and they are
+   * absent from the preload command allowlist — so a renderer cannot create an
+   * entity, a relation, a trust level or a confidence even holding this bridge. A
+   * summary with no verb attached to it is what makes that checkable by reading the
+   * interface rather than by auditing a channel list.
+   */
+  coreWorld(): Promise<WorldSummaryView | null>
+  onCoreWorld(handler: (projection: WorldSummaryView) => void): () => void
 
 
   coreFoundry(): Promise<FoundryProjection | null>

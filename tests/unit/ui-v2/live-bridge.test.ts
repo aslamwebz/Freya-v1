@@ -131,6 +131,13 @@ function installFakeBridge() {
     onCoreConsciousness: () => () => {},
     coreLifeLoop: async () => null,
     onCoreLifeLoop: () => () => {},
+    // The World summary lane, same reasoning as the conscious-context lane above:
+    // Core and the host both implement it and no surface reads it yet. `null` is the
+    // honest fake, and it is also what keeps the declaration honest — this fake is a
+    // complete `FreyaHostBridge`, so a lane added to the interface without an
+    // implementation on the far side fails to compile here rather than at runtime.
+    coreWorld: async () => null,
+    onCoreWorld: () => () => {},
   }
   window.freyaHost = bridge
 }

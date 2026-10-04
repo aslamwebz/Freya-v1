@@ -72,6 +72,8 @@
    Centred with `margin:auto`, never a transform — a transform would create a
    stacking context and isolate the centre canvas's screen blend (dark box). */
 .hd-tab-body[data-layout='wide'] .hd-tab-centre > .freya-centre { position: absolute; inset: 0; margin: auto; width: 620px; height: 620px; }
+/* Foundry: Freya rides above the build pipeline rather than over it (#6). */
+.hd-dashboard[data-screen='create'] .hd-tab-centre > .freya-centre { width: 440px; height: 440px; inset: -110px 0 auto 0; margin: 0 auto; }
 .hd-col-b { grid-column: 1 / -1; grid-row: 2; display: flex; gap: 16px; min-height: 0; overflow: hidden; }
 .hd-col-b > * { flex: 1 1 0; min-width: 0; }
 .hd-panel { position: absolute; border: 1px solid #b0daf0bd; border-radius: 12px; padding: 15px 20px 17px; background: linear-gradient(125deg, #2442587d, #06101ada 43%, #08131eca 71%, #4264806b); box-shadow: inset 1px 1px 1px #dcf1ff60, inset -1px -1px 1px #c0e5ff38, inset 0 -9px 18px #90b9e116, 0 7px 24px #0003, 0 0 9px #66c9ff15; backdrop-filter: blur(9px); }

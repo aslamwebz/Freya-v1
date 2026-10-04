@@ -447,9 +447,15 @@ export class GoalEngine {
    *
    * The verification engine's way of telling the goal engine what a verifier
    * decided. The engine is the authority on what may be recorded: the checkpoint
-   * must exist and be `in-progress`, because an outcome for a checkpoint that
-   * already failed ΓÇö or was already verified ΓÇö is a forged outcome, and the
-   * journal is the last place a fabrication should be able to reach.
+   * must exist, must belong to the goal it is being recorded against, and must be
+   * `in-progress`, because an outcome for a checkpoint that already failed — or was
+   * already verified — is a forged outcome, and the journal is the last place a
+   * fabrication should be able to reach.
+   *
+   * The ownership check is the same one `checkpointAttempts` makes, and for the
+   * same reason: a checkpoint id is not a capability, and an outcome recorded
+   * against a goal the checkpoint does not belong to would inflate that goal's
+   * verified count without a single one of its own checkpoints being verified.
    *
    * A passed outcome journals `longhorizon.checkpoint.verified`; every other
    * outcome journals `longhorizon.checkpoint.failed` with a closed reason.
@@ -465,6 +471,7 @@ export class GoalEngine {
       const checkpoint = this.goalState.checkpoints.get(checkpointId)
       const goal = this.goalState.goals.get(goalId)
       if (checkpoint === undefined || goal === undefined) return
+      if (checkpoint.goalId !== goalId) return
       if (checkpoint.status !== 'in-progress') return
       if (outcome === 'passed') {
         await this.emit('longhorizon.checkpoint.verified', {

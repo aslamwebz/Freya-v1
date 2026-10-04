@@ -2775,7 +2775,8 @@ function isOptionalId(value: unknown): value is string {
 }
 
 /**
- * A Run's resolved ceilings. *
+ * A Run's resolved ceilings.
+ *
  * Positive integers, because a zero or negative ceiling in a durable record would
  * either make every run instantly over budget or make "bounded" mean nothing.
  */

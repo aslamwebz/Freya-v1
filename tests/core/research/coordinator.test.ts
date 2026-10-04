@@ -95,6 +95,39 @@ describe('bounded research coordinator', () => {
     expect(result.failures[0]?.url).toBe('https://a.com/one')
     expect(JSON.stringify(run.events)).not.toContain('https://a.com/one')
   })
+  it('searches independent planned angles concurrently in waves of at most two', async () => {
+    let active = 0
+    let maxActive = 0
+    const waiting: Array<() => void> = []
+
+    const run = fixture({
+      plan: '{"queries":["angle-a","angle-b","angle-c"]}',
+      search: async query => {
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        if (query === 'angle-c') {
+          active -= 1
+          return [hit('https://c.com/three')]
+        }
+        return await new Promise<ReturnType<typeof hit>[]>((resolve) => {
+          waiting.push(() => {
+            active -= 1
+            resolve([hit(query === 'angle-a' ? 'https://a.com/one' : 'https://b.com/two')])
+          })
+          if (waiting.length === 2) {
+            const release = waiting.splice(0)
+            queueMicrotask(() => release.forEach((done) => done()))
+          }
+        })
+      },
+    })
+
+    const result = await run.coordinator.research('q')
+    expect(maxActive).toBe(2)
+    expect(run.counts().searches).toBe(3)
+    expect(result.usage.queries).toBe(3)
+  })
+
   it('continues after per-source timeouts while the total research deadline remains', async () => {
     const run = fixture({
       plan: '{"queries":["bad","good"]}',

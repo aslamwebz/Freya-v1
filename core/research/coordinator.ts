@@ -143,24 +143,75 @@ export class ResearchCoordinator {
     this.reserve(job, 'iterations')
     const hits: SearchResult[] = []
     const origin = new Map<string, string>()
-    for (const query of plan.queries) {
-      if (queries.has(query)) continue
-      if (job.usage.queries >= this.limits.queries || job.usage.results >= this.limits.results) { job.limited = true; break }
+    const candidates = plan.queries.filter((query) => !queries.has(query))
+    let cursor = 0
+
+    // Search planned angles in tiny waves. Two is enough to overlap independent
+    // retrieval without turning Deep Research into an unbounded swarm. The wave
+    // is additionally capped by the remaining failure budget, so a configuration
+    // that allows only one failed external attempt still launches only one.
+    while (
+      cursor < candidates.length &&
+      job.usage.queries < this.limits.queries &&
+      job.usage.results < this.limits.results
+    ) {
       this.check(job)
-      const requestId = this.id()
+      const remainingQueries = this.limits.queries - job.usage.queries
+      const remainingFailures = Math.max(1, this.limits.failures - job.usage.failures)
+      const remainingResults = this.limits.results - job.usage.results
+      const usefulSearches = Math.max(1, Math.ceil(remainingResults / 10))
+      const width = Math.min(2, remainingQueries, remainingFailures, usefulSearches, candidates.length - cursor)
+      if (width <= 0) { job.limited = true; break }
+
+      let resultSlots = remainingResults
+      const wave = candidates.slice(cursor, cursor + width).map((query) => {
+        const limit = Math.min(10, resultSlots)
+        resultSlots -= limit
+        return { query, limit }
+      })
+      cursor += wave.length
       this.stage(job, 'searching')
-      await this.authorize(job, 'search', requestId)
-      this.reserve(job, 'queries'); queries.add(query)
-      try {
-        const remaining = this.limits.results - job.usage.results
-        const found = await this.operation(job, signal => this.options.searcher.searchWeb(query, { signal, limit: Math.min(10, remaining) }))
-        for (const row of found.slice(0, Math.min(10, remaining))) {
+
+      const outcomes = await Promise.all(wave.map(async ({ query, limit }) => {
+        // Authorization remains per external request. A Guard denial is not a
+        // provider failure and aborts the research exactly as it did before.
+        await this.authorize(job, 'search', this.id())
+        this.reserve(job, 'queries')
+        queries.add(query)
+
+        try {
+          const found = await this.operation(job, signal =>
+            this.options.searcher.searchWeb(query, { signal, limit }),
+          )
+          return { query, found, error: null as unknown }
+        } catch (error) {
+          if (this.terminal(job, error)) throw error
+          return { query, found: [] as SearchResult[], error }
+        }
+      }))
+
+      // Promise.all preserves plan order even when angle B completes before A,
+      // so dedupe/origin assignment remains deterministic.
+      for (const outcome of outcomes) {
+        if (outcome.error !== null) {
+          this.failure(job, outcome.error)
+          if (job.usage.failures >= this.limits.failures) break
+          continue
+        }
+        for (const row of outcome.found) {
+          if (job.usage.results >= this.limits.results) { job.limited = true; break }
           job.usage.results++
           const url = normalizeSourceUrl(row.url)
-          if (!origin.has(url)) { origin.set(url, query); hits.push({ ...row, url }) }
+          if (!origin.has(url)) {
+            origin.set(url, outcome.query)
+            hits.push({ ...row, url })
+          }
         }
-      } catch (error) { if (this.terminal(job, error)) throw error; this.failure(job, error) }
+      }
+      if (job.usage.failures >= this.limits.failures) break
     }
+
+    if (cursor < candidates.length && job.usage.queries >= this.limits.queries) job.limited = true
     const selected = selectSources(hits.filter(hit => !visited.has(hit.url)), 24)
     for (const hit of selected) {
       if (job.usage.pages >= this.limits.pages || job.usage.evidenceChars >= this.limits.evidenceChars) { job.limited = true; break }

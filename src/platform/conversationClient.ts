@@ -3,7 +3,6 @@ import type {
   ConversationMessageView,
   ConversationProjection,
   ConversationSummaryView,
-  VoiceProjection,
 } from '../../core/protocol/conversation'
 import { hostBridge } from './host'
 
@@ -18,17 +17,21 @@ import { hostBridge } from './host'
  *
  * The one thing the renderer *does* own is the composer's draft, because an
  * unsent sentence is not conversation state and belongs to the window.
+ *
+ * ## No voice here
+ *
+ * Phase 3 kept the voice status on this mirror because there was nowhere else for
+ * it. Phase 45 gives it its own client (`voiceClient`) because the two have
+ * opposite shapes: a conversation changes when somebody thinks, and a voice
+ * projection changes when a permission prompt resolves or a device is released.
+ * Folding the second into the first would mean rebuilding a transcript read
+ * because a microphone closed.
  */
 
 export interface ConversationMirror {
   readonly projection: ConversationProjection | null
-  readonly voice: VoiceProjection | null
   subscribe(listener: (projection: ConversationProjection | null) => void): () => void
-  subscribeVoice(listener: (voice: VoiceProjection | null) => void): () => void
   attach(): Promise<() => void>
-  attachVoice(): Promise<() => void>
-  /** Re-read the voice status. Called after a capture opens or closes. */
-  refreshVoice(): Promise<void>
 
   create(): Promise<ConversationCommandOutcome>
   list(): Promise<ConversationCommandOutcome>
@@ -36,16 +39,9 @@ export interface ConversationMirror {
   submitTurn(conversationId: string, text: string): Promise<ConversationCommandOutcome>
   cancelTurn(turnId: string): Promise<ConversationCommandOutcome>
 
-  voiceCaptureStart(): Promise<{ ok: boolean; sessionId: string | null; reason: string | null }>
-  voiceCaptureEnd(input: {
-    sessionId: string
-    audio: Uint8Array
-    durationMs: number
-    cancelled?: boolean
-  }): Promise<{ ok: boolean; text: string | null; detail: string | null; reason: string | null }>
-  voiceCaptureCancel(): Promise<void>
-
-  /** Forget the shared mirror. For tests. */
+  /**
+   * Forget the shared mirror. For tests.
+   */
   reset(): void
 }
 
@@ -89,20 +85,12 @@ export function resetConversationMirror(): void {
 
 export function createConversationMirror(): ConversationMirror {
   const listeners = new Set<(projection: ConversationProjection | null) => void>()
-  const voiceListeners = new Set<(voice: VoiceProjection | null) => void>()
   let current: ConversationProjection | null = null
-  let currentVoice: VoiceProjection | null = null
   let disposeBridge: (() => void) | null = null
-  let disposeVoice: (() => void) | null = null
 
   const publish = (projection: ConversationProjection | null): void => {
     current = projection
     for (const listener of [...listeners]) listener(projection)
-  }
-
-  const publishVoice = (voice: VoiceProjection | null): void => {
-    currentVoice = voice
-    for (const listener of [...voiceListeners]) listener(voice)
   }
 
   const host = () => hostBridge()
@@ -142,23 +130,11 @@ export function createConversationMirror(): ConversationMirror {
       return current
     },
 
-    get voice() {
-      return currentVoice
-    },
-
     subscribe(listener) {
       listeners.add(listener)
       listener(current)
       return () => {
         listeners.delete(listener)
-      }
-    },
-
-    subscribeVoice(listener) {
-      voiceListeners.add(listener)
-      listener(currentVoice)
-      return () => {
-        voiceListeners.delete(listener)
       }
     },
 
@@ -183,101 +159,10 @@ export function createConversationMirror(): ConversationMirror {
       return disposeBridge
     },
 
-    async attachVoice(): Promise<() => void> {
-      disposeVoice?.()
-      disposeVoice = () => {}
-      await this.refreshVoice()
-      return disposeVoice
-    },
-
-    /**
-     * Re-read the voice status on demand.
-     *
-     * Voice status changes when a capture opens and closes, and Core has no push
-     * for it — the conversation projection already tells the window when a capture
-     * is over, so a second channel for the same fact would be a second thing to
-     * keep in step. The button asks.
-     *
-     * A failed read publishes `null` rather than rejecting. "I do not know whether
-     * a speech engine exists" is a state the UI already handles, and a rejected
-     * promise in a React effect is an unhandled rejection in somebody's console
-     * instead of a microphone button that says it does not know.
-     */
-    async refreshVoice(): Promise<void> {
-      const bridge = host()
-      if (!bridge) {
-        publishVoice(null)
-        return
-      }
-      try {
-        publishVoice(await bridge.coreVoice())
-      } catch {
-        publishVoice(null)
-      }
-    },
-
-    async voiceCaptureStart() {
-      const bridge = host()
-      if (!bridge) return { ok: false, sessionId: null, reason: 'no bridge' }
-      let result
-      try {
-        result = await bridge.coreSubmit('voice.capture.start')
-      } catch (error) {
-        return {
-          ok: false,
-          sessionId: null,
-          reason: `Freya Core could not be reached — ${
-            error instanceof Error ? error.message : 'unknown error'
-          }`,
-        }
-      }
-      const voice = result.voice as { operation: string; sessionId?: string; reason?: string } | undefined
-      if (result.ok && voice?.operation === 'capture-started') {
-        return { ok: true, sessionId: voice.sessionId ?? null, reason: null }
-      }
-      return {
-        ok: false,
-        sessionId: null,
-        reason: result.refusal?.reason ?? voice?.reason ?? 'the microphone could not be opened',
-      }
-    },
-
-    async voiceCaptureEnd(input) {
-      const bridge = host()
-      if (!bridge) return { ok: false, text: null, detail: null, reason: 'no bridge' }
-      const result = await bridge.coreSubmit('voice.capture.end', {
-        sessionId: input.sessionId,
-        audio: input.audio,
-        durationMs: input.durationMs,
-        cancelled: input.cancelled === true,
-      })
-      const voice = result.voice as
-        | { operation: string; text?: string | null; detail?: string; reason?: string }
-        | undefined
-      if (voice?.operation === 'capture-ended') {
-        return { ok: true, text: voice.text ?? null, detail: voice.detail ?? null, reason: null }
-      }
-      return {
-        ok: false,
-        text: null,
-        detail: null,
-        reason: result.refusal?.reason ?? voice?.reason ?? 'the recording could not be finished',
-      }
-    },
-
-    async voiceCaptureCancel() {
-      const bridge = host()
-      if (!bridge) return
-      await bridge.coreSubmit('voice.capture.cancel')
-    },
-
     reset() {
       disposeBridge?.()
-      disposeVoice?.()
       disposeBridge = null
-      disposeVoice = null
       publish(null)
-      publishVoice(null)
     },
   }
 }

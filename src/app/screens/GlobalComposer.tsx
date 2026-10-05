@@ -87,6 +87,8 @@ export function GlobalComposer({
   onVoicePress,
   onVoiceRelease,
   maxMessageCharacters,
+  browserOpen,
+  onBrowserToggle,
 }: {
   generating: boolean
   notice: string
@@ -98,6 +100,8 @@ export function GlobalComposer({
   onVoicePress: () => void
   onVoiceRelease: (cancelled?: boolean) => void
   maxMessageCharacters: number | null
+  browserOpen: boolean
+  onBrowserToggle: () => void
 }) {
   const [text, setText] = useState('')
   const [voiceNotice, setVoiceNotice] = useState('')
@@ -160,6 +164,15 @@ export function GlobalComposer({
       <div className="hd-tools">
         <button type="button" className="hd-tool" aria-label="Attach a file" onClick={() => setVoiceNotice('Attachments are not connected yet.')}><Glyph name="attach" size={18} /></button>
         <ModeSelector mode={mode} onChange={setMode} />
+        <button
+          type="button"
+          className="hd-tool hd-tool-browser"
+          aria-pressed={browserOpen}
+          title={browserOpen ? 'Close browser workspace' : 'Open browser workspace'}
+          onClick={onBrowserToggle}
+        >
+          <Glyph name="world" size={16} /><span>Browser</span>
+        </button>
         <ModelSelector defaultModel={defaultModel} />
         <ThinkingSelector />
       </div>

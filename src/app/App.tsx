@@ -74,6 +74,8 @@ export function App({
   const [activeEyeSessionId, setActiveEyeSessionId] = useState<string | null>(null)
   const [researchView, setResearchView] = useState<WorkspaceResearchView | null>(null)
   const [voiceTranscriptDraft, setVoiceTranscriptDraft] = useState<{ id: number; text: string } | null>(null)
+  const [browserOpen, setBrowserOpen] = useState(false)
+  const [browserRequestedUrl, setBrowserRequestedUrl] = useState<string | null>(null)
 
   const mirror = conversationMirror()
   const research = researchMirror()
@@ -231,6 +233,21 @@ export function App({
 
   const voice = useVoiceDock(onVoiceTranscript)
 
+  const openBrowserUrl = useCallback((url: string) => {
+    setScreen('chat')
+    setBrowserOpen(true)
+    setBrowserRequestedUrl(url)
+  }, [])
+
+  const handleBrowserToggle = useCallback(() => {
+    setScreen('chat')
+    setBrowserOpen((open) => !open)
+  }, [])
+
+  const handleBrowserRequestedUrlHandled = useCallback(() => {
+    setBrowserRequestedUrl(null)
+  }, [])
+
   return <>
     <HomeDashboard
       screen={current.id}
@@ -249,6 +266,12 @@ export function App({
       onVoicePress={voice.press}
       onVoiceRelease={voice.release}
       maxMessageCharacters={conversation?.maxMessageCharacters ?? null}
+      browserOpen={browserOpen}
+      browserRequestedUrl={browserRequestedUrl}
+      onBrowserToggle={handleBrowserToggle}
+      onBrowserOpenUrl={openBrowserUrl}
+      onBrowserRequestedUrlHandled={handleBrowserRequestedUrlHandled}
+      onBrowserClose={() => setBrowserOpen(false)}
     />
     <div className="freya-v2" data-theme={settings.theme} data-app-shell="app" data-ui-mode={uiMode(snapshot)}>
       <DressingTable store={dressing} open={dressingOpen} onOpenChange={setDressingOpen} />

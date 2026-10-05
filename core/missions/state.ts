@@ -1,6 +1,16 @@
 import type { AnyCoreEvent, CoreEventType } from '../events/envelope'
 import {
+  DEFAULT_MISSION_BUDGET,
+  EMPTY_MISSION_SPEND,
+  isMissionPriority,
+  missionBudget,
+  type MissionBudget,
+  type MissionPriority,
+} from './autonomy/types'
+import { reduceAutonomyEvent } from './autonomy/fold'
+import {
   canTransitionMission,
+  readMissionStatus,
   MISSION_REASONS,
   missionLimits,
   type MissionLimitName,
@@ -64,6 +74,24 @@ const MISSION_EVENT_TYPES: ReadonlySet<CoreEventType> = new Set<CoreEventType>([
   'mission.verification.requested',
   'mission.verification.completed',
   'mission.limit.exceeded',
+  // Phase 47 autonomy. Read the new families in `reduceAutonomy`.
+  // Phase 47. `mission.transitioned` is folded by `transition()` below rather than by the
+  // autonomy fold: it is an ordinary lifecycle move and must pass through the same table
+  // and the same refusals as `mission.activated`. The rest have their own handlers.
+  'mission.transitioned',
+  'mission.plan.committed',
+  'mission.step.transitioned',
+  'mission.evidence.recorded',
+  'mission.blocker.changed',
+  'mission.approval.requested',
+  'mission.wake.scheduled',
+  'mission.wake.fired',
+  'mission.continuation.decided',
+  'mission.budget.spent',
+  'mission.budget.exceeded',
+  'mission.intent.corrected',
+  'mission.correction.ambiguous',
+  'mission.step.interrupted',
 ])
 
 export function isMissionEvent(type: CoreEventType): boolean {
@@ -80,11 +108,25 @@ export function reduceMissionState(state: MissionState, event: AnyCoreEvent): Mi
   const missionId = readId(payload, 'missionId')
   if (missionId === null) return state
 
+  // The Phase 47 families are folded by their own module, which is where the plan,
+  // step, evidence, blocker, approval, wake, budget and correction records are
+  // defined. It returns null for any event it does not own so this switch stays the
+  // single place that decides which family a type belongs to.
+  const autonomy = reduceAutonomyEvent(state, event, missionId)
+  if (autonomy !== null) return autonomy
+
   switch (event.type) {
     case 'mission.created': {
       const limits = readLimits(payload.limits)
       if (limits === null) return state
-      const createdAt = readInstant(payload.createdAt) ?? event.occurredAt
+      const createdAt = readInstantField(payload.createdAt) ?? event.occurredAt
+      const budget = readBudget(payload.budget)
+      // A Mission written before Phase 47 carries no `budget` field at all. Reading
+      // it as the code-owned default is the only honest option: the alternative is
+      // refusing the creation, which would silently discard a Mission somebody set
+      // up on an older build. The default is the *ceiling*, so an old journal cannot
+      // grant itself more than a new one would be allowed.
+      if (budget === null && payload.budget !== undefined) return state
       const mission: MissionRecord = {
         missionId,
         status: 'draft',
@@ -92,12 +134,31 @@ export function reduceMissionState(state: MissionState, event: AnyCoreEvent): Mi
         activatedAt: null,
         pausedAt: null,
         settledAt: null,
-        deadlineAt: readInstant(payload.deadlineAt) ?? createdAt,
+        deadlineAt: readInstantField(payload.deadlineAt) ?? createdAt,
         childRuns: [],
         limits,
         verification: null,
         reason: null,
         limitsHit: [],
+        priority: readPriority(payload.priority),
+        budget: budget ?? DEFAULT_MISSION_BUDGET,
+        spend: EMPTY_MISSION_SPEND,
+        activePlan: null,
+        planRevisions: 0,
+        evidence: [],
+        blockers: [],
+        // No approval registry, and the absence is the design: a Mission holds a pointer
+        // to a Work gate or nothing at all.
+        approval: null,
+        wake: null,
+        // Two numbers, and only two, are in the journal about the goal itself. See
+        // `MissionRecord` for why, and for what would have to be invented without them.
+        requestedQuantity: readPositiveInt(payload.requestedQuantity),
+        resultCount: 0,
+        corrections: [],
+        awaitingOwner: false,
+        lastDecision: null,
+        lastUpdatedAt: createdAt,
       }
       const missions = new Map(state.missions)
       // A repeated `mission.created` for the same id is ignored rather than
@@ -180,8 +241,8 @@ function transition(
   const mission = state.missions.get(missionId)
   if (mission === undefined) return state
 
-  const from = readStatus(payload.from)
-  const to = readStatus(payload.to)
+  const from = readMissionStatus(payload.from)
+  const to = readMissionStatus(payload.to)
   if (from === null || to === null) return state
   // Two independent refusals: the history must agree with itself, and the move
   // must be legal. Either alone would be enough to be safe; both together mean a
@@ -211,9 +272,10 @@ function transition(
     ...mission,
     missionId,
     status: to,
+    lastUpdatedAt: at,
     ...(to === 'active' && from === 'draft' ? { activatedAt: at } : {}),
-    ...(to === 'active' && from === 'paused' ? { pausedAt: null } : {}),
-    ...(to === 'paused' ? { pausedAt: at } : {}),
+    ...(to === 'active' && from === 'stopped' ? { pausedAt: null } : {}),
+    ...(to === 'stopped' ? { pausedAt: at } : {}),
     ...(isSettled(to) ? { settledAt: at, reason: readReason(payload.reason) ?? MISSION_REASONS.owner } : {}),
   })
   return { missions, sequence: event.sequence }
@@ -225,6 +287,43 @@ function isSettled(status: MissionStatus): boolean {
 
 /* ----------------------------------------------------------------- readers */
 
+/** Budgets arrive from the journal, so they are re-validated rather than trusted. */
+function readBudget(value: unknown): MissionBudget | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  try {
+    return missionBudget(value as Partial<MissionBudget>)
+  } catch {
+    return null
+  }
+}
+
+function readPriority(value: unknown): MissionPriority {
+  // An absent or unrecognised priority reads as `routine`. This is the *lowest*
+  // level deliberately: a hand-edited journal must not be able to promote a Mission
+  // by writing a priority the domain does not have.
+  return isMissionPriority(value) ? value : 'routine'
+}
+
+/** A positive whole number, or null. Used for the two goal numbers in the journal. */
+export function readPositiveInt(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
+}
+
+/** A non-negative whole number. Used for counts the fold derives itself. */
+export function readCount(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : -1
+}
+
+/**
+ * An instant, or null.
+ *
+ * A deadline that cannot be parsed is not a deadline, so a malformed instant reads as
+ * absent and the caller applies its own fallback rather than trusting a string.
+ */
+export function readInstantField(value: unknown): string | null {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null
+}
+
 function readId(payload: Record<string, unknown>, key: string): string | null {
   const value = payload[key]
   return typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : null
@@ -234,17 +333,6 @@ function readIdArray(payload: Record<string, unknown>, key: string): readonly st
   const value = payload[key]
   if (!Array.isArray(value)) return []
   return value.filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length <= 256)
-}
-
-function readStatus(value: unknown): MissionStatus | null {
-  const status = value
-  return typeof status === 'string' && (['draft', 'active', 'paused', 'completed', 'failed', 'cancelled'] as readonly string[]).includes(status)
-    ? (status as MissionStatus)
-    : null
-}
-
-function readInstant(value: unknown): string | null {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null
 }
 
 function readReason(value: unknown): MissionReason | null {

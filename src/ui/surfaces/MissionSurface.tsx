@@ -60,14 +60,41 @@ const MAX_REASON_CHARS = 220
  */
 const ACTION_LABELS: Record<MissionAction, string> = {
   activate: 'Activate',
+  // Phase 7's name, kept because a Mission stopped before this phase still carries the old
+  // id in a projection some renderer may be holding.
   pause: 'Pause',
   resume: 'Resume',
   requestCompletion: 'Ask to complete',
   cancel: 'Cancel',
   fail: 'Conclude as not achieved',
+  // Phase 47's four. Each is named for what it *is* rather than for the state it comes
+  // from, because two of them would otherwise be the same button with different meanings.
+  stop: 'Stop',
+  correct: 'Change what this is looking for',
+  // Not "Resume": that word is taken, and it means reopening a latched gate. This is
+  // releasing a Mission that is *waiting*, which is a smaller and more specific claim.
+  resumeAutonomy: 'Carry on',
 }
 
-/** Actions that end a Mission, listed last and styled apart from the reversible ones. */
+/**
+ * **There is no `decideApproval` label, and there is no button.**
+ *
+ * An approval is answered in one place: Work's approval surface, where
+ * `work.approval.decide` evaluates the owner's authority before recording anything. A button
+ * on a Mission row that claimed to decide an approval would be a second door into that
+ * decision, and this one would be the door with no Guard behind it.
+ *
+ * A Mission parked on a gate says so and points at Work; it does not offer to resolve it.
+ */
+
+/**
+ * Actions that end a Mission, listed last and styled apart from the reversible ones.
+ *
+ * `stop` and `resumeAutonomy` are **not** here despite being reversible-looking, because
+ * a Mission that is stopped is *not running* and a reader scanning the row needs that to
+ * be visible at a glance. `requestCompletion` is here because it asks a verifier for a
+ * terminal outcome, which is what the styling means.
+ */
 const TERMINAL_ACTIONS: readonly MissionAction[] = ['requestCompletion', 'cancel', 'fail']
 
 function bounded(text: string | undefined): string {
@@ -130,7 +157,17 @@ export function MissionSurface() {
     const mirror = missionMirror()
     setBusy(`${missionId}:${action}`)
     setNotice('')
-    let outcome: MissionCommandOutcome
+    // `null` rather than an uninitialised variable, so the four Phase 47 actions this
+    // window cannot perform have an explicit answer instead of an unreachable one. A
+    // `let outcome: MissionCommandOutcome` with no assignment in some branches is a
+    // use-before-assigned bug waiting for a new case to trigger it, and these cases are
+    // exactly that.
+    //
+    // The brief for this phase is **no UI redesign**, so these four render their label and
+    // Core's own refusal rather than being hidden. They need a surface of their own — a
+    // correction composer and an approval prompt — and inventing one here would be a
+    // redesign this phase does not authorise.
+    let outcome: MissionCommandOutcome | null = null
     switch (action) {
       case 'activate':
         outcome = await mirror.activate(missionId)
@@ -150,15 +187,44 @@ export function MissionSurface() {
       case 'fail':
         outcome = await mirror.fail(missionId)
         break
+      case 'stop':
+        // `stop` is Phase 47's name for what Phase 7 called `pause`, and it is the same
+        // command. The projection offers whichever name the domain has; the bridge speaks
+        // the older one, so this is the single place they are reconciled.
+        outcome = await mirror.pause(missionId)
+        break
+      case 'resumeAutonomy':
+        // "Carry on" releases a Mission that is *waiting*, which is what the owner
+        // pressing Resume means for a parked Mission. It is the same door as `resume`.
+        outcome = await mirror.resume(missionId)
+        break
+      case 'correct':
+        // The owner is changing what a running Mission is looking for. That needs a
+        // correction composer, which is a surface of its own and not something a button on
+        // this row can do.
+        outcome = null
+        break
+      default:
+        // **`decideApproval` is not a case, because it is not an action.**
+        //
+        // There is no branch here that could decide an approval, and `MISSION_ACTIONS` has
+        // no such member, so this `default` is unreachable for it — the projection cannot
+        // offer a button this surface would then have to implement. An approval is answered
+        // on Work's surface, where `work.approval.decide` evaluates the owner's authority
+        // first. A switch arm that "handled" it by refusing would be a suggestion that the
+        // door exists somewhere else.
+        break
     }
     setBusy('')
     setNoticeFor(missionId)
     // Core's own words, in every case. A window that invented its own success message
     // would be reporting something it cannot check.
     setNotice(
-      outcome.ok
-        ? `${ACTION_LABELS[action]} — Core says ${outcome.operation}`
-        : bounded(outcome.reason ?? `${ACTION_LABELS[action]} was refused`),
+      outcome === null
+        ? `${ACTION_LABELS[action]} is not available in this window yet.`
+        : outcome.ok
+          ? `${ACTION_LABELS[action]} — Core says ${outcome.operation}`
+          : bounded(outcome.reason ?? `${ACTION_LABELS[action]} was refused`),
     )
   }, [])
 

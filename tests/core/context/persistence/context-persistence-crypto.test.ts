@@ -161,6 +161,7 @@ describe('Context is its own key domain', () => {
       missionId: 'm1',
       title: 'Handle my house move',
       intent: 'a mission, not context',
+      intentShape: null,
       successCriteria: [],
       createdAt: '2026-10-01T09:00:00.000Z',
     })

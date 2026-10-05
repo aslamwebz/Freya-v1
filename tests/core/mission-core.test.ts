@@ -184,6 +184,14 @@ describe('Missions are private', () => {
     expect(missionEvents.length).toBeGreaterThan(0)
     // Every payload is exactly ids, statuses, timestamps, the code-owned ceilings and
     // closed codes. Nothing here is text a person wrote.
+    // Phase 47 adds ids, counts, instants, enums, measured lengths and — for a correction
+    // — *field names*. Not one of them is a word the owner wrote, and the two numbers
+    // about the goal (`budget`, `requestedQuantity`) are counts, which is why progress is
+    // computable without a single piece of content in the journal.
+    //
+    // `capability` and `verifier` are the sharpest thing to check here: they are *names
+    // Core issued from its own registry*, and the assertion below is that the registry
+    // vocabulary is closed. A capability name is not a description, a path or a URL.
     const allowed = new Set([
       'missionId',
       'from',
@@ -200,6 +208,50 @@ describe('Missions are private', () => {
       'createdAt',
       'deadlineAt',
       'limits',
+      // Phase 47
+      'budget',
+      'priority',
+      'requestedQuantity',
+      'planId',
+      'revision',
+      'supersedes',
+      'steps',
+      'stepId',
+      'index',
+      'capability',
+      'dependsOn',
+      'workerId',
+      'attempts',
+      'requiresApproval',
+      'approvalId',
+      'startedAt',
+      'settledAt',
+      'consequential',
+      'evidenceId',
+      'kind',
+      'origin',
+      'summaryLength',
+      'expiresAt',
+      'code',
+      'raised',
+      'risk',
+      'justificationLength',
+      'decision',
+      'decidedBy',
+      'wakeId',
+      'dueAt',
+      'eventType',
+      'nextWakeAt',
+      'modelCalls',
+      'externalRequests',
+      'retries',
+      'delegations',
+      'correctionId',
+      'changedFields',
+      'settledSteps',
+      'preservedEvidence',
+      'replannedFrom',
+      'ambiguity',
     ])
     for (const event of missionEvents) {
       for (const key of Object.keys(event.payload)) {
@@ -582,8 +634,10 @@ describe('a Run is parented only by something Core can corroborate', () => {
       const result = await harness.send('work.run.create', { steps: [step('one')], missionId })
       expect(result.ok, refusalCase.label).toBe(false)
       expect(result.refusal?.reason, refusalCase.label).toBe(
-        `only an active Mission may attach Work; this one is ${
-          refusalCase.label === 'paused' ? 'paused' : refusalCase.label === 'cancelled' ? 'cancelled' : 'draft'
+        `only a live Mission may attach Work; this one is ${
+          // `paused` became `stopped` in Phase 47. The button a test presses did not change;
+      // what the status is called did, because "paused" implied anybody could resume it.
+      refusalCase.label === 'paused' ? 'stopped' : refusalCase.label === 'cancelled' ? 'cancelled' : 'draft'
         }`,
       )
       // Nothing corroborated means nothing claimed.

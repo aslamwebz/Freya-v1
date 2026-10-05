@@ -16,6 +16,7 @@ import {
   DEFAULT_MISSION_BUDGET,
   type MissionCapabilityPort,
   type MissionIntentShape,
+  type MissionStepRecord,
 } from '../../../core/missions/autonomy/types'
 import {
   MissionAutonomyRuntime,
@@ -64,8 +65,8 @@ afterEach(async () => {
 
 const CAPABILITIES: MissionCapabilityPort = {
   lookup: (c) => {
-    if (c === 'find.video') return { risk: 'routine', requiresApproval: false }
-    if (c === 'find.video.risky') return { risk: 'consequential', requiresApproval: true }
+    if (c === 'find.video') return { risk: 'routine', requiresApproval: false, verifier: 'video.verified' }
+    if (c === 'find.video.risky') return { risk: 'consequential', requiresApproval: true, verifier: 'video.verified' }
     return null
   },
   verifiers: () => ['video.verified'],
@@ -136,7 +137,7 @@ async function rig(options: { authority?: Partial<MissionAuthorityPort>; delegat
     work: {
       run: () => undefined,
       stepsOf: () => [],
-      isSettled: (s) => s === 'completed' || s === 'failed' || s === 'cancelled',
+      isSettled: (s: string) => s === 'completed' || s === 'failed' || s === 'cancelled',
       pauseRun: async () => true,
       cancelRun: async () => true,
     } as never,
@@ -153,7 +154,7 @@ async function rig(options: { authority?: Partial<MissionAuthorityPort>; delegat
     stopAll: () => false,
     mayUse: (c) => CAPABILITIES.known().includes(c),
     maySpend: () => false,
-    requestApproval: async (input) => ({ ok: true as const, approvalId: `gate-${input.stepId}` }),
+    approvalState: async () => ({ ok: true as const, state: { kind: 'none' as const } }),
     ...options.authority,
   }
   const port: MissionEnginePort = {
@@ -163,9 +164,8 @@ async function rig(options: { authority?: Partial<MissionAuthorityPort>; delegat
     interruptStep: (i) => engine.interruptStep(i),
     recordEvidence: (i) => engine.recordEvidence(i),
     setBlocker: (i) => engine.setBlocker(i),
-    openApproval: (i) => engine.openApproval(i),
-    decideApproval: (i) => engine.decideApproval(i),
-    expireApproval: (i) => engine.expireApproval(i),
+    noteApprovalRequested: (i) => engine.noteApprovalRequested(i),
+    noteApprovalOutcome: (i) => engine.noteApprovalOutcome(i),
     scheduleWake: (i) => engine.scheduleWake(i),
     fireWake: (i) => engine.fireWake(i),
     recordDecision: (i) => engine.recordDecision(i),
@@ -199,6 +199,7 @@ async function rig(options: { authority?: Partial<MissionAuthorityPort>; delegat
       observedResults: 1,
       reportedResults: 0,
       summaryLength: 0,
+      awaitingApproval: false,
     }),
     now: () => new Date('2026-10-01T09:00:00.000Z'),
     newId: () => 'x',
@@ -327,7 +328,7 @@ describe('attack 1: a tampered journal cannot manufacture a completed Mission', 
   })
 })
 
-function stepPayload(stepId: string, status: string) {
+function stepPayload(stepId: string, status: MissionStepRecord['status']): MissionStepRecord {
   return {
     stepId,
     index: 0,
@@ -736,7 +737,7 @@ describe('attack 6: a forged capability cannot widen what Freya may do', () => {
         spendAsked += 1
         return false
       },
-      requestApproval: async () => ({ ok: true as const, approvalId: 'x' }),
+      approvalState: async () => ({ ok: true as const, state: { kind: 'none' as const } }),
     })
     expect(spendAsked).toBe(1)
     expect(verdict.ok).toBe(false)
@@ -747,7 +748,7 @@ describe('attack 6: a forged capability cannot widen what Freya may do', () => {
 
   it('refuses every step while STOP ALL is latched, and says so', async () => {
     let stopped = true
-    const execute = vi.fn(async () => ({ ok: true as const, runId: 'r', verified: true, observedResults: 1, reportedResults: 0, summaryLength: 0 }))
+    const execute = vi.fn(async () => ({ ok: true as const, runId: 'r', verified: true, observedResults: 1, reportedResults: 0, summaryLength: 0, awaitingApproval: false }))
     const { engine, close } = await rig({ authority: { stopAll: () => stopped } })
     const created = await engine.create({ title: 'T', intent: 'I' })
     const missionId = created.missionId as string
@@ -766,9 +767,8 @@ describe('attack 6: a forged capability cannot widen what Freya may do', () => {
         interruptStep: (i) => engine.interruptStep(i),
         recordEvidence: (i) => engine.recordEvidence(i),
         setBlocker: (i) => engine.setBlocker(i),
-        openApproval: (i) => engine.openApproval(i),
-        decideApproval: (i) => engine.decideApproval(i),
-        expireApproval: (i) => engine.expireApproval(i),
+        noteApprovalRequested: (i) => engine.noteApprovalRequested(i),
+        noteApprovalOutcome: (i) => engine.noteApprovalOutcome(i),
         scheduleWake: (i) => engine.scheduleWake(i),
         fireWake: (i) => engine.fireWake(i),
         recordDecision: (i) => engine.recordDecision(i),
@@ -787,7 +787,7 @@ describe('attack 6: a forged capability cannot widen what Freya may do', () => {
         stopAll: () => stopped,
         mayUse: () => true,
         maySpend: () => false,
-        requestApproval: async () => ({ ok: true as const, approvalId: 'g' }),
+        approvalState: async () => ({ ok: true as const, state: { kind: 'none' as const } }),
       },
       delegate: async () => ({ ok: true as const, workerId: 'w', assignmentId: 'a' }),
       execute,
@@ -1075,9 +1075,8 @@ describe('attack 9: a worker result is evidence, not truth', () => {
         interruptStep: (i) => engine2.interruptStep(i),
         recordEvidence: (i) => engine2.recordEvidence(i),
         setBlocker: (i) => engine2.setBlocker(i),
-        openApproval: (i) => engine2.openApproval(i),
-        decideApproval: (i) => engine2.decideApproval(i),
-        expireApproval: (i) => engine2.expireApproval(i),
+        noteApprovalRequested: (i) => engine2.noteApprovalRequested(i),
+        noteApprovalOutcome: (i) => engine2.noteApprovalOutcome(i),
         scheduleWake: (i) => engine2.scheduleWake(i),
         fireWake: (i) => engine2.fireWake(i),
         recordDecision: (i) => engine2.recordDecision(i),
@@ -1094,13 +1093,13 @@ describe('attack 9: a worker result is evidence, not truth', () => {
       capabilities: CAPABILITIES,
       authority: {
         stopAll: () => false, mayUse: () => true, maySpend: () => false,
-        requestApproval: async () => ({ ok: true as const, approvalId: 'g' }),
+        approvalState: async () => ({ ok: true as const, state: { kind: 'none' as const } }),
       },
       delegate: async () => ({ ok: true as const, workerId: 'w', assignmentId: 'a' }),
       // "It worked, trust me" — and zero observed results.
       execute: async () => ({
         ok: true as const, runId: 'run-claimed', verified: true,
-        observedResults: 0, reportedResults: 99, summaryLength: 0,
+        observedResults: 0, reportedResults: 99, summaryLength: 0, awaitingApproval: false,
       }),
       now: () => new Date('2026-10-01T09:00:00.000Z'),
     })

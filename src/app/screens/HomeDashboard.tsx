@@ -7,6 +7,7 @@ import type { ScreenSlots } from './Home'
 import { FreyaCentre } from '../presence/FreyaCentre'
 import { Chats } from '../chat/Chats'
 import type { ComposerMode, WorkspaceResearchView } from '../chat/modes'
+import type { VoiceView } from '../voice/useVoiceDock'
 import { brainState, type BrainState } from '../presence/state'
 import { GlobalComposer } from './GlobalComposer'
 import { hostBridge } from '../../platform/host'
@@ -20,11 +21,15 @@ interface Props {
   generating: boolean
   notice: string
   dressing: DressingStore
+  voice: VoiceView
+  voiceTranscript: { id: number; text: string } | null
   onOpenDressing: () => void
   onSend: (text: string, mode: ComposerMode) => Promise<boolean>
   onStopResponse: () => void
   researchView: WorkspaceResearchView | null
   onNavigate: (screen: string) => void
+  onVoicePress: () => void
+  onVoiceRelease: (cancelled?: boolean) => void
 }
 
 const NAV = [['home', 'Home', 'home'], ['chat', 'Chats', 'chat'], ['mind', 'Mind', 'mind'], ['focus', 'Focus', 'focus'],
@@ -96,7 +101,7 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slots, snapshot, generating, notice, dressing, onOpenDressing, onSend, onStopResponse, researchView, onNavigate }: Props) {
+export function HomeDashboard({ screen, slots, snapshot, generating, notice, dressing, voice, voiceTranscript, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   const [collapsed, setCollapsed] = useState(false)
@@ -191,7 +196,17 @@ export function HomeDashboard({ screen, slots, snapshot, generating, notice, dre
         </Panel>
         </>) : screen === 'chat' ? <Chats researchView={researchView} busy={generating} /> : <TabBody slots={slots} design={design} cognition={cognition} />}
       </main>
-      <GlobalComposer generating={generating} notice={notice} defaultModel={provider?.model ?? null} onSend={onSend} onStopResponse={onStopResponse} />
+      <GlobalComposer
+        generating={generating}
+        notice={notice}
+        defaultModel={provider?.model ?? null}
+        voice={voice}
+        voiceTranscript={voiceTranscript}
+        onSend={onSend}
+        onStopResponse={onStopResponse}
+        onVoicePress={onVoicePress}
+        onVoiceRelease={onVoiceRelease}
+      />
     </div></div>
 
   </div>

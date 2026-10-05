@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, shell, safeStorage } from 'electron'
 import { join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
@@ -12,6 +12,7 @@ import { loadKeyring } from './keyring'
 import { ProviderConfigStore } from './providerConfig'
 import { createFreyaVaultBinding } from './vaultBinding'
 import { loadLocalEnv } from './localEnv'
+import { createConnectorRuntime } from './connectors/runtime'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import { PresenceHost } from './presence/host'
@@ -650,6 +651,10 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:relay', projection)
   })
 
+  const detachConnectors = coreHost?.onConnectors((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:connectors', projection)
+  })
+
   /**
    * Skills: a twelfth channel. Core owns the truth about procedures, their lifecycle
    * and their evidence; this window only displays what Core pushed. There is
@@ -735,6 +740,7 @@ function createWindow(): BrowserWindow {
     detachFoundry?.()
     detachOffice?.()
     detachRelay?.()
+    detachConnectors?.()
     detachSkills?.()
     detachWorld?.()
     detachConsciousness?.()
@@ -914,6 +920,7 @@ function registerIpc(): void {
   // every other command — it is validated and journalled in Core, not here.
   ipcMain.handle('freya:core:office', () => requireCore().office())
   ipcMain.handle('freya:core:relay', () => requireCore().relay())
+  ipcMain.handle('freya:core:connectors', () => requireCore().connectors())
   // The Skills projection is read-only; mutation remains Core-command-only.
   ipcMain.handle('freya:core:skills', () => requireCore().skills())
   // The World & self summary is read-only, and it is counts only. The graph, the
@@ -1066,6 +1073,26 @@ app.whenReady().then(async () => {
         // The *entire* provider set when the research fixtures are gated on, so an
         // E2E run cannot fall through to a real provider.
         ...(fixtureProvider ? { providers: [fixtureProvider] } : {}),
+        // Phase 44: the connector connection plane. Built here so the token store
+        // uses Electron's OS secure storage; with no client credentials the
+        // runtime is fail-closed and every connector reports unconfigured.
+        connectorRuntime: async () => {
+          const runtime = await createConnectorRuntime({
+            safeStorage,
+            tokenFilePath: `${dataPath}.connectors.tokens`,
+            configs: {},
+            oauthClient: {
+              async exchange() {
+                throw new Error('no connector OAuth client is configured')
+              },
+              async refresh() {
+                throw new Error('no connector OAuth client is configured')
+              },
+            },
+            fetchImpl: fetch as never,
+          })
+          return { auth: runtime.auth }
+        },
         // Phase 42. Off unless the main process was deliberately opted in. The seam
         // carries the real adapters, a durable journal and an owner-authored grant
         // file; Core's own STOP ALL is composed on top of it by the host.

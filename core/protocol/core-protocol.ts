@@ -15,6 +15,7 @@ import type { WorkforceCommandOutcome } from './workforce'
 import type { AttentionCommandOutcome } from './attention'
 import type { FoundryCommandOutcome } from './foundry'
 import type { RelayCommandOutcome } from './relay'
+import type { ConnectorCommandOutcome } from './connectors'
 import type { SkillCommandOutcome } from './skills'
 import type { LifeCommandOutcome } from './life'
 import type { WorldCommandOutcome } from './world'
@@ -172,8 +173,26 @@ export const CAPABILITIES = [
   'relay.github.read',
   'relay.github.issue.create',
   'relay.github.pr.create',
+  'relay.drive.read',
+  'relay.drive.file.create',
+  'relay.telegram.read',
+  'relay.telegram.send',
   'relay.external.invoke',
   'relay.approval.decide',
+
+  // Connectors — Phase 44.
+  //
+  // The connection plane. `connector.status.read` is the owner's read of the
+  // connection projection and grants nothing. `connector.connect` starts an
+  // authorization; `connector.disconnect` revokes one. `connector.read` and
+  // `connector.action` are the two doors into Relay's action plane, and the
+  // specific per-action authority is still Relay's own capability, checked by
+  // Relay's engine after these. None is held by a worker.
+  'connector.status.read',
+  'connector.connect',
+  'connector.disconnect',
+  'connector.read',
+  'connector.action',
 
   // World & self (Phase 22). Two, and the split is the same one `work.*`,
   // `mission.*` and `skill.*` make: reading what Freya thinks she knows is a
@@ -713,8 +732,30 @@ export type CoreCommandName =
   | 'relay.github.read'
   | 'relay.github.issue.create'
   | 'relay.github.pr.create'
+  | 'relay.drive.read'
+  | 'relay.drive.file.create'
+  | 'relay.telegram.read'
+  | 'relay.telegram.send'
   | 'relay.external.invoke'
   | 'relay.approval.decide'
+
+  /* ------------------------------------------------------------ connectors */
+  /**
+   * Phase 44. Connectors through a connection plane plus Relay's action plane.
+   *
+   * A window may read the connector projection, start an authorization, revoke
+   * one, submit a typed read, and submit a typed action (which Relay turns into
+   * a pending approval). It may **not** name a scope, a token, an account, a
+   * capability, a budget or a limit, and there is deliberately no
+   * `connector.authorize` and no `connector.event.ingest`: completing an
+   * authorization and delivering an authenticated event are host-only acts, and
+   * a window reaching for those names finds `unknown command`.
+   */
+  | 'connector.status.read'
+  | 'connector.connect.start'
+  | 'connector.disconnect'
+  | 'connector.read'
+  | 'connector.action.execute'
 
   /* --------------------------------------------------------------- skills */
   /**
@@ -983,6 +1024,16 @@ export interface CoreCommandResult {
    * *outcome* of one command rather than a second copy of the state.
    */
   relay?: RelayCommandOutcome
+
+  /**
+   * The connector view of a connector command's result.
+   *
+   * Its own slot for the same reason every other subsystem's exists: whether
+   * Core started an authorization, revoked a connector or refused a read is a
+   * fact about connectors and must never have to be dug out of a security
+   * projection. The projection itself arrives on its own channel.
+   */
+  connectors?: ConnectorCommandOutcome
 }
 
 /**

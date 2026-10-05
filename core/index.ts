@@ -215,6 +215,14 @@ import { projectRelay } from './relay/projection'
 import type { RelayAction, RelayFailureCode } from './relay/types'
 import type { RelayCommandOutcome, RelayProjection } from './protocol/relay'
 import { ABSENT_RELAY_PROJECTION, RELAY_NO_PAYLOAD } from './protocol/relay'
+import { ConnectorEngine, type ConnectorAuthPort, type ConnectorEngineResult } from './connectors/engine'
+import { projectConnectors } from './connectors/projection'
+import { connectorDefinition } from './connectors/catalog'
+import { isReadAction } from './connectors/policy'
+import { validateActionRequest } from './connectors/validation'
+import type { ConnectorKind } from './connectors/types'
+import type { ConnectorCommandOutcome, ConnectorProjection } from './protocol/connectors'
+import { ABSENT_CONNECTOR_PROJECTION, CONNECTOR_NO_PAYLOAD } from './protocol/connectors'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
 import type { CognitionGrantSpec } from './cognition/grants'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
@@ -631,6 +639,32 @@ export interface CoreOptions {
      * put any repo on this list.
      */
     allowlistedRepos?: readonly string[]
+    /**
+     * The Telegram chats reads and sends may target. Code-owned and
+     * host-supplied; empty means no chat may be read from or written to.
+     */
+    allowlistedChats?: readonly string[]
+  }
+  /**
+   * The Phase 44 connector connection plane.
+   *
+   * Unset means this Core has no connector domain: the projection reports
+   * `unavailable` and every connector command is refused with a stated reason,
+   * which is the honest reading rather than a simulated connection.
+   *
+   * The `auth` port is the host's authorization seam. It returns a URL and a
+   * configuration status — never a token. Tokens live in the host's secure
+   * store; Core never holds one, so a credential cannot reach the journal, a
+   * projection or the renderer.
+   *
+   * The action plane is Relay, which Core already owns. A connector write is
+   * forwarded to Relay, so there is exactly one approval system and one budget
+   * ledger.
+   */
+  connectors?: {
+    auth: ConnectorAuthPort
+    /** Connectors policy refuses outright. Code-owned and host-supplied. */
+    blocked?: readonly ConnectorKind[]
   }
   /**
    * The Phase 23 Continuous Life Loop.
@@ -852,6 +886,29 @@ export interface Core {
   relay(): RelayProjection
   /** Subscribe to the Relay projection. No connector authority crosses this seam. */
   onRelay(listener: (projection: RelayProjection) => void): () => void
+  /**
+   * Core's connector connection projection.
+   *
+   * A mirror of the connection plane: closed states, display labels, scope
+   * names, capability flags and event metadata. No token, no client secret and
+   * no event content is a field of it.
+   */
+  connectors(): ConnectorProjection
+  /** Subscribe to the connector projection. Same mirror semantics as the others. */
+  onConnectors(listener: (projection: ConnectorProjection) => void): () => void
+  /**
+   * Complete an authorization. **Host-only; never a renderer command.**
+   *
+   * The host has already verified state, nonce and PKCE and holds the token in
+   * its secure store; this records the non-secret outcome so Core can report the
+   * connection truthfully. It is deliberately not in the command vocabulary.
+   */
+  connectorAuthorizationComplete(payload: unknown): Promise<ConnectorCommandOutcome>
+  /**
+   * Deliver an authenticated external event. **Host-only; never a renderer
+   * command.** An event grants nothing and has no path to an action.
+   */
+  connectorEventIngest(payload: unknown): Promise<ConnectorCommandOutcome>
   /**
    * Evaluate due schedules. The bounded wake mechanism, driven by the host.
    *
@@ -1185,6 +1242,17 @@ class FreyaCore implements Core {
   private readonly relayListeners = new Set<(projection: RelayProjection) => void>()
   /** The Phase 16 Relay engine, built and owned by Core. */
   private relayEngine: RelayEngine | undefined
+  private readonly connectorListeners = new Set<(projection: ConnectorProjection) => void>()
+  /** The Phase 44 connector connection plane, built and owned by Core. */
+  private connectorEngine: ConnectorEngine | undefined
+  /**
+   * Connector admission.
+   *
+   * Closed synchronously by STOP ALL, before that command's first `await`, for
+   * the same reason Relay admission is: a connector action that checked
+   * admission and then awaited could reach an external provider after the stop.
+   */
+  private connectorAdmissionOpen = false
   /** Display-ready activity, rebuilt from the log on every start. */
   private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
@@ -1913,11 +1981,33 @@ class FreyaCore implements Core {
       stopAll: () => this.state.stopAll.active,
       getState: () => this.state.relay,
       allowlistedRepos: this.options.relay?.allowlistedRepos,
+      allowlistedChats: this.options.relay?.allowlistedChats,
       now: this.options.now,
       newId: this.options.newId,
     })
     this.relayAdmissionOpen = true
     await this.relayEngine.reconcile()
+
+    /**
+     * The connector connection plane, built after Relay because its action port
+     * *is* Relay. It holds no token store and no provider: the host's `auth`
+     * port returns only a URL and a status, and every action is forwarded to the
+     * Relay engine above, so there is one approval system and one budget ledger.
+     */
+    if (this.options.connectors !== undefined) {
+      this.connectorEngine = new ConnectorEngine({
+        fabric: this.fabric,
+        auth: this.options.connectors.auth,
+        action: { execute: (input) => this.requireRelay().execute(input) },
+        stopAll: () => this.state.stopAll.active,
+        getState: () => this.state.connectors,
+        blocked: this.options.connectors.blocked,
+        now: this.options.now,
+        newId: this.options.newId,
+      })
+      this.connectorAdmissionOpen = true
+      await this.connectorEngine.reconcile()
+    }
 
     /**
      * Skills, built last, because they read Work.
@@ -2362,6 +2452,7 @@ class FreyaCore implements Core {
    */
   private closeRelay(reason: string): void {
     this.relayAdmissionOpen = false
+    this.connectorAdmissionOpen = false
     void reason
   }
 
@@ -3422,6 +3513,9 @@ class FreyaCore implements Core {
     // is a change to it - and hooking each publisher is what keeps that true
     // without adding an event type a subsystem could forget to append.
     this.publishConsciousness()
+    // Relay's pending approvals are part of the connector projection, so a
+    // Relay change is a connector change.
+    this.publishConnectors()
     if (this.relayListeners.size === 0) return
     const projection = this.relay()
     for (const listener of [...this.relayListeners]) {
@@ -3439,6 +3533,121 @@ class FreyaCore implements Core {
       throw new Error('the Relay engine is not available')
     }
     return this.relayEngine
+  }
+
+  /**
+   * Core's account of the connector connection plane.
+   *
+   * Never null and never throwing: a Core with no connector domain reports the
+   * frozen absent projection, because "connectors are not up yet" and "there
+   * are no connectors" are different facts.
+   */
+  connectors(): ConnectorProjection {
+    if (this.connectorEngine === undefined || this.fabric === undefined) {
+      return ABSENT_CONNECTOR_PROJECTION
+    }
+    const engine = this.connectorEngine
+    return projectConnectors({
+      sequence: this.fabric.lastSequence,
+      engine,
+      pendingApproval: (connector) => {
+        const relayConnector = connectorDefinition(connector).relayConnector
+        return this.state.relay.approvals.some(
+          (approval) => approval.status === 'pending' && approval.connector === relayConnector,
+        )
+      },
+      recentEvents: this.state.connectors.events,
+    })
+  }
+
+  onConnectors(listener: (projection: ConnectorProjection) => void): () => void {
+    this.connectorListeners.add(listener)
+    try {
+      listener(this.connectors())
+    } catch (error) {
+      console.error('[freya.core] connector subscriber threw', error)
+    }
+    return () => {
+      this.connectorListeners.delete(listener)
+    }
+  }
+
+  private publishConnectors(): void {
+    if (this.connectorListeners.size === 0) return
+    const projection = this.connectors()
+    for (const listener of [...this.connectorListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] connector listener threw', error)
+        this.connectorListeners.delete(listener)
+      }
+    }
+  }
+
+  private requireConnector(): ConnectorEngine {
+    if (this.connectorEngine === undefined) {
+      throw new Error('the connector engine is not available')
+    }
+    return this.connectorEngine
+  }
+
+  /**
+   * Refuse a connector command, or return null to allow it.
+   *
+   * Mirrors `refuseRelay`: a build with no connector domain refuses with a
+   * closed code, and a stopped Core refuses before the first await.
+   */
+  private refuseConnector(requestId: string): CoreCommandResult | null {
+    if (this.connectorEngine === undefined) {
+      const reason = 'this Core has no connector domain'
+      return {
+        requestId,
+        ok: false,
+        refusal: { reason },
+        connectors: { operation: 'refused', ok: false, failureCode: 'unsupported', reason },
+      }
+    }
+    if (!this.connectorAdmissionOpen || this.state.stopAll.active) {
+      const reason = 'Freya is stopped. Every connector action is refused.'
+      return {
+        requestId,
+        ok: false,
+        refusal: { reason },
+        connectors: { operation: 'refused', ok: false, failureCode: 'stop_all', reason },
+      }
+    }
+    return null
+  }
+
+  /**
+   * Complete an authorization. Host-only.
+   */
+  async connectorAuthorizationComplete(payload: unknown): Promise<ConnectorCommandOutcome> {
+    if (this.connectorEngine === undefined) {
+      return { operation: 'refused', ok: false, failureCode: 'unsupported', reason: 'this Core has no connector domain' }
+    }
+    const result = await this.requireConnector().authorizationComplete(payload)
+    if (!result.ok) {
+      return { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason }
+    }
+    this.publishConnectors()
+    return { operation: 'authorization', ok: true }
+  }
+
+  /**
+   * Deliver an authenticated external event. Host-only.
+   */
+  async connectorEventIngest(payload: unknown): Promise<ConnectorCommandOutcome> {
+    if (this.connectorEngine === undefined) {
+      return { operation: 'refused', ok: false, failureCode: 'unsupported', reason: 'this Core has no connector domain' }
+    }
+    const result = await this.requireConnector().ingestEvent(payload)
+    if (!result.ok) {
+      return { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason }
+    }
+    this.publishConnectors()
+    return { operation: 'status', ok: true, eventId: result.eventId }
   }
 
   private requireAttention(): AttentionEngine {
@@ -5245,6 +5454,7 @@ class FreyaCore implements Core {
           // action is an external request, and one refused at the door during a stop
           // must not silently become allowed the instant the latch clears.
           this.relayAdmissionOpen = true
+          this.connectorAdmissionOpen = true
           // And the runtime activation system, last: it re-evaluates every domain
           // against the now-cleared latch and records which of them came back. A
           // domain whose dependency was lost during the stop stays blocked; only
@@ -5781,7 +5991,9 @@ class FreyaCore implements Core {
 
         case 'relay.email.read':
         case 'relay.calendar.read':
-        case 'relay.github.read': {
+        case 'relay.github.read':
+        case 'relay.drive.read':
+        case 'relay.telegram.read': {
           const admission = this.refuseRelay(requestId)
           if (admission !== null) return admission
           const result = await this.requireRelay().execute({
@@ -5823,6 +6035,8 @@ class FreyaCore implements Core {
         case 'relay.calendar.cancel':
         case 'relay.github.issue.create':
         case 'relay.github.pr.create':
+        case 'relay.drive.file.create':
+        case 'relay.telegram.send':
         case 'relay.external.invoke': {
           const admission = this.refuseRelay(requestId)
           if (admission !== null) return admission
@@ -5931,6 +6145,167 @@ class FreyaCore implements Core {
             ok: true,
             status: this.status(),
             relay: { operation: 'replayed', ok: true, actionId: result.action.actionId, status: result.action.status },
+          }
+        }
+
+        /* ------------------------------------------------------ connectors */
+
+        case 'connector.status.read': {
+          if (carriesFields(envelope.payload)) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: CONNECTOR_NO_PAYLOAD },
+              connectors: { operation: 'refused', ok: false, reason: CONNECTOR_NO_PAYLOAD },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            connectors: { operation: 'status', ok: true },
+          }
+        }
+
+        case 'connector.connect.start': {
+          const admission = this.refuseConnector(requestId)
+          if (admission !== null) return admission
+          const decision = this.guard.evaluate(this.owner, 'connector.connect')
+          if (!decision.allowed) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: decision.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: 'capability_denied', reason: decision.reason },
+            }
+          }
+          const result = await this.requireConnector().connect(envelope.payload)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason },
+            }
+          }
+          this.publishConnectors()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            connectors: {
+              operation: 'authorization',
+              ok: true,
+              requestId: result.requestId,
+              authorizationUrl: result.authorizationUrl,
+            },
+          }
+        }
+
+        case 'connector.disconnect': {
+          const admission = this.refuseConnector(requestId)
+          if (admission !== null) return admission
+          const decision = this.guard.evaluate(this.owner, 'connector.disconnect')
+          if (!decision.allowed) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: decision.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: 'capability_denied', reason: decision.reason },
+            }
+          }
+          const result = await this.requireConnector().disconnect(envelope.payload)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason },
+            }
+          }
+          this.publishConnectors()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            connectors: { operation: 'revoked', ok: true },
+          }
+        }
+
+        case 'connector.read': {
+          const admission = this.refuseConnector(requestId)
+          if (admission !== null) return admission
+          const decision = this.guard.evaluate(this.owner, 'connector.read')
+          if (!decision.allowed) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: decision.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: 'capability_denied', reason: decision.reason },
+            }
+          }
+          const request = validateActionRequest(envelope.payload)
+          if (!request.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: request.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: 'invalid_request', reason: request.reason },
+            }
+          }
+          if (!isReadAction(request.value.action)) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'connector.read may only submit a read action' },
+              connectors: { operation: 'refused', ok: false, failureCode: 'invalid_request', reason: 'connector.read may only submit a read action' },
+            }
+          }
+          const result = await this.requireConnector().execute(envelope.payload)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason },
+            }
+          }
+          this.publishConnectors()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            connectors: connectorEngineOutcome(result),
+          }
+        }
+
+        case 'connector.action.execute': {
+          const admission = this.refuseConnector(requestId)
+          if (admission !== null) return admission
+          const decision = this.guard.evaluate(this.owner, 'connector.action')
+          if (!decision.allowed) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: decision.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: 'capability_denied', reason: decision.reason },
+            }
+          }
+          const result = await this.requireConnector().execute(envelope.payload)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason },
+            }
+          }
+          this.publishConnectors()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            connectors: connectorEngineOutcome(result),
           }
         }
 
@@ -8378,6 +8753,10 @@ function readActionFor(command: string): RelayAction {
       return 'calendar.read'
     case 'relay.github.read':
       return 'github.read'
+    case 'relay.drive.read':
+      return 'drive.read'
+    case 'relay.telegram.read':
+      return 'telegram.read'
     default:
       return 'email.read'
   }
@@ -8400,6 +8779,10 @@ function writeActionFor(command: string): RelayAction {
       return 'github.issue.create'
     case 'relay.github.pr.create':
       return 'github.pr.create'
+    case 'relay.drive.file.create':
+      return 'drive.file.create'
+    case 'relay.telegram.send':
+      return 'telegram.send'
     case 'relay.external.invoke':
       return 'external.invoke'
     default:
@@ -8415,6 +8798,26 @@ function relayRefusal(result: { failureCode: RelayFailureCode; reason: string })
     failureCode: result.failureCode,
     reason: result.reason,
   }
+}
+
+/** The renderer-safe shape of a connector action's outcome. */
+function connectorEngineOutcome(result: ConnectorEngineResult): ConnectorCommandOutcome {
+  if (!result.ok) {
+    return { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason }
+  }
+  if (result.kind === 'read') {
+    return { operation: 'read', ok: true, result: result.result }
+  }
+  if (result.kind === 'pending') {
+    return {
+      operation: 'pending',
+      ok: true,
+      actionId: result.actionId,
+      approvalId: result.approvalId,
+      status: 'pending_approval',
+    }
+  }
+  return { operation: 'replayed', ok: true, actionId: result.actionId, status: result.status }
 }
 
 /**

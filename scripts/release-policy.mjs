@@ -26,7 +26,9 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // Deep Research to Core; CI measures main.cjs at 2,138,279 bytes. Keep only narrow,
   // explicit headroom over that measured artifact rather than absorbing future growth.
   mainBytes: 2_150_000,
-  preloadBytes: 120_000,
+  // Phase 44 adds connector projection/commands to the preload bridge; the
+  // completed branch measured ~129KB, so retain narrow explained headroom.
+  preloadBytes: 132_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,
   // Phase 19 added the ui-v2 shell: a finished design with ~1.9MB of webp imagery and

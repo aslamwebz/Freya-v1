@@ -130,6 +130,11 @@ import {
   isRelayFailureCode,
   isRelayRiskClass,
 } from '../relay/types'
+import {
+  isConnectorFailureCode,
+  isConnectorKind,
+  CONNECTOR_LIMITS,
+} from '../connectors/types'
 
 /**
  * Durable event validation.
@@ -254,6 +259,15 @@ function isNullableString(value: unknown): value is string | null {
 /** A bounded opaque string that is not required to be a bare id (a dedupe key). */
 function isBoundedText(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= max
+}
+
+/** A bounded list of scope labels. Never a token; a closed-shape name. */
+function isScopeList(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= CONNECTOR_LIMITS.maxScopeEntries &&
+    value.every((scope) => typeof scope === 'string' && scope.length > 0 && scope.length <= 128)
+  )
 }
 
 /** A goal reference: null, or an id. */
@@ -2283,6 +2297,88 @@ const PAYLOAD_RULES: {
       isRelayAction(p.action) &&
       isNonEmptyString(p.limit) &&
       isNonNegativeInt(p.observed),
+  ),
+
+  /* ------------------------------------------------------------ connectors */
+
+  // The exact-key rule is load-bearing here, as it is for the research stages:
+  // there is no slot for a token, a client secret, an authorization header or an
+  // event's content, and an extra field would be retained and quietly ignored.
+  'connector.connection.requested': workRule(
+    ['requestId', 'connector'],
+    (p) => isEventId(p.requestId) && isConnectorKind(p.connector),
+  ),
+
+  'connector.connection.authorized': workRule(
+    ['connector', 'accountLabel', 'scopes', 'expiresAt'],
+    (p) =>
+      isConnectorKind(p.connector) &&
+      isBoundedText(p.accountLabel, CONNECTOR_LIMITS.maxAccountLabelChars) &&
+      isScopeList(p.scopes) &&
+      (p.expiresAt === null || isInstant(p.expiresAt)),
+  ),
+
+  'connector.connection.refreshed': workRule(
+    ['connector', 'expiresAt'],
+    (p) => isConnectorKind(p.connector) && (p.expiresAt === null || isInstant(p.expiresAt)),
+  ),
+
+  'connector.connection.degraded': workRule(
+    ['connector', 'failureCode', 'reason'],
+    (p) =>
+      isConnectorKind(p.connector) &&
+      isConnectorFailureCode(p.failureCode) &&
+      isBoundedText(p.reason, CONNECTOR_LIMITS.maxReasonChars),
+  ),
+
+  'connector.connection.expired': workRule(['connector'], (p) => isConnectorKind(p.connector)),
+
+  'connector.connection.revoked': workRule(
+    ['connector', 'reason'],
+    (p) => isConnectorKind(p.connector) && isBoundedText(p.reason, CONNECTOR_LIMITS.maxReasonChars),
+  ),
+
+  'connector.connection.failed': workRule(
+    ['connector', 'failureCode', 'reason'],
+    (p) =>
+      isConnectorKind(p.connector) &&
+      isConnectorFailureCode(p.failureCode) &&
+      isBoundedText(p.reason, CONNECTOR_LIMITS.maxReasonChars),
+  ),
+
+  'connector.connection.blocked': workRule(
+    ['connector', 'failureCode', 'reason'],
+    (p) =>
+      isConnectorKind(p.connector) &&
+      isConnectorFailureCode(p.failureCode) &&
+      isBoundedText(p.reason, CONNECTOR_LIMITS.maxReasonChars),
+  ),
+
+  'connector.event.received': workRule(
+    ['eventId', 'connector', 'accountLabel', 'kind', 'dedupeKey', 'payloadLength'],
+    (p) =>
+      isEventId(p.eventId) &&
+      isConnectorKind(p.connector) &&
+      (p.accountLabel === null || isBoundedText(p.accountLabel, CONNECTOR_LIMITS.maxAccountLabelChars)) &&
+      isBoundedText(p.kind, 64) &&
+      isBoundedText(p.dedupeKey, 256) &&
+      isNonNegativeInt(p.payloadLength),
+  ),
+
+  'connector.event.denied': workRule(
+    ['eventId', 'connector', 'kind', 'dedupeKey', 'failureCode', 'reason'],
+    (p) =>
+      isEventId(p.eventId) &&
+      isConnectorKind(p.connector) &&
+      isBoundedText(p.kind, 64) &&
+      isBoundedText(p.dedupeKey, 256) &&
+      isConnectorFailureCode(p.failureCode) &&
+      isBoundedText(p.reason, CONNECTOR_LIMITS.maxReasonChars),
+  ),
+
+  'connector.action.reconciled': workRule(
+    ['connector', 'actionId', 'outcome'],
+    (p) => isConnectorKind(p.connector) && isEventId(p.actionId) && isBoundedText(p.outcome, 64),
   ),
 
   /* ---------------------------------------------------------------- skills */

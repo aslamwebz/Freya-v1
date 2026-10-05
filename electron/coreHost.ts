@@ -18,6 +18,9 @@ import type { RelayProjection } from '../core/protocol/relay'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
 import type { OfficeProjection } from '../core/office/projection'
 import type { RelayAdapterSet } from '../core/relay/adapters'
+import type { ConnectorAuthPort } from '../core/connectors/engine'
+import type { ConnectorKind } from '../core/connectors/types'
+import type { ConnectorCommandOutcome, ConnectorProjection } from '../core/protocol/connectors'
 import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
 import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
@@ -464,6 +467,24 @@ consciousness(): ConsciousContextProjection | null
    */
   onRelay(send: (projection: RelayProjection) => void): () => void
   relay(): RelayProjection | null
+  /**
+   * Attach to the connector projection. Returns a disposer.
+   *
+   * The host is a forwarding box here too: it cannot configure a connector,
+   * start an authorization, complete one or deliver an event. It reads Core's
+   * report and forwards it.
+   */
+  onConnectors(send: (projection: ConnectorProjection) => void): () => void
+  connectors(): ConnectorProjection | null
+  /**
+   * Complete an authorization. **Host-only; never exposed to a renderer.**
+   *
+   * The OAuth callback is handled in the main process, which holds the token in
+   * the secure store; this records the non-secret outcome in Core.
+   */
+  connectorAuthorizationComplete(payload: unknown): Promise<ConnectorCommandOutcome>
+  /** Deliver an authenticated external event. **Host-only.** */
+  connectorEventIngest(payload: unknown): Promise<ConnectorCommandOutcome>
   stop(reason?: string): Promise<void>
 }
 
@@ -621,6 +642,21 @@ export interface CoreHostOptions {
     allowlistedRepos?: readonly string[]
   }
   /**
+   * The Phase 44 connector connection plane.
+   *
+   * Forwarded into Core; tokens remain in the host secure store and never cross
+   * the renderer bridge.
+   */
+  connectors?: {
+    auth: ConnectorAuthPort
+    blocked?: readonly ConnectorKind[]
+  }
+  /**
+   * Lazy production connector runtime, constructed in the main process where
+   * Electron secure storage is available.
+   */
+  connectorRuntime?: () => Promise<{ auth: ConnectorAuthPort; blocked?: readonly ConnectorKind[] }>
+  /**
    * The Phase 42 Device Hands activation seam. Absent — the state of every build
    * until the owner supplies real adapters and an authority — the runtime is never
    * constructed, and no surface exists to reach.
@@ -647,6 +683,7 @@ export class ElectronCoreHost implements CoreHost {
   private readonly foundryWindows = new Set<(projection: FoundryProjection) => void>()
   private readonly officeWindows = new Set<(projection: OfficeProjection) => void>()
   private readonly relayWindows = new Set<(projection: RelayProjection) => void>()
+  private readonly connectorWindows = new Set<(projection: ConnectorProjection) => void>()
   /**
    * Windows following the unified conscious context.
    *
@@ -893,6 +930,7 @@ export class ElectronCoreHost implements CoreHost {
     this.stopRequested = false
     this.starting = (async () => {
       const research = this.options.research ?? this.buildResearchStack()
+      const connectors = this.options.connectors ?? (this.options.connectorRuntime ? await this.options.connectorRuntime() : undefined)
       const core = createCore({
         dataPath: this.dataPath,
         env: this.env,
@@ -954,6 +992,10 @@ export class ElectronCoreHost implements CoreHost {
         // renderer has no name for it ??? so nothing a window can send arrives
         // here, and the only thing that travels back out is what Core reports.
         ...(this.options.relay ? { relay: this.options.relay } : {}),
+        // The connector connection plane, forwarded whole for the same reason as
+        // Relay: it reaches Core, not a window, and the only thing that travels
+        // back out is what Core reports.
+        ...(connectors ? { connectors } : {}),
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),
@@ -980,6 +1022,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onFoundry((projection) => this.broadcastFoundry(projection))
       core.onOffice((projection) => this.broadcastOffice(projection))
       core.onRelay((projection) => this.broadcastRelay(projection))
+      core.onConnectors((projection) => this.broadcastConnectors(projection))
       core.onSkills((projection) => this.broadcastSkills(projection))
       core.onLife((projection) => this.broadcastLife(projection))
       core.onWorld((projection) => this.broadcastWorld(projection))
@@ -1188,6 +1231,7 @@ export class ElectronCoreHost implements CoreHost {
     this.attentionWindows.clear()
     this.officeWindows.clear()
     this.relayWindows.clear()
+    this.connectorWindows.clear()
     this.skillWindows.clear()
     this.lifeWindows.clear()
     this.consciousnessWindows.clear()
@@ -1497,6 +1541,51 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window Relay push threw', error)
         this.relayWindows.delete(send)
+      }
+    }
+  }
+
+  /** Attach to the connector projection, pushed immediately. Null before start. */
+  onConnectors(send: (projection: ConnectorProjection) => void): () => void {
+    this.connectorWindows.add(send)
+    const projection = this.connectors()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window connector push threw', error)
+      }
+    }
+    return () => {
+      this.connectorWindows.delete(send)
+    }
+  }
+
+  connectors(): ConnectorProjection | null {
+    return this.core?.connectors() ?? null
+  }
+
+  async connectorAuthorizationComplete(payload: unknown): Promise<ConnectorCommandOutcome> {
+    if (this.core === null) {
+      return { operation: 'refused', ok: false, failureCode: 'unsupported', reason: 'Core has not started' }
+    }
+    return this.core.connectorAuthorizationComplete(payload)
+  }
+
+  async connectorEventIngest(payload: unknown): Promise<ConnectorCommandOutcome> {
+    if (this.core === null) {
+      return { operation: 'refused', ok: false, failureCode: 'unsupported', reason: 'Core has not started' }
+    }
+    return this.core.connectorEventIngest(payload)
+  }
+
+  private broadcastConnectors(projection: ConnectorProjection): void {
+    for (const send of [...this.connectorWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window connector push threw', error)
+        this.connectorWindows.delete(send)
       }
     }
   }

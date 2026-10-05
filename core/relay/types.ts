@@ -48,7 +48,7 @@ import type { Capability } from '../protocol/core-protocol'
  * widens nothing — the caller still needs `relay.external.invoke`, an approval
  * and a budget, exactly as for a built-in connector.
  */
-export const RELAY_CONNECTORS = ['email', 'calendar', 'github', 'external'] as const
+export const RELAY_CONNECTORS = ['email', 'calendar', 'github', 'drive', 'telegram', 'external'] as const
 export type RelayConnectorId = (typeof RELAY_CONNECTORS)[number]
 
 export function isRelayConnectorId(value: unknown): value is RelayConnectorId {
@@ -91,6 +91,10 @@ export const RELAY_ACTIONS = [
   'github.read',
   'github.issue.create',
   'github.pr.create',
+  'drive.read',
+  'drive.file.create',
+  'telegram.read',
+  'telegram.send',
   'external.invoke',
 ] as const
 export type RelayAction = (typeof RELAY_ACTIONS)[number]
@@ -103,7 +107,7 @@ export function isRelayAction(value: unknown): value is RelayAction {
  * The read actions. These execute directly under Guard + budget + STOP ALL.
  * They never create an approval and never mutate anything.
  */
-export const RELAY_READ_ACTIONS = ['email.read', 'calendar.read', 'github.read'] as const
+export const RELAY_READ_ACTIONS = ['email.read', 'calendar.read', 'github.read', 'drive.read', 'telegram.read'] as const
 export type RelayReadAction = (typeof RELAY_READ_ACTIONS)[number]
 
 export function isRelayReadAction(value: RelayAction): value is RelayReadAction {
@@ -122,6 +126,8 @@ export const RELAY_WRITE_ACTIONS = [
   'calendar.cancel',
   'github.issue.create',
   'github.pr.create',
+  'drive.file.create',
+  'telegram.send',
   'external.invoke',
 ] as const
 export type RelayWriteAction = (typeof RELAY_WRITE_ACTIONS)[number]
@@ -142,6 +148,10 @@ export const RELAY_ACTION_CONNECTOR: Readonly<Record<RelayAction, RelayConnector
   'github.read': 'github',
   'github.issue.create': 'github',
   'github.pr.create': 'github',
+  'drive.read': 'drive',
+  'drive.file.create': 'drive',
+  'telegram.read': 'telegram',
+  'telegram.send': 'telegram',
   'external.invoke': 'external',
 })
 
@@ -171,6 +181,10 @@ export const RELAY_ACTION_RISK: Readonly<Record<RelayAction, RelayRiskClass>> = 
   'github.read': 'read',
   'github.issue.create': 'routine',
   'github.pr.create': 'routine',
+  'drive.read': 'read',
+  'drive.file.create': 'routine',
+  'telegram.read': 'read',
+  'telegram.send': 'consequential',
   'external.invoke': 'consequential',
 })
 
@@ -190,6 +204,10 @@ export const RELAY_ACTION_CAPABILITY: Readonly<Record<RelayAction, Capability>> 
   'github.read': 'relay.github.read',
   'github.issue.create': 'relay.github.issue.create',
   'github.pr.create': 'relay.github.pr.create',
+  'drive.read': 'relay.drive.read',
+  'drive.file.create': 'relay.drive.file.create',
+  'telegram.read': 'relay.telegram.read',
+  'telegram.send': 'relay.telegram.send',
   'external.invoke': 'relay.external.invoke',
 })
 
@@ -199,6 +217,8 @@ export const RELAY_CONNECTOR_CAPABILITIES: Readonly<Record<RelayConnectorId, rea
     email: ['relay.email.read', 'relay.email.draft', 'relay.email.send'],
     calendar: ['relay.calendar.read', 'relay.calendar.create', 'relay.calendar.update', 'relay.calendar.cancel'],
     github: ['relay.github.read', 'relay.github.issue.create', 'relay.github.pr.create'],
+    drive: ['relay.drive.read', 'relay.drive.file.create'],
+    telegram: ['relay.telegram.read', 'relay.telegram.send'],
     external: ['relay.external.invoke'],
   })
 
@@ -246,8 +266,12 @@ export const RELAY_FAILURE_CODES = [
   'budget_exceeded',
   'connector_unavailable',
   'connector_faulted',
+  'connection_required',
+  'scope_missing',
+  'rate_limited',
   'adapter_error',
   'transient_error',
+  'write_unknown',
   'approval_denied',
   'approval_expired',
   'approval_unknown',
@@ -319,6 +343,18 @@ export const RELAY_LIMITS = Object.freeze({
   maxAllowlistedRepos: 64,
   /** Characters in a repo ref (`owner/repo`). */
   maxRepoRefChars: 256,
+  /** Rows one Drive read may return. */
+  maxDriveFiles: 100,
+  /** Characters in a Drive file name. */
+  maxDriveNameChars: 255,
+  /** Bytes of Drive file content Relay will carry in one request. */
+  maxDriveContentChars: 64_000,
+  /** Telegram chats on the allowlist. */
+  maxAllowlistedChats: 64,
+  /** Characters in a Telegram message. */
+  maxTelegramMessageChars: 4_096,
+  /** Telegram sends in the rolling window. */
+  maxTelegramSendsPerWindow: 20,
 })
 
 /* ----------------------------------------------------------------- shapes */
@@ -427,6 +463,52 @@ export interface RelayGitHubPrInput {
   readonly body: string
 }
 
+/** One Google Drive file, as a read returns it. */
+export interface RelayDriveFile {
+  readonly fileId: string
+  readonly name: string
+  readonly mimeType: string
+  readonly modifiedAt: string
+  readonly sizeBytes: number | null
+  readonly parents: readonly string[]
+}
+
+/**
+ * Creating a Drive file: name, MIME type and bounded content.
+ *
+ * The content crosses once, in the request, exactly as an email body does. It
+ * is held process-locally for the adapter and is never written to the journal
+ * or a projection; only the file's id, name and size are ever recorded.
+ */
+export interface RelayDriveFileInput {
+  readonly name: string
+  readonly mimeType: string
+  readonly content: string
+}
+
+/** One Telegram chat, as the allowlist names it. */
+export interface RelayTelegramChat {
+  readonly chatId: string
+  readonly title: string
+  readonly kind: 'private' | 'group' | 'channel'
+}
+
+/** One Telegram message, as a read returns it. */
+export interface RelayTelegramMessage {
+  readonly messageId: string
+  readonly chatId: string
+  readonly from: string
+  readonly text: string
+  readonly sentAt: string
+}
+
+/** Sending a Telegram message. Bounded text, explicit chat. */
+export interface RelayTelegramMessageInput {
+  readonly chatId: string
+  readonly text: string
+  readonly idempotencyKey: string
+}
+
 /** A generic external invocation. Bounded in every dimension. */
 export interface RelayExternalInvoke {
   readonly connector: string
@@ -440,6 +522,14 @@ export interface RelayReadQuery {
   readonly query: string | null
   readonly limit: number
   readonly cursor: string | null
+  /**
+   * An explicit single-item read, when the action names one.
+   *
+   * `null` means "list or search"; a value means "this exact item". It is a
+   * bounded opaque id, never a URL or a path, and an adapter that does not
+   * support it refuses rather than ignoring it.
+   */
+  readonly messageId?: string | null
 }
 
 /* ----------------------------------------------------------- action state */
@@ -494,6 +584,8 @@ export interface RelayState {
   readonly actionInstants: Readonly<Record<RelayConnectorId, readonly string[]>>
   /** Send instants, for the send-specific cap. */
   readonly sendInstants: readonly string[]
+  /** Telegram send instants, for the Telegram-specific cap. */
+  readonly telegramSendInstants: readonly string[]
   /** Draft instants, for the draft-specific cap. */
   readonly draftInstants: readonly string[]
   /** External invoke instants, for the external-specific cap. */
@@ -506,8 +598,9 @@ export function initialRelayState(): RelayState {
   return {
     actions: [],
     approvals: [],
-    actionInstants: { email: [], calendar: [], github: [], external: [] },
+    actionInstants: { email: [], calendar: [], github: [], drive: [], telegram: [], external: [] },
     sendInstants: [],
+    telegramSendInstants: [],
     draftInstants: [],
     externalInstants: [],
     faulted: {},

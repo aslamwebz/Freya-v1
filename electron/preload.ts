@@ -26,6 +26,8 @@ import { FOUNDRY_NO_PAYLOAD } from '../core/protocol/foundry'
 import { ATTENTION_LIMITS } from '../core/attention/types'
 import type { RelayProjection } from '../core/protocol/relay'
 import { RELAY_NO_PAYLOAD } from '../core/protocol/relay'
+import type { ConnectorProjection } from '../core/protocol/connectors'
+import { CONNECTOR_NO_PAYLOAD } from '../core/protocol/connectors'
 import { RELAY_LIMITS } from '../core/relay/types'
 import type { OfficeProjection } from '../core/office/projection'
 import type { SkillProjection } from '../core/protocol/skills'
@@ -417,6 +419,28 @@ const api = {
   },
 
   /**
+   * The connector projection: which providers exist, their connection state,
+   * the scopes granted, and whether a write is pending approval.
+   *
+   * A mirror, like every other channel here. What deliberately does **not**
+   * cross: a token, a refresh token, a client secret, an authorization header,
+   * a code verifier or any event payload. Starting an authorization and
+   * completing one are different acts: this bridge can ask Core to start one
+   * (`connector.connect.start`), and completing it is host-only, so no window
+   * can manufacture a connection.
+   */
+  coreConnectors: (): Promise<ConnectorProjection | null> => ipcRenderer.invoke('freya:core:connectors'),
+
+  onCoreConnectors: (handler: (projection: ConnectorProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: ConnectorProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:connectors', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:connectors', listener)
+    }
+  },
+
+  /**
    * The Skills projection: procedures, lifecycle status, evidence as verdicts and
    * counts, and whether bodies survive a restart.
    *
@@ -704,8 +728,25 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'relay.github.read',
   'relay.github.issue.create',
   'relay.github.pr.create',
+  'relay.drive.read',
+  'relay.drive.file.create',
+  'relay.telegram.read',
+  'relay.telegram.send',
   'relay.external.invoke',
   'relay.approval.decide',
+
+  // Connectors (Phase 44). `connector.status.read` is the payloadless read;
+  // `connector.connect.start` starts an authorization; `connector.disconnect`
+  // revokes one; `connector.read` and `connector.action.execute` submit a typed
+  // action. There is deliberately no `connector.authorize` and no
+  // `connector.event.ingest` here: completing an authorization and delivering an
+  // authenticated event are host-only acts, and a window reaching for those
+  // names finds `unknown command`.
+  'connector.status.read',
+  'connector.connect.start',
+  'connector.disconnect',
+  'connector.read',
+  'connector.action.execute',
   'foundry.status.read',
 
   // Life History. Three reads and nothing else: there is no `life.record`,
@@ -2163,6 +2204,122 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
           approvalId,
           decision,
           ...(reason === undefined ? {} : { reason }),
+        },
+      }
+    }
+
+    /* ------------------------------------------------ relay drive/telegram */
+
+    case 'relay.drive.read':
+    case 'relay.telegram.read': {
+      const query = string('query', 2_000, false)
+      if (query === null) return { ok: false, reason: 'relay query is invalid' }
+      const limit = record?.limit
+      if (limit !== undefined && (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1)) {
+        return { ok: false, reason: 'relay pagination limit is invalid' }
+      }
+      const cursor = string('cursor', RELAY_LIMITS.maxCursorChars, false)
+      if (cursor === null) return { ok: false, reason: 'relay cursor is invalid' }
+      if (command === 'relay.telegram.read') {
+        const chatId = string('chatId', MAX_ID_CHARS)
+        if (chatId === null || chatId === undefined) return { ok: false, reason: 'a chat id is required' }
+        return {
+          ok: true,
+          payload: {
+            chatId,
+            ...(query === undefined ? {} : { query }),
+            ...(limit === undefined ? {} : { limit }),
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+        }
+      }
+      const fileId = string('fileId', MAX_ID_CHARS, false)
+      if (fileId === null) return { ok: false, reason: 'a file id is invalid' }
+      return {
+        ok: true,
+        payload: {
+          ...(query === undefined ? {} : { query }),
+          ...(limit === undefined ? {} : { limit }),
+          ...(cursor === undefined ? {} : { cursor }),
+          ...(fileId === undefined ? {} : { fileId }),
+        },
+      }
+    }
+
+    case 'relay.drive.file.create': {
+      const name = string('name', RELAY_LIMITS.maxDriveNameChars)
+      const mimeType = string('mimeType', 255)
+      const content = string('content', RELAY_LIMITS.maxDriveContentChars, false)
+      if (name === null || name === undefined) return { ok: false, reason: 'a file name is required' }
+      if (mimeType === null || mimeType === undefined) return { ok: false, reason: 'a content type is required' }
+      if (content === null) return { ok: false, reason: 'file content is invalid' }
+      const key = string('idempotencyKey', RELAY_LIMITS.maxIdempotencyKeyChars)
+      if (key === null || key === undefined) return { ok: false, reason: 'an idempotency key is required' }
+      return {
+        ok: true,
+        payload: { name, mimeType, ...(content === undefined ? {} : { content }), idempotencyKey: key },
+      }
+    }
+
+    case 'relay.telegram.send': {
+      const chatId = string('chatId', MAX_ID_CHARS)
+      const text = string('text', RELAY_LIMITS.maxTelegramMessageChars)
+      if (chatId === null || chatId === undefined) return { ok: false, reason: 'a chat id is required' }
+      if (text === null || text === undefined) return { ok: false, reason: 'message text is required' }
+      const key = string('idempotencyKey', RELAY_LIMITS.maxIdempotencyKeyChars)
+      if (key === null || key === undefined) return { ok: false, reason: 'an idempotency key is required' }
+      return { ok: true, payload: { chatId, text, idempotencyKey: key } }
+    }
+
+    /* -------------------------------------------------------- connectors */
+
+    case 'connector.status.read': {
+      if (!carriesNothing(payload)) return { ok: false, reason: CONNECTOR_NO_PAYLOAD }
+      return { ok: true }
+    }
+
+    case 'connector.connect.start': {
+      const connector = string('connector', 64)
+      if (connector === null || connector === undefined) return { ok: false, reason: 'a connector is required' }
+      const authority = string('authority', 16, false)
+      if (authority === null) return { ok: false, reason: 'a connect authority is invalid' }
+      if (authority !== undefined && authority !== 'read' && authority !== 'write') {
+        return { ok: false, reason: 'a connect authority must be read or write' }
+      }
+      return { ok: true, payload: { connector, ...(authority === undefined ? {} : { authority }) } }
+    }
+
+    case 'connector.disconnect': {
+      const connector = string('connector', 64)
+      if (connector === null || connector === undefined) return { ok: false, reason: 'a connector is required' }
+      const reason = string('reason', 300, false)
+      if (reason === null) return { ok: false, reason: 'a disconnect reason is invalid' }
+      return { ok: true, payload: { connector, ...(reason === undefined ? {} : { reason }) } }
+    }
+
+    case 'connector.read':
+    case 'connector.action.execute': {
+      // A typed connector action: a connector, an action and the action's own
+      // bounded params. There is no scope, token, account, capability, budget or
+      // limit here, because a window has no name for any of them.
+      const connector = string('connector', 64)
+      const action = string('action', 64)
+      if (connector === null || connector === undefined) return { ok: false, reason: 'a connector is required' }
+      if (action === null || action === undefined) return { ok: false, reason: 'a connector action is required' }
+      const rawParams = record?.params
+      if (rawParams !== undefined && (typeof rawParams !== 'object' || rawParams === null || Array.isArray(rawParams))) {
+        return { ok: false, reason: 'connector action params must be an object' }
+      }
+      const serialized = JSON.stringify(rawParams ?? {})
+      if (serialized === undefined || serialized.length > 256_000) {
+        return { ok: false, reason: 'connector action params are too large' }
+      }
+      return {
+        ok: true,
+        payload: {
+          connector,
+          action,
+          ...(rawParams === undefined ? {} : { params: rawParams }),
         },
       }
     }

@@ -33,7 +33,7 @@ import { fixtureSearchProvider, fixtureTransport, researchFixturesEnabled } from
 import { SafeHttpTransport } from '../core/research/transport'
 import type { SearchProvider } from '../core/research/types'
 import type { ModelProvider } from '../core/model/provider'
-import type { GrantFact } from '../core/devicehands'
+import type { DeviceHandsActionKey, GrantFact } from '../core/devicehands'
 import type { BrowserTargetFactory } from '../core/research/browser'
 import { randomUUID } from 'node:crypto'
 import {
@@ -965,6 +965,62 @@ export class ElectronCoreHost implements CoreHost {
   /** The activation's own status, or null when the seam was not supplied. */
   deviceHandsStatus(): DeviceHandsActivationStatus | null {
     return this.deviceHands?.status() ?? null
+  }
+
+  /**
+   * Run one Device Hands action on the activation this host owns.
+   *
+   * **This is the seam Phase 51 needed and the reason it needed one.** The dual-browser runtime
+   * and the Phase 43 extension bridge are two doors onto the browser surface, and the only way
+   * to keep them two doors rather than two authorities is for both of them to reach *this*
+   * runtime — the one whose authority already composes Core's STOP ALL latch. So the host
+   * exposes the perform call and nothing else: no grant source, no policy, no approval
+   * channel, no way to reach a gate without walking it.
+   */
+  async performDeviceHandsAction(request: {
+    readonly actionId: string
+    readonly principalId: string
+    readonly scope: string
+    readonly actionKey: DeviceHandsActionKey
+    readonly input: Readonly<Record<string, unknown>>
+    readonly at: string
+    readonly deadlineAt: string
+  }): Promise<{
+    readonly performed: boolean
+    readonly verdict: 'passed' | 'failed' | 'unverified'
+    readonly code: string | null
+    readonly reason: string
+  }> {
+    const activation = this.deviceHands
+    if (activation === null || !activation.active()) {
+      return {
+        performed: false,
+        verdict: 'failed',
+        code: 'subsystem-disabled',
+        reason: 'Device Hands is not active in this build, so no browser action is authorised.',
+      }
+    }
+    const outcome = await activation.runtime.perform({
+      ...request,
+      claimsAction: null,
+    })
+    return {
+      performed: outcome.performed,
+      verdict: outcome.verdict ?? 'failed',
+      code: outcome.code,
+      reason: outcome.reason,
+    }
+  }
+
+  /**
+   * The hash-chained journal Device Hands is already writing, or null when there is none.
+   *
+   * Exposed so the Phase 51 activation appends to the **same file** rather than opening a
+   * second one. Two journals would mean two integrity chains and a restart that believed one of
+   * them could be in a state the other contradicted.
+   */
+  deviceHandsJournal(): DeviceHandsJournal | null {
+    return this.options.deviceHands?.journal ?? null
   }
 
   async start(): Promise<void> {

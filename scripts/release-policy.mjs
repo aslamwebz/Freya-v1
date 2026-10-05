@@ -1,4 +1,4 @@
-import { stat, readdir, readFile } from 'node:fs/promises'
+﻿import { stat, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export const ALLOWED_INSTALL_SCRIPT_PACKAGES = new Set([
@@ -24,15 +24,16 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // the Phase 42 Device Hands seam and so lands in the main process rather than in a
   // separate bundle. Phase 50 then added persistent Eye sessions and bounded parallel
   // Deep Research. Phase 44 adds the connector engine/runtime and host composition;
-  // CI measures that reconciled main.cjs at 2,237,259 bytes. Phase 48 then adds the
-  // manifest door, declarative sandbox, static scan, validation/version pipeline and
-  // encrypted Forge store. Keep only narrow, explicit headroom over the combined
-  // artifact rather than absorbing future growth.
-  mainBytes: 2_250_000,
+  // CI measured Phase 44 at 2,237,259 bytes; after the final Phase 45 Voice API
+  // migration and Phase 46 Memory Identity composition, main.cjs is 2,312,063 bytes.
+  // Phase 48 adds the Forge manifest door, sandbox, static scan, validation/version
+  // pipeline and encrypted Forge store. Keep only narrow explicit headroom over the
+  // measured combined artifact; CI will tighten this again if Forge moves the build.
+  mainBytes: 2_325_000,
   // Phase 44 adds connector projection/commands to the preload bridge, and
-  // Phase 45 adds the bounded Voice command/capability/playback channel. The
-  // completed Voice branch measured the combined preload near this ceiling.
-  preloadBytes: 135_000,
+  // Phase 45 adds the bounded Voice command/capability/playback channel. CI measures
+  // the reconciled preload at 139,620 bytes, so retain only narrow explicit headroom.
+  preloadBytes: 142_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,
   // Phase 19 added the ui-v2 shell: a finished design with ~1.9MB of webp imagery and

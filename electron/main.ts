@@ -208,6 +208,7 @@ function e2eKeys(): {
   context: Uint8Array
   personality: Uint8Array
   skill: Uint8Array
+  forge: Uint8Array
   vault: Uint8Array
 } | null {
   const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
@@ -215,9 +216,10 @@ function e2eKeys(): {
   const mission = e2eKey('FREYA_E2E_MISSION_KEY')
   const context = e2eKey('FREYA_E2E_CONTEXT_KEY')
   const skill = e2eKey('FREYA_E2E_SKILL_KEY')
+  const forge = e2eKey('FREYA_E2E_FORGE_KEY')
   const personality = e2eKey('FREYA_E2E_PERSONALITY_KEY')
   const vault = e2eKey('FREYA_E2E_VAULT_KEY')
-  // All six or none, so a partial fixture cannot quietly run with a real keyring for
+  // All seven or none, so a partial fixture cannot quietly run with a real keyring for
   // the domain it forgot.
   if (
     conversation === null ||
@@ -226,11 +228,12 @@ function e2eKeys(): {
     context === null ||
     personality === null ||
     skill === null ||
+    forge === null ||
     vault === null
   ) {
     return null
   }
-  return { conversation, brain, mission, context, personality, skill, vault }
+  return { conversation, brain, mission, context, personality, skill, forge, vault }
 }
 
 /**
@@ -695,6 +698,20 @@ function createWindow(): BrowserWindow {
   })
 
   /**
+   * Forge: the same shape as Skills, one channel later.
+   *
+   * Push-only. There is deliberately no  reya:core:forge:write, no
+   * :generate, :install or :enable channel, and no preload method that accepts a
+   * package body: a renderer that could push a manifest into Electron would make the
+   * bridge a second admission door, and the whole of Phase 48 is that there is one door
+   * and it is Core's. Mutating work goes through  reya:core:submit with a
+   *  orge.* command, which Core Guard-evaluates and journals.
+   */
+  const detachForge = coreHost?.onForge((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:forge', projection)
+  })
+
+  /**
    * World & self: a thirteenth channel, and the narrowest one in this file.
    *
    * Only the *summary* is pushed, and the only command-free read is the summary too.
@@ -780,6 +797,7 @@ function createWindow(): BrowserWindow {
     detachRelay?.()
     detachConnectors?.()
     detachSkills?.()
+    detachForge?.()
     detachWorld?.()
     detachConsciousness?.()
     detachLifeLoop?.()
@@ -979,6 +997,8 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:connectors', () => requireCore().connectors())
   // The Skills projection is read-only; mutation remains Core-command-only.
   ipcMain.handle('freya:core:skills', () => requireCore().skills())
+  // The Forge projection is read-only; every mutation is a Guard-evaluated Core command.
+  ipcMain.handle('freya:core:forge', () => requireCore().forge())
   // The World & self summary is read-only, and it is counts only. The graph, the
   // entity list, the inspector and the self status are Core commands, not a channel.
   ipcMain.handle('freya:core:world', () => requireCore().world())
@@ -1038,6 +1058,7 @@ app.whenReady().then(async () => {
         context: { key: testKeys.context, reason: null as string | null },
         personality: { key: testKeys.personality, reason: null as string | null },
         skill: { key: testKeys.skill, reason: null as string | null },
+        forge: { key: testKeys.forge, reason: null as string | null },
         vault: { key: testKeys.vault, reason: null as string | null },
       })
     : loadKeyring(dataPath)
@@ -1106,6 +1127,7 @@ app.whenReady().then(async () => {
         contextKey: result.context.key,
         personalityKey: result.personality.key,
         skillKey: result.skill.key,
+        forgeKey: result.forge.key,
         vault: {
           path: vaultPath,
           keyProvider: { load: async () => ({ key: result.vault.key, reason: result.vault.reason }) },

@@ -1,4 +1,4 @@
-﻿import {
+import {
   CORE_EVENT_SCHEMA_VERSION,
   CORE_EVENT_TYPES,
   type AnyCoreEvent,
@@ -54,6 +54,18 @@ function isDeadlineType(value: unknown): boolean {
 import { DEFAULT_MISSION_LIMITS, MISSION_REASONS } from '../missions/types'
 import { DEFAULT_GOAL_LIMITS, GOAL_REASONS } from '../longhorizon/types'
 import { RUNTIME_STATUSES } from '../runtime/types'
+import {
+  FORGE_ACCESS_LEVELS,
+  FORGE_LIMITS,
+  FORGE_ORIGINS,
+  FORGE_REFUSAL_CODES,
+  FORGE_RUN_FAILURE_CODES,
+  FORGE_RUN_STATES,
+  FORGE_RUNTIME_KINDS,
+  FORGE_STAGE_VERDICTS,
+  FORGE_VALIDATION_STAGES,
+} from '../forge/types'
+import { CAPABILITIES } from '../protocol/core-protocol'
 import {
   DEFAULT_WORKER_BUDGET,
   WORKFORCE_LIMITS,
@@ -162,11 +174,11 @@ export interface ValidationFailure {
  *
  * The two cases are genuinely different and must not be reported as one thing:
  *
- * - **torn tail** â€” the log ends part-way through a line. That is what a crash
+ * - **torn tail** — the log ends part-way through a line. That is what a crash
  *   during a write looks like: the bytes after the last complete line were never
  *   committed. The prefix is the whole truth, and recovery is ordinary.
  *
- * - **corruption** â€” a *complete* line failed validation, or there was more data
+ * - **corruption** — a *complete* line failed validation, or there was more data
  *   after the first bad line. A complete line that is wrong is not a crash. It
  *   means the journal contains something that was never written by this code, or
  *   was edited, or arrived out of order.
@@ -281,7 +293,7 @@ function isNullableRef(value: unknown): value is string | null {
  * Three of the loop's seventeen events describe something that happened to the loop
  * rather than to a wake: a restart, the owner taking precedence, the owner clearing a
  * stop. Those are exactly the events where there is no wake to name, and the
- * alternative â€” requiring a non-empty id â€” would mean inventing one.
+ * alternative — requiring a non-empty id — would mean inventing one.
  *
  * An empty string therefore means "no wake was held", and it is the honest encoding:
  * a lifecycle entry that carried a fabricated wake id would put an invented
@@ -313,7 +325,7 @@ function isNullablePositiveInt(value: unknown): value is number | null {
  * a validation rule starts disagreeing with itself.
  *
  * `userMessageId` and `assistantMessageId` are nullable because a denied turn has
- * no stored message and an interrupted turn has no answer â€” and a schema that
+ * no stored message and an interrupted turn has no answer — and a schema that
  * pretended otherwise would push a fabrication into the audit.
  */
 const CONVERSATION_TURN = (p: Record<string, unknown>): boolean =>
@@ -517,7 +529,7 @@ const MISSION_STATUS_SET: ReadonlySet<string> = new Set([
 
 /**
  * Closed reason codes for every goal event, read from `GOAL_REASONS` rather than
- * restated — the same reasoning as `MISSION_REASON_CODES`, and the reason one
+ * restated � the same reasoning as `MISSION_REASON_CODES`, and the reason one
  * definition serves goal creation, transitions, checkpoint outcomes and
  * cancellation rather than five drifting copies of it.
  */
@@ -542,6 +554,73 @@ const EVALUATION_REASON_SET: ReadonlySet<string> = new Set(EVALUATION_REASONS)
 const PROMOTION_REASON_SET: ReadonlySet<string> = new Set(PROMOTION_REASONS)
 // `SKILL_REFUSAL_CODES` is read through `isSkillRefusalCode` rather than through a
 // second Set, so there is exactly one closed list of refusal codes in the build.
+
+/* ------------------------------------------------------------- forge sets */
+
+/**
+ * Forge's closed vocabularies, read from the domain rather than restated.
+ *
+ * Same reasoning as `MISSION_REASON_CODES`: a code added to `core/forge/types.ts`
+ * cannot leave this validator rejecting a line Core would have written, and no
+ * value can be accepted here that the domain would refuse.
+ */
+const FORGE_RUNTIME_KIND_SET: ReadonlySet<string> = new Set(FORGE_RUNTIME_KINDS)
+const FORGE_ORIGIN_SET: ReadonlySet<string> = new Set(FORGE_ORIGINS)
+const FORGE_ACCESS_LEVEL_SET: ReadonlySet<string> = new Set(FORGE_ACCESS_LEVELS)
+const FORGE_VALIDATION_STAGE_SET: ReadonlySet<string> = new Set(FORGE_VALIDATION_STAGES)
+const FORGE_STAGE_VERDICT_SET: ReadonlySet<string> = new Set(FORGE_STAGE_VERDICTS)
+const FORGE_RUN_FAILURE_SET: ReadonlySet<string> = new Set(FORGE_RUN_FAILURE_CODES)
+const FORGE_RUN_STATE_SET: ReadonlySet<string> = new Set(FORGE_RUN_STATES)
+const FORGE_CAPABILITY_SET: ReadonlySet<string> = new Set<string>(CAPABILITIES)
+
+/** The three actions an install may report. All three are explicit owner acts. */
+const FORGE_INSTALL_ACTIONS: readonly string[] = Object.freeze(['install-new', 'upgrade', 'downgrade'])
+
+/** The truncated content digest Forge uses, as opposed to a full-length sha256. */
+const FORGE_HASH_PATTERN = /^[a-f0-9]{32}$/
+
+function isForgeHash(value: unknown): boolean {
+  return typeof value === 'string' && FORGE_HASH_PATTERN.test(value)
+}
+
+/** Read from the domain's own closed list, so the two cannot drift apart. */
+function isForgeRefusalCode(value: unknown): boolean {
+  return typeof value === 'string' && (FORGE_REFUSAL_CODES as readonly string[]).includes(value)
+}
+
+function isCapabilityList(value: unknown, max: number): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= max &&
+    value.every((item) => typeof item === 'string' && FORGE_CAPABILITY_SET.has(item))
+  )
+}
+
+function isSlugList(value: unknown, max: number): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= max &&
+    value.every((item) => typeof item === 'string' && item.length <= FORGE_LIMITS.maxNameChars && SKILL_SLUG.test(item))
+  )
+}
+
+/** A nullable bounded reference: a model id, a hash prefix, an origin ref. */
+function isNullableBoundedRef(value: unknown): boolean {
+  return value === null || (typeof value === 'string' && value.length > 0 && value.length <= FORGE_LIMITS.maxRefChars)
+}
+
+function isClosedSet(value: unknown, set: ReadonlySet<string>): boolean {
+  return typeof value === 'string' && set.has(value)
+}
+
+/** Forge's own key check: the exact key set, so an extra field cannot ride along. */
+function forgeRule(
+  allowed: readonly string[],
+  rule: (payload: Record<string, unknown>) => boolean,
+): (payload: Record<string, unknown>) => boolean {
+  return (payload) => onlyNamedKeys(payload, allowed) && rule(payload)
+}
+
 
 /**
  * One admitted or revised skill version.
@@ -705,7 +784,7 @@ const PAYLOAD_RULES: {
     isNonEmptyString(p.reason),
   // `providerContacted` is checked as a boolean rather than left to a default,
   // because a cancellation with an unknown contact is a cancellation whose
-  // accounting cannot be trusted â€” and refusing to read the line is the
+  // accounting cannot be trusted — and refusing to read the line is the
   // fail-closed answer to that.
   'model.request.cancelled': (p) =>
     isEventId(p.requestId) &&
@@ -719,7 +798,7 @@ const PAYLOAD_RULES: {
     isEventId(p.conversationId) && isNonNegativeInt(p.titleLength),
 
   // One rule for all six turn outcomes, applied to each. A conversation event is
-  // metadata, and this is the list of what "metadata" is allowed to mean â€” a
+  // metadata, and this is the list of what "metadata" is allowed to mean — a
   // hand-edited line cannot smuggle a field the schema does not name, because the
   // rule reads named fields rather than passing the object through.
   'conversation.turn.started': CONVERSATION_TURN,
@@ -795,7 +874,7 @@ const PAYLOAD_RULES: {
 
   // Metadata only, and the rules below are the list of what that means. They read
   // named fields rather than passing the object through, so a hand-edited line
-  // cannot smuggle a field the schema does not name â€” which for the Brain is the
+  // cannot smuggle a field the schema does not name — which for the Brain is the
   // difference between a journal that measures what was learned and one that
   // quietly starts retaining it.
   'brain.seeded': (p) =>
@@ -944,7 +1023,7 @@ const PAYLOAD_RULES: {
   /* ----------------------------------------------------------------- work */
 
   // Metadata only. The rules below are the list of what that means for Work, and
-  // they read named fields rather than passing the object through â€” so a
+  // they read named fields rather than passing the object through — so a
   // hand-edited line cannot smuggle in a field the schema does not name, which for
   // Work is the difference between a journal that *measures* what happened and one
   // that quietly starts retaining what every capability returned.
@@ -1278,7 +1357,7 @@ const PAYLOAD_RULES: {
   // The strictest family in the journal after Mission, and for the same reason: a
   // goal holds what a person is trying to achieve. So every rule below reads named
   // fields *and* checks the key set exactly, which means a hand-edited line cannot
-  // attach a title, a description or a completion criterion â€” there is no spelling of
+  // attach a title, a description or a completion criterion — there is no spelling of
   // these payloads that carries content.
   'longhorizon.goal.created': workRule(
     ['goalId', 'state', 'createdAt', 'deadlineAt', 'dependencies', 'limits'],
@@ -1388,7 +1467,7 @@ const PAYLOAD_RULES: {
   // A workforce event describes who Freya's subordinates are and what they were
   // allowed to attempt. So every rule below reads named fields *and* checks the key
   // set exactly, which means a hand-edited line cannot attach a message body, a
-  // context item, a grant, a trust flag or a `decision: 'granted'` â€” there is no
+  // context item, a grant, a trust flag or a `decision: 'granted'` — there is no
   // spelling of these payloads that carries authority.
   'workforce.worker.created': workRule(
     ['workerId', 'name', 'specialisation', 'status', 'createdAt', 'budget'],
@@ -1637,8 +1716,8 @@ const PAYLOAD_RULES: {
    *
    * The closed-vocabulary check is therefore mandatory rather than advisory: an
    * entry carrying a key outside `LIFE_LOOP_PAYLOAD_KEYS`, or a key in
-   * `FORBIDDEN_PAYLOAD_KEYS` â€” anything shaped like a capability, a grant, a
-   * verdict or a budget â€” is corruption, because authority is minted by the Guard
+   * `FORBIDDEN_PAYLOAD_KEYS` — anything shaped like a capability, a grant, a
+   * verdict or a budget — is corruption, because authority is minted by the Guard
    * and the Governor and never by an event.
    */
   'lifeloop.wake.received': lifeLoopRule(
@@ -1652,7 +1731,7 @@ const PAYLOAD_RULES: {
       // Zero-based, because the prefilter refuses once `iterationCount` has reached
       // the ceiling: a one-based counter would refuse the last permitted iteration
       // and quietly make `maxLoopIterations` one smaller than it says. A negative
-      // value is still refused â€” a journal that counts backwards is not a journal
+      // value is still refused — a journal that counts backwards is not a journal
       // this fold can reason about.
       isNonNegativeInt(p.iteration) &&
       isNullableRef(p.goalRef) &&
@@ -1804,7 +1883,7 @@ const PAYLOAD_RULES: {
    * exactly the reason the life-loop ones are.
    *
    * `allowed` below is the per-event key list, and the wrapper checks it against
-   * `ECONOMIC_PAYLOAD_KEYS` rather than in place of it — so this validator can be neither
+   * `ECONOMIC_PAYLOAD_KEYS` rather than in place of it � so this validator can be neither
    * wider nor narrower than `core/economic/types.ts`, and the two cannot fall out of step
    * because the rule refuses any divergence in either direction. Hand-copying the shapes
    * would produce a silent failure in the worst direction: an unknown key would be
@@ -1812,7 +1891,7 @@ const PAYLOAD_RULES: {
    * entry the subsystem itself calls tampering.
    *
    * On top of that, a key from `FORBIDDEN_ECONOMIC_PAYLOAD_KEYS` is refused outright. The
-   * authority half of that set is the usual business — authority is minted by the Guard
+   * authority half of that set is the usual business � authority is minted by the Guard
    * and the Governor and never by an event. The **real-money** half is the important one:
    * there is no field anywhere in Phase 32 that could name a venue, a broker, an account,
    * a wallet or an amount, so these keys are refused *and* reported by
@@ -2019,7 +2098,7 @@ const PAYLOAD_RULES: {
   /**
    * The continuation decision.
    *
-   * `decision` and `reasoning` are closed, and `blocker` is closed **or empty** — the
+   * `decision` and `reasoning` are closed, and `blocker` is closed **or empty** � the
    * empty string being the "nothing is blocking this" answer, rather than a null, because
    * a durable payload is scalars and a reader distinguishing "no blocker" from "a blocker
    * we forgot to name" is worth the one character.
@@ -2075,7 +2154,7 @@ const PAYLOAD_RULES: {
 
   /**
    * A refusal. Both the code and the subject are closed, so a caller's own text cannot
-   * reach the journal through a refusal — which is the oldest mistake in this trade and
+   * reach the journal through a refusal � which is the oldest mistake in this trade and
    * the reason this shape is two codes rather than one string.
    */
   'economic.refusal.recorded': economicRule(
@@ -2154,6 +2233,224 @@ const PAYLOAD_RULES: {
   'office.presence.fulfilled': workRule(
     ['workerId'],
     (p) => isEventId(p.workerId),
+  ),
+
+  /* --------------------------------------------------------------- forge */
+
+  'forge.candidate.created': forgeRule(
+    [
+      'skillId',
+      'name',
+      'runtime',
+      'version',
+      'integrityHash',
+      'origin',
+      'model',
+      'requestHash',
+      'originRef',
+      'accessNetwork',
+      'accessDevice',
+      'declaredCapabilities',
+      'tags',
+      'dependencyCount',
+      'programStepCount',
+      'descriptionLength',
+      'createdAt',
+    ],
+    (p) =>
+      isEventId(p.skillId) &&
+      SKILL_SLUG.test(String(p.name)) &&
+      String(p.name).length <= FORGE_LIMITS.maxNameChars &&
+      isClosedSet(p.runtime, FORGE_RUNTIME_KIND_SET) &&
+      isPositiveInt(p.version) &&
+      isForgeHash(p.integrityHash) &&
+      isClosedSet(p.origin, FORGE_ORIGIN_SET) &&
+      isNullableBoundedRef(p.model) &&
+      isNullableBoundedRef(p.requestHash) &&
+      isNullableBoundedRef(p.originRef) &&
+      isClosedSet(p.accessNetwork, FORGE_ACCESS_LEVEL_SET) &&
+      isClosedSet(p.accessDevice, FORGE_ACCESS_LEVEL_SET) &&
+      isCapabilityList(p.declaredCapabilities, FORGE_LIMITS.maxCapabilities) &&
+      isSlugList(p.tags, FORGE_LIMITS.maxTags) &&
+      isNonNegativeInt(p.dependencyCount) &&
+      isPositiveInt(p.programStepCount) &&
+      isNonNegativeInt(p.descriptionLength) &&
+      isInstant(p.createdAt),
+  ),
+
+  'forge.validating.recorded': forgeRule(
+    ['skillId', 'version', 'integrityHash', 'startedAt'],
+    (p) =>
+      isEventId(p.skillId) && isPositiveInt(p.version) && isForgeHash(p.integrityHash) && isInstant(p.startedAt),
+  ),
+
+  /**
+   * The pipeline's verdict.
+   *
+   * `stageVerdicts` is checked against `FORGE_VALIDATION_STAGES` in length and
+   * `FORGE_STAGE_VERDICTS` in content, so a line cannot claim that four of seven
+   * stages passed and imply the other three were never considered.
+   */
+  'forge.validation.recorded': forgeRule(
+    [
+      'skillId',
+      'version',
+      'integrityHash',
+      'passed',
+      'failingStage',
+      'code',
+      'ranAt',
+      'stageVerdicts',
+      'testChecks',
+      'testFailures',
+    ],
+    (p) => {
+      if (!Array.isArray(p.stageVerdicts) || p.stageVerdicts.length !== FORGE_VALIDATION_STAGES.length) return false
+      if (!p.stageVerdicts.every((value) => isClosedSet(value, FORGE_STAGE_VERDICT_SET))) return false
+      const passed = p.passed === true
+      const stage = p.failingStage
+      const code = p.code
+      if (passed) {
+        if (stage !== null || code !== null) return false
+      } else if (!isClosedSet(stage, FORGE_VALIDATION_STAGE_SET) || !isForgeRefusalCode(code)) {
+        return false
+      }
+      return (
+        isEventId(p.skillId) &&
+        isPositiveInt(p.version) &&
+        isForgeHash(p.integrityHash) &&
+        isInstant(p.ranAt) &&
+        isNonNegativeInt(p.testChecks) &&
+        isNonNegativeInt(p.testFailures)
+      )
+    },
+  ),
+
+  'forge.installed': forgeRule(
+    ['skillId', 'version', 'integrityHash', 'action', 'installedAt'],
+    (p) =>
+      isEventId(p.skillId) &&
+      isPositiveInt(p.version) &&
+      isForgeHash(p.integrityHash) &&
+      isClosedValue(p.action, FORGE_INSTALL_ACTIONS) &&
+      isInstant(p.installedAt),
+  ),
+
+  'forge.enabled': forgeRule(
+    ['skillId', 'version', 'enabledAt'],
+    (p) => isEventId(p.skillId) && isPositiveInt(p.version) && isInstant(p.enabledAt),
+  ),
+
+  'forge.disabled': forgeRule(
+    ['skillId', 'version', 'disabledAt', 'reason'],
+    (p) =>
+      isEventId(p.skillId) && isPositiveInt(p.version) && isInstant(p.disabledAt) && isBoundedText(p.reason, 400),
+  ),
+
+  'forge.rolledback': forgeRule(
+    ['skillId', 'fromVersion', 'toVersion', 'at'],
+    (p) =>
+      isEventId(p.skillId) &&
+      isPositiveInt(p.fromVersion) &&
+      isPositiveInt(p.toVersion) &&
+      p.toVersion !== p.fromVersion &&
+      isInstant(p.at),
+  ),
+
+  'forge.quarantined': forgeRule(
+    ['skillId', 'version', 'code', 'reason', 'at'],
+    (p) =>
+      isEventId(p.skillId) &&
+      isPositiveInt(p.version) &&
+      isForgeRefusalCode(p.code) &&
+      isBoundedText(p.reason, 400) &&
+      isInstant(p.at),
+  ),
+
+  'forge.degraded': forgeRule(
+    ['skillId', 'version', 'code', 'reason', 'at'],
+    (p) =>
+      isEventId(p.skillId) &&
+      isPositiveInt(p.version) &&
+      isClosedSet(p.code, FORGE_RUN_FAILURE_SET) &&
+      isBoundedText(p.reason, 400) &&
+      isInstant(p.at),
+  ),
+
+  'forge.removed': forgeRule(
+    ['skillId', 'version', 'at', 'reason'],
+    (p) =>
+      isEventId(p.skillId) && isPositiveInt(p.version) && isInstant(p.at) && isBoundedText(p.reason, 400),
+  ),
+
+  'forge.approval.recorded': forgeRule(
+    ['skillId', 'version', 'state', 'decidedBy', 'decidedAt', 'reason'],
+    (p) =>
+      isEventId(p.skillId) &&
+      isPositiveInt(p.version) &&
+      (p.state === 'approved' || p.state === 'refused') &&
+      isPrincipalId(p.decidedBy) &&
+      isInstant(p.decidedAt) &&
+      isBoundedText(p.reason, 400),
+  ),
+
+  /**
+   * A run, started or finished.
+   *
+   * The rules that matter: `running` must have no `finishedAt` and no failure, and
+   * any other state must have both a `finishedAt` and � when it did not succeed �
+   * a closed failure code. So "succeeded with no finish time" is not writable,
+   * which is what stops a fabricated success from being a matter of leaving one
+   * field out.
+   */
+  'forge.run.recorded': forgeRule(
+    [
+      'runId',
+      'skillId',
+      'version',
+      'state',
+      'failure',
+      'startedAt',
+      'finishedAt',
+      'idempotencyKey',
+      'inputHash',
+      'opsUsed',
+      'outputChars',
+      'durationMs',
+      'outputHash',
+    ],
+    (p) => {
+      if (!isClosedSet(p.state, FORGE_RUN_STATE_SET)) return false
+      if (p.state === 'running') {
+        if (p.finishedAt !== null || p.failure !== null) return false
+      } else {
+        if (!isInstant(p.finishedAt)) return false
+        if (p.state === 'succeeded' && p.failure !== null) return false
+        if (p.state !== 'succeeded' && !isClosedSet(p.failure, FORGE_RUN_FAILURE_SET)) return false
+      }
+      return (
+        isEventId(p.runId) &&
+        isEventId(p.skillId) &&
+        isPositiveInt(p.version) &&
+        isInstant(p.startedAt) &&
+        isNullableBoundedRef(p.idempotencyKey) &&
+        isNullableBoundedRef(p.inputHash) &&
+        isNonNegativeInt(p.opsUsed) &&
+        isNonNegativeInt(p.outputChars) &&
+        isNonNegativeInt(p.durationMs) &&
+        isNullableBoundedRef(p.outputHash)
+      )
+    },
+  ),
+
+  'forge.refused': forgeRule(
+    ['code', 'skillId', 'at'],
+    (p) => isForgeRefusalCode(p.code) && isNullableRef(p.skillId) && isInstant(p.at),
+  ),
+
+  'forge.limit.exceeded': forgeRule(
+    ['limit', 'reason'],
+    (p) => isBoundedText(p.limit, 64) && isBoundedText(p.reason, 400),
   ),
 
   /* ------------------------------------------------------------- foundry */
@@ -2273,7 +2570,7 @@ const PAYLOAD_RULES: {
 
   // Metadata only, and the rule is Work's: an undeclared key is refused rather
   // than ignored. The `summary` field is the only human-readable value in the
-  // family, and it is bounded â€” a summary that could hold a paragraph would be
+  // family, and it is bounded — a summary that could hold a paragraph would be
   // a summary that could hold a message body.
   'relay.action.requested': workRule(
     ['actionId', 'connector', 'action', 'risk', 'idempotencyKey', 'summary'],
@@ -2817,7 +3114,7 @@ function isStepSeed(value: unknown): boolean {
  * ## Why only the Work family gets this
  *
  * The other rules read named fields and ignore the rest, which means a hand-edited
- * line *can* carry an extra key past them â€” it simply has nowhere to be read from,
+ * line *can* carry an extra key past them — it simply has nowhere to be read from,
  * so it never reaches a reducer or a projection. That is a real defence, and it is
  * the reason this is not an urgent fix for the existing families.
  *
@@ -2852,7 +3149,7 @@ function workRule(
  *
  * `allowed` is the per-event key list, and it is checked *against* the published
  * table rather than in place of it, so a validator can be neither wider nor narrower
- * than `core/lifeloop/types.ts` â€” the two cannot fall out of step because the rule
+ * than `core/lifeloop/types.ts` — the two cannot fall out of step because the rule
  * refuses any divergence in either direction. On top of that, a payload carrying a
  * key from `FORBIDDEN_PAYLOAD_KEYS` is refused outright: authority is minted by the
  * Guard and the Governor and never by an event, so a payload shaped like a
@@ -2889,7 +3186,7 @@ function lifeLoopRule(
  *   - the forbidden-key check, `FORBIDDEN_ECONOMIC_PAYLOAD_KEYS`, which is the authority
  *     half and the **real-money** half of the same frozen set. A payload naming a broker
  *     is refused here *and* reported by `analyseEconomicAssertions` as a
- *     `noRealMoneyAction` violation — two mechanisms for one promise, because a promise
+ *     `noRealMoneyAction` violation � two mechanisms for one promise, because a promise
  *     enforced in only one place is a policy rather than a guarantee.
  *   - a text ceiling on every string value.
  *
@@ -2919,7 +3216,7 @@ function economicRule(
  *
  * A gate may refuse with a subsystem code (`guard-denied`), with a wake code
  * (`unauthorized-actor`), or record that everything cleared (`all-gates-clear`). A
- * validator that knew only the refusal half would reject the allowed path — which is the
+ * validator that knew only the refusal half would reject the allowed path � which is the
  * worst possible failure for a validator, because it would refuse an honest record and
  * teach somebody to trust the journal less.
  */
@@ -2975,7 +3272,7 @@ function isOptionalBoundedText(value: unknown, max: number): value is string {
  * Needed across the economic family because a durable payload is scalars and `null` is
  * not one of the permitted value types. An empty string is therefore how "this wake
  * names no experiment" and "no wake was in hand when this gate ran" reach the journal,
- * and the alternative — inventing an id — would be worse: a reader could not tell a real
+ * and the alternative � inventing an id � would be worse: a reader could not tell a real
  * reference from a placeholder.
  */
 function isOptionalId(value: unknown): value is string {

@@ -7,6 +7,7 @@ import { initialOfficeState, reduceOfficeState, type OfficeState } from './offic
 import { initialRelayState, reduceRelay, type RelayState } from './relay/state'
 import { initialConnectorState, reduceConnector, type ConnectorFold } from './connectors/state'
 import { initialSkillState, reduceSkillState, type SkillState } from './skills/state'
+import { initialForgeState, reduceForgeState, type ForgeState } from './forge/state'
 
 /**
  * Everything Core knows, derived from durable events.
@@ -99,6 +100,13 @@ export interface CoreState {
    * restart without a second store.
    */
   skills: SkillState
+  /**
+   * Forge's folded state: packages, their versions, lifecycle status, validation
+   * verdicts, approval states, quarantine reasons and run outcomes. Derived from
+   *  orge.* events, so enabled state and run history survive a restart without
+   * a second store.
+   */
+  forge: ForgeState
 }
 
 /** A `core.integrity_fault` as recovered from the journal. */
@@ -124,8 +132,9 @@ export function initialCoreState(): CoreState {
     attention: initialAttentionState(),
     office: initialOfficeState(),
     relay: initialRelayState(),
-connectors: initialConnectorState(),
-skills: initialSkillState(),
+    connectors: initialConnectorState(),
+    skills: initialSkillState(),
+    forge: initialForgeState(),
   }
 }
 
@@ -374,6 +383,13 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
       if (event.type.startsWith('skill.')) {
         const skills = reduceSkillState(state.skills, event)
         return skills === state.skills ? state : { ...state, skills }
+      }
+      // Forge owns its slice for the same reason, and with the same discipline:
+      // the version table, the install/enable separation and the refusal log are
+      // invariants that belong together.
+      if (event.type.startsWith('forge.')) {
+        const forge = reduceForgeState(state.forge, event)
+        return forge === state.forge ? state : { ...state, forge }
       }
       return state
   }

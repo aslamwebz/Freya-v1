@@ -87,7 +87,7 @@ export const KEYRING_VERSION = 1
  * Closed, and the union is the point: adding a domain that quietly reused an
  * existing key would be a much worse mistake than not having the domain.
  */
-export const KEY_DOMAINS = ['conversation', 'brain', 'mission', 'context', 'personality', 'skill', 'vault'] as const
+export const KEY_DOMAINS = ['conversation', 'brain', 'mission', 'context', 'personality', 'skill', 'forge', 'vault'] as const
 
 export type KeyDomain = (typeof KEY_DOMAINS)[number]
 
@@ -123,6 +123,14 @@ export interface Keyring {
   vault: DomainKeyResult
   /** Phase 17's independent secret for stored skill bodies. */
   skill: DomainKeyResult
+  /**
+   * Phase 48's independent secret for stored Forge package bodies.
+   *
+   * Separate from the Skill key on purpose. A Forge body is a *program Freya can
+   * run*, which is a stronger claim than a stored procedure, so it gets its own
+   * secret rather than sharing one with the procedures.
+   */
+  forge: DomainKeyResult
   /**
    * An independent secret.
    *
@@ -163,6 +171,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       vault: { key: null, reason },
       personality: { key: null, reason },
       skill: { key: null, reason },
+      forge: { key: null, reason },
     }
   }
 
@@ -184,6 +193,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       ['vault', randomBytes(KEY_BYTES)],
       ['personality', randomBytes(KEY_BYTES)],
       ['skill', randomBytes(KEY_BYTES)],
+      ['forge', randomBytes(KEY_BYTES)],
     ])
     await writeKeyring(keyringPath, generated)
 
@@ -196,6 +206,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       vault: resultFor(generated.get('vault')!),
       personality: resultFor(generated.get('personality')!),
       skill: resultFor(generated.get('skill')!),
+      forge: resultFor(generated.get('forge')!),
     }
   } catch (error) {
     const reason = error instanceof KeyringFormatError
@@ -210,6 +221,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
       vault: { key: null, reason },
       personality: { key: null, reason },
       skill: { key: null, reason },
+      forge: { key: null, reason },
     }
   }
 }
@@ -231,7 +243,7 @@ export async function loadKeyring(dataPath: string): Promise<Keyring> {
 function keyringResult(path: string, read: (domain: KeyDomain) => DomainKeyResult): Keyring {
   return { keyringPath: path, conversation: read('conversation'), brain: read('brain'),
     mission: read('mission'), context: read('context'), vault: read('vault'),
-    personality: read('personality'), skill: read('skill') }
+    personality: read('personality'), skill: read('skill'), forge: read('forge') }
 }
 
 async function withMissingDomains(path: string, file: KeyringFile): Promise<Keyring> {
@@ -410,6 +422,7 @@ function describeDomain(domain: KeyDomain): string {
   if (domain === 'context') return 'Context'
   if (domain === 'personality') return 'what Freya has recorded about you'
   if (domain === 'skill') return 'stored skill procedures'
+  if (domain === 'forge') return 'stored Forge package programs'
   if (domain === 'vault') return 'the encrypted Vault'
   return 'conversation history'
 }

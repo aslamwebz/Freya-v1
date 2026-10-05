@@ -152,6 +152,16 @@ import {
 } from './world'
 import { SkillEngine, type SkillOwnerScope } from './skills/engine'
 import { SkillPersistenceRuntime } from './skillsPersistence'
+import { ForgePersistenceRuntime } from './forgePersistence'
+import { ForgeEngine, type ForgeCapabilityPort, type ForgeOwnerScope } from './forge/engine'
+import { isForgeRuntimeKind, type ForgeOrigin, type ForgeRefusalCode } from './forge/types'
+import {
+  ABSENT_FORGE_PROJECTION,
+  FORGE_NO_PAYLOAD,
+  NO_FORGE_DOMAIN_REASON,
+  type ForgeCommandOutcome,
+  type ForgeProjection,
+} from './protocol/forge'
 import type { SkillExecutionPort } from './skills/execution'
 import { OWNER_SUBMITTABLE_EVIDENCE_KINDS } from './skills/evaluation'
 import {
@@ -440,6 +450,14 @@ export interface CoreOptions {
    * process-only Skill storage; never plaintext fallback.
    */
   skillKey?: Uint8Array | null
+  /**
+   * Forge's independent encrypted persistence key, from the keyring.
+   *
+   * Its own domain label, its own file and its own key: a Forge store cannot
+   * open the Skill store even when handed the same bytes, because the AAD prefix
+   * differs by domain. Null means explicit process-only storage; never plaintext.
+   */
+  forgeKey?: Uint8Array | null
   /**
    * Personality's own independent secure key, from the keyring.
    *
@@ -1012,6 +1030,20 @@ attentionTick(now?: Date): Promise<number>
   /** Subscribe to the Skills projection. Same mirror semantics as the others. */
   onSkills(listener: (projection: SkillProjection) => void): () => void
   /**
+   * Core's account of Forge: generated and acquired packages, their lifecycle
+   * status, validation verdicts, approval state, quarantine reasons and last runs.
+   *
+   * Read-only, and the shape of the read is the whole policy. A package's program
+   * and description are not fields of the projection: they cross only through an
+   * explicit  orge.detail.read for one package, to the owner. The projection also
+   * carries untimeNotice, which states what the runtime cannot do, because a
+   * generated package that cannot reach the filesystem is a fact a person needs
+   * rather than a surprise.
+   */
+  forge(): ForgeProjection
+  /** Subscribe to the Forge projection. Same mirror semantics as the others. */
+  onForge(listener: (projection: ForgeProjection) => void): () => void
+  /**
    * Core's account of its own life history: episodes, milestones, periods and
    * themes as metadata, and whether they survive a restart.
    *
@@ -1259,6 +1291,10 @@ class FreyaCore implements Core {
    */
   private skillEngine: SkillEngine | undefined
   private skillPersistence: SkillPersistenceRuntime | undefined
+  /** The Phase 48 Forge domain: candidates, validation, install, enable and bounded runs. */
+  private forgeEngine: ForgeEngine | undefined
+  private forgePersistence: ForgePersistenceRuntime | undefined
+  private readonly forgeListeners = new Set<(projection: ForgeProjection) => void>()
   /**
    * The Phase 22 Self & World engine, built and owned by Core.
    *
@@ -1641,6 +1677,7 @@ class FreyaCore implements Core {
       // idempotent, so a replayed event cannot duplicate an entry.
       if (!event.type.startsWith('life.')) void this.lifeEngine?.observe(event)
       if (event.type.startsWith('foundry.')) this.publishFoundry()
+      if (event.type.startsWith('forge.')) this.publishForge()
       this.notify()
     })
 
@@ -2106,6 +2143,29 @@ class FreyaCore implements Core {
     })
     await this.skillEngine.open(recoveredSkills)
 
+    /**
+     * The Phase 48 Forge, built after Skills and Work because it reads both.
+     *
+     * Three seams are wired, and each one is a limit rather than a convenience:
+     *
+     * - **The capability port** answers two questions and grants nothing:
+     *   isRegistered (does any registered Work capability need this Guard
+     *   capability?) and holds (does the owner hold it *right now*). Forge has no
+     *   grant method and no authority object, so installing a package cannot widen
+     *   anything.
+     * - **The body store** is recovered before the engine adopts anything, and
+     *   adoption is filtered by the fold *and* by the recorded hash, so an edited
+     *   store cannot introduce a package Core never recorded, nor run one whose bytes
+     *   changed.
+     * - **STOP ALL** is passed as a fresh read, so a panic button stops Forge in the
+     *   same turn it stops everything else.
+     *
+     * Nothing here burns a model call, and nothing here is reachable from a renderer
+     * except through the  orge.* commands, each of which routes through Guard and the
+     * engine's own pipeline.
+     */
+    await this.buildForge()
+
     // The Phase 22 world. Built after the domains it reads, because it borrows a
     // narrow port from each of them rather than a copy of any of them, and after the
     // gateway because the self model reports which provider *would* answer.
@@ -2358,6 +2418,7 @@ class FreyaCore implements Core {
       // landed after its own journal event would be a record of something the log
       // says never happened. Ordered before the fabric closes for that reason.
       await this.skillPersistence?.close()
+    await this.forgePersistence?.close()
       await this.conversationStore?.close()
       await this.fabric?.close()
       this.notify()
@@ -3272,6 +3333,184 @@ class FreyaCore implements Core {
     }
   }
 
+  /* ------------------------------------------------------------------ forge */
+
+  /**
+   * Core's Forge projection.
+   *
+   * `unavailable` with `NO_FORGE_DOMAIN_REASON` when no Forge has been built, so a
+   * window cannot render "Freya has no generated skills" in a build that never
+   * offered her the chance.
+   */
+  forge(): ForgeProjection {
+    if (this.forgeEngine === undefined) {
+      return { ...ABSENT_FORGE_PROJECTION, reason: NO_FORGE_DOMAIN_REASON }
+    }
+    try {
+      return this.forgeEngine.projection()
+    } catch (error) {
+      return {
+        ...ABSENT_FORGE_PROJECTION,
+        reason: `the Forge domain could not be read: ${describe(error)}`,
+      }
+    }
+  }
+
+  onForge(listener: (projection: ForgeProjection) => void): () => void {
+    this.forgeListeners.add(listener)
+    try {
+      listener(this.forge())
+    } catch (error) {
+      console.error('[freya.core] Forge subscriber threw', error)
+      this.forgeListeners.delete(listener)
+    }
+    return () => {
+      this.forgeListeners.delete(listener)
+    }
+  }
+
+  private publishForge(): void {
+    // Deliberately *not* folded into publishSkills. A package appearing is not a
+    // procedure appearing, and a reader who saw one projection move because the
+    // other did would have learned to distrust both.
+    if (this.forgeListeners.size === 0) return
+    const projection = this.forge()
+    for (const listener of [...this.forgeListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Forge listener threw', error)
+        this.forgeListeners.delete(listener)
+      }
+    }
+  }
+
+  private requireForge(): ForgeEngine {
+    if (this.forgeEngine === undefined) {
+      throw new Error('the Forge engine is not available')
+    }
+    return this.forgeEngine
+  }
+
+  /**
+   * The owner's face of Forge. Issued here, absent from every interface a window can
+   * name, and carrying no capability that grants, approves or self-modifies.
+   */
+  private issueForgeOwnerScope(): ForgeOwnerScope {
+    return this.requireForge().ownerScope()
+  }
+
+  private forgeResult(requestId: string, outcome: ForgeCommandOutcome): CoreCommandResult {
+    if (!outcome.ok) {
+      return {
+        requestId,
+        ok: false,
+        refusal: { reason: outcome.reason ?? 'the Forge command was refused' },
+        forge: outcome,
+      }
+    }
+    return {
+      requestId,
+      ok: true,
+      status: this.status(),
+      forge: outcome,
+    }
+  }
+
+  private forgeRefusal(
+    requestId: string,
+    operation: ForgeCommandOutcome['operation'],
+    code: ForgeRefusalCode,
+    reason: string,
+  ): CoreCommandResult {
+    return {
+      requestId,
+      ok: false,
+      refusal: { reason },
+      forge: { operation, ok: false, code, reason },
+    }
+  }
+
+  /**
+   * The capability port Forge reads.
+   *
+   * `isRegistered` is the same question Skill admission asks � does any registered
+   * Work capability need this Guard capability � so a package can only declare
+   * something this Core could actually execute. `holds` is Guard's answer for the
+   * owner principal, read fresh on every run.
+   */
+  private forgeCapabilities(): ForgeCapabilityPort {
+    const registry = this.workRegistry
+    return {
+      isRegistered: (capability) => {
+        if (registry === undefined) return false
+        for (const name of registry.names()) {
+          const registered = registry.capability(name)
+          if (registered !== undefined && registered.capability === capability) return true
+        }
+        return false
+      },
+      holds: (capability) => this.guard.holds(this.owner, capability),
+    }
+  }
+
+  /**
+   * Recover the encrypted Forge store, or degrade in words.
+   *
+   * Same discipline as the Skill store and the same reason: a damaged store must not
+   * be silently replaced by an ephemeral one, because that would report "nothing is
+   * remembered" when the truth is "the file is damaged and Freya stopped trusting
+   * it". So the runtime records a fault, the projection reports `durable: false`
+   * with the reason, and no body is adopted � which means a package Core cannot read
+   * is a package that cannot run.
+   */
+private async buildForge(): Promise<void> {
+    try {
+      const opened = await ForgePersistenceRuntime.open({
+        path: `${this.options.dataPath}.forge.enc`,
+        key: this.options.forgeKey ?? null,
+        onHealthChange: () => this.publishForge(),
+      })
+      this.forgePersistence = opened.runtime
+      this.forgeEngine = new ForgeEngine({
+        fabric: this.fabric,
+        getState: () => this.state.forge,
+        actor: this.owner.id,
+        capabilities: this.forgeCapabilities(),
+        store: {
+          // The bodies read at start are handed over once. The engine still re-filters
+          // every one of them against the fold *and* its recorded hash before adopting
+          // it, so a file that survived the store's own authentication and still
+          // disagrees with the journal is dropped rather than run.
+          load: async () => opened.packages,
+          commit: (packages) => opened.runtime.commit(packages),
+          health: () => opened.runtime.health(),
+        },
+        now: this.options.now,
+        newId: this.options.newId,
+        onChange: () => this.publishForge(),
+        stopAll: () => this.state.stopAll.active,
+      })
+      await this.forgeEngine.open()
+    } catch (error) {
+      console.error('[freya.core] encrypted Forge store unavailable', describe(error))
+      this.forgePersistence = undefined
+      // A Forge with no store still works, and says so: bodies live in this process
+      // and the projection reports `durable: false` rather than pretending otherwise.
+      this.forgeEngine = new ForgeEngine({
+        fabric: this.fabric,
+        getState: () => this.state.forge,
+        actor: this.owner.id,
+        capabilities: this.forgeCapabilities(),
+        store: null,
+        now: this.options.now,
+        newId: this.options.newId,
+        onChange: () => this.publishForge(),
+        stopAll: () => this.state.stopAll.active,
+      })
+      await this.forgeEngine.open()
+    }
+  }
   private publishSkills(): void {
     // Every subsystem that can move the snapshot does, through this one call.
     // The conscious context is derived from all of them, so a change to any one
@@ -7906,6 +8145,217 @@ class FreyaCore implements Core {
           return { requestId, ok: true, status: this.status(), skill: { operation: 'detail', ok: true, detail } }
         }
 
+        /* -------------------------------------------------------------- forge */
+        //
+        // Phase 48. One read and eleven owner acts over generated and acquired
+        // packages.
+        //
+        // Every mutating case evaluates `skill.manage` through Guard first and
+        // records the decision, so a refusal appears in the audit stream rather than
+        // only in the caller's return value. None of them writes a status, a verdict
+        // or a threshold: `forge.validate` returns whatever the *pipeline* concluded
+        // about the candidate's own bytes, and there is no payload that can assert a
+        // verdict instead.
+        //
+        // Two absences are structural rather than omitted on purpose:
+        //   - there is no command that installs and enables at once, and no flag that
+        //     means "and turn it on";
+        //   - there is no command that grants a capability, approves an approval, or
+        //     writes to Core. Enabling re-checks the declared capabilities against
+        //     what the owner already holds, at run time.
+
+        case 'forge.status.read': {
+          // Argument-free by construction, for the same reason `skill.status.read` is:
+          // a window that could filter this read would be querying the catalog.
+          if (carriesFields(envelope.payload)) {
+            const refusal = FORGE_NO_PAYLOAD
+            return this.forgeRefusal(requestId, 'refused', 'no-payload', refusal)
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            forge: { operation: 'status', ok: true, projection: this.forge() },
+          }
+        }
+
+        case 'forge.generate': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          if (this.requireForge() === undefined) {
+            return this.forgeRefusal(requestId, 'refused', 'unsupported-runtime', 'this Core has no Forge domain')
+          }
+          const payload = (envelope.payload ?? {}) as Record<string, unknown>
+          // The origin is Core's decision about *which pathway* the request arrived
+          // through, not something a payload may declare: a window that could say
+          // `forge-generated` about its own text could launder a model-authored
+          // package as a locally-authored one.
+          const origin: ForgeOrigin = 'owner-authored'
+          return this.forgeResult(
+            requestId,
+            await this.issueForgeOwnerScope().generate({
+              payload,
+              origin,
+              model: null,
+              requestHash: null,
+              originRef: readString(payload, 'originRef') ?? null,
+            }),
+          )
+        }
+
+        case 'forge.validate': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'validated', 'no-such-package', 'skill id is missing')
+          return this.forgeResult(requestId, await this.issueForgeOwnerScope().validate(skillId))
+        }
+
+        case 'forge.install': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'installed', 'no-such-package', 'skill id is missing')
+          return this.forgeResult(
+            requestId,
+            await this.issueForgeOwnerScope().install(skillId, {
+              allowDowngrade: readBooleanField(envelope.payload, 'allowDowngrade') === true,
+            }),
+          )
+        }
+
+        case 'forge.enable': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'enabled', 'no-such-package', 'skill id is missing')
+          return this.forgeResult(requestId, await this.issueForgeOwnerScope().enable(skillId))
+        }
+
+        case 'forge.disable': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'disabled', 'no-such-package', 'skill id is missing')
+          return this.forgeResult(
+            requestId,
+            await this.issueForgeOwnerScope().disable(skillId, readString(envelope.payload, 'reason') ?? undefined),
+          )
+        }
+
+case 'forge.run': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'run', 'no-such-package', 'skill id is missing')
+          // The command's own fields are removed rather than copied: a payload that
+          // kept `skillId` would be refused by the package's input schema for
+          // carrying a field its contract does not declare, which is correct and
+          // unhelpful here.
+          const payload = { ...((envelope.payload ?? {}) as Record<string, unknown>) }
+          delete payload.skillId
+          delete payload.idempotencyKey
+          delete payload.reason
+          delete payload.allowDowngrade
+          return this.forgeResult(
+            requestId,
+            await this.issueForgeOwnerScope().run({
+              skillId,
+              input: payload,
+              idempotencyKey: readString(envelope.payload, 'idempotencyKey') ?? null,
+            }),
+          )
+        }
+
+        case 'forge.rollback': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          const version = readNumber(envelope.payload, 'version')
+          if (skillId === null) return this.forgeRefusal(requestId, 'rolledback', 'no-such-package', 'skill id is missing')
+          if (version === null) {
+            return this.forgeRefusal(requestId, 'rolledback', 'no-such-version', 'a rollback names the version it returns to')
+          }
+          return this.forgeResult(requestId, await this.issueForgeOwnerScope().rollback(skillId, version))
+        }
+
+        case 'forge.remove': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'removed', 'no-such-package', 'skill id is missing')
+          const version = readNumber(envelope.payload, 'version')
+          return this.forgeResult(requestId, await this.issueForgeOwnerScope().remove(skillId, version ?? undefined))
+        }
+
+        case 'forge.approve': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          const decision = readString(envelope.payload, 'decision')
+          if (skillId === null) return this.forgeRefusal(requestId, 'approved', 'no-such-package', 'skill id is missing')
+          if (decision !== 'approved' && decision !== 'refused') {
+            return this.forgeRefusal(requestId, 'approved', 'malformed-command', 'an approval is approved or refused')
+          }
+          return this.forgeResult(
+            requestId,
+            await this.issueForgeOwnerScope().approve(
+              skillId,
+              decision,
+              readString(envelope.payload, 'reason') ?? undefined,
+            ),
+          )
+        }
+
+        case 'forge.search': {
+          // A read over already-authorised state, so no Guard evaluation: nothing is
+          // decided here, and it costs zero model calls because it is lexical.
+          const payload = (envelope.payload ?? {}) as Record<string, unknown>
+          const runtime = readString(payload, 'runtime')
+          if (runtime !== null && !isForgeRuntimeKind(runtime)) {
+            return this.forgeRefusal(requestId, 'search', 'unknown-runtime', 'that is not a runtime this Core knows')
+          }
+          const found = this.requireForge().discover({
+            query: readString(payload, 'query'),
+            tags: readStringArray(payload, 'tags'),
+            capability: readString(payload, 'capability'),
+            runtime,
+            includeUnavailable: readBooleanField(payload, 'includeUnavailable') === true,
+            limit: readNumber(payload, 'limit'),
+          })
+          return {
+            requestId,
+            ok: found.ok,
+            status: this.status(),
+            forge: { operation: 'search', ok: found.ok, search: found.report, ...(found.projection === undefined ? {} : { projection: found.projection }) },
+          }
+        }
+
+        case 'forge.export': {
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'detail', 'no-such-package', 'skill id is missing')
+          const outcome = this.issueForgeOwnerScope().exportPackage(skillId)
+          return this.forgeResult(requestId, outcome)
+        }
+
+        case 'forge.detail.read': {
+          // The single command in this family that carries a body across the bridge,
+          // and it takes one id. There is deliberately no command that lists every
+          // program: a standing feed would defeat the encryption the store exists to
+          // provide.
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'detail', 'no-such-package', 'skill id is missing')
+          const detail = this.issueForgeOwnerScope().detail(skillId)
+          if (detail === null) {
+            return this.forgeRefusal(
+              requestId,
+              'detail',
+              'no-such-version',
+              'there is no such package, or its body could not be read at this version',
+            )
+          }
+          return { requestId, ok: true, status: this.status(), forge: { operation: 'detail', ok: true, detail } }
+        }
         /* ------------------------------------------------------ world & self */
         //
         // Phase 22. Five reads and two owner acts.

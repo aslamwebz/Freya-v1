@@ -11,6 +11,7 @@ import type { WorkforceProjection, WorkforceSource } from '../core/protocol/work
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import type { SkillProjection } from '../core/protocol/skills'
+import type { ForgeProjection } from '../core/protocol/forge'
 import type { LifeProjection } from '../core/protocol/life'
 import type { WorldSummaryView } from '../core/protocol/world'
 import type { ConsciousContextProjection } from '../core/protocol/consciousness'
@@ -387,6 +388,15 @@ onConversation(send: (projection: ConversationProjection) => void): () => void
   onSkills(send: (projection: SkillProjection) => void): () => void
   skills(): SkillProjection | null
   /**
+   * Attach to the Forge projection. Returns a disposer.
+   *
+   * A projection mirror and nothing else: no authority, no engine handle and no
+   * method that takes an instruction. Mutating Forge work goes through Core's own
+   *  orge.* commands, behind Guard.
+   */
+  onForge(send: (projection: ForgeProjection) => void): () => void
+  forge(): ForgeProjection | null
+  /**
    * Attach to the Life History projection. Returns a disposer.
    *
    * Its own channel like every other subsystem's, and the note that matters is
@@ -569,6 +579,15 @@ export interface CoreHostOptions {
   personalityKey?: Uint8Array | null
   /** Skills' independent encrypted persistence key. */
   skillKey?: Uint8Array | null
+  /**
+   * Forge's independent encrypted persistence key, from the keyring.
+   *
+   * A separate key from every other domain on purpose: a Forge package body is a
+   * program Freya can run, and a store that could be opened with the Skill key could
+   * be moved between domains by anyone holding either one. Null means Core falls
+   * back to process-only storage and *reports* durable: false � never plaintext.
+   */
+  forgeKey?: Uint8Array | null
   /** Canonical Core-private SQLCipher Vault. Never accepted from a renderer. */
   vault?: CoreOptions['vault']
   /** Explicit main-process opt-in; never accepted from a renderer. */
@@ -703,6 +722,8 @@ export class ElectronCoreHost implements CoreHost {
   private readonly lifeWindows = new Set<(projection: LifeProjection) => void>()
   private readonly worldWindows = new Set<(projection: WorldSummaryView) => void>()
   private readonly foundryWindows = new Set<(projection: FoundryProjection) => void>()
+  /** Windows following the Forge projection. Cleared when a window goes away. */
+  private readonly forgeWindows = new Set<(projection: ForgeProjection) => void>()
   private readonly officeWindows = new Set<(projection: OfficeProjection) => void>()
   private readonly relayWindows = new Set<(projection: RelayProjection) => void>()
   private readonly connectorWindows = new Set<(projection: ConnectorProjection) => void>()
@@ -1064,6 +1085,7 @@ export class ElectronCoreHost implements CoreHost {
       core.onRelay((projection) => this.broadcastRelay(projection))
       core.onConnectors((projection) => this.broadcastConnectors(projection))
       core.onSkills((projection) => this.broadcastSkills(projection))
+      core.onForge((projection) => this.broadcastForge(projection))
       core.onLife((projection) => this.broadcastLife(projection))
       core.onWorld((projection) => this.broadcastWorld(projection))
       core.onConsciousness((projection) => this.broadcastConsciousness(projection))
@@ -1503,6 +1525,43 @@ export class ElectronCoreHost implements CoreHost {
 
   skills(): SkillProjection | null {
     return this.core?.skills() ?? null
+  }
+
+  /**
+   * Attach to the Forge projection, pushed immediately.
+   *
+   * Null before Core has started, so a host with nothing to report says nothing
+   * rather than manufacturing an empty catalog.
+   */
+  onForge(send: (projection: ForgeProjection) => void): () => void {
+    this.forgeWindows.add(send)
+    const projection = this.forge()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Forge push threw', error)
+        this.forgeWindows.delete(send)
+      }
+    }
+    return () => {
+      this.forgeWindows.delete(send)
+    }
+  }
+
+  forge(): ForgeProjection | null {
+    return this.core?.forge() ?? null
+  }
+
+  private broadcastForge(projection: ForgeProjection): void {
+    for (const send of [...this.forgeWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Forge push threw', error)
+        this.forgeWindows.delete(send)
+      }
+    }
   }
 
   /**

@@ -23,6 +23,7 @@ import type { PersonalityProjection } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import { ATTENTION_NO_PAYLOAD } from '../core/protocol/attention'
 import type { FoundryProjection } from '../core/protocol/foundry'
+import type { ForgeProjection } from '../core/protocol/forge'
 import { FOUNDRY_NO_PAYLOAD } from '../core/protocol/foundry'
 import { ATTENTION_LIMITS } from '../core/attention/types'
 import type { RelayProjection } from '../core/protocol/relay'
@@ -581,6 +582,25 @@ const api = {
   coreSkills: (): Promise<SkillProjection | null> =>
     ipcRenderer.invoke('freya:core:skills'),
 
+  /**
+   * The Forge projection, read-only.
+   *
+   * One method and one subscription, for the same reason the Skills bridge has one:
+   * every mutating Forge act is a  orge.* command through submit, so the bridge
+   * cannot become a second admission door for a package body. No
+   * onCoreForgeWrite, no coreForgeGenerate, no method that takes a manifest.
+   */
+  coreForge: (): Promise<ForgeProjection | null> => ipcRenderer.invoke('freya:core:forge'),
+
+  onCoreForge: (handler: (projection: ForgeProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: ForgeProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:forge', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:forge', listener)
+    }
+  },
+
   onCoreSkills: (handler: (projection: SkillProjection) => void): (() => void) => {
     const listener = (_event: unknown, projection: SkillProjection): void =>
       handler(projection)
@@ -813,6 +833,24 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'skill.proposal.settle',
   'skill.select',
   'skill.detail.read',
+  // Forge. Every owner act over generated packages, and **none of the verbs that
+  // would let a window assert trust**: there is no  orge.setStatus,
+  //  orge.setVerified,  orge.setEnabled,  orge.grant, or anything that writes a
+  // package into Core. Status comes from the pipeline; enabling re-checks what the
+  // owner already holds.
+  'forge.status.read',
+  'forge.generate',
+  'forge.validate',
+  'forge.install',
+  'forge.enable',
+  'forge.disable',
+  'forge.run',
+  'forge.rollback',
+  'forge.remove',
+  'forge.approve',
+  'forge.search',
+  'forge.export',
+  'forge.detail.read',
   'relay.status.read',
   'relay.email.read',
   'relay.email.draft.create',

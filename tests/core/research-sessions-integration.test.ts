@@ -166,7 +166,9 @@ describe("Freya's Eye Core integration", () => {
 
     const sessions = await command('research.session.list')
     expect(sessions.research.sessions).toHaveLength(1)
-    expect(sessions.research.sessions[0].sessionId).toBe(id)
+    const onlySession = sessions.research.sessions[0]
+    if (!onlySession) throw new Error('expected the active Eye session to be listed')
+    expect(onlySession.sessionId).toBe(id)
   })
 
   it('returns ambiguity rather than silently changing intent for an unclear short follow-up', async () => {

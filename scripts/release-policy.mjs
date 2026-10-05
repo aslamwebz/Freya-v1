@@ -24,13 +24,14 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // the Phase 42 Device Hands seam and so lands in the main process rather than in a
   // separate bundle. Phase 50 then added persistent Eye sessions and bounded parallel
   // Deep Research. Phase 44 adds the connector engine/runtime and host composition;
-  // CI measures the reconciled main.cjs at 2,237,259 bytes. Keep only narrow,
-  // explicit headroom over that measured artifact rather than absorbing future growth.
-  mainBytes: 2_250_000,
+  // CI measured Phase 44 at 2,237,259 bytes; after the final Phase 45 Voice API
+  // migration and Phase 46 Memory Identity composition, main.cjs is 2,312,063 bytes.
+  // Keep only narrow explicit headroom over that measured artifact.
+  mainBytes: 2_325_000,
   // Phase 44 adds connector projection/commands to the preload bridge, and
-  // Phase 45 adds the bounded Voice command/capability/playback channel. The
-  // completed Voice branch measured the combined preload near this ceiling.
-  preloadBytes: 135_000,
+  // Phase 45 adds the bounded Voice command/capability/playback channel. CI measures
+  // the reconciled preload at 139,620 bytes, so retain only narrow explicit headroom.
+  preloadBytes: 142_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,
   // Phase 19 added the ui-v2 shell: a finished design with ~1.9MB of webp imagery and

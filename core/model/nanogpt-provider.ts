@@ -1,9 +1,13 @@
 import {
   throwIfAborted,
   ModelRequestCancelled,
+  validateModelAttachments,
+  type ModelAttachment,
   type ModelCallOptions,
   type ModelCatalogEntry,
   type ModelCatalogOptions,
+  type ModelMessage,
+  type ModelMessageRole,
   type ModelProvider,
   type ModelRequest,
   type ModelResult,
@@ -96,6 +100,216 @@ const MAX_CATALOG_ENTRIES = 2_000
 
 /** Model ids that are not this shape are refused rather than rendered. */
 const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$/
+
+/**
+ * How much of a provider error body reaches the thrown error.
+ *
+ * The server's own diagnostic is the useful part — `"This model only supports
+ * tool_choice=\"auto\""` names the fix, and `code`/`param` name the field. But
+ * the body is remote input, it may echo the request back, and it may be long
+ * enough to drown the status line it is attached to. 300 characters is enough
+ * for a sentence and a code and nowhere near enough to carry a payload back out.
+ */
+const MAX_ERROR_DETAIL_CHARS = 300
+
+/**
+ * A non-2xx chat completion, with the server's own explanation attached.
+ *
+ * Structured rather than interpolated into a bare `Error` because `code` and
+ * `param` are what make an upstream failure actionable — "invalid_image_input"
+ * on `messages` is a fact, while "nanogpt responded 400" is a rumour.
+ */
+export class NanoGptResponseError extends Error {
+  readonly status: number
+  /** The server's `error.code`, when it sent one. */
+  readonly code: string | null
+  /** The server's `error.param` — the field it objected to. */
+  readonly param: string | null
+
+  constructor(status: number, message: string, code: string | null, param: string | null) {
+    super(message)
+    this.name = 'NanoGptResponseError'
+    this.status = status
+    this.code = code
+    this.param = param
+  }
+}
+
+/**
+ * Pull `error.message`, `error.code` and `error.param` out of a failed response.
+ *
+ * This is a debuggability fix, not a formatting one. The endpoint answers, for
+ * example, `{"error":{"message":"This model only supports tool_choice=\"auto\"...",
+ * "code":"unsupported_parameter","param":"tool_choice"}}` and
+ * `{"error":{"message":"Invalid image input...","code":"invalid_image_input","param":"messages"}}`
+ * — and every one of those was being discarded in favour of `responded 400`,
+ * which is the same answer for an exhausted balance, a bad key, a bad model, and
+ * an image the model cannot see.
+ *
+ * The body is remote input, so it is not trusted beyond being text:
+ *
+ *   - only `error.message`, `error.code` and `error.param` are read. Nothing
+ *     else in the body is surfaced, so a body that echoes the request back
+ *     contributes nothing;
+ *   - response headers are never read for this, so there is no header echo;
+ *   - the configured API key is redacted wherever it appears, and so is any
+ *     `Bearer <token>` in case the server reflects one back;
+ *   - control characters are stripped and the result is truncated, so a
+ *     hostile body cannot forge log lines or smuggle megabytes into a message
+ *     that ends up in a turn record.
+ *
+ * Returns `null` when there is nothing usable to add, in which case the thrown
+ * error stays exactly the status line it has always been.
+ */
+function describeProviderError(body: unknown, apiKey: string): { message: string; code: string | null; param: string | null } | null {
+  if (typeof body !== 'object' || body === null) return null
+  const error = (body as { error?: unknown }).error
+
+  /**
+   * OpenAI-compatible errors nest under `error`; some gateways answer with a
+   * bare `{"message": ...}` or a bare string. Read the nested shape first and
+   * fall back rather than reporting nothing for a body that did explain itself.
+   */
+  const record: Record<string, unknown> =
+    typeof error === 'object' && error !== null
+      ? (error as Record<string, unknown>)
+      : typeof error === 'string'
+        ? { message: error }
+        : typeof body === 'object' && typeof (body as { message?: unknown }).message === 'string'
+          ? (body as Record<string, unknown>)
+          : {}
+
+  const message = sanitiseErrorField(record['message'], apiKey)
+  const code = sanitiseErrorField(record['code'], apiKey)
+  const param = sanitiseErrorField(record['param'], apiKey)
+  if (message === null && code === null && param === null) return null
+
+  const detail = message ?? code ?? param ?? 'no detail'
+  const qualifiers = [
+    code === null ? null : `code=${code}`,
+    param === null ? null : `param=${param}`,
+  ].filter((value): value is string => value !== null)
+
+  return {
+    message: qualifiers.length === 0 ? detail : `${detail} (${qualifiers.join(', ')})`,
+    code,
+    param,
+  }
+}
+
+/** Reduce one remote field to a short, single-line, secret-free string. Or null. */
+function sanitiseErrorField(value: unknown, apiKey: string): string | null {
+  if (typeof value !== 'string') return null
+  let text = value
+  // The key first: it is the one thing that must never leave this function, and
+  // redacting it before anything else means no later transformation can undo it.
+  if (apiKey !== '') text = text.split(apiKey).join('[redacted]')
+  // A reflected bearer token is a credential whether or not it is ours.
+  text = text.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{4,}/gi, 'Bearer [redacted]')
+// Control characters would let a remote body forge a line in a log or a record.
+  text = stripControlCharacters(text)
+  if (text === '') return null
+  return text.length > MAX_ERROR_DETAIL_CHARS
+    ? `${text.slice(0, MAX_ERROR_DETAIL_CHARS)}…`
+    : text
+}
+
+/**
+ * Flatten a remote field to one line: every C0 control and DEL becomes a space.
+ *
+ * Written as a scan rather than a `/[\u0000-\u001f\u007f]/g` because a regular
+ * expression built from control ranges is exactly the kind of thing a linter
+ * rightly refuses to let through unreviewed, and "which characters count as
+ * control" deserves to be stated as code rather than as a character class
+ * someone has to decode to check.
+ */
+function stripControlCharacters(text: string): string {
+  let out = ''
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0
+    out += code < 0x20 || code === 0x7f ? ' ' : character
+  }
+  return out.trim()
+}
+
+/**
+ * Read a failed response's body without ever letting that read become the error.
+ *
+ * The body is parsed as JSON rather than read as text so that a transport which
+ * only implements `json()` — which is every fake in this suite, deliberately — is
+ * handled the same as a real `Response`. A body that is not JSON, or a read that
+ * fails, yields `null` and the caller keeps the status-only message it had
+ * before.
+ */
+async function readErrorBody(response: Response): Promise<unknown> {
+  try {
+    return (await response.json()) as unknown
+  } catch {
+    return null
+  }
+}
+
+/**
+ * One chat message as this API expects it.
+ *
+ * `content` is either a bare string or the OpenAI content-parts array. Which one
+ * it is depends entirely on the message: a message with no attachments keeps the
+ * string it has always sent, and only a message that actually carries a payload
+ * becomes an array. That is the whole of the compatibility story — text-only
+ * request bodies are byte-for-byte what they were before images existed, so no
+ * existing assertion about a request has moved.
+ */
+type OpenAiContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'file'; file: { filename: string; file_data: string } }
+
+/**
+ * Serialise one compiled turn.
+ *
+ * Validation happens here, at the boundary that builds a request body, so a
+ * malformed attachment is refused before anything is spent and is reported as
+ * what it is rather than as an opaque HTTP 400 from the endpoint.
+ */
+function serialiseMessage(message: ModelMessage): { role: ModelMessageRole; content: string | OpenAiContentPart[] } {
+  const attachments = validateModelAttachments(message.attachments)
+  // The overwhelmingly common case, and the one every existing test asserts on:
+  // a string, not a one-element array. Wrapping it would change every request
+  // body in the suite for no benefit the endpoint offers.
+  if (attachments.length === 0) return { role: message.role, content: message.content }
+
+  const parts: OpenAiContentPart[] = []
+  // An empty string is omitted rather than sent as an empty text part, so an
+  // attachment-only turn is a clean single-part array.
+  if (message.content !== '') parts.push({ type: 'text', text: message.content })
+  for (const attachment of attachments) parts.push(toContentPart(attachment))
+  return { role: message.role, content: parts }
+}
+
+/**
+ * One attachment as one content part.
+ *
+ * The shapes are the ones verified against this endpoint: images as
+ * `image_url` with a base64 data URL, documents as `file` with `file_data`. A
+ * PDF is *not* sent as an `image_url` data URL — that is rejected with
+ * `invalid_image_input` — and not every model accepts the `file` part at all, so
+ * a model that cannot read one still refuses it server-side with its own
+ * explanation rather than being handed something it will misparse.
+ */
+function toContentPart(attachment: ModelAttachment): OpenAiContentPart {
+  return attachment.type === 'image'
+    ? {
+        type: 'image_url',
+        image_url: { url: `data:${attachment.mimeType};base64,${attachment.data}` },
+      }
+    : {
+        type: 'file',
+        file: {
+          filename: attachment.filename,
+          file_data: `data:${attachment.mimeType};base64,${attachment.data}`,
+        },
+      }
+}
 
 export interface NanoGptProviderOptions {
   config: NanoGptConfig | null
@@ -360,17 +574,31 @@ export class NanoGptProvider implements ModelProvider {
           // The compiled packet, sent as the structured turns it is. Identity
           // arrives as a system message, history as user/assistant turns, and
           // this provider has no idea any of it was assembled by Freya.
-          messages: request.messages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
+          //
+          // No key is added here, and none is removed: a text-only turn produces
+          // exactly the object it produced before attachments existed.
+          messages: request.messages.map(serialiseMessage),
         }),
       })
 
       if (cancelled !== null) throw cancelled
       if (!response.ok) {
-        // The status is safe to record; the body may echo the request.
-        throw new Error(`nanogpt responded ${response.status}`)
+        // The server's own explanation, bounded and stripped of anything that
+        // looks like a credential. `responded 400` alone was the same string for
+        // a bad key, a bad model, an exhausted balance, and an image this model
+        // cannot see — which is to say, for every failure worth diagnosing.
+        const detail = describeProviderError(
+          await readErrorBody(response),
+          this.config.apiKey,
+        )
+        throw new NanoGptResponseError(
+          response.status,
+          detail === null
+            ? `nanogpt responded ${response.status}`
+            : `nanogpt responded ${response.status}: ${detail.message}`,
+          detail?.code ?? null,
+          detail?.param ?? null,
+        )
       }
 
       const body = (await response.json()) as {

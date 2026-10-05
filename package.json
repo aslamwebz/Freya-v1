@@ -42,7 +42,9 @@
     "release:gate": "npm run verify && npm run gauntlet && npm run release:check",
     "release:manifest": "node scripts/release-manifest.mjs",
     "qualify": "node scripts/qualify.mjs",
-    "qualify:json": "node scripts/qualify.mjs --format=json"
+    "qualify:json": "node scripts/qualify.mjs --format=json",
+    "test:chat-live": "vitest run tests/live",
+    "test:chat-search": "vitest run tests/live/searxng-live.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1",

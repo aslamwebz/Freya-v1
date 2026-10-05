@@ -36,6 +36,10 @@ export default defineConfig({
       'tests/host/**/*.test.ts',
       'tests/red-team/**/*.test.ts',
       'tests/qualification/**/*.test.ts',
+      // Network-dependent. Included so `npm run test:chat-live` can find it, but
+      // every suite here self-skips unless its provider is configured, so it costs
+      // the default `npm test` run nothing and cannot make CI flaky.
+      'tests/live/**/*.test.ts',
     ],
     setupFiles: ['tests/unit/setup.ts'],
     restoreMocks: true,

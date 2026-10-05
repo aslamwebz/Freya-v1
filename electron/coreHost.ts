@@ -28,6 +28,8 @@ import { createWindowObservationRuntime, type WindowObservationRuntime } from '.
 import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
 import { BraveSearchProvider } from '../core/research/providers/brave'
+import { PreferredSearchProvider } from '../core/research/providers/preferred'
+import { SearxngSearchProvider } from '../core/research/providers/searxng'
 import { ElectronBrowserTargetFactory } from './research/managedTarget'
 import { fixtureSearchProvider, fixtureTransport, researchFixturesEnabled } from './research/e2eFixtures'
 import { SafeHttpTransport } from '../core/research/transport'
@@ -1211,7 +1213,15 @@ export class ElectronCoreHost implements CoreHost {
 
     const transport = new SafeHttpTransport()
     return {
-      searchProvider: new BraveSearchProvider({ env: this.env, transport }),
+      // Preference order, not a requirement. A locally-running metasearch daemon
+      // needs no credential, so it is asked first; a keyed provider remains a
+      // working fallback for an install that has one. `PreferredSearchProvider`
+      // re-evaluates readiness per call and never retries across providers, so a
+      // result's provenance always names the backend that actually served it.
+      searchProvider: new PreferredSearchProvider([
+        new SearxngSearchProvider({ env: this.env }),
+        new BraveSearchProvider({ env: this.env, transport }),
+      ]),
       // Shared deliberately: `SafeHttpTransport` holds no mutable instance state, so
       // a page read and a provider call cannot interfere. Two instances would add an
       // isolation boundary that does not exist and imply a separation the code does

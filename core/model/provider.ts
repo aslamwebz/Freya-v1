@@ -27,9 +27,149 @@ import type { ProviderStatus } from '../protocol/core-protocol'
  */
 export type ModelMessageRole = 'system' | 'user' | 'assistant'
 
+/**
+ * The image MIME types a message part may declare.
+ *
+ * An allowlist, not a `startsWith('image/')` test. The set is exactly what has
+ * been verified to survive the configured provider's content-parts parser, so a
+ * part carrying anything else is refused locally with a typed error rather than
+ * being forwarded as a guess and coming back as an opaque HTTP 400.
+ *
+ * SVG is deliberately absent: it is an XML document that can carry script, and
+ * no part of Freya has a reason to hand one to a model.
+ */
+export const IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
+export type ImageMimeType = (typeof IMAGE_MIME_TYPES)[number]
+
+/**
+ * The document MIME types a message part may declare.
+ *
+ * `application/pdf` is the only one verified to work as an OpenAI `file` part on
+ * the configured endpoint. It is also the only one worth supporting now: a
+ * second document type would need its own verified capability before it could be
+ * listed here, and guessing at one would trade a local typed error for a remote
+ * one.
+ */
+export const FILE_MIME_TYPES = ['application/pdf'] as const
+export type FileMimeType = (typeof FILE_MIME_TYPES)[number]
+
+/** Text as a content part. Constructed from a message's `content`, never authored directly. */
+export interface ModelTextPart {
+  readonly type: 'text'
+  readonly text: string
+}
+
+/**
+ * One image, carried inline.
+ *
+ * `data` is bare base64 — no `data:` prefix, no URL, no filesystem path.
+ *
+ * An HTTPS `image_url` was verified to work on the configured endpoint and is
+ * deliberately *not* accepted here. Turning a renderer-supplied URL into an
+ * outbound request is a new egress that no endpoint policy in this codebase
+ * covers, and a model lane that could be made to fetch an arbitrary host is a
+ * worse trade than a user picking a file. The attachment stays inline, which is
+ * also the only form that keeps the send hermetic and the request body
+ * inspectable in one place.
+ */
+export interface ModelImagePart {
+  readonly type: 'image'
+  readonly mimeType: ImageMimeType
+  /** Bare base64. Bounded by {@link MAX_ATTACHMENT_BYTES}; see {@link validateModelAttachments}. */
+  readonly data: string
+  /** Display name only. Never read by a provider, never trusted as a path. */
+  readonly filename?: string
+}
+
+/** One document, carried inline as an OpenAI-style `file` part. */
+export interface ModelFilePart {
+  readonly type: 'file'
+  readonly mimeType: FileMimeType
+  /** Bare base64. Bounded by {@link MAX_ATTACHMENT_BYTES}; see {@link validateModelAttachments}. */
+  readonly data: string
+  /** Required: the endpoint uses it to label the part, and an unnamed file is not a file. */
+  readonly filename: string
+}
+
+/**
+ * A discriminated content union, closed on `type`.
+ *
+ * `text | image | file`, and nothing else. A part whose `type` is not one of
+ * these three is not "a part with an unexpected shape" — it is unrecognised
+ * input, and {@link validateModelAttachments} refuses it with
+ * {@link ModelAttachmentError} rather than skipping it. Skipping is the failure
+ * mode that matters: a user attaches a document, the provider silently never
+ * sees it, and the answer describes something that was never sent.
+ */
+export type ModelContentPart = ModelTextPart | ModelImagePart | ModelFilePart
+
+/**
+ * The non-text half of {@link ModelContentPart}.
+ *
+ * Text is not repeated here: it already has its own field on
+ * {@link ModelMessage}, and having it in two places would be a second way for
+ * `messages` and `prompt` to disagree about what was said.
+ */
+export type ModelAttachment = ModelImagePart | ModelFilePart
+
+/**
+ * How much *decoded* payload one attachment may carry: 4 MiB.
+ *
+ * Chosen against the real cost of the thing, not a round number. A screenshot at
+ * a typical 2x retina scale is well under 1 MiB; a scanned document page lands
+ * around 200 KiB. So 4 MiB is roughly three times what the common case needs,
+ * which leaves the ceiling high enough that a legitimate attachment is never
+ * refused for being legitimate and low enough that a single turn cannot hand the
+ * endpoint a body large enough to time out and be billed as a failure.
+ *
+ * It is a per-attachment bound on decoded bytes, and it is checked against the
+ * *encoded* length before any decoding happens — see
+ * {@link validateModelAttachments}.
+ */
+export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024
+
+/**
+ * How many attachments one message may carry: 8.
+ *
+ * A turn is a conversation, not a file drop. Eight is above the point where a
+ * person has stopped attaching things and started uploading a directory, which
+ * is the signal that they want a different feature.
+ */
+export const MAX_ATTACHMENTS_PER_MESSAGE = 8
+
+/**
+ * The decoded ceiling across all of one message's attachments: 8 MiB.
+ *
+ * A per-part bound alone does not bound a request: eight legal 4 MiB parts is
+ * 32 MiB of body. This is the bound that actually caps what one turn can cost,
+ * and it is the one a caller should assume is real.
+ */
+export const MAX_MESSAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024
+
 export interface ModelMessage {
   readonly role: ModelMessageRole
   readonly content: string
+  /**
+   * Images and documents carried by this turn.
+   *
+   * A sibling field rather than a widened `content`, and that is a deliberate
+   * choice made from a measurement rather than a preference. Widening `content`
+   * to `string | readonly ModelContentPart[]` was tried against this repo and it
+   * breaks 4 production call sites plus ~30 test files that read the field as a
+   * `string` today — including `FakeEchoProvider`, which is not this change's to
+   * touch. Every one of those readers wants the *text*; none of them want a union
+   * they must narrow before they can count a token.
+   *
+   * So the text keeps its field, the payload keeps its own, and the union is the
+   * full `ModelContentPart` set that a provider serialises. A message with no
+   * `attachments` serialises exactly as it did before this field existed — the
+   * same string, not a one-element array — which is what keeps text-only request
+   * bodies byte-identical.
+   *
+   * Optional and absent-means-absent, so every existing construction site of a
+   * `ModelMessage` still compiles and still means the same thing.
+   */
+  readonly attachments?: readonly ModelAttachment[]
 }
 
 export interface ModelRequest {
@@ -50,6 +190,11 @@ export interface ModelRequest {
    *
    * Derived from `messages` by the gateway, never authored separately, so the
    * two cannot disagree about what was said.
+   *
+   * "Flattened" means flattened: a text part becomes its text, and an image or
+   * file part becomes a placeholder line that says its content was not included.
+   * See {@link flattenMessages} for why the bytes are not inlined and what the
+   * placeholder guarantees.
    */
   prompt: string
   maxOutputTokens: number
@@ -65,6 +210,213 @@ export interface ModelResult {
   /** Null when the provider did not report them. Never estimated. */
   inputTokens: number | null
   outputTokens: number | null
+}
+
+export type ModelAttachmentErrorCode =
+  /** `type` was absent, not a string, or not one of `image` / `file`. */
+  | 'unknown_part_type'
+  /** A recognised part whose fields are missing, mistyped, or not base64. */
+  | 'malformed_part'
+  /** A well-formed part declaring a MIME type outside the allowlist. */
+  | 'mime_not_allowed'
+  /** One part's decoded payload exceeds {@link MAX_ATTACHMENT_BYTES}. */
+  | 'payload_too_large'
+  /** More parts than {@link MAX_ATTACHMENTS_PER_MESSAGE}. */
+  | 'too_many_attachments'
+  /** The message's parts together exceed {@link MAX_MESSAGE_ATTACHMENT_BYTES}. */
+  | 'message_payload_too_large'
+
+/**
+ * Thrown when a message carries something that cannot be forwarded.
+ *
+ * A dedicated class with a `code`, because "the attachment was bad" and "the
+ * model refused the prompt" are different facts about different events and a
+ * caller that collapses them reports a user error as a provider failure. It is
+ * thrown *before* the request is built, so a refused attachment costs nothing.
+ */
+export class ModelAttachmentError extends Error {
+  readonly code: ModelAttachmentErrorCode
+  /** Which part of which message, when known. Null when the failure is the list itself. */
+  readonly partIndex: number | null
+  /** The MIME type that was declared, when the failure was about one. */
+  readonly mimeType: string | null
+
+  constructor(
+    code: ModelAttachmentErrorCode,
+    message: string,
+    details: { partIndex?: number | null; mimeType?: string | null } = {},
+  ) {
+    super(message)
+    this.name = 'ModelAttachmentError'
+    this.code = code
+    this.partIndex = details.partIndex ?? null
+    this.mimeType = details.mimeType ?? null
+  }
+}
+
+/**
+ * Standard base64: the alphabet, with padding only at the end.
+ *
+ * Checked explicitly because the alternative — letting `Buffer.from` try and
+ * then ignoring what it produced — is how invalid input becomes silently
+ * truncated bytes in a request the provider was billed for.
+ */
+const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/
+
+/** Decoded length of an already-validated base64 string, exactly. */
+function decodedByteLength(encoded: string): number {
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0
+  return (encoded.length / 4) * 3 - padding
+}
+
+/**
+ * Narrow untrusted input to {@link ModelAttachment}[], or refuse it.
+ *
+ * Takes `unknown` on purpose. The shape of an attachment is exactly the kind of
+ * thing that arrives from a bridge, a file drop, or a tool result, and a
+ * validator that is typed as already-correct is a validator that will be skipped
+ * at the one boundary that matters. Every rejection is a
+ * {@link ModelAttachmentError}; nothing is dropped.
+ *
+ * The size check is made against the *encoded* length, before any decode.
+ * Base64 expands by 4/3, so the decoded length is known from the string length
+ * alone — checking afterwards would mean allocating a multi-megabyte buffer for
+ * every oversized attachment in order to learn it was oversized. The check
+ * therefore uses the encoding as an upper bound on the decoding: a payload
+ * within `MAX_ATTACHMENT_BYTES` can never encode to something this rejects.
+ */
+export function validateModelAttachments(input: unknown): readonly ModelAttachment[] {
+  if (input === undefined || input === null) return []
+  if (!Array.isArray(input)) {
+    throw new ModelAttachmentError('malformed_part', 'message attachments must be a list of parts')
+  }
+  if (input.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+    throw new ModelAttachmentError(
+      'too_many_attachments',
+      `a message carries at most ${MAX_ATTACHMENTS_PER_MESSAGE} attachments, got ${input.length}`,
+    )
+  }
+
+  const validated: ModelAttachment[] = []
+  let totalBytes = 0
+
+  for (const [index, raw] of input.entries()) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      throw new ModelAttachmentError('malformed_part', `attachment ${index} is not an object`, {
+        partIndex: index,
+      })
+    }
+    const part = raw as Record<string, unknown>
+    const type = part['type']
+    if (typeof type !== 'string') {
+      throw new ModelAttachmentError(
+        'unknown_part_type',
+        `attachment ${index} has no string "type"`,
+        { partIndex: index },
+      )
+    }
+    if (type !== 'image' && type !== 'file') {
+      throw new ModelAttachmentError(
+        'unknown_part_type',
+        `attachment ${index} has unknown type "${type}"; only "image" and "file" are content parts`,
+        { partIndex: index },
+      )
+    }
+
+    const mimeType = part['mimeType']
+    if (typeof mimeType !== 'string') {
+      throw new ModelAttachmentError(
+        'malformed_part',
+        `attachment ${index} has no string "mimeType"`,
+        { partIndex: index },
+      )
+    }
+    const allowed: readonly string[] = type === 'image' ? IMAGE_MIME_TYPES : FILE_MIME_TYPES
+    if (!allowed.includes(mimeType)) {
+      throw new ModelAttachmentError(
+        'mime_not_allowed',
+        `attachment ${index} declares "${mimeType}"; a ${type} part must be one of ${allowed.join(', ')}`,
+        { partIndex: index, mimeType },
+      )
+    }
+
+    const data = part['data']
+    if (typeof data !== 'string' || data === '') {
+      throw new ModelAttachmentError(
+        'malformed_part',
+        `attachment ${index} has no base64 "data" payload`,
+        { partIndex: index, mimeType },
+      )
+    }
+    if (data.length % 4 !== 0 || !BASE64_PATTERN.test(data)) {
+      throw new ModelAttachmentError(
+        'malformed_part',
+        `attachment ${index} "data" is not standard base64`,
+        { partIndex: index, mimeType },
+      )
+    }
+
+    /**
+     * Bounded *before* decoding, on the encoded length, which upper-bounds the
+     * decoding. See the note above: this is what keeps an oversized attachment
+     * from costing a buffer allocation on its way to being refused.
+     */
+    if (decodedByteLength(data) > MAX_ATTACHMENT_BYTES) {
+      throw new ModelAttachmentError(
+        'payload_too_large',
+        `attachment ${index} is larger than the ${MAX_ATTACHMENT_BYTES} byte per-attachment limit`,
+        { partIndex: index, mimeType },
+      )
+    }
+
+    totalBytes += decodedByteLength(data)
+    if (totalBytes > MAX_MESSAGE_ATTACHMENT_BYTES) {
+      throw new ModelAttachmentError(
+        'message_payload_too_large',
+        `a message carries at most ${MAX_MESSAGE_ATTACHMENT_BYTES} bytes of attachments`,
+        { partIndex: index, mimeType },
+      )
+    }
+
+    const filename = part['filename']
+    if (filename !== undefined && typeof filename !== 'string') {
+      throw new ModelAttachmentError(
+        'malformed_part',
+        `attachment ${index} has a non-string "filename"`,
+        { partIndex: index, mimeType },
+      )
+    }
+    if (type === 'file' && typeof filename !== 'string') {
+      throw new ModelAttachmentError(
+        'malformed_part',
+        `a file attachment requires a "filename"; attachment ${index} has none`,
+        { partIndex: index, mimeType },
+      )
+    }
+
+    validated.push(
+      type === 'image'
+        ? {
+            type: 'image',
+            mimeType: mimeType as ImageMimeType,
+            data,
+            ...(typeof filename === 'string' ? { filename } : {}),
+          }
+        : {
+            type: 'file',
+            mimeType: mimeType as FileMimeType,
+            data,
+            filename: filename as string,
+          },
+    )
+  }
+
+  return validated
+}
+
+/** The decoded byte count of a part, for reporting and for budget arithmetic. */
+export function attachmentByteLength(attachment: ModelAttachment): number {
+  return decodedByteLength(attachment.data)
 }
 
 /** What the gateway hands a provider alongside the request. */
@@ -177,11 +529,44 @@ export function throwIfAborted(signal: AbortSignal, message: string): void {
  * canonical and `prompt` exists for providers that only accept a string. Role
  * prefixes are included so a flattened transcript still reads as a transcript
  * rather than as one undifferentiated wall of text.
+ *
+ * ### What a non-text part contributes
+ *
+ * A placeholder line, and nothing else. An image's pixels and a PDF's bytes are
+ * **not** decoded into the flattened string — base64 is not a rendering, and
+ * inlining four megabytes of it would produce a prompt that reads as noise to a
+ * single-prompt provider while costing the same as sending the image properly.
+ *
+ * The placeholder names the part, its declared type and its decoded size, and
+ * says in the text itself that the content was not included. That last part is
+ * the point: a marker like `[image: 2100000 bytes]` would leave a downstream
+ * model believing it had been shown the picture. `[image content not included]`
+ * is a claim it can actually act on. A provider that wants the real pixels
+ * should be reading `ModelRequest.messages`, which is what the wire form does.
+ *
+ * A message with no attachments flattens to exactly what it always did.
  */
 export function flattenMessages(messages: readonly ModelMessage[]): string {
   return messages
-    .map((message) =>
-      message.role === 'user' ? message.content : `[${message.role}] ${message.content}`,
-    )
+    .map((message) => {
+      const attachments = validateModelAttachments(message.attachments)
+      const body =
+        attachments.length === 0
+          ? message.content
+          : `${message.content}${message.content === '' ? '' : '\n'}${describeAttachments(attachments)}`
+      return message.role === 'user' ? body : `[${message.role}] ${body}`
+    })
     .join('\n\n')
+}
+
+/** The one line per attachment that stands in for the payload in a flattened prompt. */
+function describeAttachments(attachments: readonly ModelAttachment[]): string {
+  return attachments
+    .map((attachment) => {
+      const bytes = `${attachmentByteLength(attachment)} bytes`
+      return attachment.type === 'image'
+        ? `[image content not included: ${attachment.mimeType}, ${bytes}]`
+        : `[file content not included: ${attachment.mimeType}, ${attachment.filename}, ${bytes}]`
+    })
+    .join('\n')
 }

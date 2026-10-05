@@ -377,8 +377,14 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
 
   initialize(ses: Session): void {
     this.ses = ses
-    ses.setPermissionCheckHandler(() => this.localUnrestricted)
-    ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(this.localUnrestricted))
+    // Strict default remains explicit and source-auditable.
+    ses.setPermissionCheckHandler(() => false)
+    ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+    if (this.localUnrestricted) {
+      // The development profile deliberately replaces those handlers for local testing.
+      ses.setPermissionCheckHandler(() => true)
+      ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(true))
+    }
     ses.on('will-download', this.onDownload)
     // Nothing on this partition may reach a private or local address, from any origin, for
     // any resource type. This is the reason the Freya Browser is not a doorway to the

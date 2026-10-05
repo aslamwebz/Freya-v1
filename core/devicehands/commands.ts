@@ -262,9 +262,11 @@ export function readTerminalCommand(
     args.push(entry)
   }
 
-  const deleteReason = terminalDeleteReason(command, args)
-  if (deleteReason !== null) {
-    return refuse('forbidden-action', `Freya is currently in no-delete mode: ${deleteReason}.`)
+  if (policy.localUnrestricted) {
+    const deleteReason = terminalDeleteReason(command, args)
+    if (deleteReason !== null) {
+      return refuse('forbidden-action', `Freya is currently in no-delete mode: ${deleteReason}.`)
+    }
   }
 
   /* -------------------------------------------------- the working directory */

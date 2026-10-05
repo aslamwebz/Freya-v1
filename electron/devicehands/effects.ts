@@ -5,6 +5,7 @@ import {
   type TerminalCommand,
   type TransferTarget,
 } from '../../core/devicehands'
+import { terminalDeleteReason } from '../../core/safety/no-delete'
 import type {
   BrowserPortOutcome,
   BrowserPortRequest,
@@ -219,6 +220,10 @@ function createTerminalRunner(deps: TerminalDeps) {
 
   return async function runTerminal(request: { readonly command: TerminalCommand }): Promise<TerminalPortOutcome> {
     const command = request.command
+    const deleteReason = terminalDeleteReason(command.command, command.args)
+    if (deleteReason !== null) {
+      return terminalFailure('forbidden-action')
+    }
     if (!isBareProgramName(command.command)) {
       return terminalFailure('command-not-allowed')
     }

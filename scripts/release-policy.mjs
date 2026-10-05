@@ -51,9 +51,10 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // detection and settings surface across both renderer entry paths; its completed
   // branch measured the resulting ceiling at ~3.70MB.
   // The live-orb containment dashboard is an intentional renderer-only expansion;
-  // CI measures the combined dashboard build at 3,717,135 bytes. Keep narrow,
-  // explicit headroom over that measured artifact rather than weakening the gate.
-  rendererTotalBytes: 3_740_000,
+  // CI measures the dashboard-only build at 3,717,135 bytes. Composing the verified
+  // persistent Chat/browser workspace on top measures 3,741,650 bytes. Keep narrow,
+  // explicit headroom over the combined artifact rather than weakening the gate.
+  rendererTotalBytes: 3_760_000,
 })
 
 export function inspectLockfile(pkg, lock) {

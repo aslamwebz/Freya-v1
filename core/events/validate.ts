@@ -819,6 +819,9 @@ const PAYLOAD_RULES: {
     isNonEmptyString(p.reason),
 
   'brain.memory.archived': (p) => isEventId(p.memoryId) && isNonEmptyString(p.reason),
+  'brain.memory.ownership_set': (p) =>
+    isEventId(p.memoryId) && typeof p.pinned === 'boolean' && isNonNegativeInt(p.reasonLength),
+  'brain.memory.corrected': (p) => isEventId(p.memoryId) && isEventId(p.corrects) && isNonEmptyString(p.source),
 
   'brain.world.entity_noted': (p) =>
     isEventId(p.entityId) &&

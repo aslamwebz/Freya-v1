@@ -302,21 +302,6 @@ function radialTexture(): THREE.CanvasTexture {
   return texture
 }
 
-function ringGeometry(radiusX: number, radiusY: number, wobble: number): THREE.BufferGeometry {
-  const points: THREE.Vector3[] = []
-  const steps = 180
-  for (let i = 0; i <= steps; i += 1) {
-    const a = (i / steps) * TAU
-    const wobbleOffset = Math.sin(a * 3.0) * wobble
-    points.push(new THREE.Vector3(
-      Math.cos(a) * (radiusX + wobbleOffset),
-      Math.sin(a) * radiusY,
-      Math.sin(a * 2.0) * wobble * .55,
-    ))
-  }
-  return new THREE.BufferGeometry().setFromPoints(points)
-}
-
 function shapeWeights(shape: OrbShape): THREE.Vector4 {
   const weights = new THREE.Vector4(0, 0, 0, 0)
   weights.setComponent(SHAPE_INDEX[shape], 1)
@@ -366,9 +351,7 @@ export const LiveOrb = memo(function LiveOrb({ state, energy = 0 }: Props) {
     host.appendChild(renderer.domElement)
 
     const root = new THREE.Group()
-    const orbital = new THREE.Group()
     scene.add(root)
-    scene.add(orbital)
 
     const haloMap = radialTexture()
     const haloMaterial = new THREE.SpriteMaterial({
@@ -437,42 +420,6 @@ export const LiveOrb = memo(function LiveOrb({ state, energy = 0 }: Props) {
     })
     const inner = new THREE.Mesh(innerGeometry, innerMaterial)
     root.add(inner)
-
-    const ringMaterials: THREE.LineBasicMaterial[] = []
-    const ringGeometries: THREE.BufferGeometry[] = []
-    const ringSpecs = [
-      [1.72, .54, .055, new THREE.Euler(.24, .08, .18), .54],
-      [1.86, .66, .035, new THREE.Euler(-.42, .7, -.22), .34],
-      [1.58, .46, .07, new THREE.Euler(.8, -.2, .52), .28],
-    ] as const
-    ringSpecs.forEach(([rx, ry, wobble, rotation, opacity], index) => {
-      const g = ringGeometry(rx, ry, wobble)
-      const m = new THREE.LineBasicMaterial({
-        color: index === 1 ? initial.primary : index === 2 ? initial.accent : initial.secondary,
-        transparent: true,
-        opacity,
-        blending: THREE.AdditiveBlending,
-      })
-      const line = new THREE.Line(g, m)
-      line.rotation.copy(rotation)
-      orbital.add(line)
-      ringGeometries.push(g)
-      ringMaterials.push(m)
-    })
-
-    const beaconGeometry = new THREE.SphereGeometry(.034, 12, 12)
-    const beaconMaterial = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(initial.accent),
-      transparent: true,
-      opacity: .92,
-      blending: THREE.AdditiveBlending,
-    })
-    const beacons = Array.from({ length: 5 }, (_, index) => {
-      const beacon = new THREE.Mesh(beaconGeometry, beaconMaterial)
-      beacon.userData.phase = index / 5 * TAU
-      orbital.add(beacon)
-      return beacon
-    })
 
     const targetWeights = shapeWeights(initial.shape)
     const currentWeights = shapeWeights(initial.shape)
@@ -570,29 +517,14 @@ export const LiveOrb = memo(function LiveOrb({ state, energy = 0 }: Props) {
       root.rotation.x = THREE.MathUtils.lerp(root.rotation.x, pointerY * -.055, 1 - Math.pow(.02, dt))
       root.rotation.y += (pointerX * .045 - root.rotation.y * .008) * dt
 
-      orbital.rotation.z += dt * (.035 + speed * .035)
-      orbital.rotation.y -= dt * (.018 + speed * .02)
       shell.scale.setScalar(1 + Math.sin(elapsed * .83) * .012 + pulse * .018)
       inner.scale.setScalar(1 + Math.sin(elapsed * 1.3) * .06 + pulse * .1)
       innerMaterial.color.lerp(uniforms.uSecondary.value, .035)
       innerMaterial.opacity = .045 + energyBoost * .025 + pulse * .035
 
-      ringMaterials[0]?.color.lerp(uniforms.uSecondary.value, .025)
-      ringMaterials[1]?.color.lerp(uniforms.uPrimary.value, .025)
-      ringMaterials[2]?.color.lerp(uniforms.uAccent.value, .025)
       haloMaterial.color.lerp(uniforms.uSecondary.value, .018)
       haloMaterial.opacity = .62 + Math.sin(elapsed * .7) * .08 + energyBoost * .1
 
-      beacons.forEach((beacon, index) => {
-        const phase = beacon.userData.phase as number
-        const a = elapsed * (.18 + speed * .1) + phase
-        const rx = index % 2 === 0 ? 1.76 : 1.62
-        const ry = index % 2 === 0 ? .54 : .72
-        beacon.position.set(Math.cos(a) * rx, Math.sin(a) * ry, Math.sin(a * 2.0) * .22)
-        const s = .85 + .5 * (Math.sin(elapsed * 2.0 + phase) * .5 + .5) + pulse * .35
-        beacon.scale.setScalar(s)
-      })
-      beaconMaterial.color.lerp(uniforms.uAccent.value, .03)
 
       renderer.render(scene, camera)
       raf = requestAnimationFrame(render)
@@ -616,10 +548,6 @@ export const LiveOrb = memo(function LiveOrb({ state, energy = 0 }: Props) {
       shellMaterial.dispose()
       innerGeometry.dispose()
       innerMaterial.dispose()
-      ringGeometries.forEach((item) => item.dispose())
-      ringMaterials.forEach((item) => item.dispose())
-      beaconGeometry.dispose()
-      beaconMaterial.dispose()
       haloMap.dispose()
       haloMaterial.dispose()
       renderer.dispose()

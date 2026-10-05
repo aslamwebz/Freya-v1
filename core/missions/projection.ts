@@ -1,12 +1,24 @@
 import type { RunRecord, RunStatus, StepRecord, StepStatus } from '../work/types'
+import { countPlanSteps, evidenceCounts } from './engine'
+import { isTerminalMissionStepStatus } from './autonomy/types'
+import type {
+  MissionBudgetRemaining,
+  MissionEvidenceCounts,
+  MissionProgressView,
+  MissionStepCounts,
+  MissionStepView,
+} from './autonomy/types'
 import {
   DEFAULT_MISSION_LIMITS,
+  isLiveMissionStatus,
   isTerminalMissionStatus,
+  MISSION_STATUSES,
   type MissionAction,
   type MissionChildRunCounts,
   type MissionProjection,
   type MissionRecord,
   type MissionState,
+  type MissionStatus,
   type MissionSummaryView,
 } from './types'
 
@@ -60,22 +72,42 @@ export interface WorkTruthPort {
 export const ABSENT_MISSION_PROJECTION: MissionProjection = Object.freeze({
   persistence: Object.freeze({ mode: 'unavailable' as const, reason: null, durable: false }),
   missions: Object.freeze([]),
-  counts: Object.freeze({
-    total: 0,
-    draft: 0,
-    active: 0,
-    paused: 0,
-    completed: 0,
-    failed: 0,
-    cancelled: 0,
-    needsAttention: 0,
-  }),
+  /**
+   * Every status gets a counter, derived from `MISSION_STATUSES` rather than written
+   * out.
+   *
+   * Two reasons. The mechanical one: twelve hand-written counters is a place for a
+   * status to be missed, and a board that under-counted would be lying by omission.
+   * The real one: a status added to the domain appears here automatically, so the
+   * projection cannot silently stop counting a state that exists.
+   */
+  // Spread from a typed zero-tally rather than an `Object.fromEntries`, so the compiler
+  // checks that every status is present. `fromEntries` would produce
+  // `Record<string, number>` and the assertion below would paper over a missing key.
+  counts: Object.freeze<MissionProjection['counts']>({ total: 0, ...statusTally(), needsAttention: 0 }),
   limits: DEFAULT_MISSION_LIMITS,
   missionsRetained: 0,
   missionsTotal: 0,
   missionsHidden: 0,
   sequence: 0,
 })
+
+/** Every status at zero. Derived from the vocabulary, so no status can be uncounted. */
+function statusTally(): Record<MissionStatus, number> {
+  return Object.fromEntries(MISSION_STATUSES.map((status) => [status, 0])) as Record<MissionStatus, number>
+}
+
+/**
+ * The mutable tally.
+ *
+ * The projection's public `counts` is `readonly`, which is right for a caller and
+ * wrong for the loop that fills it in. This is that loop's type: every field writable,
+ * frozen on the way out. Written out rather than derived with `-readonly` so a
+ * compiler option cannot quietly make the mutation a type error later.
+ */
+type MutableCounts = {
+  -readonly [K in keyof MissionProjection['counts']]: MissionProjection['counts'][K]
+}
 
 export function missionProjection(
   state: MissionState,
@@ -87,10 +119,15 @@ export function missionProjection(
   const retained = all.slice(0, DEFAULT_MISSION_LIMITS.maxRetainedMissions)
   const missions = retained.map((mission) => summarise(mission, work, now))
 
-  // Per-status counts describe the *listed* Missions, because that is what a person
-  // is looking at. The retention triple below says how much of the truth is not on
-  // screen, which is the part a viewer cannot otherwise detect.
-  const counts = { total: 0, draft: 0, active: 0, paused: 0, completed: 0, failed: 0, cancelled: 0, needsAttention: 0 }
+  // Per-status counts describe the *listed* Missions, because that is what a person is
+  // looking at. The retention triple below says how much of the truth is not on screen,
+  // which is the part a viewer cannot otherwise detect.
+  //
+  // One counter per status, built from `MISSION_STATUSES` rather than written out, so
+  // a status added to the domain is counted automatically. A board that silently
+  // stopped counting a state that exists would be lying by omission, which is harder to
+  // notice than a missing key.
+  const counts: MutableCounts = { total: 0, ...statusTally(), needsAttention: 0 }
   for (const mission of missions) {
     counts.total += 1
     counts[mission.status] += 1
@@ -108,7 +145,8 @@ export function missionProjection(
       durable: persistence.mode === 'encrypted' && persistence.reason === null,
     },
     missions,
-    counts,
+    // Frozen on the way out, so the mutable tally above never escapes.
+    counts: Object.freeze({ ...counts }),
     limits: DEFAULT_MISSION_LIMITS,
     // The honest retention triple, the same shape Work reports for its runs.
     //
@@ -128,14 +166,49 @@ export function summarise(mission: MissionRecord, work: WorkTruthPort, now: Date
   const counts = countChildren(mission, work)
   const expired = !isTerminalMissionStatus(mission.status) && Date.parse(now.toISOString()) >= Date.parse(mission.deadlineAt)
   // A child that stopped without the Mission stopping is the case that goes missing if
-  // only `failed` and `cancelled` are counted. A Mission can end up `active` with every
-  // one of its Runs `paused` or `waiting` — pause propagates to the children outside the
-  // Mission's lock, so a resume arriving mid-propagation can land before the pause
+  // only `failed` and `cancelled` are counted. A Mission can end up live with every
+  // one of its Runs `paused` or `waiting` — stop propagates to the children outside the
+  // Mission's lock, so a resume arriving mid-propagation can land before the stop
   // finishes and leave the Run stopped with nobody resuming it. Nothing is failing, so
   // this reads as "1 run" on the board with no warning at all.
-  const childStalled =
-    mission.status === 'active' && (counts.paused > 0 || counts.waiting > 0)
-  const needsAttention = expired || counts.failed > 0 || counts.cancelled > 0 || childStalled
+  const childStalled = isLiveMissionStatus(mission.status) && (counts.paused > 0 || counts.waiting > 0)
+
+  const evidence = evidenceCounts(mission.evidence, now)
+  const steps = countPlanSteps(mission.activePlan?.steps ?? [])
+  // A **pointer**, not a gate. The capability and risk come from the step the pointer names,
+  // because a person deciding needs to know what they are deciding about — and they are
+  // looked up rather than stored, so this projection cannot become a second place a gate's
+  // facts live. `outcome === null` is what makes it *pending*; once Work reports how the
+  // gate went, the Mission is no longer waiting on it and the board stops saying so.
+  const approvalReference =
+    mission.approval !== null && mission.approval.outcome === null ? mission.approval : null
+  const approvalStep =
+    approvalReference === null
+      ? undefined
+      : mission.activePlan?.steps.find((step) => step.stepId === approvalReference.stepId)
+  const pendingApproval =
+    approvalReference === null || approvalStep === undefined
+      ? null
+      : {
+          approvalId: approvalReference.approvalId,
+          stepId: approvalStep.stepId,
+          capability: approvalStep.capability,
+          risk: approvalStep.risk,
+          requestedAt: approvalReference.requestedAt,
+          source: approvalReference.source,
+        }
+
+  // `needsAttention` means *a person is needed*, and each term below is a case where
+  // proceeding without one would be wrong rather than merely inconvenient.
+  const needsAttention =
+    expired ||
+    counts.failed > 0 ||
+    counts.cancelled > 0 ||
+    childStalled ||
+    // Anything blocked, or waiting on a decision only a person can make.
+    mission.blockers.length > 0 ||
+    pendingApproval !== null ||
+    mission.awaitingOwner
 
   return {
     missionId: mission.missionId,
@@ -154,7 +227,132 @@ export function summarise(mission: MissionRecord, work: WorkTruthPort, now: Date
       mission.verification === null
         ? null
         : { state: mission.verification.state, verifierId: mission.verification.verifierId },
+    priority: mission.priority,
+    planRevision: mission.activePlan?.revision ?? null,
+    progress: progressView(mission, steps, evidence, now),
+    currentStep: currentStepOf(mission),
+    nextAction:
+      mission.lastDecision === null
+        ? null
+        : { decision: mission.lastDecision.decision, reason: mission.lastDecision.reason },
+    blockers: mission.blockers.map((blocker) => blocker.code),
+    pendingApproval,
+    evidence,
+    nextWake:
+      mission.wake === null || mission.wake.firedAt !== null
+        ? null
+        : {
+            wakeId: mission.wake.wakeId,
+            kind: mission.wake.kind,
+            dueAt: mission.wake.dueAt,
+            eventType: mission.wake.eventType,
+          },
+    lastUpdatedAt: mission.lastUpdatedAt,
+    awaitingOwner: mission.awaitingOwner,
+    budgetRemaining: budgetRemaining(mission),
   }
+}
+
+/**
+ * Progress as counts, and the one boolean a board may render.
+ *
+ * `quantitySatisfied` is null whenever the owner named no quantity. It is never a
+ * guess and never derived from the plan: a Mission with six of six steps verified and
+ * no requested quantity reports `null`, because "done" is a question about the goal and
+ * only the goal can answer it.
+ *
+ * `observed` excludes expired evidence. That is what makes the number mean "holds
+ * right now" rather than "held once".
+ */
+function progressView(
+  mission: MissionRecord,
+  steps: MissionStepCounts,
+  evidence: MissionEvidenceCounts,
+  now: Date,
+): MissionProgressView {
+  void now
+  const quantity = mission.requestedQuantity
+  return {
+    steps,
+    planSteps: steps.total,
+    observed: evidence.observed,
+    reported: evidence.reported,
+    requestedQuantity: quantity,
+    quantitySatisfied: quantity === null ? null : evidence.observed >= quantity,
+  }
+}
+
+/**
+ * The step a board should show as "current".
+ *
+ * Plan order rather than recency, because a Mission's steps have dependencies and "the
+ * latest one" is frequently not the one being waited on.
+ */
+function currentStepOf(mission: MissionRecord): MissionStepView | null {
+  const steps = mission.activePlan?.steps ?? []
+  if (steps.length === 0) return null
+  // First non-terminal step, or — when every step is terminal — the **last** one.
+  //
+  // The fallback matters for the row a person actually reads. A Mission whose only step
+  // has just verified has no "current" step, and rendering an empty cell there would make
+  // a finished Mission look like it never had a plan. So the last step is shown, carrying
+  // its real terminal status: `verified` is the fact, and inventing an in-progress step
+  // to fill the cell would be the opposite of honest.
+  const step = steps.find((candidate) => !isTerminalMissionStepStatus(candidate.status)) ?? steps[steps.length - 1]
+  if (step === undefined) return null
+  return {
+    stepId: step.stepId,
+    index: step.index,
+    status: step.status,
+    capability: step.capability,
+    attempts: step.attempts,
+    workerId: step.workerId,
+    runId: step.runId,
+    reason: step.reason,
+    dependsOn: [...step.dependsOn],
+  }
+}
+
+/**
+ * How much of each ceiling is left.
+ *
+ * Clamped at zero. A Mission that has already exceeded a ceiling reads `0` rather than
+ * a negative number, because "3 remaining" when 5 have been spent is a subtraction bug
+ * wearing a number's clothes.
+ *
+ * `concurrentDelegations` is *headroom*, not spend: it is the ceiling minus the number
+ * currently open, which is the only one of these that is not monotonic. A board showing
+ * it as "0 remaining" correctly reads as "at its concurrency ceiling right now".
+ */
+function budgetRemaining(mission: MissionRecord): MissionBudgetRemaining {
+  const clamp = (left: number): number => Math.max(0, left)
+  return {
+    modelCalls: clamp(mission.budget.maxModelCalls - mission.spend.modelCalls),
+    actions: clamp(mission.budget.maxActions - mission.spend.actions),
+    externalRequests: clamp(mission.budget.maxExternalRequests - mission.spend.externalRequests),
+    retries: clamp(mission.budget.maxRetries - mission.spend.retries),
+    delegations: clamp(mission.budget.maxDelegations - mission.spend.delegations),
+    planRevisions: clamp(mission.budget.maxPlanRevisions - mission.planRevisions),
+    concurrentDelegations: clamp(
+      mission.budget.maxConcurrentDelegations - openDelegationCount(mission),
+    ),
+  }
+}
+
+/**
+ * How many delegations are open right now.
+ *
+ * `delegated` and `running` both count: a delegation is open from the moment a worker
+ * holds it until the step reaches a terminal status. Counting only `running` would let
+ * a Mission fill its whole roster with workers that were assigned but had not started,
+ * which is the swarm explosion this number exists to prevent.
+ */
+export function openDelegationCount(mission: MissionRecord): number {
+  let open = 0
+  for (const step of mission.activePlan?.steps ?? []) {
+    if (step.status === 'delegated' || step.status === 'running') open += 1
+  }
+  return open
 }
 
 /**
@@ -245,13 +443,53 @@ function stepsVerified(steps: readonly StepRecord[]): boolean {
  */
 export function actionsFor(mission: MissionRecord): readonly MissionAction[] {
   if (isTerminalMissionStatus(mission.status)) return []
+
+  // Universal to every non-terminal status. Offered here rather than appended at each
+  // branch so that a new status cannot be added without automatically getting the three
+  // things a person may always do to a Mission that has not settled.
+  const universal: MissionAction[] = ['stop', 'correct', 'cancel']
+
   switch (mission.status) {
     case 'draft':
-      return ['activate', 'cancel']
+      return ['activate', ...universal]
+    case 'ready':
+      // No `activate`: a ready Mission is already started, and offering it would teach
+      // that a button can do something twice.
+      return ['stop', 'correct', 'cancel', 'fail']
+    case 'planning':
+      return ['stop', 'correct', 'cancel', 'fail']
     case 'active':
-      return ['pause', 'requestCompletion', 'cancel', 'fail']
-    case 'paused':
-      return ['resume', 'cancel', 'fail']
+      return ['requestCompletion', ...universal, 'fail']
+    case 'verifying':
+      // No `requestCompletion`: a verification is already in flight, and offering the
+      // control that starts one would offer a second.
+      return ['stop', 'cancel', 'fail']
+    case 'waiting':
+      // `resumeAutonomy` rather than `resume`, and the distinction is load-bearing: `resume`
+      // is Phase 7's "reopen a stopped gate and run it", while this is "carry on from this
+      // wait". Offering the familiar word for both would make a button mean two things
+      // depending on which state the Mission happened to be in.
+      return ['resumeAutonomy', ...universal, 'fail']
+    case 'blocked':
+      // A blocked Mission cannot be resumed into running — whatever is in the way has to be
+      // cleared first. What it can be is released to try again, which is what this is.
+      return ['resumeAutonomy', ...universal, 'fail']
+    case 'approval-required':
+      // **No `decideApproval`**, and its absence is the design.
+      //
+      // A person answers an approval in one place: Work's approval surface, through
+      // `work.approval.decide`, which evaluates `work.approval.decide` on the owner before
+      // it does anything. Offering a second button here would be a second door into a
+      // decision that already has one — and this door would be the one with no Guard
+      // evaluation behind it.
+      //
+      // So a Mission parked on a gate offers only what is true of it: it can be cancelled,
+      // stopped, or failed. The gate itself is not a Mission's to decide.
+      return [...universal, 'fail']
+    case 'stopped':
+      // Phase 7's `resume`, because that is the door it has always been: only the owner can
+      // reopen a stopped gate, and resuming runs the Mission.
+      return ['resume', ...universal, 'fail']
     default:
       return []
   }

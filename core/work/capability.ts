@@ -97,6 +97,24 @@ export interface WorkCapability {
   readonly capability: Capability
   readonly risk: WorkRisk
   /**
+   * The verifier this capability is meant to be checked by, if any.
+   *
+   * **Optional, and deliberately so.** Work separates a capability from the check that
+   * judges it so the two cannot be the same piece of code, and `WorkStepPlan.verifier` stays
+   * required — a Step is always checked, and *which* check is still the plan's decision.
+   *
+   * This field exists for callers that have no way to make that decision honestly. The
+   * Mission planner is exactly that: it picks a capability from a private goal it cannot
+   * read, so guessing a verifier would mean landing on whatever sorts first — and Core's
+   * registry deliberately contains `test.always-fails`, so a Mission would retry to its
+   * ceiling and block on work that never had a chance.
+   *
+   * A capability that omits it is saying "there is no obvious check for me", and a planner
+   * that finds nothing to pair with should leave the capability out of the plan rather than
+   * attach an unrelated verifier to it.
+   */
+  readonly verifier?: string
+  /**
    * One bounded sentence stating what would happen if this were approved.
    *
    * Read before anything runs, so an approval request has a subject the person
@@ -152,6 +170,24 @@ export class WorkRegistry {
       throw new Error(`capability already registered: ${capability.name}`)
     }
     this.capabilities.set(capability.name, capability)
+  }
+
+  /**
+   * Withdraw a registered capability.
+   *
+   * The **inverse** of `register`, and it exists because registration alone can only ever
+   * grow the registry — which makes "what does Core do with fewer capabilities?" untestable.
+   * That question matters: the Mission planner picks the lowest-risk registered capability, so
+   * a Core holding only consequential ones plans work that needs a person, and without this
+   * there would be no way to demonstrate it short of building a different Core.
+   *
+   * It returns whether anything was withdrawn, so a caller can assert it happened rather than
+   * assume it. It does **not** touch verifiers: a verifier can outlive the capability it was
+   * written for, and a plan naming one that no capability declares is a planner's problem to
+   * decline rather than a boot failure.
+   */
+  unregister(name: string): boolean {
+    return this.capabilities.delete(name)
   }
 
   registerVerifier(verifier: WorkVerifier): void {
@@ -343,6 +379,11 @@ export const RECORD_CAPABILITY: WorkCapability = {
   name: 'test.record',
   capability: 'work.execute',
   risk: 'routine',
+  // Paired with `test.record.matches` (declared below as `RECORD_VERIFIER`), which checks the
+  // observation against the Step's declared `expect`. Named as a string rather than as
+  // `RECORD_VERIFIER.name` because the verifier is declared *after* this capability, and a
+  // forward reference would make registration order part of whether this file loads.
+  verifier: 'test.record.matches',
   describe() {
     return 'records a value in memory and returns it as evidence'
   },
@@ -459,6 +500,15 @@ export const CONSEQUENTIAL_CAPABILITY: WorkCapability = {
   name: 'test.consequential',
   capability: 'work.execute',
   risk: 'consequential',
+  // Paired with `test.change.applied` (declared below as `CHANGE_VERIFIER`), which accepts
+  // the capability's own claim that it applied something.
+  //
+  // The pairing is separate on purpose and that is the whole demonstration: a different
+  // registered piece of code decides whether the claim is accepted. It also means a planner
+  // can pair these two without guessing — which matters because the Mission planner refuses
+  // to plan a capability that declares no check, and a capability reachable only through a
+  // gate would otherwise be unplannable.
+  verifier: 'test.change.applied',
   describe(request) {
     const input = request.input as { effect?: string }
     return typeof input.effect === 'string'

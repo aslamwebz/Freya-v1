@@ -51,7 +51,25 @@ function isDeadlineType(value: unknown): boolean {
     value === 'verification' || value === 'approval' || value === 'wait' || value === 'action'
   )
 }
-import { DEFAULT_MISSION_LIMITS, MISSION_REASONS } from '../missions/types'
+import {
+  DEFAULT_MISSION_LIMITS,
+  MAX_REQUESTED_QUANTITY,
+  MISSION_REASONS,
+  MISSION_STATUSES,
+} from '../missions/types'
+import {
+  DEFAULT_MISSION_BUDGET,
+  MISSION_BLOCKER_CODES,
+  MISSION_CORRECTION_AMBIGUITIES,
+  MISSION_DECISIONS,
+  MISSION_EVIDENCE_KINDS,
+  MISSION_EVIDENCE_ORIGINS,
+  MISSION_INTENT_FIELDS,
+  MISSION_PRIORITIES,
+  MISSION_STEP_STATUSES,
+  MISSION_WAKE_KINDS,
+  MISSION_WAKE_SOURCES,
+} from '../missions/autonomy/types'
 import { DEFAULT_GOAL_LIMITS, GOAL_REASONS } from '../longhorizon/types'
 import { RUNTIME_STATUSES } from '../runtime/types'
 import {
@@ -346,6 +364,34 @@ const CONVERSATION_TURN = (p: Record<string, unknown>): boolean =>
  * Returns the event, or `null` with the reason. `previousSequence` enforces
  * strict monotonicity across the log; pass 0 for the first line.
  */
+/**
+ * Validate one payload against the closed schema for its type.
+ *
+ * Narrower than {@link validateDurableEvent}, which additionally checks the envelope. This
+ * exists because the *payload* rules are the interesting part on their own: the exact-key
+ * property that keeps a Mission journal free of content is a statement about payloads, and
+ * testing it directly is far clearer than constructing a whole envelope to observe it.
+ *
+ * An unknown type is refused rather than passed. There is no "no rule, so allow" path,
+ * because that would make an unrecognised event type valid by default — and a rule added
+ * later would then apply only to events written after it.
+ */
+export function validateEventPayload(
+  type: unknown,
+  payload: unknown,
+): { ok: true } | { ok: false; reason: string } {
+  if (!isCoreEventType(type)) return { ok: false, reason: `unknown event type ${JSON.stringify(type)}` }
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    return { ok: false, reason: 'payload is not an object' }
+  }
+  const rule = PAYLOAD_RULES[type]
+  // Unreachable in practice: `PAYLOAD_RULES` is total over `CoreEventType`, and the type
+  // has already been checked. Kept as a refusal rather than a non-null assertion because a
+  // "cannot happen" branch that throws is a branch nobody tests.
+  if (rule === undefined) return { ok: false, reason: `no payload rule for ${type}` }
+  return rule(payload as Record<string, unknown>) ? { ok: true } : { ok: false, reason: `payload refused for ${type}` }
+}
+
 export function validateDurableEvent(
   value: unknown,
   previousSequence: number,
@@ -512,20 +558,177 @@ const MISSION_TRANSITION = workRule(
   ['missionId', 'from', 'to', 'reason', 'verifierId'],
   (p) =>
     isEventId(p.missionId) &&
-    MISSION_STATUS_SET.has(p.from as string) &&
-    MISSION_STATUS_SET.has(p.to as string) &&
+    isMissionStatusOnWire(p.from) &&
+    isMissionStatusOnWire(p.to) &&
     (p.reason === null || MISSION_REASON_CODES.has(p.reason as string)) &&
     (p.verifierId === null || isEventId(p.verifierId)),
 )
 
-const MISSION_STATUS_SET: ReadonlySet<string> = new Set([
-  'draft',
-  'active',
-  'paused',
-  'completed',
-  'failed',
-  'cancelled',
-])
+/**
+ * The Mission status vocabulary, **read from the domain's own table**.
+ *
+ * Restating twelve statuses here would be a second copy that can drift from the one
+ * the reducer enforces, and a validator that accepts a status the fold refuses is a
+ * journal that validates and then does nothing — which is a worse failure than
+ * refusing it outright, because it looks like the event landed.
+ */
+const MISSION_STATUS_SET: ReadonlySet<string> = new Set<string>(MISSION_STATUSES)
+
+/**
+ * Statuses that existed before Phase 47.
+ *
+ * `paused` became `stopped`: a Mission in `paused` could be resumed by anyone holding
+ * `mission.manage`, whereas `stopped` names a latched gate only the owner reopens.
+ *
+ * Reading old aliases rather than refusing old journals is deliberate. A Mission
+ * somebody created on an earlier build is real work, and the reducer maps `paused`
+ * onto `stopped` for the same reason — the rename preserves both the history and its
+ * meaning, where discarding the line would throw away the first.
+ */
+const LEGACY_MISSION_STATUS_SET: ReadonlySet<string> = new Set(['paused'])
+
+/* --------------------------------------------------- Phase 47 closed tables */
+
+/**
+ * Every closed vocabulary the autonomy family uses, derived from the domain rather
+ * than restated. The same argument as `MISSION_REASON_CODES` above: a code added to
+ * the domain cannot leave this validator rejecting a line Core would have written,
+ * and no code can be accepted here that the domain would refuse.
+ */
+const MISSION_AUTONOMY_KEYS = ['budget', 'priority', 'requestedQuantity'] as const
+
+const MISSION_STEP_STATUS_SET: ReadonlySet<string> = new Set<string>(MISSION_STEP_STATUSES)
+const MISSION_EVIDENCE_KIND_SET: ReadonlySet<string> = new Set<string>(MISSION_EVIDENCE_KINDS)
+const MISSION_EVIDENCE_ORIGIN_SET: ReadonlySet<string> = new Set<string>(MISSION_EVIDENCE_ORIGINS)
+const MISSION_BLOCKER_CODE_SET: ReadonlySet<string> = new Set<string>(MISSION_BLOCKER_CODES)
+const MISSION_WAKE_KIND_SET: ReadonlySet<string> = new Set<string>(MISSION_WAKE_KINDS)
+const MISSION_WAKE_SOURCE_SET: ReadonlySet<string> = new Set<string>(MISSION_WAKE_SOURCES)
+const MISSION_DECISION_SET: ReadonlySet<string> = new Set<string>(MISSION_DECISIONS)
+const MISSION_INTENT_FIELD_SET: ReadonlySet<string> = new Set<string>(MISSION_INTENT_FIELDS)
+const MISSION_CORRECTION_AMBIGUITY_SET: ReadonlySet<string> = new Set<string>(MISSION_CORRECTION_AMBIGUITIES)
+const MISSION_BUDGET_NAME_SET: ReadonlySet<string> = new Set<string>(Object.keys(DEFAULT_MISSION_BUDGET))
+const MISSION_PRIORITY_SET: ReadonlySet<string> = new Set<string>(MISSION_PRIORITIES)
+
+/** Whether a Mission status is legal on the wire, including the pre-Phase-47 alias. */
+function isMissionStatusOnWire(value: unknown): boolean {
+  return (
+    typeof value === 'string' && (MISSION_STATUS_SET.has(value) || LEGACY_MISSION_STATUS_SET.has(value))
+  )
+}
+
+/**
+ * The optional Phase 47 fields on `mission.created`.
+ *
+ * Checked with `onlyNamedKeys`, so an unexpected key is refused rather than ignored —
+ * the same exact-key property the rest of this family holds. An *absent* optional is
+ * not a hole: it reads as the code-owned default, which is the same bound a new
+ * Mission would be allowed.
+ */
+function isOptionalAutonomyPayload(p: Record<string, unknown>): boolean {
+  if (!onlyNamedKeys(p, ['missionId', 'status', 'createdAt', 'deadlineAt', 'limits', ...MISSION_AUTONOMY_KEYS])) {
+    return false
+  }
+  if (Object.hasOwn(p, 'budget') && !isMissionBudget(p.budget)) return false
+  if (Object.hasOwn(p, 'priority') && !MISSION_PRIORITY_SET.has(p.priority as string)) return false
+  if (Object.hasOwn(p, 'requestedQuantity')) {
+    const quantity = p.requestedQuantity
+    // Bounded by `MAX_REQUESTED_QUANTITY`, not merely positive: an unbounded
+    // requested quantity is an unbounded amount of automatic searching.
+    if (quantity !== null && (!isPositiveInt(quantity) || (quantity as number) > MAX_REQUESTED_QUANTITY)) {
+      return false
+    }
+  }
+  return true
+}
+
+/** Autonomy ceilings as they appear in a durable record. Re-checked against code. */
+function isMissionBudget(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const budget = value as Record<string, unknown>
+  if (!onlyNamedKeys(budget, Object.keys(DEFAULT_MISSION_BUDGET))) return false
+  if (!Object.values(budget).every(isPositiveInt)) return false
+  for (const [key, ceiling] of Object.entries(DEFAULT_MISSION_BUDGET)) {
+    if ((budget[key] as number) > ceiling) return false
+  }
+  return true
+}
+
+/**
+ * One step inside a `mission.plan.committed` payload.
+ *
+ * `label` is absent, and so is every other string that could describe the step. A step
+ * whose description reached the journal would make the journal a record of what the
+ * Mission was trying to do, which is exactly what the encrypted store exists to keep
+ * out of it.
+ */
+function isMissionStepPayload(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const step = value as Record<string, unknown>
+  return (
+    isEventId(step.stepId) &&
+    isNonNegativeInt(step.index) &&
+    isCapabilityName(step.capability) &&
+    isCapabilityName(step.verifier) &&
+    // The exact-key check, and the load-bearing line of this function.
+    //
+    // Without it, a step carrying a `label` would pass every field test above and the
+    // label would be folded straight into the Mission record — which is exactly how a
+    // description of what the Mission was doing would end up in a journal that is meant to
+    // hold none of it. Named fields are not enough; the key set has to be exact.
+    onlyNamedKeys(step, [
+      'stepId',
+      'index',
+      'capability',
+      'verifier',
+      'dependsOn',
+      'status',
+      'workerId',
+      'runId',
+      'attempts',
+      'risk',
+      'requiresApproval',
+      'approvalId',
+      'reason',
+      'startedAt',
+      'settledAt',
+    ]) &&
+    Array.isArray(step.dependsOn) &&
+    step.dependsOn.length <= 32 &&
+    step.dependsOn.every((d) => isEventId(d)) &&
+    MISSION_STEP_STATUS_SET.has(step.status as string) &&
+    (step.workerId === null || isEventId(step.workerId)) &&
+    (step.runId === null || isEventId(step.runId)) &&
+    isNonNegativeInt(step.attempts) &&
+    isWorkRisk(step.risk) &&
+    typeof step.requiresApproval === 'boolean' &&
+    (step.approvalId === null || isEventId(step.approvalId)) &&
+    (step.reason === null || MISSION_REASON_CODES.has(step.reason as string)) &&
+    (step.startedAt === null || isInstant(step.startedAt)) &&
+    (step.settledAt === null || isInstant(step.settledAt))
+  )
+}
+
+/**
+ * A capability or verifier name on the wire.
+ *
+ * Bounded, and free of whitespace and control bytes — so a name cannot smuggle a
+ * sentence into the journal or a newline into a log line. It is deliberately *not*
+ * checked against the registry: a journal may name a capability this build no longer
+ * has, and the planner treats an unresolvable name as blocked rather than as an
+ * error. Refusing the event would instead lose the record that it happened.
+ */
+function isCapabilityName(value: unknown): boolean {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128) return false
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0
+    if (code <= 0x20 || code === 0x7f) return false
+  }
+  return true
+}
+
+function isWorkRisk(value: unknown): boolean {
+  return value === 'none' || value === 'routine' || value === 'consequential'
+}
 
 /**
  * Closed reason codes for every goal event, read from `GOAL_REASONS` rather than
@@ -1302,14 +1505,211 @@ const PAYLOAD_RULES: {
   // reason a Mission journal is safe to keep: a Mission holds what a person is
   // trying to achieve, there is no slot for a title or an intent, and a hand-edited
   // line cannot attach one because the key set is checked exactly.
+  //
+  // `MISSION_AUTONOMY_KEYS` are optional rather than required, so a journal written
+  // before Phase 47 still validates. An absent optional is not "unvalidated": each
+  // one is read through a closed table below, and an unrecognised value is refused
+  // rather than ignored.
   'mission.created': workRule(
-    ['missionId', 'status', 'createdAt', 'deadlineAt', 'limits'],
+    ['missionId', 'status', 'createdAt', 'deadlineAt', 'limits', ...MISSION_AUTONOMY_KEYS],
     (p) =>
       isEventId(p.missionId) &&
       p.status === 'draft' &&
       isInstant(p.createdAt) &&
       isInstant(p.deadlineAt) &&
-      isMissionLimits(p.limits),
+      isMissionLimits(p.limits) &&
+      isOptionalAutonomyPayload(p),
+  ),
+
+  /* ----------------------------------------- mission autonomy (Phase 47) */
+
+  // Every rule below is the same contract the Phase 7 rules hold: named fields, an
+  // exact key set, and a closed vocabulary for anything that could be free text.
+  // There is no `title`, no `intent`, no `label`, no `summary` and no `question`
+  // anywhere in this family, and an extra field cannot be attached either — which is
+  // what keeps the whole autonomy lane as private as the Mission it belongs to.
+  'mission.transitioned': MISSION_TRANSITION,
+
+  'mission.plan.committed': workRule(
+    ['missionId', 'planId', 'revision', 'supersedes', 'reason', 'steps'],
+    (p) =>
+      isEventId(p.missionId) &&
+      isEventId(p.planId) &&
+      isPositiveInt(p.revision) &&
+      (p.supersedes === null || isEventId(p.supersedes)) &&
+      (p.reason === null || MISSION_REASON_CODES.has(p.reason as string)) &&
+      Array.isArray(p.steps) &&
+      p.steps.length > 0 &&
+      p.steps.length <= DEFAULT_MISSION_BUDGET.maxStepsPerPlan &&
+      p.steps.every(isMissionStepPayload),
+  ),
+
+  'mission.step.transitioned': workRule(
+    ['missionId', 'planId', 'stepId', 'from', 'to', 'workerId', 'runId', 'attempts', 'reason'],
+    (p) =>
+      isEventId(p.missionId) &&
+      isEventId(p.planId) &&
+      isEventId(p.stepId) &&
+      MISSION_STEP_STATUS_SET.has(p.from as string) &&
+      MISSION_STEP_STATUS_SET.has(p.to as string) &&
+      (p.workerId === null || isEventId(p.workerId)) &&
+      (p.runId === null || isEventId(p.runId)) &&
+      isNonNegativeInt(p.attempts) &&
+      (p.reason === null || MISSION_REASON_CODES.has(p.reason as string)),
+  ),
+
+  'mission.step.interrupted': workRule(
+    ['missionId', 'planId', 'stepId', 'consequential'],
+    (p) =>
+      isEventId(p.missionId) &&
+      isEventId(p.planId) &&
+      isEventId(p.stepId) &&
+      typeof p.consequential === 'boolean',
+  ),
+
+  // `summaryLength` is a measurement and `summary` is absent, which is the same
+  // argument `work.task.created`'s `titleLength` makes.
+  'mission.evidence.recorded': workRule(
+    ['missionId', 'evidenceId', 'stepId', 'kind', 'origin', 'summaryLength', 'expiresAt'],
+    (p) =>
+      isEventId(p.missionId) &&
+      isEventId(p.evidenceId) &&
+      (p.stepId === null || isEventId(p.stepId)) &&
+      MISSION_EVIDENCE_KIND_SET.has(p.kind as string) &&
+      MISSION_EVIDENCE_ORIGIN_SET.has(p.origin as string) &&
+      isNonNegativeInt(p.summaryLength) &&
+      (p.expiresAt === null || isInstant(p.expiresAt)),
+  ),
+
+  'mission.blocker.changed': workRule(
+    ['missionId', 'code', 'stepId', 'raised'],
+    (p) =>
+      isEventId(p.missionId) &&
+      MISSION_BLOCKER_CODE_SET.has(p.code as string) &&
+      (p.stepId === null || isEventId(p.stepId)) &&
+      typeof p.raised === 'boolean',
+  ),
+
+  'mission.approval.requested': workRule(
+    ['missionId', 'stepId', 'approvalId', 'source', 'runId', 'requestedAt'],
+    (p) =>
+      isEventId(p.missionId) &&
+      isEventId(p.stepId) &&
+      // Work's id, not one of ours. There is no `risk` and no `justificationLength` here
+      // either: those belong to the gate, and the gate is Work's.
+      isEventId(p.approvalId) &&
+      (p.source === 'requested' || p.source === 'observed') &&
+      (p.runId === null || isEventId(p.runId)) &&
+      isInstant(p.requestedAt),
+  ),
+
+  // No `mission.approval.decided` and no `mission.approval.expired`.
+  //
+  // Their absence is enforced by the envelope's closed event-type list: a payload rule
+  // for a type that does not exist is not a stricter rule, it is a dead one. An earlier
+  // version validated both, and both were ways for a Mission to record a decision about
+  // an approval — `decidedBy` on the first, an implied silence on the second — which is
+  // precisely the second door this design does not have. A person's decision is recorded
+  // once, by `work.approval.decided`, on Work's side, after Guard has evaluated the
+  // owner. The Mission reads the outcome back and never writes it.
+
+  'mission.wake.scheduled': workRule(
+    ['missionId', 'wakeId', 'kind', 'source', 'dueAt', 'eventType'],
+    (p) =>
+      isEventId(p.missionId) &&
+      isEventId(p.wakeId) &&
+      MISSION_WAKE_KIND_SET.has(p.kind as string) &&
+      MISSION_WAKE_SOURCE_SET.has(p.source as string) &&
+      // Required for *every* kind. An event that never arrives is still bounded.
+      isInstant(p.dueAt) &&
+      // Only an event wake may name an event. A wake satisfiable by both a clock and
+      // an event is a wake nobody can reason about what is waiting for.
+      (p.kind === 'event'
+        ? typeof p.eventType === 'string' && (p.eventType as string).length > 0 && (p.eventType as string).length <= 256
+        : p.eventType === null),
+  ),
+
+  'mission.wake.fired': workRule(
+    ['missionId', 'wakeId'],
+    (p) => isEventId(p.missionId) && isEventId(p.wakeId),
+  ),
+
+  // The load-bearing check in this family: `wait` must name an instant and nothing
+  // else may. Both halves are checked here and again in the fold, because a journal
+  // is the untrusted door and the fold is the only code that also runs live.
+  'mission.continuation.decided': workRule(
+    ['missionId', 'decision', 'reason', 'stepId', 'nextWakeAt'],
+    (p) =>
+      isEventId(p.missionId) &&
+      MISSION_DECISION_SET.has(p.decision as string) &&
+      MISSION_REASON_CODES.has(p.reason as string) &&
+      (p.stepId === null || isEventId(p.stepId)) &&
+      (p.decision === 'wait' ? isInstant(p.nextWakeAt) : p.nextWakeAt === null),
+  ),
+
+  'mission.budget.spent': workRule(
+    ['missionId', 'modelCalls', 'actions', 'externalRequests', 'retries', 'delegations'],
+    (p) =>
+      isEventId(p.missionId) &&
+      isNonNegativeInt(p.modelCalls) &&
+      isNonNegativeInt(p.actions) &&
+      isNonNegativeInt(p.externalRequests) &&
+      isNonNegativeInt(p.retries) &&
+      isNonNegativeInt(p.delegations),
+  ),
+
+  'mission.budget.exceeded': workRule(
+    ['missionId', 'budget'],
+    (p) => isEventId(p.missionId) && MISSION_BUDGET_NAME_SET.has(p.budget as string),
+  ),
+
+  // `changedFields` is a list of *field names*. There is no slot for the value that
+  // changed, which is what makes "the location changed" the most this event can say
+  // about an owner correcting a running Mission.
+  //
+  // `requestedQuantity` is the one field name that may bring its value, because
+  // `mission.created` already carries it and the journal is allowed to hold it. It is
+  // **bound to `changedFields`**: present exactly when `'quantity'` is among the changed
+  // fields. An event that attached a quantity to a correction that did not change one
+  // would be claiming something the correction did not do.
+  'mission.intent.corrected': workRule(
+    [
+      'missionId',
+      'correctionId',
+      'kind',
+      'changedFields',
+      'settledSteps',
+      'preservedEvidence',
+      'replannedFrom',
+      'requestedQuantity',
+    ],
+    (p) =>
+      isEventId(p.missionId) &&
+      isEventId(p.correctionId) &&
+      // Fixed to `patch`. A journal cannot claim an ambiguous correction was applied,
+      // because that would be the one way to record a guess as a resolution.
+      p.kind === 'patch' &&
+      Array.isArray(p.changedFields) &&
+      p.changedFields.every((f) => MISSION_INTENT_FIELD_SET.has(f as string)) &&
+      isNonNegativeInt(p.settledSteps) &&
+      isNonNegativeInt(p.preservedEvidence) &&
+      (p.replannedFrom === null || isEventId(p.replannedFrom)) &&
+      (() => {
+        if (!Object.hasOwn(p, 'requestedQuantity')) return true
+        const quantity = p.requestedQuantity
+        return (
+          (quantity === null || (isNonNegativeInt(quantity) && quantity > 0)) &&
+          (p.changedFields as unknown[]).includes('quantity')
+        )
+      })(),
+  ),
+
+  'mission.correction.ambiguous': workRule(
+    ['missionId', 'correctionId', 'ambiguity'],
+    (p) =>
+      isEventId(p.missionId) &&
+      isEventId(p.correctionId) &&
+      MISSION_CORRECTION_AMBIGUITY_SET.has(p.ambiguity as string),
   ),
 
   'mission.activated': MISSION_TRANSITION,

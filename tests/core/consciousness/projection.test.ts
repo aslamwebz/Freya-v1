@@ -21,6 +21,7 @@ import type { BrainProjection } from '../../../core/brain/brain'
 import type { ContextProjectionView } from '../../../core/protocol/context'
 import type { CoreStatus } from '../../../core/protocol/core-protocol'
 import type { MissionProjection } from '../../../core/missions/types'
+import { MISSION_STATUSES } from '../../../core/missions/types'
 import type { OfficePresenceRequest, OfficeProjection } from '../../../core/office/types'
 import type { PersonalityProjection } from '../../../core/protocol/personality'
 import { ABSENT_RELAY_PROJECTION, type RelayProjection } from '../../../core/protocol/relay'
@@ -177,20 +178,26 @@ function work(over: Partial<WorkProjection> = {}): WorkProjection {
   }
 }
 
+/**
+ * Every Mission-status counter, at zero.
+ *
+ * Built from `MISSION_STATUSES` rather than written out, for the same reason the
+ * projection itself does: a status added to the domain must be counted, and a hand-written
+ * list of twelve is a place for one to be missed.
+ */
+function zeroCounts(): MissionProjection['counts'] {
+  return {
+    total: 0,
+    ...Object.fromEntries(MISSION_STATUSES.map((status) => [status, 0])),
+    needsAttention: 0,
+  } as MissionProjection['counts']
+}
+
 function mission(over: Partial<MissionProjection> = {}): MissionProjection {
   return {
     persistence: { mode: 'encrypted', reason: null, durable: true },
     missions: [],
-    counts: {
-      total: 0,
-      draft: 0,
-      active: 0,
-      paused: 0,
-      completed: 0,
-      failed: 0,
-      cancelled: 0,
-      needsAttention: 0,
-    },
+    counts: zeroCounts(),
     limits: {
       maxChildRuns: 64,
       maxConcurrentChildRuns: 4,
@@ -640,18 +647,49 @@ function activeMission(): MissionProjection {
         needsAttention: false,
         availableActions: ['pause', 'resume'],
         verification: null,
+        // Phase 47's board fields. Present and empty here because this fixture is about
+        // *two actions on a Mission*, not about a Mission in progress — and the
+        // projection must still be well-typed for a Mission that has never been planned.
+        priority: 'routine',
+        planRevision: null,
+        progress: {
+          steps: {
+            total: 0,
+            pending: 0,
+            blocked: 0,
+            delegated: 0,
+            running: 0,
+            verified: 0,
+            failed: 0,
+            cancelled: 0,
+            skipped: 0,
+          },
+          planSteps: 0,
+          observed: 0,
+          reported: 0,
+          requestedQuantity: null,
+          quantitySatisfied: null,
+        },
+        currentStep: null,
+        nextAction: null,
+        blockers: [],
+        pendingApproval: null,
+        evidence: { total: 0, observed: 0, reported: 0, expired: 0, uncertain: 0 },
+        nextWake: null,
+        lastUpdatedAt: '2026-10-03T10:00:00.000Z',
+        awaitingOwner: false,
+        budgetRemaining: {
+          modelCalls: 0,
+          actions: 0,
+          externalRequests: 0,
+          retries: 0,
+          delegations: 0,
+          planRevisions: 0,
+          concurrentDelegations: 0,
+        },
       },
     ],
-    counts: {
-      total: 1,
-      draft: 0,
-      active: 1,
-      paused: 0,
-      completed: 0,
-      failed: 0,
-      cancelled: 0,
-      needsAttention: 0,
-    },
+    counts: { ...zeroCounts(), total: 1, active: 1 },
   })
 }
 

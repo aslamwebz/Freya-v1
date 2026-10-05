@@ -43,10 +43,19 @@ import type { VoiceSttAdapter, VoiceTranscriptFragment, VoiceTtsAdapter, WakeGat
 import { WorkforceEngine } from './workforce/engine'
 import type { SubordinateWorkerScope, WorkforceOwnerScope } from './workforce/authority'
 import { ABSENT_WORKFORCE_PROJECTION } from './workforce/projection'
-import { workerPrincipalId } from './workforce/types'
+import { isAssignableToWorker, isTerminalAssignmentStatus, workerPrincipalId } from './workforce/types'
 import type { WORKFORCE_LIMITS } from './workforce/types'
 import type { WorkforceProjection, WorkforceWorkerDetail } from './workforce/types'
 import { MissionEngine, type WorkPort } from './missions/engine'
+import type { MissionCapabilityPort } from './missions/autonomy/types'
+import type { MissionAuthorityPort } from './missions/autonomy/authority'
+import type { WorkRisk } from './work/types'
+import {
+  MissionAutonomyRuntime,
+  type MissionEnginePort,
+  type StepOutcome,
+} from './missions/autonomy/runtime'
+import type { DecisionTrigger } from './missions/autonomy/continuation'
 import { ABSENT_MISSION_PROJECTION } from './missions/projection'
 import type { MissionCommandOutcome, MissionDetail, MissionProjection } from './missions/types'
 import { isTerminalMissionStatus } from './missions/types'
@@ -855,6 +864,27 @@ export interface Core {
    */
   mission(): MissionProjection
   /**
+   * Mark a Mission's goal as ready to be planned.
+   *
+   * `draft → active` is Phase 7's door for a hand-driven Mission and deliberately skips
+   * planning. The autonomy loop starts from `ready`, so this is how a Mission is handed over
+   * to it.
+   */
+  readyMission(missionId: string): Promise<MissionCommandOutcome | null>
+  /**
+   * Advance one Mission by exactly one decision.
+   *
+   * The single public door to the autonomy loop. `trigger` is required — a caller says why
+   * it is asking, and the reason is journalled with the decision.
+   *
+   * **There is no loop.** No method advances until a Mission settles, and no timer calls
+   * this on a cadence: a Mission moves because somebody asked it to, once. A scheduler here
+   * would be a hidden continuous inference, which is the thing this subsystem must not have.
+   *
+   * `null` means the runtime is not built, which a surface can render rather than crash on.
+   */
+  advanceMission(missionId: string, trigger: DecisionTrigger): Promise<StepOutcome | null>
+  /**
    * One worker with its mailbox, decrypted from this process's memory.
    *
    * The counterpart to the projection, and the reason message bodies are kept out of
@@ -1397,6 +1427,15 @@ class FreyaCore implements Core {
    */
   private workforceEngine: WorkforceEngine | undefined
   private workRegistry: WorkRegistry | undefined
+
+  /**
+   * The Mission autonomy runtime, or undefined when it was not built.
+   *
+   * Optional rather than throwing, for the same reason `missionEngine` is: `mission()` and
+   * `advanceMission()` have to report "not up yet" instead of raising, so a surface can
+   * render that plainly during startup.
+   */
+  private missionAutonomy: MissionAutonomyRuntime | undefined
 
   constructor(private readonly options: CoreOptions) {
     this.newId = options.newId ?? (() => randomUUID())
@@ -2023,6 +2062,28 @@ class FreyaCore implements Core {
       limits: this.options.workforceLimits,
     })
     await this.workforceEngine.open()
+
+    // The autonomy runtime sits above all three: it plans Missions, delegates through the
+    // workforce and executes through Work. It is built last because every one of its ports
+    // reads a subsystem that must already exist, and it holds no state of its own — one
+    // `step()` is one decision, and there is no loop.
+    this.missionAutonomy = new MissionAutonomyRuntime({
+      fabric: this.fabric,
+      principalId: this.owner.id,
+      missions: this.missionAutonomyPort(),
+      capabilities: this.missionCapabilityPort(),
+      authority: this.missionAuthorityPort(),
+      delegate: (input) => this.delegateMissionStep(input),
+      execute: (input) => this.executeMissionStep(input),
+      now: this.options.now,
+      newId: this.options.newId,
+      onChange: () => {
+        this.publishMission()
+        this.syncContextMission()
+      },
+      stopAll: () => this.state.stopAll.active,
+      liveMissionCount: () => this.liveMissionCount(),
+    })
 
     // The Workforce seam, if anything filled it.
     //
@@ -4773,6 +4834,488 @@ private async buildForge(): Promise<void> {
       throw new Error('the Mission engine is not available')
     }
     return this.missionEngine
+  }
+
+  /* ------------------------------------------- Phase 47: the autonomy wiring */
+
+  /**
+   * The Mission writer, as the runtime sees it.
+   *
+   * Every method is the engine's own, forwarded — the runtime gets no wider a surface
+   * here than the engine already had. In particular there is no `openApproval`,
+   * `decideApproval` or `expireApproval` on this port: the engine no longer has those
+   * methods, because a Mission does not own approvals. Work's Guard opens gates and a
+   * person closes them through `work.approval.decide`, which is the only door in the
+   * codebase where an approval can become `approved`.
+   */
+  private missionAutonomyPort(): MissionEnginePort {
+    const engine = this.missionEngine as MissionEngine
+    return {
+      record: (missionId) => engine.record(missionId),
+      commitPlan: (input) => engine.commitPlan(input),
+      transitionStep: (input) => engine.transitionStep(input),
+      interruptStep: (input) => engine.interruptStep(input),
+      recordEvidence: (input) => engine.recordEvidence(input),
+      setBlocker: (input) => engine.setBlocker(input),
+      noteApprovalRequested: (input) => engine.noteApprovalRequested(input),
+      noteApprovalOutcome: (input) => engine.noteApprovalOutcome(input),
+      transition: (input) => engine.autonomyTransition(input),
+      setRequestedQuantity: (input) => engine.setRequestedQuantity(input),
+      recordCorrection: (input) => engine.recordCorrection(input),
+      recordAmbiguity: (input) => engine.recordAmbiguity(input),
+      scheduleWake: (input) => engine.scheduleWake(input),
+      fireWake: (input) => engine.fireWake(input),
+      recordDecision: (input) => engine.recordDecision(input),
+      charge: (input) => engine.charge(input),
+      noteBudgetExceeded: (input) => engine.noteBudgetExceeded(input),
+      requestCompletion: (missionId) => engine.requestCompletion(missionId),
+      writeIntent: (missionId, intent) => engine.writeIntent(missionId, intent),
+      readIntent: (missionId) => engine.readIntent(missionId),
+    }
+  }
+
+  /**
+   * What the planner may plan with: Core's own registry, read-only.
+   *
+   * There is no `register` reachable from here, so a planner cannot widen the set of
+   * things Freya can do — "the plan asked for a capability nobody registered" is a
+   * blocked step, not a new capability.
+   *
+   * `requiresApproval` is read from the **registered capability**, not from the step. That
+   * is the whole point of reading the registry rather than the plan: the plan may make a
+   * step *more* gated, never less, and a planner that could state its own risk for a
+   * capability would be able to talk Guard out of a gate.
+   */
+  private missionCapabilityPort(): MissionCapabilityPort {
+    return {
+      lookup: (capability) => {
+        const found = this.workRegistry?.capability(capability)
+        if (found === undefined) return null
+        return {
+          risk: found.risk,
+          requiresApproval: found.risk === 'consequential',
+          // The capability's **own declared pairing**, or null. Not resolved to a default:
+          // a planner that cannot pair these honestly must leave the capability out, and a
+          // silent fallback would hand it `test.always-fails` and retry forever.
+          verifier: found.verifier ?? null,
+        }
+      },
+      verifiers: () => this.workRegistry?.verifierNames() ?? [],
+      known: () => this.workRegistry?.names() ?? [],
+    }
+  }
+
+  /**
+   * The authority gate's view of the world.
+   *
+   * Three reads and no grants. There is no `requestApproval` here, and there is no method
+   * anywhere on this port, the engine or the runtime that can open, approve or expire a
+   * gate — the only one is `work.approval.decide`, behind a Guard evaluation of the owner.
+   *
+   * `maySpend` returns false unconditionally, written as a call rather than a comment so a
+   * test can assert it is consulted and a future grant cannot make it true without someone
+   * editing this line in review.
+   *
+   * `approvalState` is a **read** of Work's own `ApprovalRecord`, resolved from the step's
+   * durable `runId` so the gate matched is the one that Run opened. There is deliberately
+   * no branch here that could turn an `expired` gate into `approved`, and an approval
+   * status Core does not recognise is reported as unsettled rather than resolved in the
+   * Mission's favour.
+   */
+  private missionAuthorityPort(): MissionAuthorityPort {
+    return {
+      stopAll: () => this.state.stopAll.active,
+      // Read against the **Work registry**, not the Guard vocabulary. A Work capability
+      // is registered or it is not, and whether it *may* run is decided by Guard when the
+      // Run executes — which the executor reaches through Work, as it always has.
+      mayUse: (capability) => this.workRegistry?.capability(capability) !== undefined,
+      maySpend: () => false,
+      approvalState: async ({ runId }) => {
+        // Resolved from the `runId` the executor returned, **not** from the step record.
+        //
+        // The step cannot carry it yet: writing an id needs a step transition, and a step
+        // that is `running` cannot transition to `running`. So the runtime — the only
+        // party that saw the executor's answer — carries it here, and this matches the
+        // gate to the exact Run that opened it. Looking it up by step name instead would
+        // let two Runs of one Mission be confused for each other.
+        if (runId === null) return { ok: true as const, state: { kind: 'none' as const } }
+        const work = this.workEngine
+        if (work === undefined) return { ok: false as const, reason: 'Work is not available' }
+        const approvals = work.snapshot().approvals
+        let found: string | null = null
+        for (const [approvalId, approval] of approvals) {
+          if (approval.runId !== runId) continue
+          // The *open* gate for this Run. A settled one is reported through the same
+          // lookup below so the Mission learns how it went; picking the open one first
+          // means a Run that somehow holds two gates waits on the real one.
+          if (approval.status === 'pending') {
+            found = approvalId
+            break
+          }
+          if (found === null) found = approvalId
+        }
+        if (found === null) return { ok: true as const, state: { kind: 'none' as const } }
+        const approval = approvals.get(found)
+        if (approval === undefined) return { ok: true as const, state: { kind: 'none' as const } }
+        if (approval.status === 'pending') {
+          return {
+            ok: true as const,
+            state: { kind: 'open' as const, approvalId: found, requestedAt: approval.requestedAt },
+          }
+        }
+        if (
+          approval.status !== 'approved' &&
+          approval.status !== 'denied' &&
+          approval.status !== 'expired' &&
+          approval.status !== 'cancelled'
+        ) {
+          return { ok: true as const, state: { kind: 'none' as const } }
+        }
+        return {
+          ok: true as const,
+state: {
+              kind: 'settled' as const,
+              approvalId: found,
+              outcome: approval.status,
+              decidedAt: approval.decidedAt,
+              requestedAt: approval.requestedAt,
+            },
+        }
+      },
+    }
+  }
+
+  /**
+   * How many Missions are live.
+   *
+   * Read for the swarm guard in `decide`, which holds back the last concurrency slot
+   * whenever this is above one. It only ever makes the system more cautious: there is no
+   * path by which a larger count causes more work.
+   */
+  private liveMissionCount(): number {
+    const projection = this.missionEngine?.projection()
+    if (projection === undefined) return 0
+    return projection.missions.filter((mission) => {
+      return mission.status === 'ready' || mission.status === 'planning' || mission.status === 'active'
+    }).length
+  }
+
+  /**
+   * Mark a Mission's goal as ready to be planned.
+   *
+   * `draft → active` is Phase 7's legacy edge and deliberately **skips planning**: it is the
+   * door for a Mission a person is driving by hand. The autonomy loop starts from `ready`,
+   * so this is how a person hands a Mission over to it — one explicit command, rather than
+   * the loop quietly re-planning anything already active.
+   */
+  async readyMission(missionId: string): Promise<MissionCommandOutcome | null> {
+    if (this.missionEngine === undefined) return null
+    return await this.missionEngine.markGoalReady(missionId)
+  }
+
+  /**
+   * Advance one Mission by one decision.
+   *
+   * The **single public door** to the autonomy loop. `trigger` is not optional and there is
+   * no default of "tick": a caller says why it is asking, and that reason is journalled with
+   * the decision.
+   *
+   * There is deliberately **no** method here that loops until a Mission settles, and no
+   * timer that calls this on a cadence. A Mission advances because somebody asked it to,
+   * once — and the absence of a loop is the enforcement of "no hidden continuous
+   * inference", which a scheduler would have quietly reintroduced.
+   */
+  async advanceMission(missionId: string, trigger: DecisionTrigger): Promise<StepOutcome | null> {
+    if (this.missionAutonomy === undefined) return null
+    const outcome = await this.missionAutonomy.step(missionId, trigger, null)
+    // Closed *after* the decision, and only for a Mission that settled — see the method's
+    // own note. Doing it after rather than before means the assignment was open for every
+    // step that used it, so the workforce's audit trail shows the work as in flight.
+    if (outcome !== null) await this.releaseMissionAssignments(missionId)
+    return outcome
+  }
+
+  /**
+   * Close the workforce assignments a Mission opened, once it has settled.
+   *
+   * ## Why this exists, and why it is only called here
+   *
+   * Delegation opens a `workforce.claim`/assignment per step and **nothing else closes them**.
+   * `WorkforceEngine` settles an assignment when it expires, when the owner cancels it, or
+   * when the workforce stops — and a Mission's steps complete long before any of those. So
+   * without this, a worker holds three open assignments after three steps and the fourth
+   * delegation is refused with "that worker already has its 3 assignments open", which then
+   * blocks the Mission on `no_capable_worker`.
+   *
+   * That failure is invisible from outside: it looks exactly like "the roster has nobody
+   * free", which is a legitimate answer to a different question. Which is why the closing is
+   * done here, next to the thing that opened it, rather than left to a subsystem that has no
+   * idea a Mission existed.
+   *
+   * ## Why it is safe
+   *
+   * Only assignments carrying this `missionId` are touched, and only when the Mission is
+   * terminal. A Mission still running leaves its assignments open, so a person reading the
+   * workforce can see that work is in flight — closing them early would make a running
+   * Mission's delegation look finished, which is the same class of lie as a completed step
+   * that never ran.
+   *
+   * Every failure is swallowed: a Mission's outcome does not depend on its paperwork being
+   * tidied, and a refusal here must not turn a completed Mission into a failed one.
+   */
+  private async releaseMissionAssignments(missionId: string): Promise<void> {
+    const workforce = this.workforceEngine
+    if (workforce === undefined) return
+    const projection = this.missionEngine?.record(missionId)
+    if (projection === undefined) return
+    if (!isTerminalMissionStatus(projection.status)) return
+
+    const scope = workforce.ownerScope()
+    // Read through the **workers**, which is the only place a retained assignment list
+    // appears on this projection. `WorkerView.assignments` is a retention slice, so a Mission
+    // with more steps than the slice holds could leave some open; that is preferable to a
+    // second enumeration that could disagree with the one the board shows.
+    for (const worker of scope.projection().workers) {
+      for (const assignment of worker.assignments) {
+        if (assignment.missionId !== missionId) continue
+        // `open` is the nonterminal status. `isTerminalAssignmentStatus` is used rather than
+        // a string compare so a new terminal status cannot slip past and be "closed" twice.
+        if (isTerminalAssignmentStatus(assignment.status)) continue
+        await scope.cancelAssignment(assignment.assignmentId).catch(() => undefined)
+      }
+    }
+  }
+
+  /**
+   * Give a registered worker the step's *thinking*, and let Work do the work.
+   *
+   * ## The vocabulary problem, and why this method is shaped around it
+   *
+   * A Mission step names a **Work capability** (`test.record`, `find.video`). The workforce
+   * roster holds **Guard vocabulary capabilities**, and Phase 8's rule is that a worker's set
+   * is `WORKER_CAPABILITIES` — which is `cognition.request` alone. A subordinate agent can
+   * ask to think and that is the end of it; execution is Work's business.
+   *
+   * So matching a worker against the step's Work capability name could never succeed. An
+   * earlier version of this did exactly that, matched nothing, and made **every** Mission
+   * through Core block on `no capable worker` — a total failure that read as a correct
+   * refusal, because the refusal it returned was the right refusal for a genuinely empty
+   * roster. The two are indistinguishable from outside, which is what made it dangerous.
+   *
+   * What is delegated is therefore **cognition**: the worker takes the step to think about,
+   * under the Mission's budget, and Work executes the capability as the owner. That is the
+   * same shape as every other assignment in the system — a worker is assigned work to think
+   * about, never a privilege to act with.
+   *
+   * ## The two refusals, both structural
+   *
+   * 1. **No worker means no delegation.** There is no fallback to running the step inline as
+   *    Freya's own principal. Doing so would bypass the workforce's budget, its audit trail
+   *    and its concurrency accounting.
+   * 2. **No worker is created.** `WorkforceEngine` has no method this calls that could add
+   *    one, so a Mission cannot solve "no capable worker" by inventing a worker.
+   *
+   * The assignment goes through the workforce's own owner scope, which is where its budget is
+   * charged; going around it would give a Mission unlimited assignments.
+   */
+  private async delegateMissionStep(input: {
+    missionId: string
+    stepId: string
+    capability: string
+  }): Promise<{ ok: true; workerId: string; assignmentId: string } | { ok: false; reason: string }> {
+    const workforce = this.workforceEngine
+    if (workforce === undefined) return { ok: false, reason: 'there is no workforce' }
+    const scope = workforce.ownerScope()
+    const projection = scope.projection()
+    const available = projection.workers.filter(
+      (worker) => worker.status !== 'retired' && worker.status !== 'stopped',
+    )
+    // Only a worker that can actually think can be given this step. The check is against
+    // `isAssignableToWorker` rather than against the projection's own list, so a roster that
+    // somehow claimed a worker could execute would still be refused here.
+    //
+    // A worker with **no** capabilities is skipped rather than treated as capable. That is
+    // the interesting case: Phase 8's roster begins empty, and a Mission that treated an
+    // empty roster as "somebody will do it" would report `no_capable_worker` for the wrong
+    // reason — as though the workforce were full and none of them were suitable.
+    const capable = available.find((worker) =>
+      worker.capabilities.some((capability) => isAssignableToWorker(capability)),
+    )
+    if (capable === undefined) {
+      return {
+        ok: false,
+        reason:
+          available.length === 0
+            ? 'there is no worker in the roster'
+            : 'no registered worker can take this step',
+      }
+    }
+    const assignable = capable.capabilities.filter((capability) => isAssignableToWorker(capability))
+    const assignment = await scope.assign({
+      workerId: capable.workerId,
+      capabilities: assignable,
+      // **Empty.** A worker receives no context references, ever, from a Mission.
+      //
+      // That is not an oversight: Phase 8's rule is that a subordinate agent does not
+      // inherit the user's information, and the only way to keep that true is for the
+      // delegation path to have no way to pass any. A Mission's private intent is the most
+      // sensitive thing Freya holds, and a step receives its *capability*, never its goal —
+      // so a worker learns what may be done, not what it is being done for.
+      contextRefs: [],
+      missionId: input.missionId,
+    })
+    if (!assignment.ok) {
+      return { ok: false, reason: assignment.reason ?? 'the assignment was refused' }
+    }
+    return { ok: true, workerId: capable.workerId, assignmentId: assignment.assignmentId ?? '' }
+  }
+  /**
+   * Run one step through Work.
+   *
+   * A Run is created and attached to the Mission in one call, through
+   * `attachChildRunWhileCreating` — Work's admission and the Mission's admission inside the
+   * Mission's own queue. Doing it as two calls would leave a window in which a Run existed
+   * with a Mission parent the Mission had not corroborated, which is precisely the defect
+   * that method exists to prevent.
+   *
+   * `requiresApproval` is set when the step's capability is gated, which is how the Mission
+   * **asks** Work for a gate rather than opening one. Work's Guard then evaluates the
+   * capability inside `drive()` and opens the real gate, so a person answers exactly once,
+   * on Work's surface, through `work.approval.decide`.
+   *
+   * The return value is a **verdict, not a fact**. `verified` is what Work's verifier said;
+   * the runtime treats it as evidence and the Mission verifier is still what decides
+   * whether the *Mission* was achieved. `awaitingApproval` is `true` when Work parked the
+   * Run at a gate — `ok: true`, because the executor did its job and the answer was "a
+   * person has to decide first". Nothing ran and nothing was disproved.
+   */
+  private async executeMissionStep(input: {
+    missionId: string
+    stepId: string
+    capability: string
+    verifier: string
+    risk: WorkRisk
+    requiresApproval: boolean
+    signal: AbortSignal
+  }): Promise<
+    | {
+        readonly ok: true
+        readonly runId: string
+        readonly verified: boolean
+        readonly observedResults: number
+        readonly reportedResults: number
+        readonly summaryLength: number
+        readonly awaitingApproval: boolean
+      }
+    | { readonly ok: false; readonly reason: string }
+  > {
+    const engine = this.requireWork()
+    // Resolved against the registry, not the engine. `WorkEngine` deliberately exposes no
+    // capability reader: a caller that could ask it "what does this capability need?" could
+    // then choose the answer, and choosing a capability's risk is how a consequential
+    // action gets marked routine.
+    const capability = this.requireWorkRegistry().capability(input.capability)
+    if (capability === undefined) return { ok: false, reason: `no such capability: ${input.capability}` }
+    const verifier = this.requireWorkRegistry().verifier(input.verifier)
+    if (verifier === undefined) return { ok: false, reason: `no such verifier: ${input.verifier}` }
+
+    const created = await engine.createRun({
+      steps: [
+        {
+          key: input.stepId,
+          label: input.stepId,
+          capability: input.capability,
+          verifier: input.verifier,
+          // The verifier's **expected value**, which a verifier must be able to check
+          // against.
+          //
+          // This is not a shortcut around verification — it is the only way the check can
+          // happen at all. `test.record.matches` compares the observation against
+          // `input.expect`; a Mission Run built with no input leaves it null and the
+          // verifier reports "the step declared no expected result to check against" on
+          // every single attempt. The Mission then retried to its ceiling and blocked, which
+          // looked exactly like a Mission whose work kept failing.
+          //
+          // The value is the **step id** — Core's own identifier — and not anything derived
+          // from the goal, because the goal is private and this input is journalled into the
+          // Work plan. `test.record` echoes its label into `data.produced`, so a comparison
+          // against the step id is a genuine check that the capability returned what the
+          // step it was given produced, rather than one that passes unconditionally.
+          input: { expect: input.stepId },
+          // The **request**, never the decision. Work's Guard decides whether this becomes
+          // a gate, and a person decides it.
+          ...(input.requiresApproval ? { requiresApproval: true } : {}),
+        },
+      ],
+      parent: { kind: 'mission', id: input.missionId },
+      // One step, one action, one attempt. The Mission's own budget bounds the whole
+      // thing; a Run that could loop or retry would be a second, unaccounted-for budget —
+      // and `maxAttemptsPerStep: 1` stops a failing capability being retried inside the
+      // Run, silently, behind the Mission's retry accounting.
+      limits: { maxSteps: 1, maxActions: 1, maxAttemptsPerStep: 1 },
+    })
+    if (!created.ok || created.runId === undefined) {
+      return { ok: false, reason: created.reason ?? 'the Run could not be created' }
+    }
+    const runId = created.runId
+    const attached = await this.requireMission().attachChildRunWhileCreating(input.missionId, async () => runId)
+    if (!attached.ok) {
+      // The Run exists but the Mission refused it. Cancelling rather than leaving it
+      // queued is deliberate: an orphan Run with a Mission parent that did not admit it is
+      // exactly the state this pairing exists to make impossible.
+      await engine.cancelRun(runId, 'its Mission refused to attach it').catch(() => undefined)
+      return { ok: false, reason: attached.reason ?? 'the Run could not be attached' }
+    }
+
+    const started = await engine.startRun(runId)
+    if (!started.ok) return { ok: false, reason: started.reason ?? 'the Run could not start' }
+
+    const snapshot = engine.snapshot()
+    const status = snapshot.runs.get(runId)?.status
+
+    // Observed results come from **verified steps**, not from a capability's return value.
+    // A Run that completed while its step's verifier said no contributes nothing at all to
+    // progress, and counting it would be the easiest way for this subsystem to claim work
+    // it never checked.
+    const ordered = snapshot.runSteps.get(runId) ?? []
+    let verified = 0
+    for (const stepId of ordered) {
+      if (snapshot.steps.get(stepId)?.status === 'verified') verified += 1
+    }
+
+    // A Run parked in `awaiting_approval` is not a failure. The gate is upstream of
+    // execution, so nothing ran and nothing was disproved. Reported as `ok: true` with
+    // `awaitingApproval`, and the runtime then reads the gate through `approvalState`.
+    if (status === 'awaiting_approval') {
+      return {
+        ok: true,
+        runId,
+        verified: false,
+        observedResults: 0,
+        reportedResults: 0,
+        summaryLength: 0,
+        awaitingApproval: true,
+      }
+    }
+    if (status === 'waiting') {
+      return { ok: false, reason: 'the step is waiting for an external condition' }
+    }
+    if (status === 'failed' || status === 'cancelled') {
+      return { ok: false, reason: `the Run did not complete: ${status}` }
+    }
+
+    return {
+      ok: true,
+      runId,
+      verified: verified > 0 && status === 'completed',
+      // One observation per verified step. A step verified the existence of the thing it
+      // looked for; it did not find twelve of them. Counting more would be inventing
+      // progress.
+      observedResults: verified > 0 && status === 'completed' ? verified : 0,
+      reportedResults: 0,
+      summaryLength: 0,
+      awaitingApproval: false,
+    }
   }
 
   /**

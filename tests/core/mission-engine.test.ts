@@ -138,7 +138,10 @@ describe('lifecycle', () => {
     const id = created.missionId as string
 
     expect(await engine.activate(id)).toMatchObject({ operation: 'activated', ok: true, status: 'active' })
-    expect(await engine.pause(id)).toMatchObject({ operation: 'paused', ok: true, status: 'paused' })
+    expect(await engine.pause(id)).toMatchObject({ operation: 'paused', ok: true, status: 'stopped' })
+    // Phase 7's meaning, unchanged: the owner pressed resume, so it runs. `stopped -> ready`
+    // exists for the autonomous path — "the gate is open again" and "it is running" are two
+    // different facts there — but a window's Resume button means the second.
     expect(await engine.resume(id)).toMatchObject({ operation: 'resumed', ok: true, status: 'active' })
     expect(await engine.cancel(id)).toMatchObject({ operation: 'cancelled', ok: true, status: 'cancelled' })
     await engine.close()
@@ -146,11 +149,11 @@ describe('lifecycle', () => {
   })
 
   it('records a resume as a resume, not a second activation', async () => {
-    // "Was this ever paused?" is answerable only if the journal keeps these apart,
-    // and the two edges land on the same status, so only the origin tells them
-    // apart.
+    // "Was this ever stopped?" is answerable only if the journal keeps these apart, and
+    // Phase 47's twelve-status machine has many edges landing on the same status, so
+    // only the origin tells them apart.
     const { engine, fabric } = await engineOver(workStub())
-    const id = (await engine.create({ title: 'Once paused', intent: 'Interrupt me.' })).missionId as string
+    const id = (await engine.create({ title: 'Once stopped', intent: 'Interrupt me.' })).missionId as string
     await engine.activate(id)
     await engine.pause(id)
     await engine.resume(id)
@@ -268,13 +271,14 @@ describe('pause and cancel propagation', () => {
     // The race: both in flight at once.
     const [paused, attached] = await Promise.all([engine.pause(id), engine.attachChildRun(id, 'r1')])
 
-    // Exactly one of them may have taken effect, and a paused Mission admits no
-    // new Run — so if the pause won, the attachment must have refused.
+    // Exactly one of them may have taken effect, and a stopped Mission admits no new Run
+    // — so if the stop won, the attachment must have refused. `stopped` rather than the
+    // old `paused`, and the refusal names the live statuses rather than `active`.
     if (paused.ok) {
       expect(attached.ok).toBe(false)
-      expect(attached.reason).toMatch(/only an active Mission/)
+      expect(attached.reason).toMatch(/only a live Mission/)
     }
-    expect(engine.snapshot().missions.get(id)?.status).toBe(paused.ok ? 'paused' : 'active')
+    expect(engine.snapshot().missions.get(id)?.status).toBe(paused.ok ? 'stopped' : 'active')
     await engine.close()
     await fabric.close()
   })
@@ -376,13 +380,25 @@ describe('completion requires verification', () => {
     return { engine, fabric, id, work }
   }
 
-  it('refuses to complete with no child Run at all', async () => {
+  it('refuses to complete with no child Run and no evidence', async () => {
+    // Phase 47 changed *why* this refuses, and the change matters.
+    //
+    // Before, an empty child-Run list was refused at the door, which meant a Mission
+    // driven by observed evidence rather than by Runs could never complete — "find 100
+    // cat videos" is established by 100 observations whether or not a Run exists. So the
+    // refusal now belongs to the **verifier**, which can see the evidence counts this
+    // engine cannot judge on its own.
+    //
+    // What is unchanged is the outcome: a Mission with nothing behind it is not
+    // established, and it comes back `verifying` rather than completed.
     const { engine, fabric } = await engineOver(workStub())
     const id = (await engine.create({ title: 'Empty', intent: 'Nothing attempted.' })).missionId as string
     await engine.activate(id)
     const result = await engine.requestCompletion(id)
     expect(result.ok).toBe(false)
-    expect(result.reason).toMatch(/no Work has been attached/)
+    expect(result.reason).toBe(MISSION_REASONS.no_evidence)
+    // Still checking, and not completed. The Mission is *live* again rather than
+    // settled: a verification that did not establish is not a failed outcome.
     expect(engine.snapshot().missions.get(id)?.status).toBe('active')
     await engine.close()
     await fabric.close()
@@ -428,7 +444,7 @@ describe('completion requires verification', () => {
     await fabric.close()
   })
 
-  it('completes a draft Mission never, because only an active one may', async () => {
+  it('completes a draft Mission never, because only a live one may', async () => {
     const work = workStub()
     const { engine, fabric } = await engineOver(work)
     const id = (await engine.create({ title: 'Still draft', intent: 'Not activated.' })).missionId as string
@@ -437,7 +453,7 @@ describe('completion requires verification', () => {
     await engine.attachChildRun(id, 'r1')
     const result = await engine.requestCompletion(id)
     expect(result.ok).toBe(false)
-    expect(result.reason).toMatch(/only an active Mission/)
+    expect(result.reason).toMatch(/cannot be completed from draft/)
     await engine.close()
     await fabric.close()
   })
@@ -490,10 +506,16 @@ describe('verification is bounded', () => {
     const result = await engine.requestCompletion(id)
 
     // Not established AND not failed: the honest answer is that nobody answered.
+    //
+    // And the Mission stays `verifying`, which is the Phase 47 change and the reason the
+    // state exists. A verdict would return it to `active` — that was an answer — but a
+    // timeout is *not* an answer, so the Mission keeps owning an open question. Returning
+    // it to `active` would say "we finished looking", which is not what happened.
     expect(result.operation).toBe('verification-timeout')
     expect(result.ok).toBe(false)
     expect(result.reason).toBe(MISSION_REASONS.verification_timeout)
-    expect(engine.snapshot().missions.get(id)?.status).toBe('active')
+    expect(result.status).toBe('verifying')
+    expect(engine.snapshot().missions.get(id)?.status).toBe('verifying')
     await engine.close()
     await fabric.close()
   })
@@ -516,8 +538,9 @@ describe('verification is bounded', () => {
     // The verifier finally answers, long after the wall clock gave up.
     release()
     await new Promise((resolve) => setTimeout(resolve, 20))
-    // "verification passed" must not appear after the deadline.
-    expect(engine.snapshot().missions.get(id)?.status).toBe('active')
+    // "verification passed" must not appear after the deadline, and the Mission stays in
+    // the state that says the question is still open.
+    expect(engine.snapshot().missions.get(id)?.status).toBe('verifying')
     expect(engine.snapshot().missions.get(id)?.verification?.state).toBe('timeout')
     await engine.close()
     await fabric.close()
@@ -718,11 +741,41 @@ describe('progress is derived, never invented', () => {
     await engine.cancel(cancelled)
 
     const byId = new Map(engine.projection().missions.map((m) => [m.missionId, m]))
-    expect(byId.get(draft)?.availableActions).toEqual(['activate', 'cancel'])
-    expect(byId.get(active)?.availableActions).toEqual(['pause', 'requestCompletion', 'cancel', 'fail'])
+    // Phase 47 widened the surface, so the lists are longer — and each addition is
+    // something an owner may do to a Mission that has not settled. `stop` replaces the
+    // old `pause`: it is the same button with a truer name, and `correct` is the door to
+    // intent patching.
+    expect(byId.get(draft)?.availableActions).toEqual(['activate', 'stop', 'correct', 'cancel'])
+    expect(byId.get(active)?.availableActions).toEqual([
+      'requestCompletion',
+      'stop',
+      'correct',
+      'cancel',
+      'fail',
+    ])
     // A terminal Mission offers nothing. Offering a control Core would refuse teaches
     // the user that buttons lie.
     expect(byId.get(cancelled)?.availableActions).toEqual([])
+    await engine.close()
+    await fabric.close()
+  })
+
+  it('offers the control that is actually about each parked status', async () => {
+    // The four parked statuses each need a different thing from a person, and offering
+    // the wrong control is how a Mission gets waved through the state it is in.
+    const { engine, fabric } = await engineOver(workStub())
+
+    const stopped = (await engine.create({ title: 'Stopped', intent: 'x' })).missionId as string
+    await engine.activate(stopped)
+    await engine.pause(stopped)
+    const byId = new Map(engine.projection().missions.map((m) => [m.missionId, m]))
+    expect(byId.get(stopped)?.status).toBe('stopped')
+    // Only the owner's resume releases a stopped Mission, so that is what is offered — and
+    // it is Phase 7's `resume`, not `resumeAutonomy`, because reopening a latched gate and
+    // running is one action while carrying on from a wait is a different one.
+    expect(byId.get(stopped)?.availableActions).toContain('resume')
+    expect(byId.get(stopped)?.availableActions).not.toContain('requestCompletion')
+
     await engine.close()
     await fabric.close()
   })
@@ -822,6 +875,203 @@ describe('durability is reported honestly', () => {
   })
 })
 
+describe('a corrected quantity survives a restart', () => {
+  /**
+   * These are replay tests, and the second engine is the whole point of them: nothing is
+   * carried across in memory, so any number the revived engine reports has to have come
+   * out of the journal.
+   *
+   * The defect they cover was invisible to every other test in this file. An earlier
+   * version journalled `changedFields: ['quantity']` and then wrote the new number
+   * straight into the record, so `record()` reported the corrected quantity and every
+   * assertion against the live engine passed — while the fold had nothing to apply, and
+   * the first restart put the Mission silently back to asking for 100 with no event
+   * explaining why.
+   */
+  async function reopened(clock: number, work: ReturnType<typeof workStub>) {
+    const store = await JsonlEventStore.open(join(directory, 'engine.jsonl'))
+    const fabric = await EventFabric.open({ store })
+    const engine = new MissionEngine({
+      fabric,
+      store: new MemoryMissionStore(),
+      work: work as never,
+      principalId: 'owner',
+      now: () => new Date(clock),
+      newId: (() => {
+        let n = 0
+        return () => `restart-id-${(n += 1)}`
+      })(),
+    })
+    await engine.open()
+    return { engine, fabric }
+  }
+
+  it('replays to the corrected number, not the one the Mission was created with', async () => {
+    const work = workStub()
+    const start = Date.parse('2026-10-01T09:00:00.000Z')
+    const first = await engineOver(work, undefined, { now: () => new Date(start) })
+    const id = (
+      await first.engine.create({ title: 'cat videos', intent: 'find 100 cat videos' }, undefined, { requestedQuantity: 100 })
+    ).missionId as string
+    await first.engine.activate(id)
+    expect(first.engine.record(id)?.requestedQuantity).toBe(100)
+
+    const corrected = await first.engine.setRequestedQuantity({ missionId: id, requestedQuantity: 12 })
+    expect(corrected.ok).toBe(true)
+    expect(first.engine.record(id)?.requestedQuantity).toBe(12)
+    await first.engine.close()
+    await first.fabric.close()
+
+    const second = await reopened(start + 60_000, work)
+    expect(second.engine.record(id)?.requestedQuantity).toBe(12)
+    await second.engine.close()
+    await second.fabric.close()
+  })
+
+  it('tells "the quantity was removed" apart from "the quantity did not change"', async () => {
+    const work = workStub()
+    const start = Date.parse('2026-10-01T09:00:00.000Z')
+    const first = await engineOver(work, undefined, { now: () => new Date(start) })
+    const id = (
+      await first.engine.create({ title: 'cat videos', intent: 'find 100 cat videos' }, undefined, { requestedQuantity: 100 })
+    ).missionId as string
+    await first.engine.activate(id)
+    // `null` is a *value*, not an absence: it means the owner stopped asking for a count.
+    // A fold that collapsed it with "unchanged" would keep enforcing a target that no
+    // longer exists.
+    await first.engine.setRequestedQuantity({ missionId: id, requestedQuantity: null })
+    await first.engine.close()
+    await first.fabric.close()
+
+    const second = await reopened(start + 60_000, work)
+    expect(second.engine.record(id)?.requestedQuantity).toBeNull()
+    await second.engine.close()
+    await second.fabric.close()
+  })
+
+  it('refuses a correction that attaches a quantity to one it did not change', async () => {
+    const work = workStub()
+    const { engine, fabric } = await engineOver(work)
+    const id = (
+      await engine.create({ title: 'cat videos', intent: 'find 100 cat videos' }, undefined, { requestedQuantity: 100 })
+    ).missionId as string
+    await engine.activate(id)
+    // Claiming a new target inside a correction about the *location* is how a goal moves
+    // through a path nobody reviewed. The binding is checked in the engine and again in
+    // the validator, so neither layer can be the only one holding it.
+    const outcome = await engine.recordCorrection({
+      missionId: id,
+      correctionId: 'c-context',
+      kind: 'patch',
+      changedFields: ['context'],
+      settledSteps: 0,
+      preservedEvidence: 0,
+      replannedFrom: null,
+      requestedQuantity: 3,
+    })
+    expect(outcome.ok).toBe(false)
+    expect(engine.record(id)?.requestedQuantity).toBe(100)
+    await engine.close()
+    await fabric.close()
+  })
+})
+
+describe('an approval is a pointer to a Work gate, and survives a restart as one', () => {
+  /**
+   * There is no expiry here to test, and that is the point.
+   *
+   * A Mission used to keep `MissionApprovalGate` records with their own
+   * `expiresAt`, clamped to the Mission deadline, and recovery compared the clock against
+   * them. All of that is gone: the gate is Work's, Work's TTL expires it, and Work writes
+   * `work.approval.expired`.
+   *
+   * What remains is a **pointer**, and the property worth testing is that a pointer
+   * survives a restart intact and that nothing on this side of the boundary can answer a
+   * question it is only holding.
+   */
+  async function noteGate(engine: MissionEngine, missionId: string) {
+    return engine.noteApprovalRequested({
+      missionId,
+      stepId: 's1',
+      approvalId: 'work-gate-1',
+      source: 'requested',
+      runId: 'run-s1',
+      requestedAt: '2026-10-01T09:00:05.000Z',
+    })
+  }
+
+  it('replays the pointer to the same Work gate', async () => {
+    const work = workStub()
+    const start = Date.parse('2026-10-01T09:00:00.000Z')
+    const first = await engineOver(work, undefined, { now: () => new Date(start) })
+    const id = (await first.engine.create({ title: 'gate', intent: 'do the consequential thing' }))
+      .missionId as string
+    await first.engine.activate(id)
+    expect((await noteGate(first.engine, id)).ok).toBe(true)
+    await first.engine.close()
+    await first.fabric.close()
+
+    const second = await engineOver(work, undefined, { now: () => new Date(start + 3_600_000) })
+    const reference = second.engine.record(id)?.approval
+    expect(reference?.approvalId).toBe('work-gate-1')
+    expect(reference?.stepId).toBe('s1')
+    expect(reference?.source).toBe('requested')
+    // The Run travels with the pointer, which is what lets a restarted Mission poll its
+    // gate without executing the step a second time.
+    expect(reference?.runId).toBe('run-s1')
+    // **Still open.** Work has not reported anything, so the Mission is still waiting — a
+    // restart does not withdraw the question, which is the defect this replaces.
+    expect(reference?.outcome).toBeNull()
+    await second.engine.close()
+    await second.fabric.close()
+  })
+
+  it('refuses an outcome for a gate it is not waiting on', async () => {
+    const work = workStub()
+    const { engine, fabric } = await engineOver(work)
+    const id = (await engine.create({ title: 'gate', intent: 'do something' })).missionId as string
+    await engine.activate(id)
+    // No pointer recorded, so there is nothing to report an outcome against. A stray
+    // outcome event would be a Mission asserting a decision about an approval it never
+    // asked Work about.
+    const stray = await engine.noteApprovalOutcome({ missionId: id, approvalId: 'work-gate-x', outcome: 'approved' })
+    expect(stray.ok).toBe(false)
+    expect(stray.reason).toMatch(/not waiting on that approval/)
+    await engine.close()
+    await fabric.close()
+  })
+
+  it('raises a blocker for a denial and for an expiry, and neither is a pass', async () => {
+    const work = workStub()
+    const { engine, fabric } = await engineOver(work)
+    const id = (await engine.create({ title: 'gate', intent: 'do something' })).missionId as string
+    await engine.activate(id)
+    await noteGate(engine, id)
+
+    await engine.noteApprovalOutcome({ missionId: id, approvalId: 'work-gate-1', outcome: 'denied' })
+    expect(engine.snapshot().missions.get(id)?.blockers.map((b) => b.code)).toContain('approval_denied')
+
+    const second = (await engine.create({ title: 'gate 2', intent: 'do something else' })).missionId as string
+    await engine.activate(second)
+    await noteGate(engine, second)
+    await engine.noteApprovalOutcome({ missionId: second, approvalId: 'work-gate-1', outcome: 'expired' })
+    // **Silence is not consent.** An expiry blocks exactly as a denial does, because the
+    // step will not run either way and only a person can change that.
+    expect(engine.snapshot().missions.get(second)?.blockers.map((b) => b.code)).toContain('approval_expired')
+    await engine.close()
+    await fabric.close()
+  })
+
+  it('has no method that could decide or expire an approval', async () => {
+    // Structural. The engine cannot open a gate, record a decision or expire one, so
+    // `work.approval.decide` is the only door in the codebase where an approval becomes
+    // approved.
+    const methods = Object.getOwnPropertyNames(MissionEngine.prototype).sort()
+    expect(methods).not.toContain('openApproval')
+    expect(methods).not.toContain('decideApproval')
+    expect(methods).not.toContain('expireApproval')
+  })
+})
 describe('recovery reconciles without inventing outcomes', () => {
   /** Rebuild an engine over the same journal, as a restart would. */
   async function reopen(directory: string, now: () => Date, work: ReturnType<typeof workStub>) {
@@ -887,7 +1137,7 @@ describe('recovery reconciles without inventing outcomes', () => {
     const mission = second.engine.snapshot().missions.get(id)
 
     // Not completed, because nothing established it.
-    expect(mission?.status).toBe('active')
+    expect(mission?.status).toBe('verifying')
     // And the interrupted request is still visibly unresolved rather than quietly
     // claimed as a pass or a failure.
     expect(mission?.verification?.state).toBe('requested')
@@ -1040,6 +1290,7 @@ describe('a damaged store is reported, not papered over', () => {
       missionId: 'm1',
       title: 't',
       intent: 'i',
+      intentShape: null,
       successCriteria: [],
       createdAt: '2026-10-01T09:00:00.000Z',
     })

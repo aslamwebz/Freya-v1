@@ -2,17 +2,31 @@ import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
 import type { PrincipalId } from '../protocol/core-protocol'
 import type { RunRecord, RunStatus, StepRecord } from '../work/types'
+import { isMissionPriority, missionBudget } from './autonomy/types'
+import { chargeBudget } from './autonomy/authority'
+import type {
+  MissionBudget,
+  MissionDecision,
+  MissionEvidenceCounts,
+  MissionEvidenceRecord,
+  MissionIntentShape,
+  MissionPriority,
+  MissionStepRecord,
+} from './autonomy/types'
 import { countChildren, liveChildCount, missionProjection, summarise, type WorkTruthPort } from './projection'
 import { reduceMissionState, initialMissionState } from './state'
 import type { MissionStore } from './store'
 import { MissionVerifierRegistry } from './verifier'
 import {
   DEFAULT_MISSION_LIMITS,
+  MAX_REQUESTED_QUANTITY,
   MISSION_REASONS,
   canTransitionMission,
+  isLiveMissionStatus,
   isTerminalMissionStatus,
   missionLimits,
   normaliseMissionContent,
+  normaliseStoredIntentShape,
   type MissionCommandOutcome,
   type MissionContentInput,
   type MissionDetail,
@@ -25,6 +39,7 @@ import {
   type MissionVerificationContext,
   type MissionVerifier,
 } from './types'
+import type { MissionStepCounts } from './autonomy/types'
 
 /**
  * THE MISSION ENGINE.
@@ -168,7 +183,17 @@ export class MissionEngine {
    * the journal write then fails, the content is removed again rather than leaving
    * an orphan behind that no Mission points at.
    */
-  async create(input: MissionContentInput, limits?: Partial<MissionLimits>): Promise<MissionCommandOutcome> {
+  async create(
+    input: MissionContentInput,
+    limits?: Partial<MissionLimits>,
+    options: {
+      /** Phase 47 autonomy ceilings. Narrowed only; a raise is refused. */
+      readonly budget?: Partial<MissionBudget>
+      readonly priority?: MissionPriority
+      /** How many results the owner asked for. Null when they named no number. */
+      readonly requestedQuantity?: number | null
+    } = {},
+  ): Promise<MissionCommandOutcome> {
     if (this.closed) return refused('created', 'missions are shutting down')
     const content = normaliseMissionContent(input)
     if (!content.ok) return refused('created', content.reason)
@@ -180,6 +205,33 @@ export class MissionEngine {
       return refused('created', error instanceof Error ? error.message : 'the requested limits are malformed')
     }
 
+    // The autonomy ceilings. Narrowed here with exactly the same four refusals
+    // `missionLimits` makes — unknown key, non-integer, non-positive, above the
+    // code-owned ceiling — and for the same reason: a clamp would silently accept a
+    // caller trying to raise a limit.
+    let budget: MissionBudget
+    try {
+      budget = missionBudget(options.budget)
+    } catch (error) {
+      return refused('created', error instanceof Error ? error.message : 'the requested budget is malformed')
+    }
+
+    // An unrecognised priority reads as `routine`, the *lowest* level. Reading it as
+    // anything else would mean a typo could escalate a Mission's standing.
+    const priority = isMissionPriority(options.priority) ? options.priority : 'routine'
+
+    // Null when the owner named no number, which is a different thing from naming zero
+    // — and zero is not a request, it is an absence, so it is refused.
+    const requestedQuantity =
+      options.requestedQuantity === undefined || options.requestedQuantity === null
+        ? null
+        : typeof options.requestedQuantity === 'number' &&
+            Number.isInteger(options.requestedQuantity) &&
+            options.requestedQuantity > 0 &&
+            options.requestedQuantity <= MAX_REQUESTED_QUANTITY
+          ? options.requestedQuantity
+          : null
+
     const missionId = this.options.newId?.() ?? randomUUID()
     const now = (this.options.now?.() ?? new Date()).toISOString()
     const deadlineAt = new Date(Date.parse(now) + resolved.lifetimeMs).toISOString()
@@ -189,6 +241,7 @@ export class MissionEngine {
         missionId,
         title: content.value.title,
         intent: content.value.intent,
+        intentShape: content.value.intentShape,
         successCriteria: content.value.successCriteria,
         createdAt: now,
       })
@@ -199,7 +252,21 @@ export class MissionEngine {
     try {
       // Metadata only. The title and intent are deliberately absent here and the
       // validator rejects them if a future change tried to add them.
-      await this.emit('mission.created', { missionId, status: 'draft', createdAt: now, deadlineAt, limits: resolved })
+      //
+      // `budget`, `priority` and `requestedQuantity` are Phase 47's additions and the
+      // only numbers about the goal itself. They are counts and bounds, not content:
+      // progress has to be computable, and refusing to store them would force the
+      // projection to invent a percentage instead.
+      await this.emit('mission.created', {
+        missionId,
+        status: 'draft',
+        createdAt: now,
+        deadlineAt,
+        limits: resolved,
+        budget,
+        priority,
+        requestedQuantity,
+      })
     } catch (error) {
       await this.options.store.remove(missionId).catch(() => false)
       return refused('created', `the Mission could not be recorded: ${describe(error)}`)
@@ -209,39 +276,107 @@ export class MissionEngine {
     return { operation: 'created', ok: true, missionId, status: 'draft' }
   }
 
+  /**
+   * Start a Mission: `draft → active`.
+   *
+   * Unchanged from Phase 7, deliberately. An owner pressing "activate" means "begin", and
+   * a Mission that answered by landing in `ready` — a state with no way forward except
+   * through the autonomy loop — would be a button that appears to do nothing on a machine
+   * where the loop is not running.
+   *
+   * `ready` therefore exists for the *autonomous* path: a Mission whose goal has been
+   * understood but not yet planned sits there, and `decide` moves it on. Both edges are
+   * in the table, and an owner may reach `ready` too, but the default meaning of
+   * "activate" stays "run it".
+   */
   async activate(missionId: string): Promise<MissionCommandOutcome> {
     return this.transition(missionId, 'draft', 'active', 'activated')
   }
 
-  async resume(missionId: string): Promise<MissionCommandOutcome> {
-    return this.transition(missionId, 'paused', 'active', 'resumed')
+  /**
+   * Mark a Mission's goal as understood: `draft → ready`.
+   *
+   * The first half of the autonomous handshake, and the state a plan is built from.
+   * Separate from {@link activate} because the two answer different questions — "is this
+   * understood?" and "shall it run?" — and a caller that had to guess which one it was
+   * getting would eventually press the wrong button.
+   */
+  async markGoalReady(missionId: string): Promise<MissionCommandOutcome> {
+    return this.transition(missionId, 'draft', 'ready', 'activated')
   }
 
   /**
-   * Pause a Mission and propagate to its live children.
+   * `stopped → active`.
    *
-   * The Mission settles as `paused` first, then the propagation happens. That order
-   * is deliberate: once the Mission is paused, admission of a new child Run refuses,
-   * so a Run that arrives mid-pause cannot slip in behind the propagation and then
+   * Phase 7's meaning, unchanged: the owner pressed resume, so the Mission runs. An
+   * earlier version of this phase landed on `ready` instead, which was more expressive and
+   * less true — "carry on" that leaves a Mission waiting for somebody else to start it is
+   * not carrying on.
+   *
+   * `stopped → ready` remains in the table for the autonomous path, where "the owner has
+   * reopened the gate" and "the Mission is now running" are genuinely two different facts.
+   * The distinction is who asked: a window's Resume button means the first and the second;
+   * autonomy, after a wake, means the first.
+   *
+   * The autonomous counterpart is {@link resumeToReady}, which is deliberately not this
+   * method: one says "run it" and the other says "the gate is open again".
+   *
+   * It is still a narrow door. It only works from `stopped`, so a `blocked` or
+   * `approval-required` Mission cannot be waved through by a resume — those need their own
+   * resolution, because "carry on regardless" is exactly what those states prevent.
+   */
+  async resume(missionId: string): Promise<MissionCommandOutcome> {
+    return this.transition(missionId, 'stopped', 'active', 'resumed')
+  }
+
+  /**
+   * `stopped → ready`: the owner reopened the gate without starting the work.
+   *
+   * The autonomous resume. Separate from {@link resume} because "I am no longer stopped" and
+   * "run it" are different answers to different questions, and a caller that had to guess
+   * which one it was asking for would eventually press the wrong button.
+   *
+   * Autonomy uses this one. After a wake it knows the gate is open; it does **not** know
+   * that a plan exists, never mind that one is running, so `ready` — understood, not yet
+   * running — is the only state it can honestly report.
+   */
+  async resumeToReady(missionId: string): Promise<MissionCommandOutcome> {
+    return this.transition(missionId, 'stopped', 'ready', 'resumed')
+  }
+
+  /**
+   * Stop a Mission and propagate to its live children.
+   *
+   * The Mission settles as `stopped` first, then the propagation happens. That order
+   * is deliberate: once the Mission is stopped, admission of a new child Run refuses,
+   * so a Run that arrives mid-stop cannot slip in behind the propagation and then
    * be missed by it.
    *
-   * A child that could not be paused is reported rather than hidden. Fabricating a
-   * clean pause while a Run kept going would be the single most misleading thing
+   * A child that could not be stopped is reported rather than hidden. Fabricating a
+   * clean stop while a Run kept going would be the single most misleading thing
    * this engine could do.
+   *
+   * Accepted from every live status, because STOP ALL and an owner pressing the button
+   * must be able to stop a Mission wherever it happens to be — including mid-verification
+   * and mid-approval, which is precisely when someone is most likely to reach for it.
    */
   async pause(missionId: string): Promise<MissionCommandOutcome> {
-    const settled = await this.transition(missionId, 'active', 'paused', 'paused')
+    // `transitioned` rather than `paused` as the internal operation: this method is
+    // "stop the Mission", and the journal event it writes is named by `eventTypeFor`
+    // from the actual edge. The reported operation stays `paused` so a window's
+    // optimistic update still matches the Phase 7 contract.
+    const settled = await this.transition(missionId, null, 'stopped', 'transitioned')
     if (!settled.ok) return settled
 
     const blocked = await this.propagate(missionId, 'pause')
     this.options.onChange?.()
     return blocked.length === 0
-      ? { operation: 'paused', ok: true, missionId, status: 'paused' }
+      ? { operation: 'paused', ok: true, missionId, status: 'stopped' }
       : {
           operation: 'paused',
           ok: true,
           missionId,
-          status: 'paused',
+          status: 'stopped',
           reason: `${blocked.length} child Run(s) could not be paused: ${blocked.join(', ')}`,
         }
   }
@@ -282,6 +417,27 @@ export class MissionEngine {
   }
 
   /**
+   * An autonomy transition, from the runtime.
+   *
+   * The same `transition` as every other command, and therefore the same table and the
+   * same refusals — which is the point. The autonomy runtime has no privileged way to
+   * move a Mission: it proposes a `to`, the transition table decides, and an illegal edge
+   * is refused here exactly as it would be for a renderer.
+   *
+   * Separate from `fail` and `cancel` only in that it is not an owner action. There is
+   * deliberately **no** reason parameter a caller can free-form: `reason` must be a code
+   * in `MISSION_REASONS`, which the event validator checks, so a Mission's journal cannot
+   * acquire free text through the autonomy path either.
+   */
+  async autonomyTransition(input: {
+    missionId: string
+    to: MissionStatus
+    reason: MissionReason
+  }): Promise<MissionCommandOutcome> {
+    return this.transition(input.missionId, null, input.to, 'transitioned', input.reason)
+  }
+
+  /**
    * Request completion.
    *
    * This is not a status setter. It asks a verifier whether the outcome was
@@ -310,14 +466,25 @@ export class MissionEngine {
       if (this.closed) {
         return { kind: 'refused', outcome: refused('verification-not-established', 'missions are shutting down') }
       }
-      if (mission.status !== 'active') {
+      // Completion is reached from `verifying` and nowhere else.
+      //
+      // The state exists so that "we are checking" and "it is done" are two facts rather
+      // than one. A Mission that could go straight from live to completed would have a
+      // window — however small — in which its status said `completed` while nothing had
+      // been established, and that window is where a fabricated outcome would live.
+      //
+      // A live Mission is therefore *admitted* here and moved into `verifying` before the
+      // verifier runs, rather than refused for not being there already. The transition
+      // goes through the same table and the same refusals as every other command, so
+      // admitting it is not a shortcut — it is the honest first half of a completion.
+      if (!isLiveMissionStatus(mission.status) && mission.status !== 'verifying') {
         return {
           kind: 'refused',
           outcome: refused(
             'verification-not-established',
             isTerminalMissionStatus(mission.status)
               ? 'that Mission has already settled'
-              : 'only an active Mission can be completed',
+              : `a Mission cannot be completed from ${mission.status}`,
             missionId,
           ),
         }
@@ -338,21 +505,44 @@ export class MissionEngine {
         return { kind: 'refused', outcome: refused('verification-not-established', 'no such Mission verifier', missionId) }
       }
 
-      // Required Runs default to every child attached so far: the Mission's own
+// Required Runs default to every child attached so far: the Mission's own
       // history is what this completion request is about.
-      const required = [...(options.requiredRunIds ?? mission.childRuns)]
-      if (required.length === 0) {
-        // Nothing has been attempted. Establishing a Mission that has never executed
-        // anything would be establishing a plan.
+      //
+      // Phase 47: this is no longer the gate on whether a Mission may complete. A
+      // Mission can establish an outcome with no child Runs at all — "find 100 cat
+      // videos" is established by observed evidence, not by a Run having completed — so
+      // an empty default list is deliberately *not* refused here. What a Mission with no
+      // Runs and no evidence means is decided by the verifier, which can see the
+      // evidence counts this engine cannot judge on its own.
+      //
+      // A caller that explicitly named required Runs has asserted those Runs matter, so
+      // an empty *named* list is still refused: that is a contradiction in the request
+      // rather than an absence of work.
+      const named = options.requiredRunIds
+      const required = [...(named ?? mission.childRuns)]
+      if (named !== undefined && named.length === 0) {
         return {
           kind: 'refused',
-          outcome: refused('verification-not-established', 'no Work has been attached to this Mission', missionId),
+          outcome: refused('verification-not-established', 'no required Work was named for this request', missionId),
         }
       }
-
-      // Claimed only once the request is certain to be recorded, so a refusal never
-      // leaves the Mission permanently stuck behind a claim nobody owns.
+      // Into `verifying`, before anything else is written.
       //
+      // Inside this Mission's queue and *before* the request, so the status says
+      // "checking" strictly earlier than the journal records that a check was asked for.
+      // There is therefore no instant at which a Mission is `verifying` without a request
+      // behind it, and none at which a request exists without the status having been
+      // honest about it.
+      if (mission.status !== 'verifying') {
+        await this.emit('mission.transitioned', {
+          missionId,
+          from: mission.status,
+          to: 'verifying',
+          reason: MISSION_REASONS.verification_requested,
+          verifierId: null,
+        })
+      }
+
       // The claim and the write that could fail are the reason this needs a `catch`
       // rather than just a comment: taking the claim and *then* having the journal
       // throw would otherwise strand the Mission for the life of the process, because
@@ -398,7 +588,14 @@ export class MissionEngine {
       if (current === undefined) {
         return refused('verification-not-established', 'no such mission')
       }
-      if (current.status !== 'active') {
+      // Re-read *and* re-check after awaiting the verifier. A stop or cancel that landed while
+      // verification was in flight has already moved the Mission, and a late `passed` must
+      // not resurrect it.
+      //
+      // Still `verifying`, and that is the property: nothing but this code path moves a
+      // Mission out of it, so a `passed` cannot arrive after something else decided the
+      // Mission's fate.
+      if (current.status !== 'verifying') {
         return refused(
           'verification-not-established',
           `this Mission is ${current.status} and its verification result was discarded`,
@@ -421,19 +618,42 @@ export class MissionEngine {
       })
 
       if (outcome.kind !== 'passed') {
+        // Back to `active` on a verdict, and **stay** in `verifying` on a timeout or a
+        // cancellation.
+        //
+        // The distinction is about what kind of answer arrived. "The verifier said no" is
+        // an answer, and a Mission that got one is live again — it may try a different
+        // approach. "The verifier never answered" is not an answer, so the Mission stays
+        // exactly where it was: still checking, still owning an open question. Leaving a
+        // timed-out Mission in `active` would say "we finished looking", which is not what
+        // happened.
+        const resting = outcome.kind === 'timeout' || outcome.kind === 'cancelled' ? 'verifying' : 'active'
+        if (current.status !== resting) {
+          await this.emit('mission.transitioned', {
+            missionId,
+            from: current.status,
+            to: resting,
+            reason: outcome.reason,
+            verifierId,
+          })
+        }
         this.options.onChange?.()
         return {
           operation: outcome.kind === 'timeout' ? 'verification-timeout' : 'verification-not-established',
           ok: false,
           missionId,
-          status: current.status,
+          status: resting,
           reason: outcome.reason,
         }
       }
 
+      // `from` is `verifying`, and the transition table has no other edge into
+      // `completed` — so this line is the only way a Mission ever completes, and the
+      // reducer refuses it independently unless a passed verification is already
+      // recorded under this same verifier id.
       await this.emit('mission.completed', {
         missionId,
-        from: 'active',
+        from: 'verifying',
         to: 'completed',
         reason: MISSION_REASONS.verification_passed,
         verifierId,
@@ -479,10 +699,14 @@ export class MissionEngine {
     return this.serialise(missionId, async () => {
       const mission = this.state.missions.get(missionId)
       if (mission === undefined) return refused('run-attached', 'no such mission')
-      if (mission.status !== 'active') {
+      // Live statuses, not `active` specifically. A `planning` or `ready` Mission may attach
+      // Work, because attaching is how a plan gets executed at all; what it may **not**
+      // do is attach while parked, which is the entire reason `waiting`, `blocked`,
+      // `approval-required` and `stopped` exist as distinct states.
+      if (!isLiveMissionStatus(mission.status)) {
         return refused(
           'run-attached',
-          `only an active Mission may attach Work; this one is ${mission.status}`,
+          `only a live Mission may attach Work; this one is ${mission.status}`,
           missionId,
         )
       }
@@ -528,10 +752,10 @@ export class MissionEngine {
     return this.serialise(missionId, async () => {
       const mission = this.state.missions.get(missionId)
       if (mission === undefined) return refused('run-attached', 'no such mission')
-      if (mission.status !== 'active') {
+      if (!isLiveMissionStatus(mission.status)) {
         return refused(
           'run-attached',
-          `only an active Mission may attach Work; this one is ${mission.status}`,
+          `only a live Mission may attach Work; this one is ${mission.status}`,
           missionId,
         )
       }
@@ -629,6 +853,579 @@ export class MissionEngine {
     return DEFAULT_MISSION_LIMITS
   }
 
+  /* ------------------------------------------ Phase 47: the autonomy writer */
+
+  /**
+   * Read one Mission's durable record.
+   *
+   * The whole of what the autonomy runtime needs to read. It is `readonly` by
+   * construction — a `MissionRecord` has no method and every field is frozen — so a
+   * caller cannot mutate Mission state by holding a reference to it, which is what makes
+   * it safe to hand one out at all.
+   */
+  record(missionId: string): MissionRecord | undefined {
+    return this.state.missions.get(missionId)
+  }
+
+  /**
+   * Write the private intent.
+   *
+   * The only path from the runtime to the encrypted store. It reads the existing content,
+   * replaces `intentShape`, and writes it back — deliberately **not** a partial update,
+   * because a partial update would need to know which fields the caller meant to leave
+   * alone, and a correction that silently dropped the media constraint would be the worst
+   * possible outcome for "in the barn".
+   *
+   * Free text is not accepted here. The runtime passes a normalised
+   * `MissionIntentShape`, and this re-normalises it before writing, so a caller that
+   * bypassed `normaliseIntentShape` cannot get an unbounded subject into the store.
+   */
+  async writeIntent(missionId: string, intent: MissionIntentShape): Promise<void> {
+    // The *stored* normaliser, not the input one. The two shapes have different field
+    // names, and an intent written back through the wrong normaliser loses every field it
+    // does not recognise — a successful write of the wrong thing, which is worse than a
+    // refusal because nothing reports it.
+    const normalised = normaliseStoredIntentShape(intent)
+    if (!normalised.ok) throw new Error(`mission intent is malformed: ${normalised.reason}`)
+    const existing = await this.options.store.read(missionId)
+    if (!existing.ok) return
+    await this.options.store.write({
+      ...existing.value,
+      intentShape: normalised.value,
+      // The free-text intent is regenerated from the shape so the two cannot disagree.
+      // A store holding "find 100 cat videos" beside a shape saying quantity 40 would be
+      // two sources of truth, and the private text is the one a person reads.
+      intent: describeIntent(normalised.value),
+    })
+  }
+
+  /**
+   * Read the private intent.
+   *
+   * Null on any fault rather than throwing: a Mission whose content store is unavailable
+   * is *degraded*, not broken, and refusing to read means a correction will be treated as
+   * ambiguous — which parks the Mission and asks. That is the right failure direction.
+   */
+  async readIntent(missionId: string): Promise<MissionIntentShape | null> {
+    const existing = await this.options.store.read(missionId).catch(() => null)
+    return existing?.ok === true ? existing.value.intentShape : null
+  }
+
+  /**
+   * Commit a plan.
+   *
+   * Serialised under the Mission's queue and delegating to the same fold the replay uses,
+   * so a plan committed live and a plan read from the journal are the same object. The
+   * revision number is **not** trusted from the caller: it is checked against the record's
+   * own count inside the fold, and a mismatch refuses the whole commit.
+   */
+  async commitPlan(input: {
+    missionId: string
+    planId: string
+    revision: number
+    supersedes: string | null
+    reason: string | null
+    steps: readonly MissionStepRecord[]
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('plan-committed', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      if (this.state.missions.get(input.missionId) === undefined) {
+        return refused('plan-committed', 'no such mission', input.missionId)
+      }
+      // The steps are spread field by field rather than passed through with `...input`.
+      // `MissionStepRecord.status` and `.reason` are narrow closed enums while the
+      // envelope's are `string`, so a direct pass would be a type error *because* the two
+      // layers are honestly independent — and the spread is where each record field is
+      // listed, so a new one cannot be silently dropped on its way to the journal.
+      await this.emit('mission.plan.committed', {
+        missionId: input.missionId,
+        planId: input.planId,
+        revision: input.revision,
+        supersedes: input.supersedes,
+        reason: input.reason,
+        steps: input.steps.map((step) => ({
+          stepId: step.stepId,
+          index: step.index,
+          capability: step.capability,
+          verifier: step.verifier,
+          dependsOn: [...step.dependsOn],
+          status: step.status,
+          workerId: step.workerId,
+          runId: step.runId,
+          attempts: step.attempts,
+          risk: step.risk,
+          requiresApproval: step.requiresApproval,
+          approvalId: step.approvalId,
+          reason: step.reason,
+          startedAt: step.startedAt,
+          settledAt: step.settledAt,
+        })),
+      })
+      this.options.onChange?.()
+      return { operation: 'plan-committed', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /**
+   * Move a step.
+   *
+   * The legality of the move is decided by `reduceAutonomyEvent`, not here — so the live
+   * path and the replay path cannot disagree about which transitions exist. That means
+   * this method *appears* not to check: the check happens in the fold, and if the fold
+   * refuses, `readIntent`'s caller re-reads the record and sees the step unmoved.
+   *
+   * To make that observable rather than silent, the outcome reports the step's actual
+   * status after the write.
+   */
+  async transitionStep(input: {
+    missionId: string
+    planId: string
+    stepId: string
+    to: MissionStepRecord['status']
+    workerId?: string | null
+    runId?: string | null
+    attempts?: number
+    reason?: string | null
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('step-transitioned', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      const mission = this.state.missions.get(input.missionId)
+      if (mission === undefined) return refused('step-transitioned', 'no such mission', input.missionId)
+      const step = mission.activePlan?.steps.find((candidate) => candidate.stepId === input.stepId)
+      if (step === undefined) {
+        return refused('step-transitioned', `no such step: ${input.stepId}`, input.missionId)
+      }
+      await this.emit('mission.step.transitioned', {
+        missionId: input.missionId,
+        planId: input.planId,
+        stepId: input.stepId,
+        from: step.status,
+        to: input.to,
+        workerId: input.workerId ?? null,
+        runId: input.runId ?? null,
+        attempts: input.attempts ?? step.attempts,
+        reason: input.reason ?? null,
+      })
+      const after = this.state.missions.get(input.missionId)?.activePlan?.steps.find((c) => c.stepId === input.stepId)
+      if (after?.status !== input.to) {
+        // The fold refused. Reported rather than thrown: a refused step is a normal
+        // outcome of an illegal request, and the caller decides what to do about it.
+        return {
+          operation: 'step-transitioned',
+          ok: false,
+          missionId: input.missionId,
+          reason: `a step cannot go from ${step.status} to ${input.to}`,
+        }
+      }
+      this.options.onChange?.()
+      return { operation: 'step-transitioned', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /** Record that a step's action was in flight when the process stopped. */
+  async interruptStep(input: {
+    missionId: string
+    planId: string
+    stepId: string
+    consequential: boolean
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('step-interrupted', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      if (this.state.missions.get(input.missionId) === undefined) {
+        return refused('step-interrupted', 'no such mission', input.missionId)
+      }
+      await this.emit('mission.step.interrupted', { ...input })
+      this.options.onChange?.()
+      return { operation: 'step-interrupted', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /**
+   * Record evidence.
+   *
+   * `resultCount` is the fold's business, not this method's: a caller cannot say "add 40
+   * results", it can only say "this one observation happened". That is what makes the
+   * progress number trustworthy — it is derived from events that each correspond to
+   * something, and never from a total a caller supplied.
+   */
+  async recordEvidence(input: {
+    missionId: string
+    evidenceId: string
+    stepId: string | null
+    kind: 'result' | 'observation' | 'report' | 'refusal'
+    origin: 'observed' | 'reported'
+    summaryLength: number
+    expiresAt: string | null
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('evidence-recorded', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      if (this.state.missions.get(input.missionId) === undefined) {
+        return refused('evidence-recorded', 'no such mission', input.missionId)
+      }
+      await this.emit('mission.evidence.recorded', { ...input })
+      this.options.onChange?.()
+      return { operation: 'evidence-recorded', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /** Raise or clear a blocker. Idempotent in the fold. */
+  async setBlocker(input: {
+    missionId: string
+    code: string
+    stepId: string | null
+    raised: boolean
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('blocker-changed', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      if (this.state.missions.get(input.missionId) === undefined) {
+        return refused('blocker-changed', 'no such mission', input.missionId)
+      }
+      await this.emit('mission.blocker.changed', { ...input })
+      this.options.onChange?.()
+      return { operation: 'blocker-changed', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /**
+   * Record that this step is now waiting on a Work approval.
+   *
+   * **A pointer, not a gate.** `approvalId` is Work's own id, from
+   * `work.approval.requested`, and there is no `decideApproval` and no `expireApproval`
+   * beside this method — their absence is the design.
+   *
+   * A Mission used to open, decide and expire its own approval gates, which made it a
+   * second approval system inside Core: a second id sequence, a second lifecycle, and a
+   * second surface nobody was answering. Now Work's Guard opens gates when a Run executes,
+   * a person answers on Work's surface through `work.approval.decide`, and this method
+   * records only that the Mission is waiting on a particular one. The Mission reads the
+   * outcome back from Work; it never writes one.
+   *
+   * `source` distinguishes a gate the plan anticipated from one Guard demanded, because
+   * "this is how this kind of step works" and "this surprised the planner" are different
+   * things to tell a person.
+   */
+  async noteApprovalRequested(input: {
+    missionId: string
+    stepId: string
+    approvalId: string
+    source: 'requested' | 'observed'
+    /** The Work Run the gate belongs to, so the Mission can poll it later. */
+    runId: string | null
+    requestedAt: string
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('approval-requested', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      if (this.state.missions.get(input.missionId) === undefined) {
+        return refused('approval-requested', 'no such mission', input.missionId)
+      }
+      await this.emit('mission.approval.requested', { ...input })
+      this.options.onChange?.()
+      return { operation: 'approval-requested', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /**
+   * Record what Work said about the gate this Mission was parked on.
+   *
+   * The outcome is **Work's**, read back from its `ApprovalRecord`; Core never decides it
+   * and never infers it. There is no `decidedBy` parameter because there is no actor to
+   * record — `work.approval.decided` already wrote who answered, after Guard evaluated the
+   * owner, and a second copy here would be one more fact Core cannot vouch for.
+   *
+   * It writes a **blocker**, not an approval event, and the fold settles the reference from
+   * that same event. That is why the envelope has no `mission.approval.decided`: the durable
+   * record of "this Mission stopped because a person said no" is exactly what a blocker is,
+   * and reusing it means the board cannot show a Mission as waiting on an approval that has
+   * already been answered — there is one event, so there is nothing to disagree.
+   *
+   * Only the outcomes that stopped the Mission raise anything. `approved` is deliberately
+   * **not** handled: when a gate is approved, Work's own engine resumes the Run and
+   * completes the step, and the next `step()` observes a verified step. Writing a
+   * "Mission was approved" event would be Core claiming a step it did not run.
+   */
+  async noteApprovalOutcome(input: {
+    missionId: string
+    approvalId: string
+    outcome: 'approved' | 'denied' | 'expired' | 'cancelled'
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('approval-outcome', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      const mission = this.state.missions.get(input.missionId)
+      if (mission === undefined) return refused('approval-outcome', 'no such mission', input.missionId)
+      const reference = mission.approval
+      if (reference === null || reference.approvalId !== input.approvalId) {
+        return refused('approval-outcome', 'this Mission is not waiting on that approval', input.missionId)
+      }
+      if (reference.outcome !== null) {
+        return refused('approval-outcome', `that approval is already ${reference.outcome}`, input.missionId)
+      }
+      if (input.outcome === 'approved') {
+        // **Nothing to record.** Work has already resumed the Run, and the step will settle
+        // on its own; a Mission writing "approved" here would be claiming a step it did not
+        // run. The reference stays open until the step settles, which is exactly how long
+        // the question was outstanding.
+        return { operation: 'approval-outcome', ok: true, missionId: input.missionId }
+      }
+      // `denied`, `expired` and `cancelled` all mean the same thing to this Mission: the
+      // step did not run and nobody is going to make it run without a person. Which of the
+      // three it was is Work's record to keep, not the Mission's — and the fold is the only
+      // thing that settles the reference, which is why there is no approval event here.
+      const code = input.outcome === 'denied' ? 'approval_denied' : 'approval_expired'
+      await this.emit('mission.blocker.changed', {
+        missionId: input.missionId,
+        code,
+        stepId: reference.stepId,
+        raised: true,
+      })
+      this.options.onChange?.()
+      return { operation: 'approval-outcome', ok: true, missionId: input.missionId }
+    })
+  }
+  /**
+   * Schedule the next wake.
+   *
+   * `dueAt` is required by the event schema and there is no default, so a caller cannot
+   * omit it and get an open-ended wait. The instant is additionally **clamped to the
+   * Mission's deadline** here, so a wake cannot outlive the Mission it belongs to — which
+   * would be a scheduled callback for something that no longer exists.
+   */
+  async scheduleWake(input: {
+    missionId: string
+    wakeId: string
+    kind: 'event' | 'time' | 'manual'
+    source: 'fabric' | 'time' | 'owner'
+    dueAt: string
+    eventType: string | null
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('wake-scheduled', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      const mission = this.state.missions.get(input.missionId)
+      if (mission === undefined) return refused('wake-scheduled', 'no such mission', input.missionId)
+      const bound = Math.min(Date.parse(input.dueAt), Date.parse(mission.deadlineAt))
+      await this.emit('mission.wake.scheduled', {
+        ...input,
+        dueAt: new Date(bound).toISOString(),
+        eventType: input.kind === 'event' ? input.eventType : null,
+      })
+      this.options.onChange?.()
+      return { operation: 'wake-scheduled', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /** Record that a wake fired. Idempotent in the fold. */
+  async fireWake(input: { missionId: string; wakeId: string }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('wake-fired', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      if (this.state.missions.get(input.missionId) === undefined) {
+        return refused('wake-fired', 'no such mission', input.missionId)
+      }
+      await this.emit('mission.wake.fired', { ...input })
+      this.options.onChange?.()
+      return { operation: 'wake-fired', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /**
+   * Journal a continuation decision.
+   *
+   * The fold enforces the invariant that a `wait` names an instant and nothing else does.
+   * Passing an ill-formed pair here therefore *fails* rather than being written, which is
+   * what stops an open-ended wait from reaching disk by a path other than the decider's.
+   */
+  async recordDecision(input: {
+    missionId: string
+    decision: MissionDecision
+    reason: string
+    stepId: string | null
+    nextWakeAt: string | null
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('continuation-decided', 'missions are shutting down')
+    if (input.decision === 'wait' && input.nextWakeAt === null) {
+      return refused('continuation-decided', 'a wait must name an instant', input.missionId)
+    }
+    if (input.decision !== 'wait' && input.nextWakeAt !== null) {
+      return refused('continuation-decided', 'only a wait may name a next wake', input.missionId)
+    }
+    return this.serialise(input.missionId, async () => {
+      if (this.state.missions.get(input.missionId) === undefined) {
+        return refused('continuation-decided', 'no such mission', input.missionId)
+      }
+      await this.emit('mission.continuation.decided', { ...input })
+      this.options.onChange?.()
+      return { operation: 'continuation-decided', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /**
+   * Charge a budget.
+   *
+   * Five **deltas**, never totals. The fold adds them to the record's own counts, so a
+   * caller cannot set spend to a number it likes and a restart cannot reset it. The
+   * ceiling check happens in the fold's arithmetic as well as in `chargeBudget`, so a
+   * caller that skipped the latter still cannot overdraw.
+   */
+  async charge(input: {
+    missionId: string
+    modelCalls: number
+    actions: number
+    externalRequests: number
+    retries: number
+    delegations: number
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('budget-spent', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      const mission = this.state.missions.get(input.missionId)
+      if (mission === undefined) return refused('budget-spent', 'no such mission', input.missionId)
+      const charged = chargeBudget(mission.spend, mission.budget, {
+        modelCalls: input.modelCalls,
+        actions: input.actions,
+        externalRequests: input.externalRequests,
+        retries: input.retries,
+        delegations: input.delegations,
+      })
+      if (!charged.ok) {
+        await this.emit('mission.budget.exceeded', { missionId: input.missionId, budget: charged.dimension })
+        this.options.onChange?.()
+        return { operation: 'budget-exceeded', ok: false, missionId: input.missionId, reason: charged.reason }
+      }
+      await this.emit('mission.budget.spent', { ...input })
+      this.options.onChange?.()
+      return { operation: 'budget-spent', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /**
+   * Record that a ceiling was reached.
+   *
+   * Separate from `charge` because most ceilings are hit by a *refusal* rather than by a
+   * spend: no capable worker means the delegation ceiling stopped mattering, and that is
+   * worth recording so a restart cannot hide why a Mission stopped progressing.
+   */
+  async noteBudgetExceeded(input: { missionId: string; budget: string }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('budget-exceeded', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      if (this.state.missions.get(input.missionId) === undefined) {
+        return refused('budget-exceeded', 'no such mission', input.missionId)
+      }
+      await this.emit('mission.budget.exceeded', { ...input })
+      this.options.onChange?.()
+      return { operation: 'budget-exceeded', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /**
+   * Change the requested quantity.
+   *
+   * A fact about the goal, not a budget. Emitted through `mission.intent.corrected`'s
+   * sibling path rather than as budget spend, and refused above `MAX_REQUESTED_QUANTITY` —
+   * an owner correction may change *how much they want*, and it may not change how much
+   * Freya may do.
+   */
+  async setRequestedQuantity(input: {
+    missionId: string
+    requestedQuantity: number | null
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('intent-corrected', 'missions are shutting down')
+    const quantity = input.requestedQuantity
+    if (quantity !== null && (!Number.isInteger(quantity) || quantity <= 0 || quantity > MAX_REQUESTED_QUANTITY)) {
+      return refused('intent-corrected', 'a requested quantity must be a positive whole number')
+    }
+    return this.serialise(input.missionId, async () => {
+      if (this.state.missions.get(input.missionId) === undefined) {
+        return refused('intent-corrected', 'no such mission', input.missionId)
+      }
+      const mission = this.state.missions.get(input.missionId)
+      await this.emit('mission.intent.corrected', {
+        missionId: input.missionId,
+        correctionId: this.options.newId?.() ?? randomUUID(),
+        kind: 'patch',
+        changedFields: ['quantity'],
+        settledSteps: 0,
+        // The evidence a correction preserves is the evidence still standing afterwards,
+        // which is read **before** anything is settled. Nothing is settled here, so this
+        // is what the Mission already had.
+        preservedEvidence: mission?.evidence.length ?? 0,
+        replannedFrom: null,
+        // The number rides on the event, and the fold applies it. An earlier version
+        // recorded the field *name* here and then wrote the number straight into the
+        // in-memory record — which meant a corrected quantity lasted until the process
+        // restarted and then quietly reverted, because nothing in the journal said what
+        // it had become. A quantity is a count, not content: `mission.created` already
+        // carries one, and this is the same field moving.
+        requestedQuantity: quantity,
+      })
+      this.options.onChange?.()
+      return { operation: 'intent-corrected', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /**
+   * Record an applied correction.
+   *
+   * Field names and counts only. There is no parameter through which a value could
+   * travel, which is what makes "a correction cannot widen authority" structural rather
+   * than a validation rule.
+   */
+  async recordCorrection(input: {
+    missionId: string
+    correctionId: string
+    kind: 'patch'
+    changedFields: readonly string[]
+    settledSteps: number
+    preservedEvidence: number
+    replannedFrom: string | null
+    /**
+     * The new quantity, when the correction changed it.
+     *
+     * Read from the corrected intent by the caller rather than from the record, because
+     * the record's number is the *old* one at this point — the correction's whole job is
+     * to replace it. Omitted rather than sent as `null` when the quantity did not change,
+     * since "no longer asking for a quantity" and "did not touch the quantity" are
+     * different corrections and the journal has to be able to tell them apart on replay.
+     */
+    requestedQuantity?: number | null
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('intent-corrected', 'missions are shutting down')
+    const changed = input.changedFields.includes('quantity')
+    if (changed !== Object.hasOwn(input, 'requestedQuantity')) {
+      // The binding is enforced here as well as in the validator, so a caller cannot
+      // record a correction that claims to have changed the quantity without saying what
+      // it became, or attach a number to a correction that did not change one.
+      return refused('intent-corrected', changed ? 'a corrected quantity must say what it became' : 'an unchanged quantity must be left out')
+    }
+    return this.serialise(input.missionId, async () => {
+      if (this.state.missions.get(input.missionId) === undefined) {
+        return refused('intent-corrected', 'no such mission', input.missionId)
+      }
+      await this.emit('mission.intent.corrected', { ...input })
+      this.options.onChange?.()
+      return { operation: 'intent-corrected', ok: true, missionId: input.missionId }
+    })
+  }
+
+  /**
+   * Record that a correction was ambiguous.
+   *
+   * The only outcome on this path. Nothing is merged, no step is settled, and no evidence
+   * is discarded — the Mission keeps running exactly as it was and only the owner can
+   * change that.
+   */
+  async recordAmbiguity(input: {
+    missionId: string
+    correctionId: string
+    ambiguity: string
+  }): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('correction-ambiguous', 'missions are shutting down')
+    return this.serialise(input.missionId, async () => {
+      if (this.state.missions.get(input.missionId) === undefined) {
+        return refused('correction-ambiguous', 'no such mission', input.missionId)
+      }
+      await this.emit('mission.correction.ambiguous', { ...input })
+      this.options.onChange?.()
+      return { operation: 'correction-ambiguous', ok: true, missionId: input.missionId }
+    })
+  }
+
   /* ------------------------------------------------------------- internals */
 
   /**
@@ -643,6 +1440,18 @@ export class MissionEngine {
     from: MissionStatus | null,
     to: MissionStatus,
     operation: MissionCommandOutcome['operation'],
+    /**
+     * A specific closed code, for a caller that knows why.
+     *
+     * Every command has a real reason — a deadline, a budget, an approval, an owner — and
+     * defaulting all of them to `owner` would mean a Mission that failed on a budget
+     * reported that a person stopped it. Supplied by `settle` and `autonomyTransition`,
+     * omitted by the plain lifecycle commands, which are genuinely the owner's say-so.
+     *
+     * Checked against `MISSION_REASONS` before the write, so an unknown code is refused
+     * rather than reaching the journal.
+     */
+    reason?: MissionReason,
   ): Promise<MissionCommandOutcome> {
     if (this.closed) return refused(operation, 'missions are shutting down')
 
@@ -663,15 +1472,26 @@ export class MissionEngine {
       if (!canTransitionMission(mission.status, to)) {
         return refused(operation, `a Mission cannot go from ${mission.status} to ${to}`, missionId)
       }
-      if (this.options.stopAll?.() === true && to === 'active') {
+      // STOP ALL closes every door that would let work begin, which is now three statuses
+      // rather than one: a Mission may be `ready`, `planning` or `active` and none of
+      // them may start anything new while the panic button is latched.
+      //
+      // Read fresh at the moment of the decision rather than cached, so a Mission
+      // activated a microsecond after the button is refused. A gate that could be
+      // stale is not a gate.
+      if (this.options.stopAll?.() === true && isLiveMissionStatus(to)) {
         return refused(operation, 'Freya is stopped', missionId)
+      }
+
+      if (reason !== undefined && !Object.hasOwn(MISSION_REASONS, reason)) {
+        return refused(operation, `not a mission reason: ${reason}`, missionId)
       }
 
       await this.emit(eventTypeFor(mission.status, to), {
         missionId,
         from: mission.status,
         to,
-        reason: reasonFor(to),
+        reason: reason ?? reasonFor(mission.status, to),
         verifierId: null,
       })
       this.options.onChange?.()
@@ -685,6 +1505,10 @@ export class MissionEngine {
       const mission = this.state.missions.get(missionId)
       if (mission === undefined) return refused('refused', 'no such mission')
       if (!canTransitionMission(mission.status, to)) return refused('refused', `a Mission cannot go from ${mission.status} to ${to}`, missionId)
+      // `reason` is passed through rather than `reasonFor`, because `settle` was called
+      // with a *specific* reason by whoever knew it — a deadline expiry, a ceiling, a
+      // verification timeout — and deriving one here would overwrite the real cause with
+      // "the owner".
       await this.emit(eventTypeFor(mission.status, to), {
         missionId,
         from: mission.status,
@@ -784,6 +1608,21 @@ export class MissionEngine {
     }
   }
 
+  /**
+   * What a verifier is shown, and what it is not.
+   *
+   * The context is built from **counts, statuses and ids**. It carries no title, no
+   * intent, no success criterion and no evidence body, and the same is true of
+   * `MissionVerificationOutcome`, so there is no field a verifier could put private
+   * text into. A verifier that needs to know what the Mission is must ask for that
+   * deliberately through the encrypted store, under its own capability.
+   *
+   * The Phase 47 additions exist because mission-level completion is about evidence
+   * and steps, not about child Runs. `observedResults` and `expiredObservedResults` are
+   * separate numbers precisely so a verifier can tell fresh evidence from stale
+   * evidence — a Mission backed entirely by expired observations is not established,
+   * and a verifier that could only see a total could not know that.
+   */
   private verificationContext(
     missionId: string,
     mission: MissionRecord,
@@ -815,12 +1654,30 @@ export class MissionEngine {
       runStatuses[runId] = 'non_terminal'
     }
 
+    const evidence = evidenceCounts(mission.evidence, this.options.now?.() ?? new Date())
+    const plan = mission.activePlan
+    const stepCounts = countPlanSteps(plan?.steps ?? [])
+
     return {
       missionId,
       status: mission.status,
       requiredRunIds: [...requiredRunIds],
       runStatuses,
       runStepStatuses,
+      stepCounts,
+      observedResults: evidence.observed,
+      // **Excluded from** `observedResults`, not added to it. A verifier reading
+      // `observedResults` and seeing 40 when 10 of those expired would conclude the
+      // outcome is established on 40 fresh observations, which it is not.
+      expiredObservedResults: evidence.expired,
+      reportedResults: evidence.reported,
+      requestedQuantity: mission.requestedQuantity,
+      blocked: mission.blockers.length > 0,
+      // Reads the Mission's *pointer*, not a gate lifecycle. `outcome === null` means Work has
+      // not reported how the gate went, so it is still open — the Mission is waiting, and
+      // saying so is the whole claim being made here.
+      approvalPending: mission.approval !== null && mission.approval.outcome === null,
+      uncertainEffects: mission.blockers.filter((blocker) => blocker.code === 'step_failed').length,
     }
   }
 
@@ -869,19 +1726,48 @@ export class MissionEngine {
  * one that was resumed are different facts, and a journal that cannot tell them
  * apart cannot answer "was this ever paused?".
  */
+/**
+ * Which event an edge emits.
+ *
+ * Six named lifecycle events and one general one. The named six survive because they
+ * are *specific historical facts* — a Mission was activated, was stopped, settled — and
+ * a journal that cannot distinguish them cannot answer "was this ever stopped?".
+ *
+ * The twelve-status machine has far more edges than that, and inventing a named event
+ * per edge would mean a `mission.waiting` / `mission.blocked` / `mission.verifying`
+ * vocabulary that is really just `mission.transitioned` fourteen times. So every other
+ * edge emits `mission.transitioned`, and the reducer reads it through the same
+ * `MISSION_TRANSITIONS` table and the same refusals.
+ */
 function eventTypeFor(from: MissionStatus, to: MissionStatus): string {
-  if (to === 'active') return from === 'paused' ? 'mission.resumed' : 'mission.activated'
-  if (to === 'paused') return 'mission.paused'
+  // Six named lifecycle events and one general one. The named six survive because they are
+  // *specific historical facts* — a Mission was activated, was stopped, was resumed — and a
+  // journal that could not tell them apart could not answer "was this ever stopped, and
+  // did it ever carry on again?".
+  if (to === 'active' && from === 'draft') return 'mission.activated'
+  // **Both** resumes are `mission.resumed`, and that is the point. `stopped → active` and
+  // `stopped → ready` are different destinations, and the payload's `from`/`to` say which —
+  // so naming them differently would have meant a journal that could not answer the two
+  // questions from the event *type* alone. One event, read through `MISSION_TRANSITIONS`.
+  if (to === 'ready' && from === 'stopped') return 'mission.resumed'
+  if (to === 'active' && from === 'stopped') return 'mission.resumed'
+  if (to === 'stopped') return 'mission.paused'
   if (to === 'completed') return 'mission.completed'
   if (to === 'failed') return 'mission.failed'
-  return 'mission.cancelled'
+  if (to === 'cancelled') return 'mission.cancelled'
+  return 'mission.transitioned'
 }
 
-function reasonFor(to: MissionStatus): MissionReason {
+function reasonFor(from: MissionStatus, to: MissionStatus): MissionReason {
   // A completion is always a verifier's verdict, never the owner's say-so. The
   // verifier's own reason is recorded by the caller, so this is the fallback for
   // the edges that nobody else reaches.
   if (to === 'completed') return MISSION_REASONS.verification_passed
+  // Leaving or entering `stopped` is a statement about the gate rather than about the
+  // goal, and saying so is what lets a reader tell "the owner paused this" from "the
+  // owner walked away from it".
+  if (to === 'stopped') return MISSION_REASONS.stopped
+  if (from === 'stopped') return MISSION_REASONS.resumed
   return MISSION_REASONS.owner
 }
 
@@ -900,6 +1786,133 @@ function refused(
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown error'
+}
+
+
+
+
+
+
+/**
+ * Render a structured intent as the free-text line a person reads.
+ *
+ * Private, and written to the encrypted store beside the shape rather than replacing it —
+ * the shape is what a correction patches, and the text is what somebody looks at. Keeping
+ * both, with the text *derived*, is what stops them drifting into two different goals.
+ *
+ * Field values appear here and nowhere else. This string lives in the encrypted store; the
+ * journal never receives it, and `mission.intent.corrected` receives only the names of the
+ * fields that changed.
+ */
+function describeIntent(shape: MissionIntentShape): string {
+  const parts: string[] = []
+  const quantity = shape.requestedQuantity === null ? null : `${shape.requestedQuantity}`
+  parts.push(shape.subject)
+  if (quantity !== null) parts.push(`× ${quantity}`)
+  if (shape.mediaConstraints.length > 0) parts.push(`(${shape.mediaConstraints.join(', ')})`)
+  if (shape.contextConstraints.length > 0) parts.push(`in ${shape.contextConstraints.join(', ')}`)
+  if (shape.exclusions.length > 0) parts.push(`excluding ${shape.exclusions.join(', ')}`)
+  return parts.join(' ').slice(0, DEFAULT_MISSION_LIMITS.maxIntentChars)
+}
+
+/* ----------------------------------------------------------------- derived */
+
+/**
+ * Split a Mission's evidence three ways, as of `now`.
+ *
+ * Three, not two, and the split is the requirement rather than a detail:
+ *
+ * - `observed` — fresh, independently observed results. The **only** kind that counts
+ *   toward progress or toward completion.
+ * - `reported` — what a capability *said* it found. Displayed, stored, and worth
+ *   nothing as evidence.
+ * - `expired` — observed results whose `expiresAt` has passed. Counted in neither of the
+ *   other two, so a Mission whose evidence has gone stale reports no progress rather
+ *   than stale progress.
+ *
+ * `uncertain` counts blocked steps, because a step interrupted mid-action may or may
+ * not have taken effect and the honest position is that nobody knows.
+ *
+ * Pure, and `now` is a parameter rather than a read, so a projection is a function of
+ * (state, clock) and a test can put an item's expiry anywhere it likes.
+ */
+export function evidenceCounts(
+  evidence: readonly MissionEvidenceRecord[],
+  now: Date,
+): MissionEvidenceCounts & { uncertain: number } {
+  const at = now.getTime()
+  let observed = 0
+  let reported = 0
+  let expired = 0
+  let total = 0
+  for (const item of evidence) {
+    total += 1
+    const stale = item.expiresAt !== null && Date.parse(item.expiresAt) <= at
+    if (item.origin === 'reported') {
+      reported += 1
+      continue
+    }
+    if (item.kind !== 'result') continue
+    if (stale) expired += 1
+    else observed += 1
+  }
+  return { total, observed, reported, expired, uncertain: 0 }
+}
+
+/**
+ * Count a plan's steps by status.
+ *
+ * Nine counters, summing to `total`, and **no percentage** — the same refusal as the
+ * Mission board's: a plan can be revised and decomposed again, so a fraction of a plan
+ * is arithmetic about a denominator Freya chose.
+ *
+ * Unrecognised statuses are counted in `total` and nowhere else, so a step from a
+ * newer build still adds up rather than making the counts disagree with the plan.
+ */
+export function countPlanSteps(steps: readonly MissionStepRecord[]): MissionStepCounts {
+  // Built as a mutable tally and frozen at the end rather than annotated as a
+  // `MissionStepCounts`, because the annotation would make every `+= 1` a write to a
+  // `readonly` field. The freeze restores the guarantee at the boundary.
+  const counts = {
+    total: steps.length,
+    pending: 0,
+    blocked: 0,
+    delegated: 0,
+    running: 0,
+    verified: 0,
+    failed: 0,
+    cancelled: 0,
+    skipped: 0,
+  }
+  for (const step of steps) {
+    switch (step.status) {
+      case 'pending':
+        counts.pending += 1
+        break
+      case 'blocked':
+        counts.blocked += 1
+        break
+      case 'delegated':
+        counts.delegated += 1
+        break
+      case 'running':
+        counts.running += 1
+        break
+      case 'verified':
+        counts.verified += 1
+        break
+      case 'failed':
+        counts.failed += 1
+        break
+      case 'cancelled':
+        counts.cancelled += 1
+        break
+      case 'skipped':
+        counts.skipped += 1
+        break
+    }
+  }
+  return Object.freeze(counts)
 }
 
 /** Re-exported so Core can name the limits it forwards without reaching into types. */

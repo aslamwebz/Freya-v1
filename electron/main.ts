@@ -29,6 +29,8 @@ import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ProviderConfigInput } from './providerConfig'
 import type { ModelProvider } from '../core/model/provider'
 import type { GrantFact } from '../core/devicehands'
+import type { BrowserResult } from '../core/browser'
+import { normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
@@ -227,6 +229,58 @@ function buildDualBrowserSeam(extension: BrowserExtensionHost | null): DualBrows
     allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
     onLog: (line) => console.log(`[freya] ${line}`),
   })
+}
+
+function browserBridgeState(): BrowserBridgeState {
+  const seam = dualBrowser
+  if (seam === null) {
+    return {
+      available: false,
+      active: false,
+      reason: 'The dual-browser runtime is not enabled in this build.',
+      publicAvailable: false,
+      extensionPaired: false,
+      extensionLive: false,
+      journalTrustworthy: false,
+      summary: 'dual-browser runtime unavailable',
+      sessions: [],
+      handoffs: [],
+      described: 0,
+      staleRefs: 0,
+      mediaObserved: 0,
+      refusals: 0,
+    }
+  }
+
+  const status = seam.status()
+  const projection = seam.projection()
+  return {
+    available: seam.active(),
+    active: seam.active(),
+    reason: seam.active() ? null : status.summary,
+    publicAvailable: status.publicAvailable,
+    extensionPaired: status.extensionPaired,
+    extensionLive: status.extensionLive,
+    journalTrustworthy: status.journalTrustworthy,
+    summary: status.summary,
+    sessions: projection.sessions,
+    handoffs: [...projection.handoffs.entries()].map(([handoffId, state]) => ({ handoffId, state })),
+    described: projection.described,
+    staleRefs: projection.staleRefs,
+    mediaObserved: projection.mediaObserved,
+    refusals: projection.refusals,
+  }
+}
+
+function browserUnavailable(command: BrowserResult['command'], reason: string): BrowserResult {
+  return {
+    ok: false,
+    command,
+    target: null,
+    code: 'subsystem-disabled',
+    reason,
+    escalation: null,
+  }
 }
 
 // The E2E harness sometimes opens two throwaway processes against the same
@@ -1039,6 +1093,24 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:status', () => requireCore().status())
   ipcMain.handle('freya:core:activity', () => requireCore().activity())
   ipcMain.handle('freya:core:conversation', () => requireCore().conversation())
+
+  // Phase 51 stays the browser authority boundary. The window can read this
+  // display projection and submit one closed-vocabulary request; it cannot reach
+  // the BrowserWindow, adapter, extension session, journal or Device Hands runtime.
+  ipcMain.handle('freya:browser:state', () => browserBridgeState())
+  ipcMain.handle('freya:browser:execute', async (_event, input: unknown) => {
+    const bounded = normaliseRendererBrowserRequest(input)
+    if (!bounded.ok) throw new Error(bounded.reason)
+    const seam = dualBrowser
+    if (seam === null) {
+      return browserUnavailable(
+        bounded.request.command,
+        'The dual-browser runtime is not enabled, so no page was opened or changed.',
+      )
+    }
+    return seam.execute(bounded.request)
+  })
+
   ipcMain.handle('freya:core:voice', () => requireCore().voice())
   ipcMain.handle('freya:core:brain', () => requireCore().brain())
   ipcMain.handle('freya:core:work', () => requireCore().work())

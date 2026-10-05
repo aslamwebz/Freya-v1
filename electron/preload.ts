@@ -6,6 +6,7 @@ import type {
   CoreStatus,
 } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
+import type { BrowserRequest, BrowserResult } from '../core/browser'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
 import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
@@ -41,6 +42,7 @@ import { SKILL_LIMITS } from '../core/skills/types'
 import type { ProviderConfig, ProviderConfigInput } from './providerConfig'
 import { checkProviderBaseUrl } from '../core/model/provider-endpoint'
 import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
+import { normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
 
 export interface RuntimeInfo {
   version: string
@@ -79,6 +81,22 @@ const api = {
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('freya:window:minimize'),
   windowMaximize: (): Promise<void> => ipcRenderer.invoke('freya:window:maximize'),
   windowClose: (): Promise<void> => ipcRenderer.invoke('freya:window:close'),
+
+  /**
+   * The owner-facing dual-browser seam.
+   *
+   * This is deliberately not a Core command and not a generic IPC tunnel. The
+   * existing Phase 51 runtime lives in main because it owns Electron browser
+   * windows; this bridge only exposes its renderer-safe projection and one bounded
+   * request shape. Every actual page action still goes through Device Hands inside
+   * that runtime.
+   */
+  browserState: (): Promise<BrowserBridgeState> => ipcRenderer.invoke('freya:browser:state'),
+  browserExecute: (input: BrowserRequest): Promise<BrowserResult> => {
+    const bounded = normaliseRendererBrowserRequest(input)
+    if (!bounded.ok) return Promise.reject(new Error(bounded.reason))
+    return ipcRenderer.invoke('freya:browser:execute', bounded.request)
+  },
 
   /**
    * Provider settings, and the one place a credential crosses this bridge — in

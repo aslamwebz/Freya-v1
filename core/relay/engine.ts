@@ -35,14 +35,17 @@ import {
   RELAY_LIMITS,
   isRelayAction,
   isRelayReadAction,
+  sanitizeRelayText,
   type RelayAction,
   type RelayActionRecord,
   type RelayCalendarEvent,
   type RelayConnectorId,
+  type RelayDriveFile,
   type RelayEmailMessage,
   type RelayFailureCode,
   type RelayGitHubIssue,
   type RelayState,
+  type RelayTelegramMessage,
 } from './types'
 import {
   findApproval,
@@ -52,15 +55,18 @@ import {
   draftsInWindow,
   externalInvokesInWindow,
   sendsInWindow,
+  telegramSendsInWindow,
 } from './state'
 import {
   RelayAdapterError,
   RelayTransientError,
   type CalendarAdapter,
+  type DriveAdapter,
   type EmailAdapter,
   type ExternalAdapter,
   type GitHubAdapter,
   type RelayAdapterSet,
+  type TelegramAdapter,
 } from './adapters'
 
 /** What a read returned, in the bounded shape the protocol carries. */
@@ -68,6 +74,8 @@ export type RelayReadResult =
   | { readonly kind: 'email.messages'; readonly messages: readonly RelayEmailMessage[]; readonly nextCursor: string | null }
   | { readonly kind: 'calendar.events'; readonly events: readonly RelayCalendarEvent[]; readonly nextCursor: string | null }
   | { readonly kind: 'github.issues'; readonly issues: readonly RelayGitHubIssue[]; readonly nextCursor: string | null }
+  | { readonly kind: 'drive.files'; readonly files: readonly RelayDriveFile[]; readonly nextCursor: string | null }
+  | { readonly kind: 'telegram.messages'; readonly messages: readonly RelayTelegramMessage[]; readonly nextCursor: string | null }
   | { readonly kind: 'external.result'; readonly data: unknown }
 
 /** What a write produced, after approval. */
@@ -79,6 +87,8 @@ export type RelayWriteResult =
   | { readonly kind: 'calendar.event.cancelled'; readonly eventId: string }
   | { readonly kind: 'github.issue.created'; readonly number: number }
   | { readonly kind: 'github.pr.created'; readonly number: number }
+  | { readonly kind: 'drive.file.created'; readonly fileId: string }
+  | { readonly kind: 'telegram.sent'; readonly messageId: string }
   | { readonly kind: 'external.invoked'; readonly data: unknown }
 
 /** The engine's answer to one action request. */
@@ -114,6 +124,8 @@ export interface RelayEngineOptions {
   getState: () => RelayState
   /** Repos the GitHub adapter may write to. Code-owned; empty means none. */
   allowlistedRepos?: readonly string[]
+  /** Telegram chats reads and sends may target. Code-owned; empty means none. */
+  allowlistedChats?: readonly string[]
   now?: () => Date
   newId?: () => string
 }
@@ -139,6 +151,7 @@ export class RelayEngine {
   private readonly stopAll: () => boolean
   private readonly getState: () => RelayState
   private readonly allowlistedRepos: ReadonlySet<string>
+  private readonly allowlistedChats: ReadonlySet<string>
   private readonly now: () => Date
   private readonly newId: () => string
   /**
@@ -160,6 +173,7 @@ export class RelayEngine {
     this.stopAll = options.stopAll
     this.getState = options.getState
     this.allowlistedRepos = new Set(options.allowlistedRepos ?? [])
+    this.allowlistedChats = new Set(options.allowlistedChats ?? [])
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => crypto.randomUUID())
   }
@@ -490,6 +504,9 @@ export class RelayEngine {
     if (action === 'email.draft.create' && draftsInWindow(state, now) >= RELAY_LIMITS.maxDraftsPerWindow) {
       return `at most ${RELAY_LIMITS.maxDraftsPerWindow} drafts may be created per ${RELAY_LIMITS.budgetWindowMs / 60_000} minutes`
     }
+    if (action === 'telegram.send' && telegramSendsInWindow(state, now) >= RELAY_LIMITS.maxTelegramSendsPerWindow) {
+      return `at most ${RELAY_LIMITS.maxTelegramSendsPerWindow} Telegram messages may be sent per ${RELAY_LIMITS.budgetWindowMs / 60_000} minutes`
+    }
     if (action === 'external.invoke' && externalInvokesInWindow(state, now) >= RELAY_LIMITS.maxExternalInvokesPerWindow) {
       return `at most ${RELAY_LIMITS.maxExternalInvokesPerWindow} external invocations are allowed per ${RELAY_LIMITS.budgetWindowMs / 60_000} minutes`
     }
@@ -510,6 +527,7 @@ export class RelayEngine {
           query: (payload.query as string | null) ?? null,
           limit: payload.limit as number,
           cursor: (payload.cursor as string | null) ?? null,
+          messageId: (payload.messageId as string | null) ?? null,
         })
         return { kind: 'email.messages', messages, nextCursor: null }
       }
@@ -604,6 +622,47 @@ export class RelayEngine {
         })
         return { kind: 'github.pr.created', number: result.number }
       }
+      case 'drive.read': {
+        const adapter = this.requireDrive()
+        const files = await adapter.listFiles({
+          query: (payload.query as string | null) ?? null,
+          limit: payload.limit as number,
+          cursor: (payload.cursor as string | null) ?? null,
+          messageId: (payload.messageId as string | null) ?? null,
+        })
+        return { kind: 'drive.files', files, nextCursor: null }
+      }
+      case 'drive.file.create': {
+        const adapter = this.requireDrive()
+        const result = await adapter.createFile({
+          name: payload.name as string,
+          mimeType: payload.mimeType as string,
+          content: payload.content as string,
+        })
+        return { kind: 'drive.file.created', fileId: result.fileId }
+      }
+      case 'telegram.read': {
+        const adapter = this.requireTelegram()
+        const chatId = payload.chatId as string
+        this.requireAllowlistedChat(chatId)
+        const messages = await adapter.listMessages(chatId, {
+          query: (payload.query as string | null) ?? null,
+          limit: payload.limit as number,
+          cursor: (payload.cursor as string | null) ?? null,
+        })
+        return { kind: 'telegram.messages', messages, nextCursor: null }
+      }
+      case 'telegram.send': {
+        const adapter = this.requireTelegram()
+        const chatId = payload.chatId as string
+        this.requireAllowlistedChat(chatId)
+        const result = await adapter.sendMessage({
+          chatId,
+          text: payload.text as string,
+          idempotencyKey: payload.idempotencyKey as string,
+        })
+        return { kind: 'telegram.sent', messageId: result.messageId }
+      }
       case 'external.invoke': {
         const connector = payload.connector as string
         const adapter = this.requireExternal(connector)
@@ -636,6 +695,18 @@ export class RelayEngine {
     return adapter
   }
 
+  private requireDrive(): DriveAdapter {
+    const adapter = this.adapters.drive
+    if (adapter === undefined) throw new RelayAdapterError('the Drive connector is not configured')
+    return adapter
+  }
+
+  private requireTelegram(): TelegramAdapter {
+    const adapter = this.adapters.telegram
+    if (adapter === undefined) throw new RelayAdapterError('the Telegram connector is not configured')
+    return adapter
+  }
+
   private requireExternal(connector: string): ExternalAdapter {
     const adapter = this.adapters.external?.[connector]
     if (adapter === undefined) {
@@ -658,6 +729,23 @@ export class RelayEngine {
     const ref = `${repo.owner}/${repo.repo}`
     if (!this.allowlistedRepos.has(ref)) {
       throw new RelayAdapterError(`the repository ${ref} is not allowlisted`)
+    }
+  }
+
+  /**
+   * The Telegram chat allowlist.
+   *
+   * Code-owned and host-supplied. An empty list means no chat may be read from
+   * or written to — deny by default. Registering a Telegram adapter does not
+   * put any chat on the list; the host must name them explicitly, which is what
+   * makes "no silent chat enumeration" structural rather than a promise.
+   */
+  private requireAllowlistedChat(chatId: string): void {
+    if (this.allowlistedChats.size === 0) {
+      throw new RelayAdapterError('no Telegram chat is allowlisted in this build')
+    }
+    if (!this.allowlistedChats.has(chatId)) {
+      throw new RelayAdapterError(`the chat ${chatId} is not allowlisted`)
     }
   }
 }
@@ -693,6 +781,10 @@ function writeSummary(action: RelayAction, payload: Record<string, unknown>): st
       return `Create an issue in ${(payload.repo as { owner: string; repo: string }).owner}/${(payload.repo as { owner: string; repo: string }).repo}`
     case 'github.pr.create':
       return `Create a pull request in ${(payload.repo as { owner: string; repo: string }).owner}/${(payload.repo as { owner: string; repo: string }).repo} (${payload.head} → ${payload.base})`
+    case 'drive.file.create':
+      return `Create a Drive file named ${sanitizeRelayText(payload.name, 80)}`
+    case 'telegram.send':
+      return `Send a Telegram message to chat ${payload.chatId}`
     case 'external.invoke':
       return `Invoke ${payload.connector}.${payload.operation}`
     default:

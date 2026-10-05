@@ -122,8 +122,9 @@
 
 /* Chat mode selector ----------------------------------------------------- */
 .hd-mode-select { position: relative; }
-.hd-tool-mode { min-width: 74px; justify-content: center; }
-.hd-tool-mode > svg:last-child { opacity: .65; transform: rotate(90deg); }
+/* Icon-only: the glyph is the current mode, so no label or caret is drawn. */
+.hd-tool-mode { min-width: 0; width: 30px; padding: 0; justify-content: center; }
+.hd-tool-mode > svg { color: #9fd8ec; }
 .hd-menu-mode { min-width: 252px; }
 .hd-menu-mode li { list-style: none; }
 .hd-dashboard .hd-menu-mode button {
@@ -347,8 +348,6 @@
 }
 
 @media (max-width: 1180px) {
-  .hd-tool-mode > span { display: none; }
-  .hd-tool-mode { min-width: 28px; padding-inline: 6px !important; }
   .chats-research-card { width: 100%; }
 }
 

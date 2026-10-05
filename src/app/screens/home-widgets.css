@@ -75,23 +75,11 @@
 .hw-result small { color: #9d9990; font-size: 8px; }
 .hw-empty { color: #b3aca0; font-size: 11px; line-height: 1.6; }
 @media (min-width: 1800px) { .hw-left { left: 244px; } .hw-right { right: 32px; } }
-/* At this width the Home rail is forced to the icon column: an expanded 216px rail
-   does not leave the stage enough room. Because this rule outranks `.hd-rail` and
-   `.hd-rail[data-collapsed]` on specificity, the toggle could not visibly change
-   anything here — so it is hidden rather than left looking broken. */
-@media (min-width: 1200px) and (max-width: 1799px) {
-  .hd-dashboard[data-screen='home'] .hd-rail { width: 64px; }
-  .hd-dashboard[data-screen='home'] .hd-railhead .hd-rail-toggle { display: none; }
-  .hd-dashboard[data-screen='home'] .hd-rail .hd-place span,
-  .hd-dashboard[data-screen='home'] .hd-rail .chats-history,
-  .hd-dashboard[data-screen='home'] .hd-rail .hd-online > span:not(.hd-status-dot),
-  .hd-dashboard[data-screen='home'] .hd-rail .hd-online small,
-  .hd-dashboard[data-screen='home'] .hd-rail .hd-user-name,
-  .hd-dashboard[data-screen='home'] .hd-rail .hd-user > svg { display: none; }
-  .hd-dashboard[data-screen='home'] .hd-place { justify-content: center; padding: 0; }
-  .hd-dashboard[data-screen='home'] .hd-railhead { justify-content: center; padding: 12px 0 8px; }
-  .hd-dashboard[data-screen='home'] .hd-rail-foot { padding: 10px 0 14px; justify-items: center; }
-}
+/* The Home rail used to be force-collapsed across this whole range by rules that
+   duplicated what `.hd-rail[data-collapsed]` already does — and outranked it, so the
+   toggle flipped `aria-pressed` while changing nothing on screen. Collapsing is now
+   the toggle's job alone; the narrow-width default is HomeDashboard's initial state
+   and the stage gutter follows the rail via `.hd-rail[data-collapsed] ~ .hd-main`. */
 @media (min-width: 1200px) and (max-height: 850px) { .hw-column { top: 72px; gap: 10px; bottom: 88px; overflow-y: auto; scrollbar-width: thin; } .hw-widget { padding: 12px 14px; } }
 @media (max-width: 1199px) {
   .hd-dashboard[data-screen='home'] .hd-main { inset: 56px 0 90px 64px; display: flex; flex-wrap: wrap; align-content: start; align-items: stretch; gap: 14px; padding: 20px; overflow-y: auto; pointer-events: auto; }

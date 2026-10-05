@@ -16,8 +16,18 @@ import './chat.css'
  * optimistic row, and no cached title: every row here was built by Core and
  * arrived on the conversation channel, which is what makes "3 saved" mean
  * three conversations exist rather than three rows were drawn.
+ *
+ * Chats is the one place that is *not* a plain row — it carries the conversation
+ * list underneath it. That made collapsing the rail a special case: hiding this
+ * block for a 64px column would take the Chats workspace with it, so instead the
+ * head stays as an icon-only row and behaves like every other place (it navigates)
+ * while the disclosure it normally performs is meaningless at that width.
  */
-export function ChatHistory({ onOpen }: { onOpen?: () => void }) {
+export function ChatHistory({ onOpen, collapsed = false, current = false }: {
+  onOpen?: () => void
+  collapsed?: boolean
+  current?: boolean
+}) {
   const mirror = conversationMirror()
   const projection = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
   // The list folds like the reference's rail groups, except the title itself is
@@ -57,11 +67,13 @@ export function ChatHistory({ onOpen }: { onOpen?: () => void }) {
     <div className="chats-history" data-collapsed={!open || undefined}>
       <header className="chats-history-head">
         {/* The title is the one control: it shows and hides the conversations.
-            New chat stays beside it. */}
-        <button type="button" className="chats-history-title" aria-expanded={open}
-          aria-label={open ? 'Hide the conversation list' : 'Show the conversation list'}
-          onClick={() => setOpen((value) => !value)}>
-          <Glyph name="chat" size={16} style={open ? undefined : { opacity: 0.55 }} />
+            New chat stays beside it. Collapsed, there is no room to disclose into,
+            so the same button becomes an ordinary place row that opens Chats. */}
+        <button type="button" className="chats-history-title" aria-expanded={collapsed ? undefined : open}
+          aria-current={current ? 'page' : undefined}
+          aria-label={collapsed ? 'Open Chats' : (open ? 'Hide the conversation list' : 'Show the conversation list')}
+          onClick={() => { if (collapsed) { onOpen?.(); return } setOpen((value) => !value) }}>
+          <Glyph name="chat" size={20} style={open && !collapsed ? undefined : { opacity: 0.75 }} />
           <span>Chats</span>
         </button>
         <button

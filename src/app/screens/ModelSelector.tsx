@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { readModelCatalog, selectModel } from '../../platform/modelClient'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 
@@ -37,6 +37,18 @@ function readFavorites(): readonly string[] {
   }
 }
 
+/**
+ * The provider's configured default, remembered across mounts.
+ *
+ * The catalogue is a network read and is not fetched while Freya sits idle, so the
+ * one fact the chip needs between openings is kept here. It is Core's answer from
+ * the last successful read, never a hard-coded name.
+ */
+let catalogDefault: string | null = null
+function setCatalogDefault(id: string | null): void {
+  catalogDefault = id
+}
+
 export function ModelSelector({ defaultModel }: { defaultModel: string | null }) {
   const [open, setOpen] = useState(false)
   const [models, setModels] = useState<readonly ModelEntry[]>([])
@@ -45,6 +57,25 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
   const [favorites, setFavorites] = useState<readonly string[]>(readFavorites)
   const [note, setNote] = useState('')
 
+  /**
+   * Core answers two different questions, and the chip used to show neither.
+   *
+   * `selected` is the owner's explicit choice; `defaultModel` is the provider's own
+   * configured fallback, which is what a turn runs when nothing is selected. Both
+   * are reported by `model.catalog.read`, so asking once on mount is enough to name
+   * the model that is actually in use instead of printing the words "provider
+   * default" — which described the absence of a name rather than the model.
+   */
+  useEffect(() => {
+    let live = true
+    void readModelCatalog().then(outcome => {
+      if (!live || outcome.operation !== 'catalog') return
+      setSelected(outcome.selected ?? null)
+      if (outcome.defaultModel) setCatalogDefault(outcome.defaultModel)
+    })
+    return () => { live = false }
+  }, [])
+
   const toggle = () => {
     const next = !open
     setOpen(next)
@@ -52,8 +83,14 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
     setNote('')
     setQuery('')
     void readModelCatalog().then(outcome => {
-      if (outcome.operation === 'catalog' && outcome.models) setModels(outcome.models)
-      else { setModels([]); setNote(outcome.reason ?? 'The model catalogue is unavailable.') }
+      if (outcome.operation === 'catalog') {
+        if (outcome.models) setModels(outcome.models)
+        setSelected(outcome.selected ?? null)
+        setCatalogDefault(outcome.defaultModel ?? null)
+      } else {
+        setModels([])
+        setNote(outcome.reason ?? 'The model catalogue is unavailable.')
+      }
     })
   }
 
@@ -75,8 +112,11 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
     })
   }
 
-  const selectedId = selected ?? defaultModel ?? null
-  const activeModel = selectedId ? modelName(selectedId) : 'provider default'
+  // What a turn would actually run right now: the owner's selection if there is
+  // one, otherwise the provider's own default. Only when Core has told us neither
+  // is there genuinely nothing to name.
+  const selectedId = selected ?? defaultModel ?? catalogDefault
+  const activeModel = selectedId ? modelName(selectedId) : 'no model reported'
   const search = query.trim().toLowerCase()
   const matches = models.filter(entry => search.length === 0
     || modelName(entry.id).toLowerCase().includes(search)

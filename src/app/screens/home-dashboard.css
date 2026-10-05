@@ -24,7 +24,7 @@
 
 /* ---- the top bar ---- */
 .hd-top {
-  position: absolute; inset: 0 0 auto 0; height: 56px; z-index: 4;
+  position: absolute; inset: 0 0 auto 0; height: 56px; z-index: 30;
   display: flex; align-items: center; gap: 14px; padding: 0 22px 0 26px;
   border-bottom: 1px solid #8db7d32e;
   background: rgba(5, 10, 16, .62);
@@ -87,8 +87,11 @@
 .hd-pop-empty { margin: 4px 2px; font-size: 12px; line-height: 1.5; color: #7e95a8; }
 
 /* ---- the rail ---- */
+/* Above the Home stage (z-index 20), not below it. The stage is a fixed,
+   viewport-wide decorative layer, so at z-index 3 the rail opened *behind* the
+   gate cards. Chrome wins over the stage it frames. */
 .hd-rail {
-  position: absolute; top: 56px; bottom: 0; left: 0; width: 216px; z-index: 3;
+  position: absolute; top: 56px; bottom: 0; left: 0; width: 216px; z-index: 30;
   display: flex; flex-direction: column;
   border-right: 1px solid #8db7d32e;
   background: rgba(5, 10, 16, .55);
@@ -106,11 +109,27 @@
 .hd-rail[data-collapsed] .hd-rail-toggle svg { transform: scaleX(-1); }
 .hd-rail[data-collapsed] .hd-place { justify-content: center; padding: 0; }
 .hd-rail[data-collapsed] .hd-place span,
-.hd-rail[data-collapsed] .chats-history,
 .hd-rail[data-collapsed] .hd-online span,
 .hd-rail[data-collapsed] .hd-online small,
 .hd-rail[data-collapsed] .hd-user-name,
 .hd-rail[data-collapsed] .hd-user > svg { display: none; }
+/*
+ * Chats stays reachable when collapsed.
+ *
+ * The conversation block used to be hidden wholesale, which took the Chats entry
+ * with it — Chats is the one place that lives *inside* this component rather than
+ * being its own row, so hiding the block made the workspace unreachable from a
+ * 64px rail. Only the list and the New button go; the head becomes the same
+ * icon-only row as every other place, and it navigates rather than disclosing.
+ */
+.hd-rail[data-collapsed] .chats-history-list,
+.hd-rail[data-collapsed] .chats-new,
+.hd-rail[data-collapsed] .chats-history-empty { display: none; }
+.hd-rail[data-collapsed] .chats-history { margin-top: 0; }
+.hd-rail[data-collapsed] .chats-history-title {
+  justify-content: center; gap: 0; padding: 0; height: 44px;
+}
+.hd-rail[data-collapsed] .chats-history-title span { display: none; }
 .hd-rail[data-collapsed] .hd-rail-foot { padding: 10px 0 14px; justify-items: center; }
 .hd-rail[data-collapsed] .hd-user { width: auto; padding: 4px; }
 .hd-rail-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; display: grid; gap: 2px; align-content: start; padding: 6px 10px 12px; }
@@ -122,7 +141,7 @@
 .hd-place svg { flex: none; color: #9db6c9; }
 .hd-place:hover { color: #e6f4ff; background: rgba(255, 255, 255, .045); }
 .hd-place[aria-current='page'] { color: #8ee6ff; background: #59e0ff17; }
-.hd-place[aria-current='page'] svg { color: #8ee6ff; }
+.hd-place[aria-current='page'] svg { color: #8ee6ff; filter: drop-shadow(0 0 7px #4fe6ff); }
 
 /* Chat history: the conversations, listed directly under the Chats group head
    as a quieter second level — same row shape as the places above, text aligned
@@ -369,22 +388,13 @@
 @keyframes hd-spin { to { transform: rotate(360deg); } }
 .hd-notice { position: absolute; bottom: 62px; left: 18px; margin: 0; border: 1px solid #6fb6d559; border-radius: 10px; padding: 10px 16px; background: #071320f0; font-size: 13px; }
 .hd-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-/* Collapse: below a laptop width the rail narrows to icons and the board's
-   side padding tightens to follow it. */
-@media (max-width: 1360px) {
-  .hd-rail { width: 64px; }
-  .hd-rail .hd-place span,
-  .hd-rail .chats-history,
-  .hd-rail .hd-online > span:not(.hd-status-dot),
-  .hd-rail .hd-online small,
-  .hd-rail .hd-user-name,
-  .hd-rail .hd-user > svg { display: none; }
-  .hd-rail .hd-place { justify-content: center; padding: 0; }
-  .hd-railhead { justify-content: center; padding: 12px 0 8px; }
-  .hd-rail-foot { padding: 10px 0 14px; justify-items: center; }
-  .hd-user { width: auto; padding: 4px; }
-  .hd-main { left: 86px; }
-}
+/* Collapse is driven by one thing only: the `data-collapsed` attribute the toggle
+   writes. An earlier copy of these rules lived in a `max-width: 1360px` query and
+   hid the labels independently of that attribute, so expanding below 1360px left
+   a 216px rail full of icon-only rows. The toggle is the only control. */
+/* The stage gutter follows the rail rather than the viewport, so expanding the rail
+   at any width moves the board out from under it instead of behind it. */
+.hd-rail[data-collapsed] ~ .hd-main { left: 86px; }
 
 
 /* --------------------------------------------------------------------------

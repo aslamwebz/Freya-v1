@@ -122,7 +122,15 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserToggle, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
-  const [collapsed, setCollapsed] = useState(false)
+  /*
+   * Narrow viewports start collapsed. This used to live in a CSS media query that
+   * outranked `[data-collapsed]`, which meant the toggle could not widen the rail
+   * back out — it only flipped `aria-pressed`. The default is chosen here instead,
+   * so after first paint the attribute is the single source of truth.
+   */
+  const [collapsed, setCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 1800,
+  )
   const home = ready(snapshot.home)
   const focus = home?.focus
   const attention = home?.attention.profiles[0]
@@ -263,7 +271,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
         </div>
         <div className="hd-rail-list">
           <button className="hd-place" aria-label="Home" aria-current={screen === 'home' ? 'page' : undefined} onClick={open('home')}><Glyph name="home" size={20} /><span>Home</span></button>
-          <ChatHistory onOpen={open('chat')} />
+          <ChatHistory onOpen={open('chat')} collapsed={collapsed} current={screen === 'chat'} />
           {NAV.filter(([id]) => id !== 'home' && id !== 'chat').map(([id, label, icon]) => (
             <button key={id} className="hd-place" aria-label={label} aria-current={id === screen ? 'page' : undefined} onClick={open(id)}><Glyph name={icon} size={20} /><span>{label}</span></button>
           ))}

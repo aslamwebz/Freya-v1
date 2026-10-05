@@ -173,10 +173,11 @@ export function GlobalComposer({
           type="button"
           className="hd-tool hd-tool-browser"
           aria-pressed={browserOpen}
-          title={browserOpen ? 'Close browser workspace' : 'Open browser workspace'}
+          aria-label={browserOpen ? 'Close the browser workspace' : 'Open the browser workspace'}
+          title={browserOpen ? 'Close the browser workspace' : 'Open the browser workspace'}
           onClick={onBrowserToggle}
         >
-          <Glyph name="world" size={16} /><span>Browser</span>
+          <Glyph name="world" size={17} />
         </button>
         <ModelSelector defaultModel={defaultModel} />
         <ThinkingSelector />

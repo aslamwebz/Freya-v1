@@ -27,11 +27,12 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // CI measured Phase 44 at 2,237,259 bytes; after the final Phase 45 Voice API
   // migration and Phase 46 Memory Identity composition, main.cjs is 2,312,063 bytes.
   // Phase 48 adds the Forge manifest door, sandbox, static scan, validation/version
-  // pipeline and encrypted Forge store. Phase 49 adds qualification inventory and
-  // runtime readiness metadata. Phase 51 adds the embedded Freya Browser window,
-  // Dual Browser routing/handoff runtime and Device Hands adapter. Keep the current
-  // measured ceiling until CI reports the exact combined artifact size.
-  mainBytes: 2_325_000,
+  // pipeline and encrypted Forge store; CI measures the reconciled P44-P48 main.cjs
+  // at 2,473,605 bytes. Phase 49 adds qualification inventory/runtime readiness, and
+  // Phase 51 adds the embedded Freya Browser, Dual Browser routing/handoff runtime
+  // and Device Hands adapter. Start from the verified P48 baseline; CI will measure
+  // the exact final P51 artifact and tighten the ceiling from there.
+  mainBytes: 2_490_000,
   // Phase 44 adds connector projection/commands to the preload bridge, and
   // Phase 45 adds the bounded Voice command/capability/playback channel. CI measures
   // the reconciled preload at 139,620 bytes, so retain only narrow explicit headroom.

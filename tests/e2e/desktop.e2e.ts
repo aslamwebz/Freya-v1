@@ -51,6 +51,15 @@ const E2E_CONTEXT_KEY = Buffer.alloc(32, 0x47).toString('base64')
  */
 const E2E_PERSONALITY_KEY = Buffer.alloc(32, 0x7e).toString('base64')
 const E2E_SKILL_KEY = Buffer.alloc(32, 0x39).toString('base64')
+/**
+ * Phase 48 gives executable Forge package bodies their own independent key.
+ *
+ * The E2E seam is deliberately all-or-nothing across durable domains, so the
+ * harness has to provide Forge as well; omitting it would make the application
+ * reject the entire deterministic key set and honestly fall back to ephemeral
+ * Context/Personality storage on CI.
+ */
+const E2E_FORGE_KEY = Buffer.alloc(32, 0x52).toString('base64')
 const E2E_VAULT_KEY = Buffer.alloc(32, 0x61).toString('base64')
 /**
  * Which monitor the suite drives Freya on.
@@ -106,6 +115,7 @@ async function launch(
       FREYA_E2E_CONTEXT_KEY: E2E_CONTEXT_KEY,
       FREYA_E2E_PERSONALITY_KEY: E2E_PERSONALITY_KEY,
       FREYA_E2E_SKILL_KEY: E2E_SKILL_KEY,
+      FREYA_E2E_FORGE_KEY: E2E_FORGE_KEY,
       FREYA_E2E_VAULT_KEY: E2E_VAULT_KEY,
       FREYA_CONTEXT_WINDOW_OBSERVATION: '',
       ...env,
@@ -2502,17 +2512,12 @@ async function main(): Promise<void> {
         // Wait for the fixed, code-owned verification failure reason. Verifier
         // explanations can contain Step input or Observation data, so they are not
         // durable UI text and must not be echoed back through the Work projection.
-        await work.waitForFunction(
-          () =>
-            [...document.querySelectorAll('[role="dialog"][aria-label="Work"] .work-step-meta')].some(
-              (row) =>
-                (row.textContent ?? '').includes('failed') &&
-                (row.textContent ?? '').includes('verification did not establish the intended result'),
-            ),
-          undefined,
-          { timeout: 30_000 },
-        )
-        const stepText = (await board.locator('.work-step-meta').allTextContents()).join(' ')
+        const verificationFailure = board
+          .locator('.work-step-meta')
+          .filter({ hasText: 'verification did not establish the intended result' })
+          .first()
+        await verificationFailure.waitFor({ state: 'visible', timeout: 30_000 })
+        const stepText = (await verificationFailure.textContent()) ?? ''
         check(
           'a step whose action succeeded but whose verification failed is shown as failed',
           stepText.includes('failed'),
@@ -2594,10 +2599,36 @@ async function main(): Promise<void> {
         const bridged = await work.evaluate(() =>
           Object.keys((window as unknown as { freyaHost?: object }).freyaHost ?? {}).sort(),
         )
+        /*
+         * Scoped to Work, on purpose.
+         *
+         * The bare words "capability", "verifier" and "plan" are not Work's alone:
+         * Phase 45 added `reportVoiceCapabilities`, which is a *report* of what the
+         * platform's speech engine turned out to be and carries no authority. A
+         * check written against the bare words would have failed on that name and
+         * the tempting fix would have been to rename it until it passed — which is
+         * how a boundary check stops meaning anything.
+         *
+         * So this asks what it actually means: does any bridge function reach Work's
+         * capability registry, a verifier or a plan body? `workCapability`,
+         * `capabilityRegistry`, `verifierFor` and `planFor` are the shapes that
+         * would do it, and none of them may exist.
+         */
         check(
           'the bridge exposes no capability, verifier or plan for Work',
-          !bridged.some((key) => /capabilit|verifier|plan|registry|executor/i.test(key)),
+          !bridged.some((key) =>
+            /^(workCapability|capabilityRegistry|verifier|verifierFor|plan|planFor|executor|workExecutor)/i.test(key),
+          ),
           bridged.join(', '),
+        )
+        // And the voice channel is the exact set Phase 45 declared: a projection, a
+        // fragment feed, a playback instruction and a capability report. Nothing
+        // there can start a capture, open a device or name what Freya says.
+        check(
+          'the voice channel is a projection, fragments, playback and a capability report — nothing more',
+          bridged.filter((key) => /voice/i.test(key)).sort().join(', ') ===
+            'coreVoice, onCoreVoice, onCoreVoiceTranscript, onVoiceOutput, reportVoiceCapabilities',
+          bridged.filter((key) => /voice/i.test(key)).sort().join(', '),
         )
 
         // --- 9. it survives an application relaunch --------------------

@@ -5,7 +5,9 @@ import type { ModelUsage, PrincipalId } from './protocol/core-protocol'
 import { initialAttentionState, reduceAttention, type AttentionState } from './attention/state'
 import { initialOfficeState, reduceOfficeState, type OfficeState } from './office/state'
 import { initialRelayState, reduceRelay, type RelayState } from './relay/state'
+import { initialConnectorState, reduceConnector, type ConnectorFold } from './connectors/state'
 import { initialSkillState, reduceSkillState, type SkillState } from './skills/state'
+import { initialForgeState, reduceForgeState, type ForgeState } from './forge/state'
 
 /**
  * Everything Core knows, derived from durable events.
@@ -86,12 +88,25 @@ export interface CoreState {
    */
   relay: RelayState
   /**
+   * Connectors' folded state: connection records, authorization requests, event
+   * metadata and dedupe keys. Derived from `connector.*` events, so revocation
+   * and replay protection survive a restart without a second store.
+   */
+  connectors: ConnectorFold
+  /**
    * Skills' folded state: records, lifecycle status, verification, version history,
    * evaluation records and open improvement proposals. Derived from `skill.*` events
    * like everything else, so promotions, contradictions and retirement survive a
    * restart without a second store.
    */
   skills: SkillState
+  /**
+   * Forge's folded state: packages, their versions, lifecycle status, validation
+   * verdicts, approval states, quarantine reasons and run outcomes. Derived from
+   *  orge.* events, so enabled state and run history survive a restart without
+   * a second store.
+   */
+  forge: ForgeState
 }
 
 /** A `core.integrity_fault` as recovered from the journal. */
@@ -117,7 +132,9 @@ export function initialCoreState(): CoreState {
     attention: initialAttentionState(),
     office: initialOfficeState(),
     relay: initialRelayState(),
-skills: initialSkillState(),
+    connectors: initialConnectorState(),
+    skills: initialSkillState(),
+    forge: initialForgeState(),
   }
 }
 
@@ -356,12 +373,23 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
         const relay = reduceRelay(state.relay, event)
         return relay === state.relay ? state : { ...state, relay }
       }
+      if (event.type.startsWith('connector.')) {
+        const connectors = reduceConnector(state.connectors, event)
+        return connectors === state.connectors ? state : { ...state, connectors }
+      }
       // Skills own their own slice and their own reducer, for the same reason: the
       // lifecycle table, the version arithmetic and the evidence window are three
       // invariants that belong together and should not be spread across this switch.
       if (event.type.startsWith('skill.')) {
         const skills = reduceSkillState(state.skills, event)
         return skills === state.skills ? state : { ...state, skills }
+      }
+      // Forge owns its slice for the same reason, and with the same discipline:
+      // the version table, the install/enable separation and the refusal log are
+      // invariants that belong together.
+      if (event.type.startsWith('forge.')) {
+        const forge = reduceForgeState(state.forge, event)
+        return forge === state.forge ? state : { ...state, forge }
       }
       return state
   }

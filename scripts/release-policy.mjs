@@ -23,19 +23,31 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // Raised from 2.1MB for the Phase 43 browser-extension host, which mounts against
   // the Phase 42 Device Hands seam and so lands in the main process rather than in a
   // separate bundle. Phase 50 then added persistent Eye sessions and bounded parallel
-  // Deep Research to Core; CI measures main.cjs at 2,138,279 bytes. Keep only narrow,
-  // explicit headroom over that measured artifact rather than absorbing future growth.
-  mainBytes: 2_150_000,
-  preloadBytes: 120_000,
+  // Deep Research. Phase 44 adds the connector engine/runtime and host composition;
+  // CI measured Phase 44 at 2,237,259 bytes; after the final Phase 45 Voice API
+  // migration and Phase 46 Memory Identity composition, main.cjs is 2,312,063 bytes.
+  // Phase 48 adds the Forge manifest door, sandbox, static scan, validation/version
+  // pipeline and encrypted Forge store; CI measures the reconciled P44-P48 main.cjs
+  // at 2,473,605 bytes. Phase 49 adds qualification inventory/runtime readiness.
+  // Phase 51 adds the embedded Freya Browser, Dual Browser routing/handoff runtime
+  // and Device Hands adapter; CI measures the reconciled final main.cjs at
+  // 2,600,227 bytes. Keep only narrow explicit headroom over that verified artifact.
+  mainBytes: 2_620_000,
+  // Phase 44 adds connector projection/commands to the preload bridge, and
+  // Phase 45 adds the bounded Voice command/capability/playback channel. CI measures
+  // the reconciled preload at 139,620 bytes, so retain only narrow explicit headroom.
+  preloadBytes: 142_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,
   // Phase 19 added the ui-v2 shell: a finished design with ~1.9MB of webp imagery and
   // the three.js presence stage. The old 1.5MB ceiling predated that surface, so the
   // budget tracks the shipped design with headroom for its next iteration rather than
   // forcing the concept art out to satisfy a number that never accounted for it.
-  // The App Mode / persistent-board merge pushed the measured total to ~3.57MB, so the
-  // bound is raised to keep headroom over the shipped design rather than trimming it.
-  rendererTotalBytes: 3_650_000,
+  // The App Mode / persistent-board merge pushed the measured total to ~3.57MB.
+  // Phase 45 adds the voice runtime, platform speech adapter, recognition feature
+  // detection and settings surface across both renderer entry paths; its completed
+  // branch measured the resulting ceiling at ~3.70MB.
+  rendererTotalBytes: 3_700_000,
 })
 
 export function inspectLockfile(pkg, lock) {

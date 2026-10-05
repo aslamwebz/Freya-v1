@@ -2,6 +2,7 @@ import type {
   ExperienceRecord,
   IdentityRoot,
   MemoryCandidate,
+  MemoryOwnership,
   MemoryRecord,
   MemoryReview,
   SelfDefinition,
@@ -84,6 +85,7 @@ export type BrainRecord =
   | { kind: 'memory-candidate'; candidate: MemoryCandidate }
   | { kind: 'memory-record'; memory: MemoryRecord }
   | { kind: 'memory-review'; review: MemoryReview }
+  | { kind: 'memory-ownership'; ownership: MemoryOwnership }
   | { kind: 'experience'; experience: ExperienceRecord }
 
 export type BrainRecordKind = BrainRecord['kind']
@@ -98,6 +100,14 @@ export interface BrainState {
   candidates: Map<string, MemoryCandidate>
   memories: Map<string, MemoryRecord>
   reviews: Map<string, MemoryReview>
+  /**
+   * The owner's latest pinning decision per memory.
+   *
+   * Keyed by memory id and **last write wins**, which is the same rule the memory
+   * map itself follows: a newer decision about one memory replaces the older one,
+   * and the chain still holds every version that was ever written.
+   */
+  ownership: Map<string, MemoryOwnership>
   experiences: Map<string, ExperienceRecord>
   /** Monotonic write position, and the chain head the next record will extend. */
   sequence: number
@@ -113,6 +123,7 @@ export function emptyBrainState(): BrainState {
     candidates: new Map(),
     memories: new Map(),
     reviews: new Map(),
+    ownership: new Map(),
     experiences: new Map(),
     sequence: 0,
   }

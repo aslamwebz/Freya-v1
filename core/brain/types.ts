@@ -453,6 +453,36 @@ export interface MemoryRecord {
   admissionReason: string
 }
 
+/**
+ * What the owner decided about keeping a memory in front of Freya.
+ *
+ * A **separate record kind**, not a field on `MemoryRecord`, and the reason is
+ * worth stating because it looks like duplication: pinning answers a different
+ * question from admission. Admission asks "is this worth believing?", and pinning
+ * asks "should this be in front of me when you answer?". A field on the memory
+ * would make the second question able to overwrite the first — unpinning would
+ * look like retracting a belief, and pinning would look like raising confidence.
+ *
+ * Two invariants live in the type rather than in a caller:
+ *
+ *  - **`decidedBy` is `'owner'` and nothing else.** There is no pathway by which a
+ *    subsystem, a worker or a model decides what the owner keeps in view. If that
+ *    were ever widened, "the model decided what Freya always sees" would be a
+ *    memory-poisoning primitive with a UI.
+ *  - **Pinning is not recallability.** It changes what is offered, never what is
+ *    admitted, and it cannot resurrect a withdrawn memory: retrieval still filters
+ *    on `status`, so an archived memory stays archived whatever this says.
+ */
+export interface MemoryOwnership {
+  memoryId: string
+  /** True to offer first, false to stop offering. Never "true forever". */
+  pinned: boolean
+  decidedAt: string
+  decidedBy: 'owner'
+  /** In the owner's words. Bounded by the reason limit, and never inferred. */
+  reason: string
+}
+
 /** Why a candidate was not admitted, kept so the decision can be examined later. */
 export interface MemoryReview {
   candidateId: string

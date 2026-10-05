@@ -34,8 +34,12 @@ import { ConversationService } from './conversation/service'
 import type { ConversationStore } from './conversation/store'
 import { EncryptedConversationStore } from './conversation/encrypted-store'
 import { MemoryConversationStore } from './conversation/memory-store'
+import { CONVERSATION_LIMITS } from './conversation/types'
 import { VoiceService } from './voice/service'
-import type { VoiceTranscriber, VoiceSynthesizer } from './voice/types'
+import { UnavailableSttAdapter } from './voice/stt'
+import { UnavailableTtsAdapter } from './voice/tts'
+import { LOCAL_ENERGY_WAKE_GATE } from './voice/wake'
+import type { VoiceSttAdapter, VoiceTranscriptFragment, VoiceTtsAdapter, WakeGate } from './voice/types'
 import { WorkforceEngine } from './workforce/engine'
 import type { SubordinateWorkerScope, WorkforceOwnerScope } from './workforce/authority'
 import { ABSENT_WORKFORCE_PROJECTION } from './workforce/projection'
@@ -148,6 +152,16 @@ import {
 } from './world'
 import { SkillEngine, type SkillOwnerScope } from './skills/engine'
 import { SkillPersistenceRuntime } from './skillsPersistence'
+import { ForgePersistenceRuntime } from './forgePersistence'
+import { ForgeEngine, type ForgeCapabilityPort, type ForgeOwnerScope } from './forge/engine'
+import { isForgeRuntimeKind, type ForgeOrigin, type ForgeRefusalCode } from './forge/types'
+import {
+  ABSENT_FORGE_PROJECTION,
+  FORGE_NO_PAYLOAD,
+  NO_FORGE_DOMAIN_REASON,
+  type ForgeCommandOutcome,
+  type ForgeProjection,
+} from './protocol/forge'
 import type { SkillExecutionPort } from './skills/execution'
 import { OWNER_SUBMITTABLE_EVIDENCE_KINDS } from './skills/evaluation'
 import {
@@ -215,6 +229,14 @@ import { projectRelay } from './relay/projection'
 import type { RelayAction, RelayFailureCode } from './relay/types'
 import type { RelayCommandOutcome, RelayProjection } from './protocol/relay'
 import { ABSENT_RELAY_PROJECTION, RELAY_NO_PAYLOAD } from './protocol/relay'
+import { ConnectorEngine, type ConnectorAuthPort, type ConnectorEngineResult } from './connectors/engine'
+import { projectConnectors } from './connectors/projection'
+import { connectorDefinition } from './connectors/catalog'
+import { isReadAction } from './connectors/policy'
+import { validateActionRequest } from './connectors/validation'
+import type { ConnectorKind } from './connectors/types'
+import type { ConnectorCommandOutcome, ConnectorProjection } from './protocol/connectors'
+import { ABSENT_CONNECTOR_PROJECTION, CONNECTOR_NO_PAYLOAD } from './protocol/connectors'
 import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
 import type { CognitionGrantSpec } from './cognition/grants'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
@@ -429,6 +451,14 @@ export interface CoreOptions {
    */
   skillKey?: Uint8Array | null
   /**
+   * Forge's independent encrypted persistence key, from the keyring.
+   *
+   * Its own domain label, its own file and its own key: a Forge store cannot
+   * open the Skill store even when handed the same bytes, because the AAD prefix
+   * differs by domain. Null means explicit process-only storage; never plaintext.
+   */
+  forgeKey?: Uint8Array | null
+  /**
    * Personality's own independent secure key, from the keyring.
    *
    * A **fourth** independent secret, for the same reason as the other three: what
@@ -545,10 +575,23 @@ export interface CoreOptions {
     /** Test/embedding seam. Production uses the canonical encrypted Vault when available. */
     sessionStore?: SearchSessionStore
   }
-  /** A local speech-to-text engine. Absent means none is configured. */
-  voiceTranscriber?: VoiceTranscriber
-  /** A local text-to-speech engine. Absent means none is configured. */
-  voiceSynthesizer?: VoiceSynthesizer
+  /** A speech-to-text engine. Absent means none is configured. */
+  voiceStt?: VoiceSttAdapter
+  /** A speech output engine. Absent means none is configured. */
+  voiceTts?: VoiceTtsAdapter
+  /** A local wake gate. Absent means hands-free cannot be armed at all. */
+  voiceWake?: WakeGate
+  /**
+   * Whether this platform offers a capture path.
+   *
+   * False reports `unsupported` from the first projection rather than offering a
+   * button that cannot work. A host that knows it has no microphone says so here;
+   * a host that does not know leaves it unset and the renderer reports the truth
+   * from `navigator.mediaDevices` instead.
+   */
+  voiceCaptureSupported?: boolean
+  /** Tightens the transcription deadline. Cannot raise it past the hard limit. */
+  voiceTranscriptionTimeoutMs?: number
   /** Overrides the conversation context budget. For tests. */
   contextBudget?: ContextBudget
   /**
@@ -631,6 +674,32 @@ export interface CoreOptions {
      * put any repo on this list.
      */
     allowlistedRepos?: readonly string[]
+    /**
+     * The Telegram chats reads and sends may target. Code-owned and
+     * host-supplied; empty means no chat may be read from or written to.
+     */
+    allowlistedChats?: readonly string[]
+  }
+  /**
+   * The Phase 44 connector connection plane.
+   *
+   * Unset means this Core has no connector domain: the projection reports
+   * `unavailable` and every connector command is refused with a stated reason,
+   * which is the honest reading rather than a simulated connection.
+   *
+   * The `auth` port is the host's authorization seam. It returns a URL and a
+   * configuration status — never a token. Tokens live in the host's secure
+   * store; Core never holds one, so a credential cannot reach the journal, a
+   * projection or the renderer.
+   *
+   * The action plane is Relay, which Core already owns. A connector write is
+   * forwarded to Relay, so there is exactly one approval system and one budget
+   * ledger.
+   */
+  connectors?: {
+    auth: ConnectorAuthPort
+    /** Connectors policy refuses outright. Code-owned and host-supplied. */
+    blocked?: readonly ConnectorKind[]
   }
   /**
    * The Phase 23 Continuous Life Loop.
@@ -720,6 +789,23 @@ export interface Core {
   conversation(): Promise<ConversationProjection>
   /** The current voice projection. */
   voice(): VoiceProjection
+  /**
+   * Subscribe to the voice projection.
+   *
+   * Pushed on every move of the voice state machine — permission resolving, a
+   * capture opening, a transcription finishing, STOP ALL landing — so a window's
+   * listening indicator is Core's state rather than a flag the window set itself.
+   */
+  onVoice(listener: (projection: VoiceProjection) => void): () => void
+  /**
+   * Subscribe to transcript fragments.
+   *
+   * Interim fragments arrive here while an engine is still revising its guess, and
+   * a final one arrives when it has stopped. Interim text is display-only: there
+   * is no command anywhere in this protocol that would submit it, so a window
+   * cannot execute a guess even if it tried.
+   */
+  onVoiceTranscript(listener: (fragment: VoiceTranscriptFragment) => void): () => void
   /**
    * Subscribe to the Brain projection.
    *
@@ -853,6 +939,29 @@ export interface Core {
   /** Subscribe to the Relay projection. No connector authority crosses this seam. */
   onRelay(listener: (projection: RelayProjection) => void): () => void
   /**
+   * Core's connector connection projection.
+   *
+   * A mirror of the connection plane: closed states, display labels, scope
+   * names, capability flags and event metadata. No token, no client secret and
+   * no event content is a field of it.
+   */
+  connectors(): ConnectorProjection
+  /** Subscribe to the connector projection. Same mirror semantics as the others. */
+  onConnectors(listener: (projection: ConnectorProjection) => void): () => void
+  /**
+   * Complete an authorization. **Host-only; never a renderer command.**
+   *
+   * The host has already verified state, nonce and PKCE and holds the token in
+   * its secure store; this records the non-secret outcome so Core can report the
+   * connection truthfully. It is deliberately not in the command vocabulary.
+   */
+  connectorAuthorizationComplete(payload: unknown): Promise<ConnectorCommandOutcome>
+  /**
+   * Deliver an authenticated external event. **Host-only; never a renderer
+   * command.** An event grants nothing and has no path to an action.
+   */
+  connectorEventIngest(payload: unknown): Promise<ConnectorCommandOutcome>
+  /**
    * Evaluate due schedules. The bounded wake mechanism, driven by the host.
    *
    * Main-process composition only — there is deliberately no `attention.tick`
@@ -920,6 +1029,20 @@ attentionTick(now?: Date): Promise<number>
   skills(): SkillProjection
   /** Subscribe to the Skills projection. Same mirror semantics as the others. */
   onSkills(listener: (projection: SkillProjection) => void): () => void
+  /**
+   * Core's account of Forge: generated and acquired packages, their lifecycle
+   * status, validation verdicts, approval state, quarantine reasons and last runs.
+   *
+   * Read-only, and the shape of the read is the whole policy. A package's program
+   * and description are not fields of the projection: they cross only through an
+   * explicit  orge.detail.read for one package, to the owner. The projection also
+   * carries untimeNotice, which states what the runtime cannot do, because a
+   * generated package that cannot reach the filesystem is a fact a person needs
+   * rather than a surprise.
+   */
+  forge(): ForgeProjection
+  /** Subscribe to the Forge projection. Same mirror semantics as the others. */
+  onForge(listener: (projection: ForgeProjection) => void): () => void
   /**
    * Core's account of its own life history: episodes, milestones, periods and
    * themes as metadata, and whether they survive a restart.
@@ -1168,6 +1291,10 @@ class FreyaCore implements Core {
    */
   private skillEngine: SkillEngine | undefined
   private skillPersistence: SkillPersistenceRuntime | undefined
+  /** The Phase 48 Forge domain: candidates, validation, install, enable and bounded runs. */
+  private forgeEngine: ForgeEngine | undefined
+  private forgePersistence: ForgePersistenceRuntime | undefined
+  private readonly forgeListeners = new Set<(projection: ForgeProjection) => void>()
   /**
    * The Phase 22 Self & World engine, built and owned by Core.
    *
@@ -1185,6 +1312,17 @@ class FreyaCore implements Core {
   private readonly relayListeners = new Set<(projection: RelayProjection) => void>()
   /** The Phase 16 Relay engine, built and owned by Core. */
   private relayEngine: RelayEngine | undefined
+  private readonly connectorListeners = new Set<(projection: ConnectorProjection) => void>()
+  /** The Phase 44 connector connection plane, built and owned by Core. */
+  private connectorEngine: ConnectorEngine | undefined
+  /**
+   * Connector admission.
+   *
+   * Closed synchronously by STOP ALL, before that command's first `await`, for
+   * the same reason Relay admission is: a connector action that checked
+   * admission and then awaited could reach an external provider after the stop.
+   */
+  private connectorAdmissionOpen = false
   /** Display-ready activity, rebuilt from the log on every start. */
   private activityFeed: CoreActivityEvent[] = []
   private readonly newId: () => string
@@ -1539,6 +1677,7 @@ class FreyaCore implements Core {
       // idempotent, so a replayed event cannot duplicate an entry.
       if (!event.type.startsWith('life.')) void this.lifeEngine?.observe(event)
       if (event.type.startsWith('foundry.')) this.publishFoundry()
+      if (event.type.startsWith('forge.')) this.publishForge()
       this.notify()
     })
 
@@ -1725,10 +1864,44 @@ class FreyaCore implements Core {
     })
     this.voiceService = new VoiceService({
       fabric: this.fabric,
-      transcriber: this.options.voiceTranscriber,
-      synthesizer: this.options.voiceSynthesizer,
+      // An absent engine becomes an object that refuses, rather than an `undefined`
+      // that five call sites each have to remember to check. The refusal is what
+      // makes "no engine configured" a reportable state instead of a silent no-op.
+      stt: this.options.voiceStt ?? new UnavailableSttAdapter(),
+      tts: this.options.voiceTts ?? new UnavailableTtsAdapter(),
+      wake: this.options.voiceWake ?? LOCAL_ENERGY_WAKE_GATE,
+      captureSupported: this.options.voiceCaptureSupported ?? true,
+      transcriptionTimeoutMs: this.options.voiceTranscriptionTimeoutMs,
+      stopAll: () => this.state.stopAll.active,
+      // The canonical door. This is the same function `conversation.turn.submit`
+      // reaches, so a spoken sentence is a typed sentence from the Mind down: same
+      // context compilation, same grant, same Governor, same budget, same STOP ALL.
+      submitTurn: async ({ text }) => {
+        const conversationId = await this.conversations.ensureConversation()
+        if (conversationId === null) {
+          return { ok: false, turnId: null, outcome: 'none', reason: 'no conversation could be opened' }
+        }
+        const result = await this.conversations.submitTurn({ conversationId, text, requestId: this.newId() })
+        if (!result.ok) {
+          return { ok: false, turnId: null, outcome: 'none', reason: result.reason }
+        }
+        return {
+          ok: true,
+          turnId: result.turn.turnId,
+          outcome: result.turn.outcome,
+          reason: result.turn.reason,
+        }
+      },
+      // Playback reads the store, in this direction only. The window names a turn
+      // and never the words, so it cannot put a sentence in Freya's mouth.
+      resolveTurnText: (turnId) => this.storedAnswerFor(turnId),
       now: this.options.now,
       newId: this.options.newId,
+    })
+    // The voice projection is pushed on every move, so a window's indicator is
+    // Core's state rather than a flag the window set for itself.
+    this.voiceService.onChange(() => {
+      this.notify()
     })
 
     /**
@@ -1913,11 +2086,33 @@ class FreyaCore implements Core {
       stopAll: () => this.state.stopAll.active,
       getState: () => this.state.relay,
       allowlistedRepos: this.options.relay?.allowlistedRepos,
+      allowlistedChats: this.options.relay?.allowlistedChats,
       now: this.options.now,
       newId: this.options.newId,
     })
     this.relayAdmissionOpen = true
     await this.relayEngine.reconcile()
+
+    /**
+     * The connector connection plane, built after Relay because its action port
+     * *is* Relay. It holds no token store and no provider: the host's `auth`
+     * port returns only a URL and a status, and every action is forwarded to the
+     * Relay engine above, so there is one approval system and one budget ledger.
+     */
+    if (this.options.connectors !== undefined) {
+      this.connectorEngine = new ConnectorEngine({
+        fabric: this.fabric,
+        auth: this.options.connectors.auth,
+        action: { execute: (input) => this.requireRelay().execute(input) },
+        stopAll: () => this.state.stopAll.active,
+        getState: () => this.state.connectors,
+        blocked: this.options.connectors.blocked,
+        now: this.options.now,
+        newId: this.options.newId,
+      })
+      this.connectorAdmissionOpen = true
+      await this.connectorEngine.reconcile()
+    }
 
     /**
      * Skills, built last, because they read Work.
@@ -1947,6 +2142,29 @@ class FreyaCore implements Core {
       stopAll: () => this.state.stopAll.active,
     })
     await this.skillEngine.open(recoveredSkills)
+
+    /**
+     * The Phase 48 Forge, built after Skills and Work because it reads both.
+     *
+     * Three seams are wired, and each one is a limit rather than a convenience:
+     *
+     * - **The capability port** answers two questions and grants nothing:
+     *   isRegistered (does any registered Work capability need this Guard
+     *   capability?) and holds (does the owner hold it *right now*). Forge has no
+     *   grant method and no authority object, so installing a package cannot widen
+     *   anything.
+     * - **The body store** is recovered before the engine adopts anything, and
+     *   adoption is filtered by the fold *and* by the recorded hash, so an edited
+     *   store cannot introduce a package Core never recorded, nor run one whose bytes
+     *   changed.
+     * - **STOP ALL** is passed as a fresh read, so a panic button stops Forge in the
+     *   same turn it stops everything else.
+     *
+     * Nothing here burns a model call, and nothing here is reachable from a renderer
+     * except through the  orge.* commands, each of which routes through Guard and the
+     * engine's own pipeline.
+     */
+    await this.buildForge()
 
     // The Phase 22 world. Built after the domains it reads, because it borrows a
     // narrow port from each of them rather than a copy of any of them, and after the
@@ -2133,8 +2351,10 @@ class FreyaCore implements Core {
         // that was activated must not be left recorded as active after the Core
         // that activated it has gone.
         await this.activation?.shutdown(`core stopping: ${reason}`)
-        // A microphone must not outlive the Core that opened it.
-        await this.voiceService?.abandon('the application is shutting down')
+        // A microphone must not outlive the Core that opened it, and neither must
+        // a queued utterance: the device is released, any transcription is
+        // aborted and playback is cut before shutdown records anything.
+        await this.voiceService?.onStopAll(`core stopping: ${reason}`)
         this.gateway?.cancelAll(`core stopping: ${reason}`)
         await this.gateway?.drain(SHUTDOWN_DRAIN_MS)
         await this.fabric.append('core.stopping', { reason }, { actor: 'system' })
@@ -2198,6 +2418,7 @@ class FreyaCore implements Core {
       // landed after its own journal event would be a record of something the log
       // says never happened. Ordered before the fabric closes for that reason.
       await this.skillPersistence?.close()
+    await this.forgePersistence?.close()
       await this.conversationStore?.close()
       await this.fabric?.close()
       this.notify()
@@ -2362,6 +2583,7 @@ class FreyaCore implements Core {
    */
   private closeRelay(reason: string): void {
     this.relayAdmissionOpen = false
+    this.connectorAdmissionOpen = false
     void reason
   }
 
@@ -3056,7 +3278,7 @@ class FreyaCore implements Core {
     const hostAdapters: string[] = []
     if (options.research !== undefined) hostAdapters.push('research')
     if (options.relay !== undefined) hostAdapters.push('relay')
-    if (options.voiceTranscriber !== undefined || options.voiceSynthesizer !== undefined) hostAdapters.push('voice')
+    if (options.voiceStt !== undefined || options.voiceTts !== undefined || options.voiceWake !== undefined) hostAdapters.push('voice')
     // Adapters the host wired but does not route through Core — Phase 42's Device
     // Hands seam is the live case. Declared, never inferred.
     hostAdapters.push(...(options.runtimeFacts?.hostAdapters ?? []))
@@ -3111,6 +3333,184 @@ class FreyaCore implements Core {
     }
   }
 
+  /* ------------------------------------------------------------------ forge */
+
+  /**
+   * Core's Forge projection.
+   *
+   * `unavailable` with `NO_FORGE_DOMAIN_REASON` when no Forge has been built, so a
+   * window cannot render "Freya has no generated skills" in a build that never
+   * offered her the chance.
+   */
+  forge(): ForgeProjection {
+    if (this.forgeEngine === undefined) {
+      return { ...ABSENT_FORGE_PROJECTION, reason: NO_FORGE_DOMAIN_REASON }
+    }
+    try {
+      return this.forgeEngine.projection()
+    } catch (error) {
+      return {
+        ...ABSENT_FORGE_PROJECTION,
+        reason: `the Forge domain could not be read: ${describe(error)}`,
+      }
+    }
+  }
+
+  onForge(listener: (projection: ForgeProjection) => void): () => void {
+    this.forgeListeners.add(listener)
+    try {
+      listener(this.forge())
+    } catch (error) {
+      console.error('[freya.core] Forge subscriber threw', error)
+      this.forgeListeners.delete(listener)
+    }
+    return () => {
+      this.forgeListeners.delete(listener)
+    }
+  }
+
+  private publishForge(): void {
+    // Deliberately *not* folded into publishSkills. A package appearing is not a
+    // procedure appearing, and a reader who saw one projection move because the
+    // other did would have learned to distrust both.
+    if (this.forgeListeners.size === 0) return
+    const projection = this.forge()
+    for (const listener of [...this.forgeListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Forge listener threw', error)
+        this.forgeListeners.delete(listener)
+      }
+    }
+  }
+
+  private requireForge(): ForgeEngine {
+    if (this.forgeEngine === undefined) {
+      throw new Error('the Forge engine is not available')
+    }
+    return this.forgeEngine
+  }
+
+  /**
+   * The owner's face of Forge. Issued here, absent from every interface a window can
+   * name, and carrying no capability that grants, approves or self-modifies.
+   */
+  private issueForgeOwnerScope(): ForgeOwnerScope {
+    return this.requireForge().ownerScope()
+  }
+
+  private forgeResult(requestId: string, outcome: ForgeCommandOutcome): CoreCommandResult {
+    if (!outcome.ok) {
+      return {
+        requestId,
+        ok: false,
+        refusal: { reason: outcome.reason ?? 'the Forge command was refused' },
+        forge: outcome,
+      }
+    }
+    return {
+      requestId,
+      ok: true,
+      status: this.status(),
+      forge: outcome,
+    }
+  }
+
+  private forgeRefusal(
+    requestId: string,
+    operation: ForgeCommandOutcome['operation'],
+    code: ForgeRefusalCode,
+    reason: string,
+  ): CoreCommandResult {
+    return {
+      requestId,
+      ok: false,
+      refusal: { reason },
+      forge: { operation, ok: false, code, reason },
+    }
+  }
+
+  /**
+   * The capability port Forge reads.
+   *
+   * `isRegistered` is the same question Skill admission asks � does any registered
+   * Work capability need this Guard capability � so a package can only declare
+   * something this Core could actually execute. `holds` is Guard's answer for the
+   * owner principal, read fresh on every run.
+   */
+  private forgeCapabilities(): ForgeCapabilityPort {
+    const registry = this.workRegistry
+    return {
+      isRegistered: (capability) => {
+        if (registry === undefined) return false
+        for (const name of registry.names()) {
+          const registered = registry.capability(name)
+          if (registered !== undefined && registered.capability === capability) return true
+        }
+        return false
+      },
+      holds: (capability) => this.guard.holds(this.owner, capability),
+    }
+  }
+
+  /**
+   * Recover the encrypted Forge store, or degrade in words.
+   *
+   * Same discipline as the Skill store and the same reason: a damaged store must not
+   * be silently replaced by an ephemeral one, because that would report "nothing is
+   * remembered" when the truth is "the file is damaged and Freya stopped trusting
+   * it". So the runtime records a fault, the projection reports `durable: false`
+   * with the reason, and no body is adopted � which means a package Core cannot read
+   * is a package that cannot run.
+   */
+private async buildForge(): Promise<void> {
+    try {
+      const opened = await ForgePersistenceRuntime.open({
+        path: `${this.options.dataPath}.forge.enc`,
+        key: this.options.forgeKey ?? null,
+        onHealthChange: () => this.publishForge(),
+      })
+      this.forgePersistence = opened.runtime
+      this.forgeEngine = new ForgeEngine({
+        fabric: this.fabric,
+        getState: () => this.state.forge,
+        actor: this.owner.id,
+        capabilities: this.forgeCapabilities(),
+        store: {
+          // The bodies read at start are handed over once. The engine still re-filters
+          // every one of them against the fold *and* its recorded hash before adopting
+          // it, so a file that survived the store's own authentication and still
+          // disagrees with the journal is dropped rather than run.
+          load: async () => opened.packages,
+          commit: (packages) => opened.runtime.commit(packages),
+          health: () => opened.runtime.health(),
+        },
+        now: this.options.now,
+        newId: this.options.newId,
+        onChange: () => this.publishForge(),
+        stopAll: () => this.state.stopAll.active,
+      })
+      await this.forgeEngine.open()
+    } catch (error) {
+      console.error('[freya.core] encrypted Forge store unavailable', describe(error))
+      this.forgePersistence = undefined
+      // A Forge with no store still works, and says so: bodies live in this process
+      // and the projection reports `durable: false` rather than pretending otherwise.
+      this.forgeEngine = new ForgeEngine({
+        fabric: this.fabric,
+        getState: () => this.state.forge,
+        actor: this.owner.id,
+        capabilities: this.forgeCapabilities(),
+        store: null,
+        now: this.options.now,
+        newId: this.options.newId,
+        onChange: () => this.publishForge(),
+        stopAll: () => this.state.stopAll.active,
+      })
+      await this.forgeEngine.open()
+    }
+  }
   private publishSkills(): void {
     // Every subsystem that can move the snapshot does, through this one call.
     // The conscious context is derived from all of them, so a change to any one
@@ -3422,6 +3822,9 @@ class FreyaCore implements Core {
     // is a change to it - and hooking each publisher is what keeps that true
     // without adding an event type a subsystem could forget to append.
     this.publishConsciousness()
+    // Relay's pending approvals are part of the connector projection, so a
+    // Relay change is a connector change.
+    this.publishConnectors()
     if (this.relayListeners.size === 0) return
     const projection = this.relay()
     for (const listener of [...this.relayListeners]) {
@@ -3439,6 +3842,121 @@ class FreyaCore implements Core {
       throw new Error('the Relay engine is not available')
     }
     return this.relayEngine
+  }
+
+  /**
+   * Core's account of the connector connection plane.
+   *
+   * Never null and never throwing: a Core with no connector domain reports the
+   * frozen absent projection, because "connectors are not up yet" and "there
+   * are no connectors" are different facts.
+   */
+  connectors(): ConnectorProjection {
+    if (this.connectorEngine === undefined || this.fabric === undefined) {
+      return ABSENT_CONNECTOR_PROJECTION
+    }
+    const engine = this.connectorEngine
+    return projectConnectors({
+      sequence: this.fabric.lastSequence,
+      engine,
+      pendingApproval: (connector) => {
+        const relayConnector = connectorDefinition(connector).relayConnector
+        return this.state.relay.approvals.some(
+          (approval) => approval.status === 'pending' && approval.connector === relayConnector,
+        )
+      },
+      recentEvents: this.state.connectors.events,
+    })
+  }
+
+  onConnectors(listener: (projection: ConnectorProjection) => void): () => void {
+    this.connectorListeners.add(listener)
+    try {
+      listener(this.connectors())
+    } catch (error) {
+      console.error('[freya.core] connector subscriber threw', error)
+    }
+    return () => {
+      this.connectorListeners.delete(listener)
+    }
+  }
+
+  private publishConnectors(): void {
+    if (this.connectorListeners.size === 0) return
+    const projection = this.connectors()
+    for (const listener of [...this.connectorListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] connector listener threw', error)
+        this.connectorListeners.delete(listener)
+      }
+    }
+  }
+
+  private requireConnector(): ConnectorEngine {
+    if (this.connectorEngine === undefined) {
+      throw new Error('the connector engine is not available')
+    }
+    return this.connectorEngine
+  }
+
+  /**
+   * Refuse a connector command, or return null to allow it.
+   *
+   * Mirrors `refuseRelay`: a build with no connector domain refuses with a
+   * closed code, and a stopped Core refuses before the first await.
+   */
+  private refuseConnector(requestId: string): CoreCommandResult | null {
+    if (this.connectorEngine === undefined) {
+      const reason = 'this Core has no connector domain'
+      return {
+        requestId,
+        ok: false,
+        refusal: { reason },
+        connectors: { operation: 'refused', ok: false, failureCode: 'unsupported', reason },
+      }
+    }
+    if (!this.connectorAdmissionOpen || this.state.stopAll.active) {
+      const reason = 'Freya is stopped. Every connector action is refused.'
+      return {
+        requestId,
+        ok: false,
+        refusal: { reason },
+        connectors: { operation: 'refused', ok: false, failureCode: 'stop_all', reason },
+      }
+    }
+    return null
+  }
+
+  /**
+   * Complete an authorization. Host-only.
+   */
+  async connectorAuthorizationComplete(payload: unknown): Promise<ConnectorCommandOutcome> {
+    if (this.connectorEngine === undefined) {
+      return { operation: 'refused', ok: false, failureCode: 'unsupported', reason: 'this Core has no connector domain' }
+    }
+    const result = await this.requireConnector().authorizationComplete(payload)
+    if (!result.ok) {
+      return { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason }
+    }
+    this.publishConnectors()
+    return { operation: 'authorization', ok: true }
+  }
+
+  /**
+   * Deliver an authenticated external event. Host-only.
+   */
+  async connectorEventIngest(payload: unknown): Promise<ConnectorCommandOutcome> {
+    if (this.connectorEngine === undefined) {
+      return { operation: 'refused', ok: false, failureCode: 'unsupported', reason: 'this Core has no connector domain' }
+    }
+    const result = await this.requireConnector().ingestEvent(payload)
+    if (!result.ok) {
+      return { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason }
+    }
+    this.publishConnectors()
+    return { operation: 'status', ok: true, eventId: result.eventId }
   }
 
   private requireAttention(): AttentionEngine {
@@ -5148,6 +5666,19 @@ class FreyaCore implements Core {
           // each decision, so this is belt-and-braces ??? but the property being
           // defended is that no external action can *begin* after a stop.
           this.closeRelay(`STOP ALL: ${reason}`)
+          // And voice, in the same synchronous turn, for the same reason.
+          //
+          // Voice is I/O, not authority — but a microphone that stays open after the
+          // panic button is still a microphone the owner asked to be shut, and a
+          // queued utterance that plays out afterwards is Freya talking when
+          // somebody believes she has stopped. So the capture is released, the
+          // transcription aborted and the queue dropped here, before this file's
+          // first await, and the state is latched to `stopped-by-STOP-ALL`.
+          //
+          // What it does not do is clear `micEnabled`. Resuming must not reopen a
+          // device; that stays an explicit press, which is why `onResume` only
+          // recomputes the state and never clears a flag.
+          void this.voiceService?.onStopAll(reason)
           // And the life loop, in the same synchronous turn. Its gate is the
           // prefilter's STOP ALL check and the journal latch this very command is
           // about to write, so a loop that reconciled only after the await could
@@ -5179,6 +5710,15 @@ class FreyaCore implements Core {
             // transitions are written would report a stop over a board that has not been
             // told yet. The gate itself was closed synchronously above, so nothing could
             // slip in while this ran.
+            //
+            // Voice is re-asserted here rather than only above. The synchronous call
+            // closed whatever was open at the moment the stop was decided, but a
+            // `voice.capture.start` already in flight can still land in the window
+            // before the latch is durable — and this is the first moment at which
+            // `stopAllLatch()` reads true, so the first moment Core can honestly
+            // refuse one. `onStopAll` is idempotent, so calling it twice writes one
+            // event rather than two.
+            await this.voiceService?.onStopAll(reason)
             await this.workforceEngine?.settled()
             // And the runtime activation system, after the latch is durable and
             // before the answer: STOP ALL stops every activated domain except the
@@ -5219,6 +5759,7 @@ class FreyaCore implements Core {
             // stopped, and degraded Core is rejected before command dispatch.
             this.gateway?.resume()
             this.workforceEngine?.resume()
+            this.voiceService?.onResume()
             this.conversations?.publish()
             this.publishWorkforce()
             return { requestId, ok: true, status: this.status() }
@@ -5245,12 +5786,16 @@ class FreyaCore implements Core {
           // action is an external request, and one refused at the door during a stop
           // must not silently become allowed the instant the latch clears.
           this.relayAdmissionOpen = true
+          this.connectorAdmissionOpen = true
           // And the runtime activation system, last: it re-evaluates every domain
           // against the now-cleared latch and records which of them came back. A
           // domain whose dependency was lost during the stop stays blocked; only
           // the ones that can honestly run again do.
           await this.activation?.resume(this.runtimeFacts())
           this.publishRuntime()
+          // Voice resumes its state machine without reopening the microphone.
+          // STOP ALL clears hands-free arming; clearing the latch must not restore it.
+          this.voiceService?.onResume()
           // As above: a resume has to reach the surfaces that report it, or Chat
           // stays visibly locked after Core has reopened.
           this.conversations?.publish()
@@ -5781,7 +6326,9 @@ class FreyaCore implements Core {
 
         case 'relay.email.read':
         case 'relay.calendar.read':
-        case 'relay.github.read': {
+        case 'relay.github.read':
+        case 'relay.drive.read':
+        case 'relay.telegram.read': {
           const admission = this.refuseRelay(requestId)
           if (admission !== null) return admission
           const result = await this.requireRelay().execute({
@@ -5823,6 +6370,8 @@ class FreyaCore implements Core {
         case 'relay.calendar.cancel':
         case 'relay.github.issue.create':
         case 'relay.github.pr.create':
+        case 'relay.drive.file.create':
+        case 'relay.telegram.send':
         case 'relay.external.invoke': {
           const admission = this.refuseRelay(requestId)
           if (admission !== null) return admission
@@ -5934,17 +6483,225 @@ class FreyaCore implements Core {
           }
         }
 
+        /* ------------------------------------------------------ connectors */
+
+        case 'connector.status.read': {
+          if (carriesFields(envelope.payload)) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: CONNECTOR_NO_PAYLOAD },
+              connectors: { operation: 'refused', ok: false, reason: CONNECTOR_NO_PAYLOAD },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            connectors: { operation: 'status', ok: true },
+          }
+        }
+
+        case 'connector.connect.start': {
+          const admission = this.refuseConnector(requestId)
+          if (admission !== null) return admission
+          const decision = this.guard.evaluate(this.owner, 'connector.connect')
+          if (!decision.allowed) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: decision.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: 'capability_denied', reason: decision.reason },
+            }
+          }
+          const result = await this.requireConnector().connect(envelope.payload)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason },
+            }
+          }
+          this.publishConnectors()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            connectors: {
+              operation: 'authorization',
+              ok: true,
+              requestId: result.requestId,
+              authorizationUrl: result.authorizationUrl,
+            },
+          }
+        }
+
+        case 'connector.disconnect': {
+          const admission = this.refuseConnector(requestId)
+          if (admission !== null) return admission
+          const decision = this.guard.evaluate(this.owner, 'connector.disconnect')
+          if (!decision.allowed) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: decision.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: 'capability_denied', reason: decision.reason },
+            }
+          }
+          const result = await this.requireConnector().disconnect(envelope.payload)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason },
+            }
+          }
+          this.publishConnectors()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            connectors: { operation: 'revoked', ok: true },
+          }
+        }
+
+        case 'connector.read': {
+          const admission = this.refuseConnector(requestId)
+          if (admission !== null) return admission
+          const decision = this.guard.evaluate(this.owner, 'connector.read')
+          if (!decision.allowed) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: decision.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: 'capability_denied', reason: decision.reason },
+            }
+          }
+          const request = validateActionRequest(envelope.payload)
+          if (!request.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: request.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: 'invalid_request', reason: request.reason },
+            }
+          }
+          if (!isReadAction(request.value.action)) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'connector.read may only submit a read action' },
+              connectors: { operation: 'refused', ok: false, failureCode: 'invalid_request', reason: 'connector.read may only submit a read action' },
+            }
+          }
+          const result = await this.requireConnector().execute(envelope.payload)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason },
+            }
+          }
+          this.publishConnectors()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            connectors: connectorEngineOutcome(result),
+          }
+        }
+
+        case 'connector.action.execute': {
+          const admission = this.refuseConnector(requestId)
+          if (admission !== null) return admission
+          const decision = this.guard.evaluate(this.owner, 'connector.action')
+          if (!decision.allowed) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: decision.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: 'capability_denied', reason: decision.reason },
+            }
+          }
+          const result = await this.requireConnector().execute(envelope.payload)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              connectors: { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason },
+            }
+          }
+          this.publishConnectors()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            connectors: connectorEngineOutcome(result),
+          }
+        }
+
         /* -------------------------------------------------------- voice */
 
         case 'voice.status.read':
-          return { requestId, ok: true, status: this.status() }
+          // Read-only and always allowed, including while stopped: "the microphone
+          // is off" is a state somebody needs to be able to ask about, and it is
+          // not an authority question. Note the asymmetry that follows from this —
+          // knowing Freya is stopped must not be the same as being able to act.
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'state', state: this.voice().state } }
+
+        case 'voice.mic.enable': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          // The activation source is a closed two-value set, checked here rather
+          // than defaulted. Anything else is refused rather than treated as
+          // `owner`: a window naming a source Core does not know is a window naming
+          // something, and the safe reading of an unrecognised value is "no".
+          const source = readString(envelope.payload, 'source')
+          if (source !== null && source !== 'owner' && source !== 'wake') {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: 'the microphone activation source is owner or wake' },
+              voice: { operation: 'refused', reason: 'the microphone activation source is owner or wake' },
+            }
+          }
+          const result = await this.voiceService.enableMic(source === 'wake' ? 'wake' : 'owner')
+          return {
+            requestId,
+            ok: result.ok,
+            ...(result.ok ? {} : { refusal: { reason: result.reason } }),
+            status: this.status(),
+            voice: result.ok
+              ? { operation: 'state', state: result.state }
+              : { operation: 'refused', reason: result.reason },
+          }
+        }
+
+        case 'voice.mic.disable': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          // Always permitted, and deliberately not Guard-blocked: a person must be
+          // able to close the microphone even in the middle of anything.
+          await this.voiceService.disableMic(readString(envelope.payload, 'reason') ?? 'the owner turned the microphone off')
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'state', state: this.voice().state } }
+        }
+
+        case 'voice.permission.report': {
+          const outcome = readString(envelope.payload, 'outcome')
+          if (outcome !== 'granted' && outcome !== 'denied' && outcome !== 'revoked') {
+            return { requestId, ok: false, refusal: { reason: 'a permission report must say granted, denied or revoked' } }
+          }
+          const state = await this.voiceService.reportPermission(outcome)
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'permission', state, outcome } }
+        }
 
         case 'voice.capture.start': {
-          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
-          if (!decision.allowed) {
-            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
-            return { requestId, ok: false, refusal: { reason: decision.reason } }
-          }
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
           const result = await this.voiceService.beginCapture()
           if (!result.ok) {
             return {
@@ -5966,28 +6723,40 @@ class FreyaCore implements Core {
           }
         }
 
-        case 'voice.capture.end': {
-          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
-          if (!decision.allowed) {
-            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
-            return { requestId, ok: false, refusal: { reason: decision.reason } }
-          }
-          const sessionId = readString(envelope.payload, 'sessionId')
-          if (sessionId === null) {
-            return { requestId, ok: false, refusal: { reason: 'sessionId is missing' } }
-          }
-          const result = await this.voiceService.endCapture({
-            sessionId,
-            audio: readAudioBytes(envelope.payload),
-            durationMs: readNumber(envelope.payload, 'durationMs') ?? 0,
-            cancelled: readRaw(envelope.payload, 'cancelled') === true,
-          })
+        case 'voice.transcript.interim': {
+          // Deliberately *not* Guard-gated and deliberately cheap: interim text is
+          // a display string on its way to a screen. There is no path from here to
+          // a turn, so a renderer sending interim text has not gained anything by
+          // being able to send it.
+          const result = this.voiceService.pushInterim(
+            readString(envelope.payload, 'sessionId') ?? '',
+            readRaw(envelope.payload, 'text'),
+          )
           return {
             requestId,
             ok: true,
             status: this.status(),
-            // A transcript, not a turn. Nothing has been sent and nothing has been
-            // spent; the window puts this text in a composer and waits for a Send.
+            voice: {
+              operation: 'interim',
+              sessionId: readString(envelope.payload, 'sessionId') ?? '',
+              accepted: result.ok,
+              reason: result.reason ?? null,
+            },
+          }
+        }
+
+        case 'voice.capture.end': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const result = await this.voiceService.endCapture(normaliseAudioPayload(envelope.payload))
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            // A transcript, and — only when the owner turned auto-submit on before
+            // speaking — a turn. `turnId` says which happened, so a window never
+            // has to guess whether it is holding text in a composer or a message in
+            // a conversation.
             voice: {
               operation: 'capture-ended',
               reason: result.reason,
@@ -5996,13 +6765,151 @@ class FreyaCore implements Core {
               transcribed: result.transcribed,
               byteLength: result.byteLength,
               durationMs: result.durationMs,
+              turnId: result.turnId,
             },
           }
         }
 
         case 'voice.capture.cancel': {
-          await this.voiceService.abandon('the owner released the microphone')
+          // Allowed unconditionally, for the same reason `voice.mic.disable` is.
+          await this.voiceService.cancelCapture(readString(envelope.payload, 'reason') ?? 'the owner cancelled the recording')
           return { requestId, ok: true, status: this.status(), voice: { operation: 'cancelled' } }
+        }
+
+        case 'voice.submit.set': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const enabled = readRaw(envelope.payload, 'enabled')
+          if (typeof enabled !== 'boolean') {
+            return { requestId, ok: false, refusal: { reason: 'auto-submit is a true or false setting' } }
+          }
+          await this.voiceService.setAutoSubmit(enabled)
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'auto-submit', enabled } }
+        }
+
+        case 'voice.tts.speak': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          // The payload is a turn id. Core reads the words from its own store, so
+          // there is no field here a window could use to make Freya say something
+          // she did not already write — and the Guard above still applies, because
+          // playback is not free of the owner's authority rules.
+          const result = await this.voiceService.speakTurn(envelope.payload)
+          return {
+            requestId,
+            ok: result.ok,
+            ...(result.ok ? {} : { refusal: { reason: result.reason } }),
+            status: this.status(),
+            voice: result.ok
+              ? { operation: 'speaking', utteranceId: result.utteranceId, queued: result.queued }
+              : { operation: 'refused', reason: result.reason },
+          }
+        }
+
+        case 'voice.tts.stop': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          await this.voiceService.stopSpeaking()
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            voice: { operation: 'speech-stopped', utteranceId: null },
+          }
+        }
+
+        case 'voice.tts.cancel': {
+          // Unconditional, like the capture cancel: cutting Freya off is always
+          // something the owner must be able to do.
+          await this.voiceService.cancelSpeaking(
+            readString(envelope.payload, 'reason') ?? 'the owner interrupted Freya',
+          )
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            voice: {
+              operation: 'speech-interrupted',
+              utteranceId: null,
+              reason: readString(envelope.payload, 'reason') ?? 'the owner interrupted Freya',
+            },
+          }
+        }
+
+        case 'voice.tts.settle': {
+          const outcome = readString(envelope.payload, 'outcome')
+          if (outcome !== 'completed' && outcome !== 'failed') {
+            return { requestId, ok: false, refusal: { reason: 'a settlement is completed or failed' } }
+          }
+          await this.voiceService.settleSpeech(readString(envelope.payload, 'utteranceId'), outcome)
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'state', state: this.voice().state } }
+        }
+
+        case 'voice.tts.voice.read': {
+          const voices = await this.voiceService.listVoices()
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'voices', voices } }
+        }
+
+        case 'voice.tts.voice.select': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const result = await this.voiceService.selectVoice(readRaw(envelope.payload, 'voiceId'))
+          return {
+            requestId,
+            ok: result.ok,
+            ...(result.ok ? {} : { refusal: { reason: result.reason ?? 'that voice could not be selected' } }),
+            status: this.status(),
+            voice: result.ok
+              ? { operation: 'voice-selected', voiceId: String(readRaw(envelope.payload, 'voiceId')).slice(0, 200) }
+              : { operation: 'refused', reason: result.reason ?? 'that voice could not be selected' },
+          }
+        }
+
+        case 'voice.mute.set': {
+          const muted = readRaw(envelope.payload, 'muted')
+          if (typeof muted !== 'boolean') {
+            return { requestId, ok: false, refusal: { reason: 'mute is a true or false setting' } }
+          }
+          const state = await this.voiceService.setMuted(muted)
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'muted', muted, state } }
+        }
+
+        case 'voice.wake.arm': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const result = await this.voiceService.armWake()
+          return {
+            requestId,
+            ok: result.ok,
+            ...(result.ok ? {} : { refusal: { reason: result.reason ?? 'hands-free could not be armed' } }),
+            status: this.status(),
+            voice: result.ok
+              ? { operation: 'wake-armed' }
+              : { operation: 'refused', reason: result.reason ?? 'hands-free could not be armed' },
+          }
+        }
+
+        case 'voice.wake.disarm': {
+          await this.voiceService.disarmWake(readString(envelope.payload, 'reason') ?? 'hands-free was turned off')
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'wake-disarmed' } }
+        }
+
+        case 'voice.wake.energy': {
+          // Reports a local measurement. It can only ever *ask* for a capture, and
+          // the capture path still has to clear every ordinary precondition — so a
+          // sound in the room is not permission, a turn, or a grant.
+          const result = await this.voiceService.reportWakeEnergy(
+            readNumber(envelope.payload, 'level'),
+            readNumber(envelope.payload, 'sustainedMs') ?? 0,
+          )
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            voice: result.fired
+              ? { operation: 'capture-started', sessionId: this.voice().sessionId ?? '', startedAt: new Date().toISOString() }
+              : { operation: 'refused', reason: result.reason ?? 'the wake gate did not fire' },
+          }
         }
 
         /* ------------------------------------------------------------ brain */
@@ -7238,6 +8145,217 @@ class FreyaCore implements Core {
           return { requestId, ok: true, status: this.status(), skill: { operation: 'detail', ok: true, detail } }
         }
 
+        /* -------------------------------------------------------------- forge */
+        //
+        // Phase 48. One read and eleven owner acts over generated and acquired
+        // packages.
+        //
+        // Every mutating case evaluates `skill.manage` through Guard first and
+        // records the decision, so a refusal appears in the audit stream rather than
+        // only in the caller's return value. None of them writes a status, a verdict
+        // or a threshold: `forge.validate` returns whatever the *pipeline* concluded
+        // about the candidate's own bytes, and there is no payload that can assert a
+        // verdict instead.
+        //
+        // Two absences are structural rather than omitted on purpose:
+        //   - there is no command that installs and enables at once, and no flag that
+        //     means "and turn it on";
+        //   - there is no command that grants a capability, approves an approval, or
+        //     writes to Core. Enabling re-checks the declared capabilities against
+        //     what the owner already holds, at run time.
+
+        case 'forge.status.read': {
+          // Argument-free by construction, for the same reason `skill.status.read` is:
+          // a window that could filter this read would be querying the catalog.
+          if (carriesFields(envelope.payload)) {
+            const refusal = FORGE_NO_PAYLOAD
+            return this.forgeRefusal(requestId, 'refused', 'no-payload', refusal)
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            forge: { operation: 'status', ok: true, projection: this.forge() },
+          }
+        }
+
+        case 'forge.generate': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          if (this.requireForge() === undefined) {
+            return this.forgeRefusal(requestId, 'refused', 'unsupported-runtime', 'this Core has no Forge domain')
+          }
+          const payload = (envelope.payload ?? {}) as Record<string, unknown>
+          // The origin is Core's decision about *which pathway* the request arrived
+          // through, not something a payload may declare: a window that could say
+          // `forge-generated` about its own text could launder a model-authored
+          // package as a locally-authored one.
+          const origin: ForgeOrigin = 'owner-authored'
+          return this.forgeResult(
+            requestId,
+            await this.issueForgeOwnerScope().generate({
+              payload,
+              origin,
+              model: null,
+              requestHash: null,
+              originRef: readString(payload, 'originRef') ?? null,
+            }),
+          )
+        }
+
+        case 'forge.validate': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'validated', 'no-such-package', 'skill id is missing')
+          return this.forgeResult(requestId, await this.issueForgeOwnerScope().validate(skillId))
+        }
+
+        case 'forge.install': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'installed', 'no-such-package', 'skill id is missing')
+          return this.forgeResult(
+            requestId,
+            await this.issueForgeOwnerScope().install(skillId, {
+              allowDowngrade: readBooleanField(envelope.payload, 'allowDowngrade') === true,
+            }),
+          )
+        }
+
+        case 'forge.enable': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'enabled', 'no-such-package', 'skill id is missing')
+          return this.forgeResult(requestId, await this.issueForgeOwnerScope().enable(skillId))
+        }
+
+        case 'forge.disable': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'disabled', 'no-such-package', 'skill id is missing')
+          return this.forgeResult(
+            requestId,
+            await this.issueForgeOwnerScope().disable(skillId, readString(envelope.payload, 'reason') ?? undefined),
+          )
+        }
+
+case 'forge.run': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'run', 'no-such-package', 'skill id is missing')
+          // The command's own fields are removed rather than copied: a payload that
+          // kept `skillId` would be refused by the package's input schema for
+          // carrying a field its contract does not declare, which is correct and
+          // unhelpful here.
+          const payload = { ...((envelope.payload ?? {}) as Record<string, unknown>) }
+          delete payload.skillId
+          delete payload.idempotencyKey
+          delete payload.reason
+          delete payload.allowDowngrade
+          return this.forgeResult(
+            requestId,
+            await this.issueForgeOwnerScope().run({
+              skillId,
+              input: payload,
+              idempotencyKey: readString(envelope.payload, 'idempotencyKey') ?? null,
+            }),
+          )
+        }
+
+        case 'forge.rollback': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          const version = readNumber(envelope.payload, 'version')
+          if (skillId === null) return this.forgeRefusal(requestId, 'rolledback', 'no-such-package', 'skill id is missing')
+          if (version === null) {
+            return this.forgeRefusal(requestId, 'rolledback', 'no-such-version', 'a rollback names the version it returns to')
+          }
+          return this.forgeResult(requestId, await this.issueForgeOwnerScope().rollback(skillId, version))
+        }
+
+        case 'forge.remove': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'removed', 'no-such-package', 'skill id is missing')
+          const version = readNumber(envelope.payload, 'version')
+          return this.forgeResult(requestId, await this.issueForgeOwnerScope().remove(skillId, version ?? undefined))
+        }
+
+        case 'forge.approve': {
+          const guarded = await this.guardSkill(requestId)
+          if (guarded !== null) return guarded
+          const skillId = readString(envelope.payload, 'skillId')
+          const decision = readString(envelope.payload, 'decision')
+          if (skillId === null) return this.forgeRefusal(requestId, 'approved', 'no-such-package', 'skill id is missing')
+          if (decision !== 'approved' && decision !== 'refused') {
+            return this.forgeRefusal(requestId, 'approved', 'malformed-command', 'an approval is approved or refused')
+          }
+          return this.forgeResult(
+            requestId,
+            await this.issueForgeOwnerScope().approve(
+              skillId,
+              decision,
+              readString(envelope.payload, 'reason') ?? undefined,
+            ),
+          )
+        }
+
+        case 'forge.search': {
+          // A read over already-authorised state, so no Guard evaluation: nothing is
+          // decided here, and it costs zero model calls because it is lexical.
+          const payload = (envelope.payload ?? {}) as Record<string, unknown>
+          const runtime = readString(payload, 'runtime')
+          if (runtime !== null && !isForgeRuntimeKind(runtime)) {
+            return this.forgeRefusal(requestId, 'search', 'unknown-runtime', 'that is not a runtime this Core knows')
+          }
+          const found = this.requireForge().discover({
+            query: readString(payload, 'query'),
+            tags: readStringArray(payload, 'tags'),
+            capability: readString(payload, 'capability'),
+            runtime,
+            includeUnavailable: readBooleanField(payload, 'includeUnavailable') === true,
+            limit: readNumber(payload, 'limit'),
+          })
+          return {
+            requestId,
+            ok: found.ok,
+            status: this.status(),
+            forge: { operation: 'search', ok: found.ok, search: found.report, ...(found.projection === undefined ? {} : { projection: found.projection }) },
+          }
+        }
+
+        case 'forge.export': {
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'detail', 'no-such-package', 'skill id is missing')
+          const outcome = this.issueForgeOwnerScope().exportPackage(skillId)
+          return this.forgeResult(requestId, outcome)
+        }
+
+        case 'forge.detail.read': {
+          // The single command in this family that carries a body across the bridge,
+          // and it takes one id. There is deliberately no command that lists every
+          // program: a standing feed would defeat the encryption the store exists to
+          // provide.
+          const skillId = readString(envelope.payload, 'skillId')
+          if (skillId === null) return this.forgeRefusal(requestId, 'detail', 'no-such-package', 'skill id is missing')
+          const detail = this.issueForgeOwnerScope().detail(skillId)
+          if (detail === null) {
+            return this.forgeRefusal(
+              requestId,
+              'detail',
+              'no-such-version',
+              'there is no such package, or its body could not be read at this version',
+            )
+          }
+          return { requestId, ok: true, status: this.status(), forge: { operation: 'detail', ok: true, detail } }
+        }
         /* ------------------------------------------------------ world & self */
         //
         // Phase 22. Five reads and two owner acts.
@@ -7931,21 +9049,80 @@ class FreyaCore implements Core {
 
   voice(): VoiceProjection {
     if (!this.voiceService) {
+      // Before the service exists. `unsupported` rather than `ready`, because a
+      // window that reads this during start-up must not render a live-looking
+      // microphone for a Core that has not built one yet.
       return {
-        transcription: { available: false, engine: null, detail: 'Core has not started.' },
-        synthesis: { available: false, engine: null, detail: 'Core has not started.' },
+        state: 'unsupported',
+        micEnabled: false,
+        permission: 'unknown',
         capturing: false,
         sessionId: null,
+        interim: '',
+        finalTranscript: null,
+        finalTranscriptAt: null,
+        lastInterruption: null,
+        transcription: { available: false, engine: null, kind: 'local', availability: 'unavailable', detail: 'Core has not started.' },
+        synthesis: { available: false, engine: null, kind: 'platform', availability: 'unavailable', detail: 'Core has not started.' },
+        speaking: false,
+        queued: 0,
+        muted: false,
+        selectedVoiceId: null,
+        autoSubmit: false,
+        wake: {
+          armed: false,
+          available: false,
+          gate: 'none',
+          kind: 'speech-activity',
+          detail: 'Core has not started.',
+          maxArmedMs: 0,
+        },
         limits: {
           maxDurationMs: 0,
           maxAudioBytes: 0,
           format: 'pcm-s16le',
+          maxTranscriptCharacters: 0,
+          transcriptionTimeoutMs: 0,
         },
-        localOnly: true,
         faults: [],
       }
     }
     return this.voiceService.projection()
+  }
+
+  /**
+   * Subscribe to the voice projection.
+   *
+   * A mirror like the conversation one, and it exists because "is the microphone
+   * open" is a fact that changes on somebody else's schedule: a permission prompt
+   * resolving, a transcription finishing, STOP ALL landing. Without a push, every
+   * indicator in every window would have to poll, and a polled indicator is one
+   * that lies for a frame.
+   */
+  onVoice(listener: (projection: VoiceProjection) => void): () => void {
+    if (!this.voiceService) return () => {}
+    const dispose = this.voiceService.onChange(listener)
+    // Pushed immediately, so a window attaching late is already correct.
+    try {
+      listener(this.voiceService.projection())
+    } catch (error) {
+      console.error('[freya.core] voice projection subscriber threw', error)
+    }
+    return dispose
+  }
+
+  /**
+   * Subscribe to transcript fragments, interim and final.
+   *
+   * A separate channel from the projection because these are words in flight: a
+   * window that wants to animate an interim line needs every fragment, and a
+   * window that only cares about the final transcript should not be handed a
+   * stream of guesses to filter. Interim text crossing this channel is display
+   * text and nothing more — there is no command that would submit it.
+   */
+  onVoiceTranscript(listener: (fragment: VoiceTranscriptFragment) => void): () => void {
+    if (!this.voiceService) return () => {}
+    return this.voiceService.onTranscript(listener)
   }
 
   /** Wait for the services, then project. Used by a window that attaches early. */
@@ -8043,6 +9220,71 @@ class FreyaCore implements Core {
   /** The owner's authority. Identity lives here, not in any caller's payload. */
   private get ownerAuthority(): OwnerAuthority {
     return this.issueOwnerAuthority()
+  }
+
+  /**
+   * The one Guard check every voice command runs.
+   *
+   * Factored out rather than repeated because "did every voice command remember to
+   * evaluate the Guard?" is exactly the kind of question a code review answers by
+   * reading rather than by running, and a hand-written dispatcher with fifteen new
+   * arms is where that answer goes stale.
+   *
+   * It returns a refusal envelope or `null`, so an arm reads as
+   * `const refused = await this.guardVoice(requestId); if (refused) return refused`
+   * — two lines, and the *next* arm cannot forget the check because the shape is
+   * right there.
+   *
+   * The capability is `core.command.submit`, the same one `voice.capture.start`
+   * used in Phase 3: voice is a surface of the owner's own Core, so it needs the
+   * owner's standing ability to submit a command and nothing beyond it. It is not
+   * `cognition.request`, because reading a stored answer aloud is not cognition —
+   * the words already exist, and the turn that produced them was authorised when
+   * it ran.
+   */
+  private async guardVoice(
+    requestId: string,
+  ): Promise<{ requestId: string; ok: false; refusal: { reason: string } } | null> {
+    const decision = this.guard.evaluate(this.owner, 'core.command.submit')
+    if (decision.allowed) return null
+    await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
+    return { requestId, ok: false, refusal: { reason: decision.reason } }
+  }
+
+  /**
+   * The stored answer for a turn, for playback.
+   *
+   * Bounded on purpose: the listing is capped by the conversation limits and each
+   * record is read whole, so this is a lookup over a bounded set rather than a
+   * scan of an unbounded history. It returns nothing unless the turn completed
+   * *and* has an assistant message — a denied or cancelled turn has no answer, and
+   * Freya does not read the question back.
+   */
+  private async storedAnswerFor(turnId: string): Promise<{ ok: boolean; text: string | null; reason: string | null }> {
+    try {
+      const summaries = await this.conversationStore.listConversations(CONVERSATION_LIMITS.maxConversationsListed)
+      for (const summary of summaries) {
+        const record = await this.conversationStore.readConversation(summary.conversationId)
+        if (record === null) continue
+        const turn = record.turns.find((candidate) => candidate.turnId === turnId)
+        if (turn === undefined) continue
+        if (turn.assistantMessageId === null) {
+          return { ok: false, text: null, reason: 'that turn has no stored answer to read' }
+        }
+        const message = record.messages.find((candidate) => candidate.messageId === turn.assistantMessageId)
+        if (message === undefined) {
+          return { ok: false, text: null, reason: 'that turn has no stored answer to read' }
+        }
+        return { ok: true, text: message.content, reason: null }
+      }
+      return { ok: false, text: null, reason: 'no such turn' }
+    } catch (error) {
+      return {
+        ok: false,
+        text: null,
+        reason: `the conversation store could not be read: ${error instanceof Error ? error.message : 'unknown error'}`,
+      }
+    }
   }
 
   private async recordGuard(
@@ -8339,17 +9581,42 @@ function readRaw(payload: unknown, key: string): unknown {
  * bytes go straight to a local engine and are dropped: never journalled, never
  * written to disk, and never retained as "memory".
  */
-function readAudioBytes(payload: unknown): Uint8Array | undefined {
-  const raw = readRaw(payload, 'audio')
-  if (raw instanceof Uint8Array) return raw
-  if (typeof raw === 'string') {
-    try {
-      return new Uint8Array(Buffer.from(raw, 'base64'))
-    } catch {
-      return undefined
-    }
+/**
+ * Normalise a capture payload for `validateAudio`.
+ *
+ * The bridge accepts the samples under `audio` — that is what a renderer has — and
+ * the validator wants them under `bytes` with the metadata alongside. Both names
+ * are also accepted on the way in, because a host that assembles the payload
+ * itself should not have to know which half of that pair this function is.
+ *
+ * Everything else is passed through **unvalidated on purpose**: the whole point of
+ * `validateAudio` is that it takes `unknown` and checks it. Re-checking here would
+ * mean two validators that could disagree, and the one the renderer can reach
+ * would be the one that decides.
+ *
+ * A base64 string is still accepted, because a structured-clone boundary cannot
+ * always carry a `Uint8Array`, and decoding a base64 string here is not a parser
+ * anyone can attack — `Buffer.from` either produces bytes or throws.
+ */
+function normaliseAudioPayload(payload: unknown): Record<string, unknown> {
+  const record = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
+  const raw = record.audio ?? record.bytes
+  const bytes =
+    raw instanceof Uint8Array
+      ? raw
+      : typeof raw === 'string'
+        ? Buffer.from(raw, 'base64')
+        : undefined
+  return {
+    ...record,
+    bytes,
+    // A caller-declared length is passed through rather than replaced, so
+    // `validateAudio` can compare what the sender *said* the payload was against
+    // what actually arrived. Overwriting it here would make that check vacuous, and
+    // the check is the only thing that catches a sender confused about its own
+    // buffer.
+    byteLength: record.byteLength ?? bytes?.byteLength,
   }
-  return undefined
 }
 
 /** The renderer-safe shape of an attention decision. Metadata only. */
@@ -8378,6 +9645,10 @@ function readActionFor(command: string): RelayAction {
       return 'calendar.read'
     case 'relay.github.read':
       return 'github.read'
+    case 'relay.drive.read':
+      return 'drive.read'
+    case 'relay.telegram.read':
+      return 'telegram.read'
     default:
       return 'email.read'
   }
@@ -8400,6 +9671,10 @@ function writeActionFor(command: string): RelayAction {
       return 'github.issue.create'
     case 'relay.github.pr.create':
       return 'github.pr.create'
+    case 'relay.drive.file.create':
+      return 'drive.file.create'
+    case 'relay.telegram.send':
+      return 'telegram.send'
     case 'relay.external.invoke':
       return 'external.invoke'
     default:
@@ -8415,6 +9690,26 @@ function relayRefusal(result: { failureCode: RelayFailureCode; reason: string })
     failureCode: result.failureCode,
     reason: result.reason,
   }
+}
+
+/** The renderer-safe shape of a connector action's outcome. */
+function connectorEngineOutcome(result: ConnectorEngineResult): ConnectorCommandOutcome {
+  if (!result.ok) {
+    return { operation: 'refused', ok: false, failureCode: result.failureCode, reason: result.reason }
+  }
+  if (result.kind === 'read') {
+    return { operation: 'read', ok: true, result: result.result }
+  }
+  if (result.kind === 'pending') {
+    return {
+      operation: 'pending',
+      ok: true,
+      actionId: result.actionId,
+      approvalId: result.approvalId,
+      status: 'pending_approval',
+    }
+  }
+  return { operation: 'replayed', ok: true, actionId: result.actionId, status: result.status }
 }
 
 /**

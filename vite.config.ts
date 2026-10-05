@@ -35,6 +35,7 @@ export default defineConfig({
       'tests/core/**/*.test.ts',
       'tests/host/**/*.test.ts',
       'tests/red-team/**/*.test.ts',
+      'tests/qualification/**/*.test.ts',
     ],
     setupFiles: ['tests/unit/setup.ts'],
     restoreMocks: true,

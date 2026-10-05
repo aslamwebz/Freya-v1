@@ -89,6 +89,10 @@ beforeEach(() => {
     coreConversation: (async () => null) as never,
     onCoreConversation: (() => () => {}) as never,
     coreVoice: (async () => null) as never,
+    onCoreVoice: (() => () => {}) as never,
+    onCoreVoiceTranscript: (() => () => {}) as never,
+    onVoiceOutput: (() => () => {}) as never,
+    reportVoiceCapabilities: (() => {}) as never,
     coreBrain: (async () => null) as never,
     onCoreBrain: (() => () => {}) as never,
   } as never

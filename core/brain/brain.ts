@@ -22,6 +22,7 @@ import {
   type IdentityRoot,
   type IdentityRootClaim,
   type MemoryKind,
+  type MemoryOwnership,
   type MemoryRecord,
   type MemoryStatus,
   RECALLABLE_STATUSES,
@@ -399,103 +400,114 @@ export class Brain {
     if (this.closing || this.closed) {
       return { outcome: 'unavailable', memory: null, reason: 'the Brain is closing or closed', notes: [] }
     }
-    const task = async (): Promise<MemoryWriteOutcome> => {
-      const now = this.timestamp()
-      const candidateId = this.newId()
-      const memoryId = this.newId()
-
-      const admission: AdmissionRequest = {
-        kind: request.kind,
-        subject: request.subject,
-        content: request.content,
-        source: request.source,
-        sourceRef: request.sourceRef,
-        observedAt: request.observedAt ?? now,
-        now,
-        proposedConfidence: request.confidence,
-        sensitivity: request.sensitivity,
-        tags: request.tags,
-        entityRefs: request.entityRefs,
-        structuredData: request.structuredData,
-        candidateId,
-        memoryId,
-        actor: request.actor,
-        conflictsWith: request.conflictsWith,
-      }
-
-      try {
-        // The candidate is written first and unconditionally. A refusal is a decision
-        // somebody may want to examine, and an examineable decision needs the proposal
-        // that produced it.
-        await this.write({ kind: 'memory-candidate', candidate: proposeCandidate(admission) })
-
-        const outcome = admit(admission, this.store.state())
-        const review = reviewOf(outcome, candidateId, now)
-        await this.write({ kind: 'memory-review', review })
-
-        if (outcome.decision !== 'admitted') {
-          await this.emit('brain.memory.reviewed', {
-            candidateId,
-            decision: outcome.decision,
-            reason: outcome.reason,
-          })
-          return { outcome: outcome.decision, memory: null, reason: outcome.reason, notes: [] }
-        }
-
-        const stored = await this.write({ kind: 'memory-record', memory: outcome.memory })
-        const memory = stored.memory
-
-        // A contradiction is symmetric. Admission can discover that the new memory
-        // conflicts with an older one, but leaving the older record as plain
-        // "admitted" makes recall depend on which side happened to be selected.
-        // Persist the reciprocal edge so either side truthfully discloses the
-        // disagreement after a restart.
-        for (const otherId of memory.conflictsWith) {
-          const other = this.store.state().memories.get(otherId)
-          if (other === undefined || other.status === 'archived' || other.status === 'superseded') continue
-          const reciprocal = [...new Set([...other.conflictsWith, memory.memoryId])].sort()
-          if (other.status === 'conflicted' && reciprocal.length === other.conflictsWith.length) continue
-          await this.write({
-            kind: 'memory-record',
-            memory: {
-              ...other,
-              status: 'conflicted',
-              updatedAt: now,
-              conflictsWith: reciprocal,
-            },
-          })
-        }
-
-        await this.emit('brain.memory.admitted', {
-          memoryId: memory.memoryId,
-          kind: memory.kind,
-          source: memory.source,
-          confidence: memory.confidence,
-          status: memory.status,
-          conflictsWith: memory.conflictsWith.length,
-          contentLength: memory.content.length,
-        })
-        return {
-          outcome: 'admitted',
-          memory,
-          reason: memory.admissionReason,
-          notes: outcome.notes,
-        }
-      } catch (error) {
-        if (error instanceof BrainStoreError && ['store-unavailable', 'read-only', 'write-failed'].includes(error.code)) {
-          return {
-            outcome: 'unavailable',
-            memory: null,
-            reason: error.message,
-            notes: [],
-          }
-        }
-        throw error
-      }
-    }
-    const result = this.mutationTail.then(task, task)
+    const result = this.mutationTail.then(() => this.admitNow(request), () => this.admitNow(request))
     this.mutationTail = result.then(() => undefined, () => undefined)
     return result
+  }
+
+  /**
+   * The admission itself, with no queue of its own.
+   *
+   * Split out from `writeMemory` because a queued task cannot call the queued
+   * method: the queue is a promise chain over the *previous* task, so a task that
+   * awaited `writeMemory` would be waiting for itself and the Brain would hang on
+   * the first correction. Anything that must admit from inside a mutation — a
+   * correction admitting its replacement — calls this instead, and inherits the
+   * same ordering because its caller already holds the queue.
+   */
+  private async admitNow(request: MemoryWriteRequest): Promise<MemoryWriteOutcome> {
+    const now = this.timestamp()
+    const candidateId = this.newId()
+    const memoryId = this.newId()
+
+    const admission: AdmissionRequest = {
+      kind: request.kind,
+      subject: request.subject,
+      content: request.content,
+      source: request.source,
+      sourceRef: request.sourceRef,
+      observedAt: request.observedAt ?? now,
+      now,
+      proposedConfidence: request.confidence,
+      sensitivity: request.sensitivity,
+      tags: request.tags,
+      entityRefs: request.entityRefs,
+      structuredData: request.structuredData,
+      candidateId,
+      memoryId,
+      actor: request.actor,
+      conflictsWith: request.conflictsWith,
+    }
+
+    try {
+      // The candidate is written first and unconditionally. A refusal is a decision
+      // somebody may want to examine, and an examineable decision needs the proposal
+      // that produced it.
+      await this.write({ kind: 'memory-candidate', candidate: proposeCandidate(admission) })
+
+      const outcome = admit(admission, this.store.state())
+      const review = reviewOf(outcome, candidateId, now)
+      await this.write({ kind: 'memory-review', review })
+
+      if (outcome.decision !== 'admitted') {
+        await this.emit('brain.memory.reviewed', {
+          candidateId,
+          decision: outcome.decision,
+          reason: outcome.reason,
+        })
+        return { outcome: outcome.decision, memory: null, reason: outcome.reason, notes: [] }
+      }
+
+      const stored = await this.write({ kind: 'memory-record', memory: outcome.memory })
+      const memory = stored.memory
+
+      // A contradiction is symmetric. Admission can discover that the new memory
+      // conflicts with an older one, but leaving the older record as plain
+      // "admitted" makes recall depend on which side happened to be selected.
+      // Persist the reciprocal edge so either side truthfully discloses the
+      // disagreement after a restart.
+      for (const otherId of memory.conflictsWith) {
+        const other = this.store.state().memories.get(otherId)
+        if (other === undefined || other.status === 'archived' || other.status === 'superseded') continue
+        const reciprocal = [...new Set([...other.conflictsWith, memory.memoryId])].sort()
+        if (other.status === 'conflicted' && reciprocal.length === other.conflictsWith.length) continue
+        await this.write({
+          kind: 'memory-record',
+          memory: {
+            ...other,
+            status: 'conflicted',
+            updatedAt: now,
+            conflictsWith: reciprocal,
+          },
+        })
+      }
+
+      await this.emit('brain.memory.admitted', {
+        memoryId: memory.memoryId,
+        kind: memory.kind,
+        source: memory.source,
+        confidence: memory.confidence,
+        status: memory.status,
+        conflictsWith: memory.conflictsWith.length,
+        contentLength: memory.content.length,
+      })
+      return {
+        outcome: 'admitted',
+        memory,
+        reason: memory.admissionReason,
+        notes: outcome.notes,
+      }
+    } catch (error) {
+      if (error instanceof BrainStoreError && ['store-unavailable', 'read-only', 'write-failed'].includes(error.code)) {
+        return {
+          outcome: 'unavailable',
+          memory: null,
+          reason: error.message,
+          notes: [],
+        }
+      }
+      throw error
+    }
   }
 
   /**
@@ -528,6 +540,194 @@ export class Brain {
       const written = await this.write({ kind: 'memory-record', memory: archived })
       await this.emit('brain.memory.archived', { memoryId, reason: 'owner-requested' })
       return { outcome: 'admitted', memory: written.memory, reason, notes: [] }
+    }
+    const result = this.mutationTail.then(task, task)
+    this.mutationTail = result.then(() => undefined, () => undefined)
+    return result
+  }
+
+  /**
+   * The owner's pinning decision for a memory, or null when there is none.
+   *
+   * Read-only on purpose, like `identity()`. The only writer is `setMemoryPinned`,
+   * and its `decidedBy` is the literal `'owner'` — a closed type, checked again on
+   * read by the fold's validation, so there is no third way in.
+   */
+  ownership(memoryId: string): MemoryOwnership | null {
+    return this.store.state().ownership.get(memoryId) ?? null
+  }
+
+  /**
+   * Offer a memory first, or stop offering it.
+   *
+   * Two things this deliberately does **not** do, and both are the reason it is
+   * safe to hand an owner a one-click "keep this in view":
+   *
+   *  - **It does not change what Freya believes.** Status, confidence, provenance
+   *    and conflicts are untouched, so pinning cannot make a weak claim look
+   *    strong. It changes only what is *offered*.
+   *  - **It cannot resurrect a withdrawn memory.** A memory that is archived or
+   *    superseded is refused here, and retrieval filters on status regardless, so
+   *    the order of the two operations does not matter: pin-then-archive and
+   *    archive-then-pin both end with the memory out of every pack.
+   *
+   * The decision is a record, not a field, so the chain keeps the whole history
+   * of what the owner asked to keep and when.
+   */
+  async setMemoryPinned(
+    memoryId: string,
+    pinned: boolean,
+    reason: string,
+  ): Promise<MemoryWriteOutcome> {
+    if (this.closing || this.closed) {
+      return { outcome: 'unavailable', memory: null, reason: 'the Brain is closing or closed', notes: [] }
+    }
+    const trimmed = reason.trim()
+    if (trimmed.length === 0) {
+      return { outcome: 'rejected', memory: null, reason: 'a pinning decision must say why', notes: [] }
+    }
+    if (trimmed.length > BRAIN_LIMITS.maxReasonChars) {
+      return { outcome: 'rejected', memory: null, reason: 'that reason is longer than a reason may be', notes: [] }
+    }
+    const task = async (): Promise<MemoryWriteOutcome> => {
+      const memory = this.store.state().memories.get(memoryId)
+      if (memory === undefined) {
+        return { outcome: 'rejected', memory: null, reason: 'no such memory', notes: [] }
+      }
+      // Only a memory Freya would otherwise recall can be pinned. Pinning an
+      // archived one would be a request to un-withdraw it wearing a different hat.
+      if (pinned && !RECALLABLE_STATUSES.includes(memory.status)) {
+        return {
+          outcome: 'rejected',
+          memory,
+          reason: `a ${memory.status} memory cannot be pinned; it is no longer something Freya recalls`,
+          notes: [],
+        }
+      }
+      const decision: MemoryOwnership = {
+        memoryId,
+        pinned,
+        decidedAt: this.timestamp(),
+        decidedBy: 'owner',
+        reason: trimmed,
+      }
+      await this.write({ kind: 'memory-ownership', ownership: decision })
+      await this.emit('brain.memory.ownership_set', { memoryId, pinned, reason: trimmed.length })
+      return { outcome: 'admitted', memory, reason: trimmed, notes: [] }
+    }
+    const result = this.mutationTail.then(task, task)
+    this.mutationTail = result.then(() => undefined, () => undefined)
+    return result
+  }
+
+  /** Memories the owner has pinned, in a stable order. Never filtered by status. */
+  pinnedMemoryIds(): string[] {
+    return [...this.store.state().ownership.values()]
+      .filter((decision) => decision.pinned)
+      .map((decision) => decision.memoryId)
+      .sort()
+  }
+
+  /**
+   * Replace what Freya believes about something, keeping both versions.
+   *
+   * A correction is an admission from the strongest source there is, carrying an
+   * explicit `supersedes`. The old record is **not** edited and **not** removed:
+   * it becomes `superseded` and stays readable, because "Freya used to believe
+   * this, and the owner corrected her on this date" is itself part of what the
+   * owner is entitled to know. A correction that erased its target would be
+   * indistinguishable from a memory quietly changing its own mind.
+   *
+   * `structuredData` and the original's `entityRefs` are inherited so a correction
+   * is recognisable as the *same* claim being restated; the caller may add tags but
+   * the subject and entities are the anchor.
+   */
+  async correctMemory(
+    memoryId: string,
+    correction: { content: string; reason: string; tags?: readonly string[] },
+  ): Promise<MemoryWriteOutcome> {
+    if (this.closing || this.closed) {
+      return { outcome: 'unavailable', memory: null, reason: 'the Brain is closing or closed', notes: [] }
+    }
+    const task = async (): Promise<MemoryWriteOutcome> => {
+      const original = this.store.state().memories.get(memoryId)
+      if (original === undefined) {
+        return { outcome: 'rejected', memory: null, reason: 'no such memory', notes: [] }
+      }
+      if (original.status === 'archived') {
+        return {
+          outcome: 'rejected',
+          memory: original,
+          reason: 'a withdrawn memory cannot be corrected; it is no longer held',
+          notes: [],
+        }
+      }
+      const content = correction.content.trim()
+      if (content.length === 0) {
+        return { outcome: 'rejected', memory: original, reason: 'a correction needs the corrected text', notes: [] }
+      }
+      if (content === original.content) {
+        return {
+          outcome: 'rejected',
+          memory: original,
+          reason: 'that is the same text; a correction has to change something',
+          notes: [],
+        }
+      }
+      const reason = correction.reason.trim()
+      if (reason.length === 0) {
+        return { outcome: 'rejected', memory: original, reason: 'a correction must say what was wrong', notes: [] }
+      }
+
+      // The strongest source, because the owner is the one correcting — and the
+      // owner is still only a *source*. A correction is admitted evidence, not a
+      // grant: it moves a belief, and it cannot widen anything.
+      //
+      // `admitNow`, not `writeMemory`: this task already holds the mutation queue, and
+      // the queued method would be waiting on a promise that includes this task.
+      const outcome = await this.admitNow({
+        kind: original.kind,
+        subject: original.subject,
+        content,
+        source: 'owner-assertion',
+        sourceRef: memoryId,
+        observedAt: this.timestamp(),
+        confidence: 'high',
+        sensitivity: original.sensitivity,
+        tags: correction.tags ?? original.tags,
+        entityRefs: original.entityRefs,
+        structuredData: original.structuredData,
+        actor: 'owner',
+        conflictsWith: original.conflictsWith,
+      })
+      if (outcome.outcome !== 'admitted' || outcome.memory === null) {
+        return outcome
+      }
+
+      // Re-point the new record at the old one. Written as a second record rather
+      // than by mutating the admitted memory, so the chain shows the supersession
+      // and the admission reason it was given stays intact.
+      const superseding: MemoryRecord = {
+        ...outcome.memory,
+        supersedes: memoryId,
+        admissionReason: `${outcome.memory.admissionReason}; owner correction of ${memoryId}: ${reason}`.slice(
+          0,
+          BRAIN_LIMITS.maxReasonChars,
+        ),
+        updatedAt: this.timestamp(),
+      }
+      const written = await this.write({ kind: 'memory-record', memory: superseding })
+      await this.emit('brain.memory.corrected', {
+        memoryId: written.memory.memoryId,
+        corrects: memoryId,
+        source: 'owner-assertion',
+      })
+      return {
+        outcome: 'admitted',
+        memory: written.memory,
+        reason: reason,
+        notes: [`the previous version is kept as superseded and stays readable: ${memoryId}`],
+      }
     }
     const result = this.mutationTail.then(task, task)
     this.mutationTail = result.then(() => undefined, () => undefined)

@@ -93,9 +93,11 @@ describe('identity and self', () => {
 
   it('has no way to install a different identity', () => {
     // Structural rather than a search for a particular verb: the only mutating
-    // members are `writeMemory` and `archiveMemory`, which go through admission,
-    // and the generic `write` is private. Nothing accepts an `IdentityRoot`, so
-    // there is no path by which a caller could supply one.
+    // members are the ones that go through admission (`writeMemory`,
+    // `archiveMemory`, `correctMemory`) and the owner's own decisions about what to
+    // keep in view (`setMemoryPinned`), and the generic `write` is private. Nothing
+    // accepts an `IdentityRoot`, so there is no path by which a caller could supply
+    // one.
     const surface = Brain.prototype as unknown as Record<string, unknown>
     const methods = Object.getOwnPropertyNames(surface).filter(
       (name) => name !== 'constructor' && typeof surface[name] === 'function',
@@ -104,6 +106,15 @@ describe('identity and self', () => {
     // quietly appearing.
     expect(methods.sort()).toEqual(
       [
+        // Phase 46: owner control over held memories. Each is a decision about a
+        // *belief* — admit a correction, withdraw, pin — and none of them can grant,
+        // widen or clear anything. `admitNow` is the un-queued admission body they
+        // share, and it is private for the reason given at its definition.
+        'admitNow',
+        'correctMemory',
+        'ownership',
+        'pinnedMemoryIds',
+        'setMemoryPinned',
         'archiveMemory',
         'close',
         // Private in TypeScript, and named so: `write` is the only generic record

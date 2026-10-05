@@ -1,4 +1,19 @@
-import type { CognitionCause, CognitionOrigin, PrincipalId } from '../protocol/core-protocol'
+import type {
+  CognitionCause,
+  CognitionOrigin,
+  PrincipalId,
+  Capability,
+} from '../protocol/core-protocol'
+import type {
+  ForgeAccessLevel,
+  ForgeOrigin,
+  ForgeRefusalCode,
+  ForgeRunFailureCode,
+  ForgeRunState,
+  ForgeRuntimeKind,
+  ForgeStageVerdict,
+  ForgeValidationStage,
+} from '../forge/types'
 import type {
   EvaluationAuthor,
   EvaluationReason,
@@ -30,6 +45,7 @@ import type {
   RelayFailureCode,
   RelayRiskClass,
 } from '../relay/types'
+import type { ConnectorFailureCode, ConnectorKind } from '../connectors/types'
 import type { RuntimeStatus } from '../runtime/types'
 
 /**
@@ -99,10 +115,24 @@ export const CORE_EVENT_TYPES = [
   'conversation.turn.denied',
   'conversation.turn.interrupted',
 
-  // Local voice — metadata only. Audio never reaches this file.
+  // Voice — metadata only. Audio never reaches this file, and neither does a
+  // transcript: an interim fragment is not even offered to the journal, and a
+  // final one is recorded as a length and a turn reference.
   'voice.capture.started',
   'voice.capture.completed',
   'voice.capture.cancelled',
+  'voice.transcribe.started',
+  'voice.transcribe.completed',
+  'voice.transcribe.failed',
+  'voice.submitted',
+  'voice.speech.started',
+  'voice.speech.stopped',
+  'voice.speech.interrupted',
+  'voice.permission.changed',
+  'voice.wake.armed',
+  'voice.wake.fired',
+  'voice.wake.disarmed',
+  'voice.stopped',
 
   // Brain — metadata only.
   //
@@ -119,6 +149,8 @@ export const CORE_EVENT_TYPES = [
   'brain.memory.admitted',
   'brain.memory.reviewed',
   'brain.memory.archived',
+  'brain.memory.ownership_set',
+  'brain.memory.corrected',
   'brain.world.entity_noted',
   'brain.world.related',
   'brain.world.observed',
@@ -449,10 +481,47 @@ export const CORE_EVENT_TYPES = [
    */
   'skill.runtime.promotion.refused',
 
+  // Forge (Phase 48) — metadata only, and the family where the *body* is absent.
+  //
+  // A Forge package is a generated or acquired program. The program itself, its
+  // description, a run's input and a run's output are **not in this journal** —
+  // they live in the encrypted body store, and this family records only that a
+  // version exists, what it hashes to, what state it is in, what the pipeline
+  // decided, and how a run ended.
+  //
+  // There is no `forge.installed` that also enables, and there is no event whose
+  // name could be read as "a generated package became trusted Core code". The
+  // vocabulary is deliberately small: a candidate was created, a validation ran,
+  // a version was installed, enabled, disabled, rolled back, quarantined, degraded
+  // or removed, an approval was recorded, a run started and ended, and something
+  // was refused. Every payload is an id, a slug, a closed label, a closed code, an
+  // integer, a measured length, a hash or an instant.
+  'forge.candidate.created',
+  'forge.validating.recorded',
+  'forge.validation.recorded',
+  'forge.installed',
+  'forge.enabled',
+  'forge.disabled',
+  'forge.rolledback',
+  'forge.quarantined',
+  'forge.degraded',
+  'forge.removed',
+  'forge.approval.recorded',
+  'forge.run.recorded',
+  /**
+   * An attempt was refused.
+   *
+   * Journalled rather than dropped, for the same reason `skill.proposal.rejected`
+   * exists: a refusal pattern is what an investigation needs, and the payload is a
+   * closed code plus an id — never the text that was refused.
+   */
+  'forge.refused',
+  'forge.limit.exceeded',
+
+
 
   // Foundry (Phase 15) — metadata only, and the family where deterministic
-  // identity is the whole point.
-  //
+  // identity is the whole point.  //
   // A Foundry event describes *that an artifact was produced, verified,
   // promoted or activated* and *what its deterministic identity is*. There is
   // no slot for the artifact's content, its spec, or its verification evidence:
@@ -497,6 +566,27 @@ export const CORE_EVENT_TYPES = [
   'relay.action.cancelled',
   'relay.connector.faulted',
   'relay.limits.exceeded',
+
+  // Connectors (Phase 44) — the connection lifecycle, metadata only.
+  //
+  // A connector event describes *that a connection was requested, authorized,
+  // refreshed, degraded, expired, revoked, failed or blocked*, and *that an
+  // authenticated external event arrived*. There is no slot for a token, an
+  // authorization header, a client secret or an event's payload: the token store
+  // lives host-side and this file is read, copied and exported into backups.
+  // Every field is an id, a closed label, a scope name, a measured length or an
+  // instant.
+  'connector.connection.requested',
+  'connector.connection.authorized',
+  'connector.connection.refreshed',
+  'connector.connection.degraded',
+  'connector.connection.expired',
+  'connector.connection.revoked',
+  'connector.connection.failed',
+  'connector.connection.blocked',
+  'connector.event.received',
+  'connector.event.denied',
+  'connector.action.reconciled',
 
   // Long-Horizon Goals (Phase 31) — metadata only, and the strictest family in
   // the journal after Mission.
@@ -784,21 +874,91 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
     /** Chosen before any audio exists, so this is a format not a measurement. */
     format: string
     sampleRate: number
+    channels: number
+    /**
+     * How this session opened.
+     *
+     * `explicit` means a person pressed something. `wake` means a local
+     * speech-activity gate asked — which is recorded separately precisely so an
+     * operator can tell a hands-free capture from a deliberate one without the
+     * audio either way.
+     */
+    activation: 'explicit' | 'wake'
   }
   'voice.capture.completed': {
     sessionId: string
     /** Bytes of audio handled and then discarded. Never the audio itself. */
     byteLength: number
     durationMs: number
-    /** Whether a local engine produced a transcript. Never implies a model call. */
+    /** Sample frames. A second ceiling, because metadata is attacker-controlled. */
+    frames: number
+    /** Whether an engine produced a transcript. Never implies a model call. */
     transcribed: boolean
     transcriptLength: number
+    /** How many times the engine revised its guess. A count, never the guesses. */
+    interimFragments: number
   }
   'voice.capture.cancelled': {
     sessionId: string
     byteLength: number
+    durationMs: number
     reason: string
   }
+  'voice.transcribe.started': {
+    sessionId: string
+    /** A named engine, or a stand-in that names itself as one. Never a credential. */
+    engine: string
+    /** Where the engine runs: this machine, the OS, or a configured provider. */
+    kind: string
+    frames: number
+  }
+  'voice.transcribe.completed': {
+    sessionId: string
+    engine: string
+    transcriptLength: number
+    interimFragments: number
+  }
+  'voice.transcribe.failed': {
+    sessionId: string
+    engine: string
+    /** A closed vocabulary of *causes*, never an engine's error text. */
+    reason: 'timeout' | 'unconfigured' | 'engine-failed'
+  }
+  /**
+   * A confirmed transcript entered the canonical conversation path.
+   *
+   * `turnId` is the reference that makes this auditable without being a
+   * transcript: an operator can follow it to the turn event and see what the
+   * Mind, the Governor and the provider each did. The words themselves live in
+   * the encrypted conversation store and are not here.
+   */
+  'voice.submitted': {
+    sessionId: string
+    turnId: string
+    outcome: string
+    transcriptLength: number
+  }
+  'voice.speech.started': {
+    utteranceId: string
+    /** Which stored turn is being read. Freya never says anything she did not write. */
+    turnId: string
+    characters: number
+    voice: 'default' | 'selected'
+    queued: number
+  }
+  'voice.speech.stopped': { utteranceId: string; turnId: string; completed: boolean }
+  'voice.speech.interrupted': { utteranceId: string; turnId: string; reason: string }
+  'voice.permission.changed': {
+    /** Which capability the owner was asked about. One category today. */
+    category: 'microphone'
+    outcome: 'granted' | 'denied' | 'revoked'
+    source: 'idle' | 'capturing'
+  }
+  'voice.wake.armed': { gate: string; threshold: number; maxArmedMs: number }
+  'voice.wake.fired': { gate: string; sustainedMs: number }
+  'voice.wake.disarmed': { gate: string; reason: string }
+  /** STOP ALL reached the voice subsystem. The only `scope` is `all`, today. */
+  'voice.stopped': { scope: 'all'; reason: string }
 
   /* --------------------------------------------------------------- brain */
 
@@ -845,6 +1005,28 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
 
   /** A memory was withdrawn deliberately. Archived, never deleted. */
   'brain.memory.archived': { memoryId: string; reason: string }
+
+  /**
+   * The owner changed what Freya keeps in view.
+   *
+   * Metadata only, and the shape is the defence: `reasonLength` rather than
+   * `reason`, because the journal is audit surface that gets read, copied and
+   * backed up far more freely than the Brain itself, and an owner's explanation of
+   * why they pinned something is exactly the kind of private aside that has no
+   * business in it. The words stay in the encrypted record; only the fact, the
+   * target and the size of the explanation are journalled.
+   */
+  'brain.memory.ownership_set': { memoryId: string; pinned: boolean; reasonLength: number }
+
+  /**
+   * The owner corrected a memory.
+   *
+   * `corrects` names the superseded record rather than replacing it. A correction
+   * that erased its target would be indistinguishable, from the outside, from a
+   * memory quietly changing its own mind — so both ids are here, and the old one
+   * stays readable in the Brain.
+   */
+  'brain.memory.corrected': { memoryId: string; corrects: string; source: string }
 
   /** Something was noted. The name itself is not here, only its length. */
   'brain.world.entity_noted': {
@@ -2170,6 +2352,158 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
     reason: SkillRefusalReason
   }
 
+  /* --------------------------------------------------------------- forge */
+
+  /**
+   * A candidate package exists, as a version, with a hash.
+   *
+   * `declaredCapabilities` is the one list here, and it is a list of **Guard
+   * vocabulary entries** rather than the package's own words — a capability map
+   * that survives a restart is exactly the thing an attacker would want to edit,
+   * so the fold stores the closed names and re-derives the permission question at
+   * install and at every run. It is bounded by the domain's own limit.
+   */
+  'forge.candidate.created': {
+    skillId: string
+    name: string
+    runtime: ForgeRuntimeKind
+    version: number
+    integrityHash: string
+    origin: ForgeOrigin
+    model: string | null
+    requestHash: string | null
+    originRef: string | null
+    accessNetwork: ForgeAccessLevel
+    accessDevice: ForgeAccessLevel
+    declaredCapabilities: Capability[]
+    tags: string[]
+    dependencyCount: number
+    programStepCount: number
+    descriptionLength: number
+    createdAt: string
+  }
+
+  /** A validation attempt began. Distinct from its result so an audit can see the attempt. */
+  'forge.validating.recorded': {
+    skillId: string
+    version: number
+    integrityHash: string
+    startedAt: string
+  }
+
+  /**
+   * The whole pipeline's result, as one verdict and one closed code per stage.
+   *
+   * `stageVerdicts` always has one entry per stage in pipeline order, including
+   * the stages that did not run — a truncated pipeline is the shape that lets a
+   * reader assume the rest was considered.
+   */
+  'forge.validation.recorded': {
+    skillId: string
+    version: number
+    integrityHash: string
+    passed: boolean
+    failingStage: ForgeValidationStage | null
+    code: ForgeRefusalCode | null
+    ranAt: string
+    stageVerdicts: ForgeStageVerdict[]
+    testChecks: number
+    testFailures: number
+  }
+
+  'forge.installed': {
+    skillId: string
+    version: number
+    integrityHash: string
+    action: 'install-new' | 'upgrade' | 'downgrade'
+    installedAt: string
+  }
+
+  'forge.enabled': {
+    skillId: string
+    version: number
+    enabledAt: string
+  }
+
+  'forge.disabled': {
+    skillId: string
+    version: number
+    disabledAt: string
+    reason: string
+  }
+
+  'forge.rolledback': {
+    skillId: string
+    fromVersion: number
+    toVersion: number
+    at: string
+  }
+
+  'forge.quarantined': {
+    skillId: string
+    version: number
+    code: ForgeRefusalCode
+    reason: string
+    at: string
+  }
+
+  'forge.degraded': {
+    skillId: string
+    version: number
+    code: ForgeRunFailureCode
+    reason: string
+    at: string
+  }
+
+  'forge.removed': {
+    skillId: string
+    version: number
+    at: string
+    reason: string
+  }
+
+  'forge.approval.recorded': {
+    skillId: string
+    version: number
+    state: 'approved' | 'refused'
+    decidedBy: string
+    decidedAt: string
+    reason: string
+  }
+
+  /**
+   * A run, twice: once when it starts and once when it ends.
+   *
+   * A run whose `finishedAt` is null is one that was in flight. Recovery turns
+   * those into `interrupted` rather than retrying them, because a result that was
+   * not durably recorded did not provably happen.
+   */
+  'forge.run.recorded': {
+    runId: string
+    skillId: string
+    version: number
+    state: ForgeRunState
+    failure: ForgeRunFailureCode | null
+    startedAt: string
+    finishedAt: string | null
+    idempotencyKey: string | null
+    inputHash: string | null
+    opsUsed: number
+    outputChars: number
+    durationMs: number
+    outputHash: string | null
+  }
+
+  'forge.refused': {
+    code: ForgeRefusalCode
+    skillId: string | null
+    at: string
+  }
+
+  'forge.limit.exceeded': {
+    limit: string
+    reason: string
+  }
 
   /* ------------------------------------------------------------- foundry */
 
@@ -2341,6 +2675,80 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
     action: RelayAction
     limit: string
     observed: number
+  }
+
+  /* ------------------------------------------------------------ connectors */
+
+  // Metadata only, and the exact-key rules in `validate.ts` are load-bearing:
+  // there is no slot for a token, a client secret, an authorization header or
+  // an event's content. `accountLabel` is a display label Core assigned, never
+  // an account credential.
+  'connector.connection.requested': {
+    requestId: string
+    connector: ConnectorKind
+  }
+
+  'connector.connection.authorized': {
+    connector: ConnectorKind
+    accountLabel: string
+    scopes: string[]
+    expiresAt: string | null
+  }
+
+  'connector.connection.refreshed': {
+    connector: ConnectorKind
+    expiresAt: string | null
+  }
+
+  'connector.connection.degraded': {
+    connector: ConnectorKind
+    failureCode: ConnectorFailureCode
+    reason: string
+  }
+
+  'connector.connection.expired': {
+    connector: ConnectorKind
+  }
+
+  'connector.connection.revoked': {
+    connector: ConnectorKind
+    reason: string
+  }
+
+  'connector.connection.failed': {
+    connector: ConnectorKind
+    failureCode: ConnectorFailureCode
+    reason: string
+  }
+
+  'connector.connection.blocked': {
+    connector: ConnectorKind
+    failureCode: ConnectorFailureCode
+    reason: string
+  }
+
+  'connector.event.received': {
+    eventId: string
+    connector: ConnectorKind
+    accountLabel: string | null
+    kind: string
+    dedupeKey: string
+    payloadLength: number
+  }
+
+  'connector.event.denied': {
+    eventId: string
+    connector: ConnectorKind
+    kind: string
+    dedupeKey: string
+    failureCode: ConnectorFailureCode
+    reason: string
+  }
+
+  'connector.action.reconciled': {
+    connector: ConnectorKind
+    actionId: string
+    outcome: string
   }
 
   /* --------------------------------------------------------- long-horizon */

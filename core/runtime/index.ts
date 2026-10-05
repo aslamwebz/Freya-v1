@@ -30,6 +30,7 @@ export { RUNTIME_REGISTRY, orderedRegistry, registryById } from './registry'
 export { initialRuntimeFold, reduceRuntimeEntry, reduceRuntimeState } from './state'
 export {
   RuntimeActivationController,
+  STOP_ALL_EXEMPT_DOMAIN,
   type RuntimeActivationControllerOptions,
   type RuntimeActivationHandler,
   type RuntimeJournalPort,

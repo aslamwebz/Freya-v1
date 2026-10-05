@@ -149,6 +149,23 @@ export function validateRelayId(value: unknown, field: string): RelayValidation<
   return { ok: true, value }
 }
 
+/** A Drive file name: bounded, control-stripped, non-empty. */
+export function validateDriveName(value: unknown): RelayValidation<string> {
+  const text = validateText(value, 'name', RELAY_LIMITS.maxDriveNameChars)
+  if (!text.ok) return text
+  const stripped = stripControlCharacters(text.value).trim()
+  if (stripped.length === 0) return { ok: false, reason: 'a file name is empty' }
+  return { ok: true, value: stripped }
+}
+
+/** A MIME content type for an upload. */
+export function validateMimeType(value: unknown): RelayValidation<string> {
+  if (typeof value !== 'string' || !CONTENT_TYPE.test(value)) {
+    return { ok: false, reason: 'a file content type is invalid' }
+  }
+  return { ok: true, value }
+}
+
 /**
  * Validate an idempotency key: bounded, opaque, required for writes.
  *
@@ -290,7 +307,16 @@ export function validateActionPayload(
       if (!query.ok) return query
       const page = validatePagination(record)
       if (!page.ok) return page
-      return { ok: true, value: { query: query.value, limit: page.value.limit, cursor: page.value.cursor } }
+      let messageId: string | null = null
+      if (record.messageId !== undefined && record.messageId !== null) {
+        const validated = validateRelayId(record.messageId, 'messageId')
+        if (!validated.ok) return validated
+        messageId = validated.value
+      }
+      return {
+        ok: true,
+        value: { query: query.value, limit: page.value.limit, cursor: page.value.cursor, messageId },
+      }
     }
 
     case 'email.draft.create':
@@ -475,6 +501,61 @@ export function validateActionPayload(
         ok: true,
         value: { repo: repo.value, head: head.value, base: base.value, title: title.value, body: body.value, idempotencyKey: key.value },
       }
+    }
+
+    case 'drive.read': {
+      const query = validateQuery(record.query)
+      if (!query.ok) return query
+      const page = validatePagination(record)
+      if (!page.ok) return page
+      let fileId: string | null = null
+      if (record.fileId !== undefined && record.fileId !== null) {
+        const validated = validateRelayId(record.fileId, 'fileId')
+        if (!validated.ok) return validated
+        fileId = validated.value
+      }
+      return {
+        ok: true,
+        value: { query: query.value, limit: page.value.limit, cursor: page.value.cursor, messageId: fileId },
+      }
+    }
+
+    case 'drive.file.create': {
+      const name = validateDriveName(record.name)
+      if (!name.ok) return name
+      const mimeType = validateMimeType(record.mimeType)
+      if (!mimeType.ok) return mimeType
+      const content = validateText(record.content, 'content', RELAY_LIMITS.maxDriveContentChars, false)
+      if (!content.ok) return content
+      const key = validateIdempotencyKey(record.idempotencyKey)
+      if (!key.ok) return key
+      return {
+        ok: true,
+        value: { name: name.value, mimeType: mimeType.value, content: content.value, idempotencyKey: key.value },
+      }
+    }
+
+    case 'telegram.read': {
+      const chatId = validateRelayId(record.chatId, 'chatId')
+      if (!chatId.ok) return chatId
+      const query = validateQuery(record.query)
+      if (!query.ok) return query
+      const page = validatePagination(record)
+      if (!page.ok) return page
+      return {
+        ok: true,
+        value: { chatId: chatId.value, query: query.value, limit: page.value.limit, cursor: page.value.cursor },
+      }
+    }
+
+    case 'telegram.send': {
+      const chatId = validateRelayId(record.chatId, 'chatId')
+      if (!chatId.ok) return chatId
+      const text = validateText(record.text, 'text', RELAY_LIMITS.maxTelegramMessageChars)
+      if (!text.ok) return text
+      const key = validateIdempotencyKey(record.idempotencyKey)
+      if (!key.ok) return key
+      return { ok: true, value: { chatId: chatId.value, text: text.value, idempotencyKey: key.value } }
     }
 
     case 'external.invoke': {

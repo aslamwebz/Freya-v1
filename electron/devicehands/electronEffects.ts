@@ -226,11 +226,45 @@ class ManagedBrowserFactory implements DeviceBrowserFactory {
   }
 }
 
+/**
+ * Attach a live Freya Browser as the same runtime's in-page target.
+ *
+ * This is the whole Phase 51 wiring, and it is deliberately **one line of composition**: the
+ * factory is *added* to the existing managed factory rather than replacing it, so a read that
+ * no window is serving still goes to the Phase 5 managed target exactly as it did before, and a
+ * click still resolves to `browser-action-unsupported` when the Freya Browser is not switched
+ * on. Nothing about Phase 42's behaviour changes; it gains a second door, behind the same
+ * gates, the same grant and the same journal.
+ */
+function withInPageTarget(
+  factory: DeviceBrowserFactory,
+  resolve: () => DeviceBrowserFactory | null,
+): DeviceBrowserFactory {
+  return {
+    open: () => factory.open(),
+    openInPage: async (request) => {
+      const inPage = resolve()
+      if (inPage === null || inPage.openInPage === undefined) return null
+      return await inPage.openInPage(request)
+    },
+  }
+}
+
 /* ---------------------------------------------------------------- assembly */
 
 export interface ElectronDeviceHandsEffectsOptions {
   /** Overrides the managed browser. For tests; production uses the real one. */
   readonly browserFactory?: DeviceBrowserFactory
+  /**
+   * The Freya Browser, when Phase 51 has one.
+   *
+   * A **getter**, not a value, and the reason is composition order: the Device Hands effects
+   * are built during Core startup, and the Freya Browser's windows are opened later. Resolving
+   * the factory at call time means neither has to know about the other's lifetime, and a
+   * Freya Browser that has not started yet is simply "no in-page target" — which is the Phase
+   * 42 behaviour, unchanged.
+   */
+  readonly inPageFactory?: () => DeviceBrowserFactory | null
   /** Notifies the host that something a surface might be showing changed. */
   readonly onChange?: () => void
 }
@@ -253,7 +287,11 @@ export function createElectronDeviceHandsEffects(
       writeText: (text) => clipboard.writeText(text),
       clear: () => clipboard.clear(),
     },
-    browser: options.browserFactory ?? new ManagedBrowserFactory(new ElectronBrowserTargetFactory(transport)),
+    browser: options.browserFactory ??
+      withInPageTarget(
+        new ManagedBrowserFactory(new ElectronBrowserTargetFactory(transport)),
+        options.inPageFactory ?? ((): DeviceBrowserFactory | null => null),
+      ),
     transfer: {
       httpGet: createHttpGet(transport),
       httpPost: createHttpPost(),

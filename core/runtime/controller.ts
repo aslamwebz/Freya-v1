@@ -71,8 +71,14 @@ interface ComputedDomain {
   readonly stopRelated: boolean
 }
 
-/** The security spine is never stopped by STOP ALL: it is what enforces it. */
-const STOP_ALL_EXEMPT = 'core.security-spine'
+/**
+ * The security spine is never stopped by STOP ALL: it is what enforces it.
+ *
+ * Exported so the Phase 49 qualification inventory derives its readiness from the
+ * same exemption rather than keeping a second copy that can drift out of step. The
+ * inventory/controller agreement test fails if the two ever disagree.
+ */
+export const STOP_ALL_EXEMPT_DOMAIN = 'core.security-spine'
 
 function defaultNow(): string {
   return new Date().toISOString()
@@ -315,7 +321,7 @@ export class RuntimeActivationController {
       }
     }
 
-    if (stopAllActive && descriptor.id !== STOP_ALL_EXEMPT) {
+    if (stopAllActive && descriptor.id !== STOP_ALL_EXEMPT_DOMAIN) {
       return {
         ...base,
         status: 'blocked',

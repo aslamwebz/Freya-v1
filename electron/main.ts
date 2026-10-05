@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, shell, safeStorage } from 'electron'
 import { join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
@@ -12,10 +12,18 @@ import { loadKeyring } from './keyring'
 import { ProviderConfigStore } from './providerConfig'
 import { createFreyaVaultBinding } from './vaultBinding'
 import { loadLocalEnv } from './localEnv'
+import { createConnectorRuntime } from './connectors/runtime'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import { PresenceHost } from './presence/host'
 import { createBrowserExtensionHost, type BrowserExtensionHost } from './browserext'
+import { HostVoiceOutput, registerVoiceOutputIpc } from './voiceHost'
+import {
+  createDualBrowserActivation,
+  createFreyaBrowserAdapter,
+  ElectronFreyaWindowFactory,
+  type DualBrowserActivation,
+} from './browser'
 import { installSingleInstanceGuard } from './startup/singleInstance'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ProviderConfigInput } from './providerConfig'
@@ -49,6 +57,14 @@ let workspace: WorkspaceFile | null = null
 let providerStore: ProviderConfigStore | null = null
 /** One Core per process. Survives renderer reloads; dies only with the app. */
 let coreHost: ElectronCoreHost | null = null
+/**
+ * Speech output, hosted.
+ *
+ * Created once, before Core, and lives independently of it so a Core rebuild —
+ * which happens every time the provider settings change — does not lose the list
+ * of voices the window reported or strand an utterance that was playing.
+ */
+const voiceOutput = new HostVoiceOutput()
 /** The presence host. Owns the presence window and pushes frames to it. */
 let presenceHost: PresenceHost | null = null
 /**
@@ -59,6 +75,25 @@ let presenceHost: PresenceHost | null = null
  * shutdown path can reach it.
  */
 let browserExtensionHost: BrowserExtensionHost | null = null
+/**
+ * Phase 51's dual-browser runtime.
+ *
+ * **Null unless the owner opted in twice**: `FREYA_DEVICE_HANDS=1` *and*
+ * `FREYA_PUBLIC_BROWSER=1`. The first is Phase 42's switch and the second is this phase's,
+ * and the second cannot be useful without the first — the browser surfaces are gated by a
+ * Device Hands runtime, so a public browser with no runtime behind it would have no gates at
+ * all. That is the same rule Phase 43 followed when it refused to be `active` without Phase 42.
+ */
+let dualBrowser: DualBrowserActivation | null = null
+/**
+ * The Freya Browser's adapter, created before Device Hands so the effects can resolve it lazily.
+ *
+ * It is a *factory*, not an activation: nothing is opened by constructing it, and it only
+ * becomes reachable through `openInPage` when a live window is serving the authorised URL. A
+ * build that never opens the Freya Browser never reaches it, and every read falls through to
+ * the Phase 5 managed target exactly as it did before this phase existed.
+ */
+let publicBrowserAdapter: ReturnType<typeof createFreyaBrowserAdapter> | null = null
 /**
  * The bounded attention wake.
  *
@@ -115,7 +150,20 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
   const userData = app.getPath('userData')
   const grants = readDeviceHandsGrants(join(userData, 'device-hands.grants.json'))
   const journal = openDeviceHandsJournal(join(userData, 'device-hands.jsonl'))
-  const effects = createElectronDeviceHandsEffects()
+  const effects = createElectronDeviceHandsEffects({
+    /**
+     * Phase 51's second door, resolved **per call** rather than at construction.
+     *
+     * This is the whole wiring. The adapter is added to the managed browser factory rather
+     * than replacing it, so:
+     *
+     *   - a read that no live window is serving still goes to the Phase 5 managed target;
+     *   - a click with no live window still resolves to `browser-action-unsupported`;
+     *   - and a click **with** one is driven by the Freya Browser, through the same runtime,
+     *     the same grant and the same ten gates as everything else.
+     */
+    inPageFactory: () => publicBrowserAdapter?.inPage ?? null,
+  })
   const authority = denyAllAuthority({
     enabled: () => true,
     activeGrant: (principalId, scope) =>
@@ -137,6 +185,48 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
     grants,
     enabled: true,
   }
+}
+
+/**
+ * Build the Phase 51 adapter and activation, but only when both switches are on.
+ *
+ * Returns null — not a disabled object — because "there is no dual-browser runtime" is the
+ * honest description of a build that was not opted in, and a caller that got an object would
+ * reasonably assume there was something behind it.
+ *
+ * Approvals are denied in exactly the shape Phase 42 denies them. That means `page.click` and
+ * `page.type` are refused at the Phase 35 approval gate in a default build, while the reads
+ * run. Saying so here is more useful than quietly inventing an approval channel: the acts are
+ * implemented and gated, and the missing piece is a Phase 35 seam, not a Phase 51 one.
+ */
+function buildDualBrowserSeam(extension: BrowserExtensionHost | null): DualBrowserActivation | null {
+  if (process.env.FREYA_DEVICE_HANDS !== '1') return null
+  if (process.env.FREYA_PUBLIC_BROWSER !== '1') return null
+
+  const adapter = createFreyaBrowserAdapter({
+    factory: new ElectronFreyaWindowFactory({
+      allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+    }),
+    publicAvailable: () => true,
+  })
+  publicBrowserAdapter = adapter
+
+  const journal = coreHost?.deviceHandsJournal() ?? null
+  if (journal === null) return null
+
+  return createDualBrowserActivation({
+    authority: {
+      // Core's own latch is composed in by `coreHost`, exactly as it is for Device Hands.
+      stopAllActive: () => false,
+      perform: (request) => requireCore().performDeviceHandsAction(request),
+    },
+    // The **same** hash-chained journal Device Hands already appends to. One writer, one chain.
+    journal,
+    adapter,
+    extension,
+    allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+    onLog: (line) => console.log(`[freya] ${line}`),
+  })
 }
 
 // The E2E harness sometimes opens two throwaway processes against the same
@@ -198,6 +288,7 @@ function e2eKeys(): {
   context: Uint8Array
   personality: Uint8Array
   skill: Uint8Array
+  forge: Uint8Array
   vault: Uint8Array
 } | null {
   const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
@@ -205,9 +296,10 @@ function e2eKeys(): {
   const mission = e2eKey('FREYA_E2E_MISSION_KEY')
   const context = e2eKey('FREYA_E2E_CONTEXT_KEY')
   const skill = e2eKey('FREYA_E2E_SKILL_KEY')
+  const forge = e2eKey('FREYA_E2E_FORGE_KEY')
   const personality = e2eKey('FREYA_E2E_PERSONALITY_KEY')
   const vault = e2eKey('FREYA_E2E_VAULT_KEY')
-  // All six or none, so a partial fixture cannot quietly run with a real keyring for
+  // All seven or none, so a partial fixture cannot quietly run with a real keyring for
   // the domain it forgot.
   if (
     conversation === null ||
@@ -216,11 +308,12 @@ function e2eKeys(): {
     context === null ||
     personality === null ||
     skill === null ||
+    forge === null ||
     vault === null
   ) {
     return null
   }
-  return { conversation, brain, mission, context, personality, skill, vault }
+  return { conversation, brain, mission, context, personality, skill, forge, vault }
 }
 
 /**
@@ -436,6 +529,12 @@ function shutdownCoreAndThen(finish: () => void): void {
     clearInterval(attentionTimer)
     attentionTimer = null
   }
+  // Phase 51: close every Freya Browser window before the app goes. A window that outlived its
+  // runtime would be a page nothing is gating any more.
+  const seam = dualBrowser
+  dualBrowser = null
+  publicBrowserAdapter = null
+  if (seam !== null) void seam.dispose().catch(() => undefined)
   presenceHost?.stop()
   presenceHost = null
   // Before Core stops, so the bridge is closed while its authority is still readable
@@ -548,6 +647,11 @@ function createWindow(): BrowserWindow {
 
   window.once('ready-to-show', () => window.show())
 
+  // Speech output: this window is a candidate speaker. Removing it on close takes
+  // every utterance with it, so a window that has gone away cannot leave Core
+  // reporting `speaking` for an answer nobody can hear.
+  const detachVoiceOutput = voiceOutput.add(window)
+
   // The host pushes the current status on attach, so a freshly loaded or
   // reloaded renderer knows the Core state without polling for it.
   const detachCore = coreHost?.attach((status) => {
@@ -650,6 +754,10 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:relay', projection)
   })
 
+  const detachConnectors = coreHost?.onConnectors((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:connectors', projection)
+  })
+
   /**
    * Skills: a twelfth channel. Core owns the truth about procedures, their lifecycle
    * and their evidence; this window only displays what Core pushed. There is
@@ -673,6 +781,20 @@ function createWindow(): BrowserWindow {
 
   const detachSkills = coreHost?.onSkills((projection) => {
     if (!window.isDestroyed()) window.webContents.send('freya:core:skills', projection)
+  })
+
+  /**
+   * Forge: the same shape as Skills, one channel later.
+   *
+   * Push-only. There is deliberately no  reya:core:forge:write, no
+   * :generate, :install or :enable channel, and no preload method that accepts a
+   * package body: a renderer that could push a manifest into Electron would make the
+   * bridge a second admission door, and the whole of Phase 48 is that there is one door
+   * and it is Core's. Mutating work goes through  reya:core:submit with a
+   *  orge.* command, which Core Guard-evaluates and journals.
+   */
+  const detachForge = coreHost?.onForge((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:forge', projection)
   })
 
   /**
@@ -721,10 +843,34 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:life', projection)
   })
 
+  // Voice, on two channels, and the split is the design.
+  //
+  // The *projection* is state: where the machine is, whether the microphone is on,
+  // what the last capture produced. It moves on a schedule nothing else does — a
+  // permission prompt resolving, an engine finishing, STOP ALL landing — so it gets
+  // its own channel rather than riding along inside `freya:core:status`, where it
+  // would be copied and cached wherever a security projection is kept.
+  //
+  // The *transcript fragments* are words in flight, and they get a second channel
+  // for two reasons. A window that wants an animated interim line needs every
+  // fragment; a window that only cares about the final transcript should not be
+  // handed a stream of guesses to filter. And the two have opposite trust: a
+  // fragment marked `interim` is a guess the engine is still revising, and there
+  // is no command anywhere that would submit one.
+  const detachVoice = coreHost?.onVoice((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:voice', projection)
+  })
+  const detachVoiceTranscript = coreHost?.onVoiceTranscript((fragment) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:voice:transcript', fragment)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
     detachConversation?.()
+    detachVoice?.()
+    detachVoiceTranscript?.()
+    detachVoiceOutput()
     detachBrain?.()
     detachWork?.()
     detachMission?.()
@@ -735,7 +881,9 @@ function createWindow(): BrowserWindow {
     detachFoundry?.()
     detachOffice?.()
     detachRelay?.()
+    detachConnectors?.()
     detachSkills?.()
+    detachForge?.()
     detachWorld?.()
     detachConsciousness?.()
     detachLifeLoop?.()
@@ -809,6 +957,11 @@ function startPresenceFor(window: BrowserWindow): void {
  * ------------------------------------------------------------------ */
 
 function registerIpc(): void {
+  // Speech capability reporting. The only message a window may send about voice
+  // that is not a Core command, and it carries no words and no authority — just
+  // what the platform's speech engine turned out to be.
+  registerVoiceOutputIpc(voiceOutput)
+
   ipcMain.handle('freya:runtime', () => ({
     version: app.getVersion(),
     electron: process.versions.electron,
@@ -866,8 +1019,21 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:submit', (_event, envelope: CoreCommandEnvelope) => {
     const result = requireCore().submit(envelope)
     // The microphone gate follows Core's verdict rather than the request, so a
-    // refused capture never opens the device.
-    void result.then((settled) => trackVoiceCapture(envelope, settled))
+    // refused capture never opens the device and a refusal cannot leave the gate
+    // latched open for whatever asks next.
+    void result.then((settled) => {
+      trackVoiceCapture(envelope, settled)
+      // And a settlement releases the utterance Core was waiting on. Core is what
+      // decides what the report means; this only stops the promise from hanging,
+      // which is what keeps `voice.speaking` true only while something is audible.
+      if (envelope.command === 'voice.tts.settle') {
+        const utteranceId = (envelope.payload as { utteranceId?: unknown } | undefined)?.utteranceId
+        const outcome = (envelope.payload as { outcome?: unknown } | undefined)?.outcome
+        if (typeof utteranceId === 'string' && settled.ok) {
+          voiceOutput.settle(utteranceId, outcome === 'completed')
+        }
+      }
+    })
     return result
   })
   ipcMain.handle('freya:core:status', () => requireCore().status())
@@ -914,8 +1080,11 @@ function registerIpc(): void {
   // every other command — it is validated and journalled in Core, not here.
   ipcMain.handle('freya:core:office', () => requireCore().office())
   ipcMain.handle('freya:core:relay', () => requireCore().relay())
+  ipcMain.handle('freya:core:connectors', () => requireCore().connectors())
   // The Skills projection is read-only; mutation remains Core-command-only.
   ipcMain.handle('freya:core:skills', () => requireCore().skills())
+  // The Forge projection is read-only; every mutation is a Guard-evaluated Core command.
+  ipcMain.handle('freya:core:forge', () => requireCore().forge())
   // The World & self summary is read-only, and it is counts only. The graph, the
   // entity list, the inspector and the self status are Core commands, not a channel.
   ipcMain.handle('freya:core:world', () => requireCore().world())
@@ -975,6 +1144,7 @@ app.whenReady().then(async () => {
         context: { key: testKeys.context, reason: null as string | null },
         personality: { key: testKeys.personality, reason: null as string | null },
         skill: { key: testKeys.skill, reason: null as string | null },
+        forge: { key: testKeys.forge, reason: null as string | null },
         vault: { key: testKeys.vault, reason: null as string | null },
       })
     : loadKeyring(dataPath)
@@ -1043,6 +1213,7 @@ app.whenReady().then(async () => {
         contextKey: result.context.key,
         personalityKey: result.personality.key,
         skillKey: result.skill.key,
+        forgeKey: result.forge.key,
         vault: {
           path: vaultPath,
           keyProvider: { load: async () => ({ key: result.vault.key, reason: result.vault.reason }) },
@@ -1066,10 +1237,48 @@ app.whenReady().then(async () => {
         // The *entire* provider set when the research fixtures are gated on, so an
         // E2E run cannot fall through to a real provider.
         ...(fixtureProvider ? { providers: [fixtureProvider] } : {}),
+        // Phase 44: the connector connection plane. Built here so the token store
+        // uses Electron's OS secure storage; with no client credentials the
+        // runtime is fail-closed and every connector reports unconfigured.
+        connectorRuntime: async () => {
+          const runtime = await createConnectorRuntime({
+            safeStorage,
+            tokenFilePath: `${dataPath}.connectors.tokens`,
+            configs: {},
+            oauthClient: {
+              async exchange() {
+                throw new Error('no connector OAuth client is configured')
+              },
+              async refresh() {
+                throw new Error('no connector OAuth client is configured')
+              },
+            },
+            fetchImpl: fetch as never,
+          })
+          return { auth: runtime.auth }
+        },
         // Phase 42. Off unless the main process was deliberately opted in. The seam
         // carries the real adapters, a durable journal and an owner-authored grant
         // file; Core's own STOP ALL is composed on top of it by the host.
         ...(deviceHandsSeam ? { deviceHands: deviceHandsSeam } : {}),
+        /*
+         * Speech output, and nothing for speech input.
+         *
+         * The platform does give the window a speech engine, so `voiceTts` is
+         * wired and Freya can genuinely read a stored answer aloud. It does *not*
+         * give this build a recogniser, so no `voiceStt` is passed — and that is
+         * the whole reason Core reports transcription as `configuration-required`
+         * and discards recordings. The tempting move here is to attach a hosted
+         * recogniser to close the gap; it is refused because audio would then leave
+         * the machine over a path a window cannot see and a credential would sit in
+         * this process, and the honest gap is cheaper than that.
+         *
+         * `voiceCaptureSupported` is not asserted either: main has no microphone to
+         * ask about, so the renderer reports that from `navigator.mediaDevices` and
+         * a machine without a device gets `unsupported` from the renderer instead
+         * of a button that cannot work.
+         */
+        voiceTts: voiceOutput,
       },
     )
     registerIpc()
@@ -1136,6 +1345,33 @@ app.whenReady().then(async () => {
         })
     }
 
+    /**
+     * Mount the Freya Browser, but only when the owner asked for it *and* Device Hands is on.
+     *
+     * The activation is deliberately built **after** the bridge and given it, so a handoff to
+     * Chrome has a real destination and a refusal has a real reason. Activation is async and
+     * cannot block the window: a Freya Browser that fails to open leaves `dualBrowser` null
+     * and the app exactly as it was, which is the safe direction.
+     */
+    const dualBrowserSeam = buildDualBrowserSeam(browserExtensionHost)
+    if (dualBrowserSeam !== null) {
+      dualBrowserSeam
+        .activate()
+        .then((result) => {
+          if (!result.ok) {
+            console.error(`[freya] the Freya Browser did not activate: ${result.reason}`)
+            dualBrowser = null
+            return
+          }
+          dualBrowser = dualBrowserSeam
+          console.log(`[freya] ${result.reason}`)
+        })
+        .catch((error: unknown) => {
+          console.error('[freya] the Freya Browser failed to activate', error)
+          dualBrowser = null
+        })
+    }
+
     mainWindow = createWindow()
     startPresenceFor(mainWindow)
 
@@ -1190,8 +1426,9 @@ app.on('before-quit', (event) => {
  *
  * Everything is denied by default, which is the posture the rest of the security
  * story rests on. The single exception is the microphone, and it is granted only
- * when all three of these hold:
+ * when all four of these hold:
  *
+ *   - the owner has turned the microphone on, as **Core** reported it;
  *   - a voice capture is actually open, as Core reported it;
  *   - the request is for audio only, never a camera;
  *   - the browser raised it as a direct result of the user pressing the
@@ -1201,6 +1438,19 @@ app.on('before-quit', (event) => {
  * no always-on stream, and no way for a window to hold a microphone open between
  * captures. A request at any other time, or for anything other than audio, is
  * refused.
+ *
+ * ## Why there are two handlers
+ *
+ * `setPermissionRequestHandler` covers the prompt. `setPermissionCheckHandler`
+ * covers the *synchronous* question a renderer asks when a `MediaStream` is
+ * constructed from an already-granted source, and — more importantly here — it
+ * is the only place a renderer can be caught asking whether it is allowed to use
+ * the microphone *between* captures. Installing only the first leaves a window that
+ * polls permission as a way to learn whether a capture is expected, which is a
+ * side channel into Core's state; installing both means both answers come from
+ * Core's own projection and neither can be used as a probe.
+ *
+ * Both read the same two facts, and both are cleared together.
  */
 app.on('web-contents-created', (_event, contents) => {
   if (!ownsProfile) return
@@ -1211,29 +1461,65 @@ app.on('web-contents-created', (_event, contents) => {
     const mediaTypes = (details as { mediaTypes?: readonly string[] } | undefined)?.mediaTypes
     const audioOnly = Array.isArray(mediaTypes) && mediaTypes.length > 0 &&
       mediaTypes.every((kind) => kind === 'audio')
-    callback(permission === 'media' && voiceCaptureOpen && audioOnly)
+    callback(permission === 'media' && microphoneExpected() && audioOnly)
+  })
+  contents.session.setPermissionCheckHandler((_wc, permission) => {
+    // Deliberately origin-blind and content-blind: a request is allowed only when
+    // Core has an open capture, and a page loaded into any window therefore cannot
+    // obtain a stream by asking while an unrelated capture happens to be running.
+    // Web content cannot activate the microphone at all, because it has no path to
+    // `getUserMedia` — the permission gate is the second lock, not the only one.
+    if (permission !== 'media') return false
+    return microphoneExpected()
   })
 })
 
 /**
- * Whether a capture is currently open.
+ * Whether the operating system should hand over a microphone right now.
  *
- * Set from **Core's answer**, not from a renderer claim. The renderer opens and
+ * Set from **Core's answer**, never from a renderer claim. The renderer opens and
  * closes the device itself — that is where the Web Audio API is — but the host
  * only relaxes the permission gate once the trusted half has agreed a capture is
- * running, so a compromised window cannot open a stream by asking nicely.
+ * running *and* that the owner turned the microphone on, so a compromised window
+ * cannot open a stream by asking nicely and cannot hold one open by asking again.
  */
 let voiceCaptureOpen = false
+let voiceMicEnabled = false
 
-/** Follow Core's verdict on a voice capture command. */
-function trackVoiceCapture(envelope: CoreCommandEnvelope, result: { ok: boolean }): void {
-  if (envelope.command === 'voice.capture.start') {
-    voiceCaptureOpen = result.ok
-    presenceHost?.updateVoice(requireCore().voice())
-    return
+function microphoneExpected(): boolean {
+  return voiceCaptureOpen && voiceMicEnabled
+}
+
+/**
+ * Follow Core's verdict on a voice command.
+ *
+ * Every arm reads the same Core projection afterwards rather than tracking a
+ * separate local model of it, because the projection is the truth and a second
+ * copy is a second thing that can be wrong. The two booleans above are only the
+ * hot path's cache of "does Core's projection currently say an open capture on an
+ * enabled microphone", and they are rewritten from it on every voice command.
+ */
+function trackVoiceCapture(envelope: CoreCommandEnvelope, _result: { ok: boolean }): void {
+  switch (envelope.command) {
+    case 'voice.capture.start':
+    case 'voice.capture.end':
+    case 'voice.capture.cancel':
+    case 'voice.mic.enable':
+    case 'voice.mic.disable':
+    case 'voice.permission.report':
+    case 'voice.tts.cancel':
+    case 'voice.wake.arm':
+    case 'voice.wake.disarm':
+      break
+    default:
+      return
   }
-  if (envelope.command === 'voice.capture.end' || envelope.command === 'voice.capture.cancel') {
-    voiceCaptureOpen = false
-    presenceHost?.updateVoice(requireCore().voice())
-  }
+  const voice = requireCore().voice()
+  // A refused start must not leave the gate open: the previous value is only
+  // replaced when Core actually agrees a session exists. Before Core has built
+  // the service at all, both stay false — which is the safe reading, since there
+  // is no capture for a window to be asking about.
+  voiceMicEnabled = voice?.micEnabled === true
+  voiceCaptureOpen = voice?.capturing === true
+  presenceHost?.updateVoice(voice)
 }

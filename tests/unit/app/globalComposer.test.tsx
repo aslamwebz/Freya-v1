@@ -1,11 +1,32 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GlobalComposer } from '../../../src/app/screens/GlobalComposer'
+import type { VoiceView } from '../../../src/app/voice/useVoiceDock'
 
 afterEach(cleanup)
 
 function input(): HTMLInputElement {
   return screen.getByRole('textbox', { name: 'Ask Freya' }) as HTMLInputElement
+}
+
+function voice(): VoiceView {
+  return {
+    state: 'unreachable',
+    projection: null,
+    interim: '',
+    micEnabled: false,
+    capturing: false,
+    speaking: false,
+    muted: false,
+    wakeArmed: false,
+    notice: '',
+    unavailableReason: 'Voice unavailable in this test.',
+    capabilities: {
+      capture: false,
+      recognition: { available: false, local: false, detail: 'not available in this test' },
+    },
+    voices: [],
+  }
 }
 
 describe('GlobalComposer', () => {
@@ -17,6 +38,10 @@ describe('GlobalComposer', () => {
         generating={false}
         notice=""
         defaultModel={null}
+        voice={voice()}
+        voiceTranscript={null}
+        onVoicePress={vi.fn()}
+        onVoiceRelease={vi.fn()}
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -37,6 +62,10 @@ describe('GlobalComposer', () => {
         generating={false}
         notice=""
         defaultModel={null}
+        voice={voice()}
+        voiceTranscript={null}
+        onVoicePress={vi.fn()}
+        onVoiceRelease={vi.fn()}
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -57,6 +86,10 @@ describe('GlobalComposer', () => {
         generating={false}
         notice=""
         defaultModel={null}
+        voice={voice()}
+        voiceTranscript={null}
+        onVoicePress={vi.fn()}
+        onVoiceRelease={vi.fn()}
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -78,6 +111,10 @@ describe('GlobalComposer', () => {
         generating
         notice=""
         defaultModel={null}
+        voice={voice()}
+        voiceTranscript={null}
+        onVoicePress={vi.fn()}
+        onVoiceRelease={vi.fn()}
         onSend={vi.fn(async () => true)}
         onStopResponse={onStopResponse}
       />,

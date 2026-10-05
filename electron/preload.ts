@@ -10,7 +10,8 @@ import type { ConversationProjection, VoiceProjection } from '../core/protocol/c
 import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
 import { CONVERSATION_LIMITS } from '../core/conversation/types'
-import { VOICE_LIMITS } from '../core/voice/types'
+import { VOICE_CHANNEL_COUNTS, VOICE_CODECS, VOICE_LIMITS, VOICE_MIME_TYPES, VOICE_SAMPLE_RATES, type VoiceTranscriptFragment } from '../core/voice/types'
+import type { VoiceOutputInstruction } from './voiceHost'
 import { BRAIN_LIMITS } from '../core/brain/types'
 import { WORK_LIMITS } from '../core/work/types'
 import { DEFAULT_MISSION_LIMITS as MISSION_LIMITS } from '../core/missions/types'
@@ -22,10 +23,13 @@ import type { PersonalityProjection } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import { ATTENTION_NO_PAYLOAD } from '../core/protocol/attention'
 import type { FoundryProjection } from '../core/protocol/foundry'
+import type { ForgeProjection } from '../core/protocol/forge'
 import { FOUNDRY_NO_PAYLOAD } from '../core/protocol/foundry'
 import { ATTENTION_LIMITS } from '../core/attention/types'
 import type { RelayProjection } from '../core/protocol/relay'
 import { RELAY_NO_PAYLOAD } from '../core/protocol/relay'
+import type { ConnectorProjection } from '../core/protocol/connectors'
+import { CONNECTOR_NO_PAYLOAD } from '../core/protocol/connectors'
 import { RELAY_LIMITS } from '../core/relay/types'
 import type { OfficeProjection } from '../core/office/projection'
 import type { SkillProjection } from '../core/protocol/skills'
@@ -185,14 +189,84 @@ const api = {
   },
 
   /**
-   * Voice status: whether a local speech engine exists, and the capture bounds.
+   * Voice status: where the voice state machine actually is, and the bounds.
    *
-   * A read, never a configuration surface. There is no function here that points
-   * Freya at a speech service, because there is no speech service to point it at:
-   * voice is local-only, and this exists so the UI can say so rather than showing
-   * a microphone button that quietly does nothing.
+   * A read and a follow, never a configuration surface. There is no function here
+   * that points Freya at a speech service: adapters are supplied by the host when
+   * Freya is built, and a window cannot introduce one, name an endpoint, or supply
+   * a credential. What a window gets is Core's own report of whether an engine
+   * exists — so a microphone button can say "no engine is configured" instead of
+   * looking live and quietly doing nothing.
+   *
+   * Note what does not cross: no audio, no provider name, no key, no way to
+   * request permission. `voice.permission.report` is the only permission-related
+   * function on this bridge and it is a *report* of what the operating system
+   * said, not a request for it.
    */
   coreVoice: (): Promise<VoiceProjection | null> => ipcRenderer.invoke('freya:core:voice'),
+
+  onCoreVoice: (handler: (projection: VoiceProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: VoiceProjection): void => handler(projection)
+    ipcRenderer.on('freya:core:voice', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:voice', listener)
+    }
+  },
+
+  /**
+   * Transcript fragments, interim and final.
+   *
+   * Its own channel from the projection because the two have opposite trust. A
+   * fragment marked `interim` is a guess an engine is still revising, and there is
+   * no command on this bridge that would submit one — the conversation path takes
+   * text a person confirmed.
+   *
+   * Fragments are pushed, not replayed: a fragment is an event, and re-sending the
+   * last one on attach would put words on screen with no capture behind them.
+   */
+  onCoreVoiceTranscript: (handler: (fragment: VoiceTranscriptFragment) => void): (() => void) => {
+    const listener = (_event: unknown, fragment: VoiceTranscriptFragment): void => handler(fragment)
+    ipcRenderer.on('freya:core:voice:transcript', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:voice:transcript', listener)
+    }
+  },
+
+  /**
+   * Playback instructions, straight from the host's speech adapter.
+   *
+   * Not a Core command and not on the conversation path: Core decided *which*
+   * stored answer may be spoken, this channel carries the words it read, and the
+   * window plays them. The words arrive here rather than being sent from the
+   * renderer for exactly that reason — a window cannot name what Freya says.
+   *
+   * `stop` ends the current utterance at a boundary; `cancel` cuts it off
+   * mid-word. The difference is what a person hears, so it is carried rather than
+   * collapsed into one "stop".
+   */
+  onVoiceOutput: (handler: (instruction: VoiceOutputInstruction) => void): (() => void) => {
+    const listener = (_event: unknown, instruction: VoiceOutputInstruction): void => handler(instruction)
+    ipcRenderer.on('freya:voice:output', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:voice:output', listener)
+    }
+  },
+
+  /**
+   * Tell the host what this platform's speech engine turned out to be.
+   *
+   * Sent once at start-up and again whenever the platform changes its voice list.
+   * It carries ids, labels and a sentence — no audio, no credential, and no way to
+   * ask for anything: this is a capability report, and a window reporting "I have
+   * no speech engine" is exactly as welcome as one reporting "I do".
+   */
+  reportVoiceCapabilities: (report: {
+    available: boolean
+    voices: readonly { voiceId: string; label: string; language: string | null; isDefault: boolean | null }[]
+    detail: string
+  }): void => {
+    ipcRenderer.send('freya:voice:capabilities', report)
+  },
 
   /**
    * The Brain projection: identity, the self-model, counts, recent admissions and
@@ -417,6 +491,28 @@ const api = {
   },
 
   /**
+   * The connector projection: which providers exist, their connection state,
+   * the scopes granted, and whether a write is pending approval.
+   *
+   * A mirror, like every other channel here. What deliberately does **not**
+   * cross: a token, a refresh token, a client secret, an authorization header,
+   * a code verifier or any event payload. Starting an authorization and
+   * completing one are different acts: this bridge can ask Core to start one
+   * (`connector.connect.start`), and completing it is host-only, so no window
+   * can manufacture a connection.
+   */
+  coreConnectors: (): Promise<ConnectorProjection | null> => ipcRenderer.invoke('freya:core:connectors'),
+
+  onCoreConnectors: (handler: (projection: ConnectorProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: ConnectorProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:connectors', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:connectors', listener)
+    }
+  },
+
+  /**
    * The Skills projection: procedures, lifecycle status, evidence as verdicts and
    * counts, and whether bodies survive a restart.
    *
@@ -485,6 +581,25 @@ const api = {
 
   coreSkills: (): Promise<SkillProjection | null> =>
     ipcRenderer.invoke('freya:core:skills'),
+
+  /**
+   * The Forge projection, read-only.
+   *
+   * One method and one subscription, for the same reason the Skills bridge has one:
+   * every mutating Forge act is a  orge.* command through submit, so the bridge
+   * cannot become a second admission door for a package body. No
+   * onCoreForgeWrite, no coreForgeGenerate, no method that takes a manifest.
+   */
+  coreForge: (): Promise<ForgeProjection | null> => ipcRenderer.invoke('freya:core:forge'),
+
+  onCoreForge: (handler: (projection: ForgeProjection) => void): (() => void) => {
+    const listener = (_event: unknown, projection: ForgeProjection): void =>
+      handler(projection)
+    ipcRenderer.on('freya:core:forge', listener)
+    return () => {
+      ipcRenderer.removeListener('freya:core:forge', listener)
+    }
+  },
 
   onCoreSkills: (handler: (projection: SkillProjection) => void): (() => void) => {
     const listener = (_event: unknown, projection: SkillProjection): void =>
@@ -582,10 +697,35 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   // what a configured provider can actually serve before it means anything.
   'model.catalog.read',
   'model.select',
+  // Voice. Read the comment in `CoreCommandName` before adding a name here; the
+  // whole point of this list is that granting a window a voice command is a
+  // decision that reads like one.
+  //
+  // Note what a window still cannot do through any of them: it cannot name what
+  // Freya says (`voice.tts.speak` takes a turn id and Core reads the words), it
+  // cannot grant itself permission (`voice.permission.report` is a report, and
+  // capture is refused unless the last report was `granted`), and it cannot
+  // execute an interim fragment — there is no command anywhere that would submit
+  // one.
   'voice.status.read',
+  'voice.mic.enable',
+  'voice.mic.disable',
+  'voice.permission.report',
   'voice.capture.start',
+  'voice.transcript.interim',
   'voice.capture.end',
   'voice.capture.cancel',
+  'voice.submit.set',
+  'voice.tts.speak',
+  'voice.tts.stop',
+  'voice.tts.cancel',
+  'voice.tts.settle',
+  'voice.tts.voice.read',
+  'voice.tts.voice.select',
+  'voice.mute.set',
+  'voice.wake.arm',
+  'voice.wake.disarm',
+  'voice.wake.energy',
   // The Brain is readable and writable by the owner, because remembering is the
   // product. Note what is *not* reachable through these: a window cannot name a
   // source class, a confidence ceiling or a verification status. It says what it
@@ -693,6 +833,24 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'skill.proposal.settle',
   'skill.select',
   'skill.detail.read',
+  // Forge. Every owner act over generated packages, and **none of the verbs that
+  // would let a window assert trust**: there is no  orge.setStatus,
+  //  orge.setVerified,  orge.setEnabled,  orge.grant, or anything that writes a
+  // package into Core. Status comes from the pipeline; enabling re-checks what the
+  // owner already holds.
+  'forge.status.read',
+  'forge.generate',
+  'forge.validate',
+  'forge.install',
+  'forge.enable',
+  'forge.disable',
+  'forge.run',
+  'forge.rollback',
+  'forge.remove',
+  'forge.approve',
+  'forge.search',
+  'forge.export',
+  'forge.detail.read',
   'relay.status.read',
   'relay.email.read',
   'relay.email.draft.create',
@@ -704,8 +862,25 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'relay.github.read',
   'relay.github.issue.create',
   'relay.github.pr.create',
+  'relay.drive.read',
+  'relay.drive.file.create',
+  'relay.telegram.read',
+  'relay.telegram.send',
   'relay.external.invoke',
   'relay.approval.decide',
+
+  // Connectors (Phase 44). `connector.status.read` is the payloadless read;
+  // `connector.connect.start` starts an authorization; `connector.disconnect`
+  // revokes one; `connector.read` and `connector.action.execute` submit a typed
+  // action. There is deliberately no `connector.authorize` and no
+  // `connector.event.ingest` here: completing an authorization and delivering an
+  // authenticated event are host-only acts, and a window reaching for those
+  // names finds `unknown command`.
+  'connector.status.read',
+  'connector.connect.start',
+  'connector.disconnect',
+  'connector.read',
+  'connector.action.execute',
   'foundry.status.read',
 
   // Life History. Three reads and nothing else: there is no `life.record`,
@@ -766,6 +941,29 @@ function readString(
 type RendererPayloadResult =
   | { ok: true; payload?: unknown }
   | { ok: false; reason: string }
+
+/**
+ * A number inside a closed range, or the answer that the caller's own
+ * tri-state needs.
+ *
+ * Three outcomes on purpose, matching `readString`: `null` means "you sent
+ * something invalid", `undefined` means "you sent nothing, which is fine" and a
+ * number means "here is the bounded value". A two-state check would have to
+ * invent a default for a missing tuning parameter, and inventing a default here
+ * is how a window ends up believing it set a rate it never set.
+ */
+function readBoundedNumber(
+  record: Record<string, unknown> | null,
+  key: string,
+  min: number,
+  max: number,
+): number | null | undefined {
+  const value = record?.[key]
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  if (value < min || value > max) return null
+  return value
+}
 
 /**
  * Whether a payload is empty: `undefined`, `null`, or an object with no keys.
@@ -1061,9 +1259,126 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     case 'voice.status.read':
     case 'voice.capture.start':
     case 'voice.capture.cancel':
+    case 'voice.tts.stop':
+    case 'voice.tts.voice.read':
+    case 'voice.wake.disarm':
     case 'brain.status.read':
     case 'research.status.read':
       return { ok: true }
+
+    case 'voice.mic.enable':
+    case 'voice.mic.disable': {
+      // `source` is how the wake path distinguishes itself, and it is validated as
+      // a closed two-value set rather than a free string. A window claiming
+      // `owner` is the ordinary case; one claiming `wake` gets *fewer* rights, so
+      // the field is checked rather than trusted in either direction.
+      const source = record?.source
+      if (source === undefined) return { ok: true }
+      if (source !== 'owner' && source !== 'wake') {
+        return { ok: false, reason: 'the microphone activation source is owner or wake' }
+      }
+      const reason = string('reason', 200, false)
+      return { ok: true, payload: { source, ...(reason === undefined || reason === null ? {} : { reason }) } }
+    }
+
+    case 'voice.permission.report': {
+      // A report, not a request. The bridge forwards a closed vocabulary and drops
+      // everything else, so a window cannot smuggle a field Core would read as
+      // something it is not.
+      const outcome = record?.outcome
+      if (outcome !== 'granted' && outcome !== 'denied' && outcome !== 'revoked') {
+        return { ok: false, reason: 'a permission report must say granted, denied or revoked' }
+      }
+      return { ok: true, payload: { outcome } }
+    }
+
+    case 'voice.transcript.interim': {
+      const sessionId = string('sessionId', MAX_ID_CHARS)
+      if (sessionId === null || sessionId === undefined) {
+        return { ok: false, reason: 'an interim fragment needs the session id' }
+      }
+      // Bounded at the edge, at the same ceiling Core clips to, so a window cannot
+      // move half a megabyte of text through this bridge in one message.
+      const text = string('text', VOICE_LIMITS.maxInterimCharacters, false)
+      if (text === null) return { ok: false, reason: 'an interim fragment is too long or invalid' }
+      return { ok: true, payload: { sessionId, ...(text === undefined ? {} : { text }) } }
+    }
+
+    case 'voice.submit.set':
+    case 'voice.mute.set': {
+      // Booleans only. A truthy string here would be a window that believes it
+      // turned auto-submit on while Core read something else.
+      const key = command === 'voice.submit.set' ? 'enabled' : 'muted'
+      const value = record?.[key]
+      if (typeof value !== 'boolean') {
+        return { ok: false, reason: `${key} is a true or false setting` }
+      }
+      return { ok: true, payload: { [key]: value } }
+    }
+
+    case 'voice.tts.speak': {
+      // The payload is a turn id and a turn id. Nothing here reads a `text` field,
+      // so anything a window attaches to it is dropped before it can be structured
+      // cloned into the main process — Core reads the words out of its own store.
+      const turnId = string('turnId', MAX_ID_CHARS)
+      if (turnId === null || turnId === undefined) {
+        return { ok: false, reason: 'speaking a turn needs the turn id' }
+      }
+      const rate = readBoundedNumber(record, 'rate', 0.5, 2)
+      const pitch = readBoundedNumber(record, 'pitch', 0, 2)
+      if (rate === null || pitch === null) {
+        return { ok: false, reason: 'the speaking tuning is out of range' }
+      }
+      return {
+        ok: true,
+        payload: { turnId, ...(rate === undefined ? {} : { rate }), ...(pitch === undefined ? {} : { pitch }) },
+      }
+    }
+
+    case 'voice.tts.cancel': {
+      const reason = string('reason', 200, false)
+      if (reason === null) return { ok: false, reason: 'the interruption reason is too long or invalid' }
+      return { ok: true, payload: reason === undefined ? {} : { reason } }
+    }
+
+    case 'voice.tts.settle': {
+      const utteranceId = string('utteranceId', MAX_ID_CHARS)
+      const outcome = record?.outcome
+      if (utteranceId === null || utteranceId === undefined) {
+        return { ok: false, reason: 'a settlement needs the utterance id' }
+      }
+      if (outcome !== 'completed' && outcome !== 'failed') {
+        return { ok: false, reason: 'a settlement is completed or failed' }
+      }
+      return { ok: true, payload: { utteranceId, outcome } }
+    }
+
+    case 'voice.tts.voice.select': {
+      const voiceId = string('voiceId', 200)
+      if (voiceId === null || voiceId === undefined) {
+        return { ok: false, reason: 'selecting a voice needs the voice id' }
+      }
+      return { ok: true, payload: { voiceId } }
+    }
+
+    case 'voice.wake.arm': {
+      const reason = string('reason', 200, false)
+      if (reason === null) return { ok: false, reason: 'the wake reason is too long or invalid' }
+      return { ok: true, payload: reason === undefined ? {} : { reason } }
+    }
+
+    case 'voice.wake.energy': {
+      // Two bounded numbers. A window reporting its own level is trusted for
+      // nothing except *asking*, and the ask still has to clear every ordinary
+      // capture precondition in Core — so a forged level can at worst start a
+      // microphone the owner already turned on.
+      const level = readBoundedNumber(record, 'level', 0, 1)
+      const sustainedMs = readBoundedNumber(record, 'sustainedMs', 0, VOICE_LIMITS.maxWakeArmedMs)
+      if (level === undefined || sustainedMs === undefined) {
+        return { ok: false, reason: 'a wake reading needs a level and a sustained duration' }
+      }
+      return { ok: true, payload: { level, sustainedMs } }
+    }
 
     case 'work.status.read':
     case 'mission.status.read':
@@ -1893,6 +2208,9 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       if (!(audio instanceof Uint8Array)) {
         return { ok: false, reason: 'voice audio payload is invalid' }
       }
+      // The byte ceiling is checked here rather than only in Core: this bridge is a
+      // capability boundary, and a payload large enough to be a denial of service
+      // belongs to be refused before it is structured-cloned into the main process.
       if (audio.byteLength > VOICE_LIMITS.maxAudioBytes) {
         return { ok: false, reason: 'voice audio payload exceeds the capture limit' }
       }
@@ -1903,6 +2221,37 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
         return { ok: false, reason: 'voice cancellation flag is invalid' }
       }
 
+      /*
+       * The descriptive fields are forwarded as *strings from closed sets*, or not
+       * at all.
+       *
+       * Core re-validates all of them — a bridge that trusted its own earlier check
+       * would be trusting a window — but forwarding a bounded set of known-good
+       * values is cheaper and stricter than forwarding whatever arrived and letting
+       * a second validator sort it out. Anything outside the sets is refused here,
+       * which means a malformed declaration never reaches the trusted half at all.
+       */
+      const format = record?.format
+      if (format !== undefined && format !== VOICE_LIMITS.format) {
+        return { ok: false, reason: `voice audio must be ${VOICE_LIMITS.format}` }
+      }
+      const codec = record?.codec
+      if (codec !== undefined && (typeof codec !== 'string' || !VOICE_CODECS.has(codec))) {
+        return { ok: false, reason: 'voice audio codec is not accepted' }
+      }
+      const mimeType = record?.mimeType
+      if (mimeType !== undefined && (typeof mimeType !== 'string' || !VOICE_MIME_TYPES.has(mimeType.toLowerCase()))) {
+        return { ok: false, reason: 'voice audio container type is not accepted' }
+      }
+      const sampleRate = record?.sampleRate
+      if (sampleRate !== undefined && (typeof sampleRate !== 'number' || !VOICE_SAMPLE_RATES.has(sampleRate))) {
+        return { ok: false, reason: 'voice sample rate is not accepted' }
+      }
+      const channels = record?.channels
+      if (channels !== undefined && (typeof channels !== 'number' || !VOICE_CHANNEL_COUNTS.has(channels))) {
+        return { ok: false, reason: 'voice channel count is not accepted' }
+      }
+
       return {
         ok: true,
         payload: {
@@ -1910,6 +2259,11 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
           audio,
           durationMs,
           ...(cancelled === undefined ? {} : { cancelled }),
+          ...(format === undefined ? {} : { format }),
+          ...(codec === undefined ? {} : { codec }),
+          ...(mimeType === undefined ? {} : { mimeType }),
+          ...(sampleRate === undefined ? {} : { sampleRate }),
+          ...(channels === undefined ? {} : { channels }),
         },
       }
     }
@@ -2163,6 +2517,122 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
           approvalId,
           decision,
           ...(reason === undefined ? {} : { reason }),
+        },
+      }
+    }
+
+    /* ------------------------------------------------ relay drive/telegram */
+
+    case 'relay.drive.read':
+    case 'relay.telegram.read': {
+      const query = string('query', 2_000, false)
+      if (query === null) return { ok: false, reason: 'relay query is invalid' }
+      const limit = record?.limit
+      if (limit !== undefined && (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1)) {
+        return { ok: false, reason: 'relay pagination limit is invalid' }
+      }
+      const cursor = string('cursor', RELAY_LIMITS.maxCursorChars, false)
+      if (cursor === null) return { ok: false, reason: 'relay cursor is invalid' }
+      if (command === 'relay.telegram.read') {
+        const chatId = string('chatId', MAX_ID_CHARS)
+        if (chatId === null || chatId === undefined) return { ok: false, reason: 'a chat id is required' }
+        return {
+          ok: true,
+          payload: {
+            chatId,
+            ...(query === undefined ? {} : { query }),
+            ...(limit === undefined ? {} : { limit }),
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+        }
+      }
+      const fileId = string('fileId', MAX_ID_CHARS, false)
+      if (fileId === null) return { ok: false, reason: 'a file id is invalid' }
+      return {
+        ok: true,
+        payload: {
+          ...(query === undefined ? {} : { query }),
+          ...(limit === undefined ? {} : { limit }),
+          ...(cursor === undefined ? {} : { cursor }),
+          ...(fileId === undefined ? {} : { fileId }),
+        },
+      }
+    }
+
+    case 'relay.drive.file.create': {
+      const name = string('name', RELAY_LIMITS.maxDriveNameChars)
+      const mimeType = string('mimeType', 255)
+      const content = string('content', RELAY_LIMITS.maxDriveContentChars, false)
+      if (name === null || name === undefined) return { ok: false, reason: 'a file name is required' }
+      if (mimeType === null || mimeType === undefined) return { ok: false, reason: 'a content type is required' }
+      if (content === null) return { ok: false, reason: 'file content is invalid' }
+      const key = string('idempotencyKey', RELAY_LIMITS.maxIdempotencyKeyChars)
+      if (key === null || key === undefined) return { ok: false, reason: 'an idempotency key is required' }
+      return {
+        ok: true,
+        payload: { name, mimeType, ...(content === undefined ? {} : { content }), idempotencyKey: key },
+      }
+    }
+
+    case 'relay.telegram.send': {
+      const chatId = string('chatId', MAX_ID_CHARS)
+      const text = string('text', RELAY_LIMITS.maxTelegramMessageChars)
+      if (chatId === null || chatId === undefined) return { ok: false, reason: 'a chat id is required' }
+      if (text === null || text === undefined) return { ok: false, reason: 'message text is required' }
+      const key = string('idempotencyKey', RELAY_LIMITS.maxIdempotencyKeyChars)
+      if (key === null || key === undefined) return { ok: false, reason: 'an idempotency key is required' }
+      return { ok: true, payload: { chatId, text, idempotencyKey: key } }
+    }
+
+    /* -------------------------------------------------------- connectors */
+
+    case 'connector.status.read': {
+      if (!carriesNothing(payload)) return { ok: false, reason: CONNECTOR_NO_PAYLOAD }
+      return { ok: true }
+    }
+
+    case 'connector.connect.start': {
+      const connector = string('connector', 64)
+      if (connector === null || connector === undefined) return { ok: false, reason: 'a connector is required' }
+      const authority = string('authority', 16, false)
+      if (authority === null) return { ok: false, reason: 'a connect authority is invalid' }
+      if (authority !== undefined && authority !== 'read' && authority !== 'write') {
+        return { ok: false, reason: 'a connect authority must be read or write' }
+      }
+      return { ok: true, payload: { connector, ...(authority === undefined ? {} : { authority }) } }
+    }
+
+    case 'connector.disconnect': {
+      const connector = string('connector', 64)
+      if (connector === null || connector === undefined) return { ok: false, reason: 'a connector is required' }
+      const reason = string('reason', 300, false)
+      if (reason === null) return { ok: false, reason: 'a disconnect reason is invalid' }
+      return { ok: true, payload: { connector, ...(reason === undefined ? {} : { reason }) } }
+    }
+
+    case 'connector.read':
+    case 'connector.action.execute': {
+      // A typed connector action: a connector, an action and the action's own
+      // bounded params. There is no scope, token, account, capability, budget or
+      // limit here, because a window has no name for any of them.
+      const connector = string('connector', 64)
+      const action = string('action', 64)
+      if (connector === null || connector === undefined) return { ok: false, reason: 'a connector is required' }
+      if (action === null || action === undefined) return { ok: false, reason: 'a connector action is required' }
+      const rawParams = record?.params
+      if (rawParams !== undefined && (typeof rawParams !== 'object' || rawParams === null || Array.isArray(rawParams))) {
+        return { ok: false, reason: 'connector action params must be an object' }
+      }
+      const serialized = JSON.stringify(rawParams ?? {})
+      if (serialized === undefined || serialized.length > 256_000) {
+        return { ok: false, reason: 'connector action params are too large' }
+      }
+      return {
+        ok: true,
+        payload: {
+          connector,
+          action,
+          ...(rawParams === undefined ? {} : { params: rawParams }),
         },
       }
     }

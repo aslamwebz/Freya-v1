@@ -2,6 +2,8 @@ import { createCore, type Core, type CoreOptions } from '../core/index'
 import type { CoreCommandEnvelope, CoreCommandResult, CoreStatus } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
+import type { VoiceTranscriptFragment } from '../core/voice/types'
+import type { VoiceSttAdapter, VoiceTtsAdapter, WakeGate } from '../core/voice/types'
 import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
 import type { MissionProjection } from '../core/missions/types'
@@ -9,6 +11,7 @@ import type { WorkforceProjection, WorkforceSource } from '../core/protocol/work
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import type { SkillProjection } from '../core/protocol/skills'
+import type { ForgeProjection } from '../core/protocol/forge'
 import type { LifeProjection } from '../core/protocol/life'
 import type { WorldSummaryView } from '../core/protocol/world'
 import type { ConsciousContextProjection } from '../core/protocol/consciousness'
@@ -18,6 +21,9 @@ import type { RelayProjection } from '../core/protocol/relay'
 import type { ContextProjection, ContextProjectionView, ContextScopeRef } from '../core/protocol/context'
 import type { OfficeProjection } from '../core/office/projection'
 import type { RelayAdapterSet } from '../core/relay/adapters'
+import type { ConnectorAuthPort } from '../core/connectors/engine'
+import type { ConnectorKind } from '../core/connectors/types'
+import type { ConnectorCommandOutcome, ConnectorProjection } from '../core/protocol/connectors'
 import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
 import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
 import type { NanoGptEnv } from '../core/model/nanogpt-provider'
@@ -27,7 +33,7 @@ import { fixtureSearchProvider, fixtureTransport, researchFixturesEnabled } from
 import { SafeHttpTransport } from '../core/research/transport'
 import type { SearchProvider } from '../core/research/types'
 import type { ModelProvider } from '../core/model/provider'
-import type { GrantFact } from '../core/devicehands'
+import type { DeviceHandsActionKey, GrantFact } from '../core/devicehands'
 import type { BrowserTargetFactory } from '../core/research/browser'
 import { randomUUID } from 'node:crypto'
 import {
@@ -297,7 +303,9 @@ export interface CoreHost {
   activity(): CoreActivityEvent[]
   status(): CoreStatus
   /** Attach to the conversation projection. Returns a disposer. */
-  onConversation(send: (projection: ConversationProjection) => void): () => void
+onConversation(send: (projection: ConversationProjection) => void): () => void
+  onVoice(send: (projection: VoiceProjection) => void): () => void
+  onVoiceTranscript(send: (fragment: VoiceTranscriptFragment) => void): () => void
   conversation(): Promise<ConversationProjection | null>
   voice(): VoiceProjection | null
   /**
@@ -379,6 +387,15 @@ export interface CoreHost {
    */
   onSkills(send: (projection: SkillProjection) => void): () => void
   skills(): SkillProjection | null
+  /**
+   * Attach to the Forge projection. Returns a disposer.
+   *
+   * A projection mirror and nothing else: no authority, no engine handle and no
+   * method that takes an instruction. Mutating Forge work goes through Core's own
+   *  orge.* commands, behind Guard.
+   */
+  onForge(send: (projection: ForgeProjection) => void): () => void
+  forge(): ForgeProjection | null
   /**
    * Attach to the Life History projection. Returns a disposer.
    *
@@ -464,6 +481,24 @@ consciousness(): ConsciousContextProjection | null
    */
   onRelay(send: (projection: RelayProjection) => void): () => void
   relay(): RelayProjection | null
+  /**
+   * Attach to the connector projection. Returns a disposer.
+   *
+   * The host is a forwarding box here too: it cannot configure a connector,
+   * start an authorization, complete one or deliver an event. It reads Core's
+   * report and forwards it.
+   */
+  onConnectors(send: (projection: ConnectorProjection) => void): () => void
+  connectors(): ConnectorProjection | null
+  /**
+   * Complete an authorization. **Host-only; never exposed to a renderer.**
+   *
+   * The OAuth callback is handled in the main process, which holds the token in
+   * the secure store; this records the non-secret outcome in Core.
+   */
+  connectorAuthorizationComplete(payload: unknown): Promise<ConnectorCommandOutcome>
+  /** Deliver an authenticated external event. **Host-only.** */
+  connectorEventIngest(payload: unknown): Promise<ConnectorCommandOutcome>
   stop(reason?: string): Promise<void>
 }
 
@@ -544,6 +579,15 @@ export interface CoreHostOptions {
   personalityKey?: Uint8Array | null
   /** Skills' independent encrypted persistence key. */
   skillKey?: Uint8Array | null
+  /**
+   * Forge's independent encrypted persistence key, from the keyring.
+   *
+   * A separate key from every other domain on purpose: a Forge package body is a
+   * program Freya can run, and a store that could be opened with the Skill key could
+   * be moved between domains by anyone holding either one. Null means Core falls
+   * back to process-only storage and *reports* durable: false � never plaintext.
+   */
+  forgeKey?: Uint8Array | null
   /** Canonical Core-private SQLCipher Vault. Never accepted from a renderer. */
   vault?: CoreOptions['vault']
   /** Explicit main-process opt-in; never accepted from a renderer. */
@@ -567,6 +611,22 @@ export interface CoreHostOptions {
    * provider. Production passes none of this.
    */
   providers?: ModelProvider[]
+  /**
+   * The desktop speech output adapter, forwarded straight into Core.
+   *
+   * Note the asymmetry with speech *input*: production passes this and passes no
+   * `voiceStt`, because the platform gives us a speech engine and does not give
+   * us a local recogniser. That is not a gap to be papered over with a hosted
+   * service — it is the honest state of this build, and Core reports it as
+   * `configuration-required` and discards recordings rather than sending them.
+   */
+  voiceTts?: VoiceTtsAdapter
+  /** A speech-to-text adapter. Unset in production; see `voiceTts`. */
+  voiceStt?: VoiceSttAdapter
+  /** A local wake gate. Unset in production, so hands-free cannot be armed. */
+  voiceWake?: WakeGate
+  /** Whether the platform offers a capture path at all. */
+  voiceCaptureSupported?: boolean
   /**
    * Replaces the production research stack wholesale. For tests.
    *
@@ -621,6 +681,21 @@ export interface CoreHostOptions {
     allowlistedRepos?: readonly string[]
   }
   /**
+   * The Phase 44 connector connection plane.
+   *
+   * Forwarded into Core; tokens remain in the host secure store and never cross
+   * the renderer bridge.
+   */
+  connectors?: {
+    auth: ConnectorAuthPort
+    blocked?: readonly ConnectorKind[]
+  }
+  /**
+   * Lazy production connector runtime, constructed in the main process where
+   * Electron secure storage is available.
+   */
+  connectorRuntime?: () => Promise<{ auth: ConnectorAuthPort; blocked?: readonly ConnectorKind[] }>
+  /**
    * The Phase 42 Device Hands activation seam. Absent — the state of every build
    * until the owner supplies real adapters and an authority — the runtime is never
    * constructed, and no surface exists to reach.
@@ -635,6 +710,8 @@ export class ElectronCoreHost implements CoreHost {
   private readonly windows = new Set<(status: CoreStatus) => void>()
   private readonly activityWindows = new Set<(activity: CoreActivityEvent[]) => void>()
   private readonly conversationWindows = new Set<(projection: ConversationProjection) => void>()
+  private readonly voiceWindows = new Set<(projection: VoiceProjection) => void>()
+  private readonly voiceTranscriptWindows = new Set<(fragment: VoiceTranscriptFragment) => void>()
   private readonly brainWindows = new Set<(projection: BrainProjection) => void>()
   private readonly workWindows = new Set<(projection: WorkProjection) => void>()
   private readonly missionWindows = new Set<(projection: MissionProjection) => void>()
@@ -645,8 +722,11 @@ export class ElectronCoreHost implements CoreHost {
   private readonly lifeWindows = new Set<(projection: LifeProjection) => void>()
   private readonly worldWindows = new Set<(projection: WorldSummaryView) => void>()
   private readonly foundryWindows = new Set<(projection: FoundryProjection) => void>()
+  /** Windows following the Forge projection. Cleared when a window goes away. */
+  private readonly forgeWindows = new Set<(projection: ForgeProjection) => void>()
   private readonly officeWindows = new Set<(projection: OfficeProjection) => void>()
   private readonly relayWindows = new Set<(projection: RelayProjection) => void>()
+  private readonly connectorWindows = new Set<(projection: ConnectorProjection) => void>()
   /**
    * Windows following the unified conscious context.
    *
@@ -887,12 +967,69 @@ export class ElectronCoreHost implements CoreHost {
     return this.deviceHands?.status() ?? null
   }
 
+  /**
+   * Run one Device Hands action on the activation this host owns.
+   *
+   * **This is the seam Phase 51 needed and the reason it needed one.** The dual-browser runtime
+   * and the Phase 43 extension bridge are two doors onto the browser surface, and the only way
+   * to keep them two doors rather than two authorities is for both of them to reach *this*
+   * runtime — the one whose authority already composes Core's STOP ALL latch. So the host
+   * exposes the perform call and nothing else: no grant source, no policy, no approval
+   * channel, no way to reach a gate without walking it.
+   */
+  async performDeviceHandsAction(request: {
+    readonly actionId: string
+    readonly principalId: string
+    readonly scope: string
+    readonly actionKey: DeviceHandsActionKey
+    readonly input: Readonly<Record<string, unknown>>
+    readonly at: string
+    readonly deadlineAt: string
+  }): Promise<{
+    readonly performed: boolean
+    readonly verdict: 'passed' | 'failed' | 'unverified'
+    readonly code: string | null
+    readonly reason: string
+  }> {
+    const activation = this.deviceHands
+    if (activation === null || !activation.active()) {
+      return {
+        performed: false,
+        verdict: 'failed',
+        code: 'subsystem-disabled',
+        reason: 'Device Hands is not active in this build, so no browser action is authorised.',
+      }
+    }
+    const outcome = await activation.runtime.perform({
+      ...request,
+      claimsAction: null,
+    })
+    return {
+      performed: outcome.performed,
+      verdict: outcome.verdict ?? 'failed',
+      code: outcome.code,
+      reason: outcome.reason,
+    }
+  }
+
+  /**
+   * The hash-chained journal Device Hands is already writing, or null when there is none.
+   *
+   * Exposed so the Phase 51 activation appends to the **same file** rather than opening a
+   * second one. Two journals would mean two integrity chains and a restart that believed one of
+   * them could be in a state the other contradicted.
+   */
+  deviceHandsJournal(): DeviceHandsJournal | null {
+    return this.options.deviceHands?.journal ?? null
+  }
+
   async start(): Promise<void> {
     if (this.core) return
     if (this.starting) return this.starting
     this.stopRequested = false
     this.starting = (async () => {
       const research = this.options.research ?? this.buildResearchStack()
+      const connectors = this.options.connectors ?? (this.options.connectorRuntime ? await this.options.connectorRuntime() : undefined)
       const core = createCore({
         dataPath: this.dataPath,
         env: this.env,
@@ -954,12 +1091,29 @@ export class ElectronCoreHost implements CoreHost {
         // renderer has no name for it ??? so nothing a window can send arrives
         // here, and the only thing that travels back out is what Core reports.
         ...(this.options.relay ? { relay: this.options.relay } : {}),
+        // The connector connection plane, forwarded whole for the same reason as
+        // Relay: it reaches Core, not a window, and the only thing that travels
+        // back out is what Core reports.
+        ...(connectors ? { connectors } : {}),
         ...(this.options.developerProvider
           ? { developerProvider: this.options.developerProvider }
           : {}),
         // The *entire* provider set when one is supplied, forwarded verbatim so a
         // test can never exercise the real provider while believing it is offline.
         ...(this.options.providers ? { providers: this.options.providers } : {}),
+        // Speech output, forwarded whole for the same reason as every other seam
+        // above: the adapter reaches Core, not a window, and there is no renderer
+        // name for it. A window never sends text to be spoken — Core reads the words
+        // out of its own conversation store and this adapter forwards them to the
+        // platform. Deliberately absent: a speech *input* adapter. This host supplies
+        // none, so Core reports transcription as `configuration-required` and
+        // discards recordings rather than reaching anywhere for a recogniser.
+        ...(this.options.voiceTts ? { voiceTts: this.options.voiceTts } : {}),
+        ...(this.options.voiceStt ? { voiceStt: this.options.voiceStt } : {}),
+        ...(this.options.voiceWake ? { voiceWake: this.options.voiceWake } : {}),
+        ...(this.options.voiceCaptureSupported === undefined
+          ? {}
+          : { voiceCaptureSupported: this.options.voiceCaptureSupported }),
       })
       await core.start()
       if (this.stopRequested) {
@@ -971,6 +1125,11 @@ export class ElectronCoreHost implements CoreHost {
       core.subscribe((status) => this.broadcast(status))
       core.onActivity((activity) => this.broadcastActivity(activity))
       core.onConversation((projection) => this.broadcastConversation(projection))
+      // Voice, two channels. The projection is state and goes to every attached
+      // window; transcript fragments are words in flight and are forwarded to
+      // whoever is listening, with Core doing the deciding about what they are.
+      core.onVoice((projection) => this.broadcastVoice(projection))
+      core.onVoiceTranscript((fragment) => this.broadcastVoiceTranscript(fragment))
       core.onBrain((projection) => this.broadcastBrain(projection))
       core.onWork((projection) => this.broadcastWork(projection))
       core.onMission((projection) => this.broadcastMission(projection))
@@ -980,7 +1139,9 @@ export class ElectronCoreHost implements CoreHost {
       core.onFoundry((projection) => this.broadcastFoundry(projection))
       core.onOffice((projection) => this.broadcastOffice(projection))
       core.onRelay((projection) => this.broadcastRelay(projection))
+      core.onConnectors((projection) => this.broadcastConnectors(projection))
       core.onSkills((projection) => this.broadcastSkills(projection))
+      core.onForge((projection) => this.broadcastForge(projection))
       core.onLife((projection) => this.broadcastLife(projection))
       core.onWorld((projection) => this.broadcastWorld(projection))
       core.onConsciousness((projection) => this.broadcastConsciousness(projection))
@@ -1115,6 +1276,45 @@ export class ElectronCoreHost implements CoreHost {
     return this.core?.voice() ?? null
   }
 
+  /**
+   * Follow the voice projection.
+   *
+   * Pushed immediately, so a window that attaches after the microphone was turned
+   * on already sees `micEnabled: true` instead of rendering an off microphone over
+   * an open one. The voice projection's whole job is to make the indicator
+   * truthful, and an indicator that is right for the first frame and wrong for
+   * every one after it is worse than none.
+   */
+  onVoice(send: (projection: VoiceProjection) => void): () => void {
+    this.voiceWindows.add(send)
+    const core = this.core
+    if (core) {
+      try {
+        send(core.voice())
+      } catch (error) {
+        console.error('[freya.core] window voice push threw', error)
+      }
+    }
+    return () => {
+      this.voiceWindows.delete(send)
+    }
+  }
+
+  /**
+   * Follow transcript fragments.
+   *
+   * Not pushed immediately, and deliberately: there is no "current fragment" to
+   * replay, because a fragment is an event that happened rather than a state that
+   * persists. Re-sending the last interim on attach would put a guess on screen
+   * with no capture behind it.
+   */
+  onVoiceTranscript(send: (fragment: VoiceTranscriptFragment) => void): () => void {
+    this.voiceTranscriptWindows.add(send)
+    return () => {
+      this.voiceTranscriptWindows.delete(send)
+    }
+  }
+
   onBrain(send: (projection: BrainProjection) => void): () => void {
     this.brainWindows.add(send)
     // Pushed immediately, so a window that attaches after startup still sees what
@@ -1188,6 +1388,7 @@ export class ElectronCoreHost implements CoreHost {
     this.attentionWindows.clear()
     this.officeWindows.clear()
     this.relayWindows.clear()
+    this.connectorWindows.clear()
     this.skillWindows.clear()
     this.lifeWindows.clear()
     this.consciousnessWindows.clear()
@@ -1383,6 +1584,43 @@ export class ElectronCoreHost implements CoreHost {
   }
 
   /**
+   * Attach to the Forge projection, pushed immediately.
+   *
+   * Null before Core has started, so a host with nothing to report says nothing
+   * rather than manufacturing an empty catalog.
+   */
+  onForge(send: (projection: ForgeProjection) => void): () => void {
+    this.forgeWindows.add(send)
+    const projection = this.forge()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Forge push threw', error)
+        this.forgeWindows.delete(send)
+      }
+    }
+    return () => {
+      this.forgeWindows.delete(send)
+    }
+  }
+
+  forge(): ForgeProjection | null {
+    return this.core?.forge() ?? null
+  }
+
+  private broadcastForge(projection: ForgeProjection): void {
+    for (const send of [...this.forgeWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window Forge push threw', error)
+        this.forgeWindows.delete(send)
+      }
+    }
+  }
+
+  /**
    * Attach to the Life History projection, pushed immediately.
    *
    * Null before the Core has started, so a host with nothing to report says
@@ -1497,6 +1735,51 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window Relay push threw', error)
         this.relayWindows.delete(send)
+      }
+    }
+  }
+
+  /** Attach to the connector projection, pushed immediately. Null before start. */
+  onConnectors(send: (projection: ConnectorProjection) => void): () => void {
+    this.connectorWindows.add(send)
+    const projection = this.connectors()
+    if (projection !== null) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window connector push threw', error)
+      }
+    }
+    return () => {
+      this.connectorWindows.delete(send)
+    }
+  }
+
+  connectors(): ConnectorProjection | null {
+    return this.core?.connectors() ?? null
+  }
+
+  async connectorAuthorizationComplete(payload: unknown): Promise<ConnectorCommandOutcome> {
+    if (this.core === null) {
+      return { operation: 'refused', ok: false, failureCode: 'unsupported', reason: 'Core has not started' }
+    }
+    return this.core.connectorAuthorizationComplete(payload)
+  }
+
+  async connectorEventIngest(payload: unknown): Promise<ConnectorCommandOutcome> {
+    if (this.core === null) {
+      return { operation: 'refused', ok: false, failureCode: 'unsupported', reason: 'Core has not started' }
+    }
+    return this.core.connectorEventIngest(payload)
+  }
+
+  private broadcastConnectors(projection: ConnectorProjection): void {
+    for (const send of [...this.connectorWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window connector push threw', error)
+        this.connectorWindows.delete(send)
       }
     }
   }
@@ -1664,6 +1947,28 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window conversation push threw', error)
         this.conversationWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastVoice(projection: VoiceProjection): void {
+    for (const send of [...this.voiceWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window voice push threw', error)
+        this.voiceWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastVoiceTranscript(fragment: VoiceTranscriptFragment): void {
+    for (const send of [...this.voiceTranscriptWindows]) {
+      try {
+        send(fragment)
+      } catch (error) {
+        console.error('[freya.core] window voice transcript push threw', error)
+        this.voiceTranscriptWindows.delete(send)
       }
     }
   }

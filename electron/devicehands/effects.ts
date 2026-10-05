@@ -113,11 +113,36 @@ export interface ClipboardLike {
 export interface DeviceBrowserSession {
   navigate(url: string, deadlineAt: string): Promise<{ readonly ok: boolean; readonly finalUrl: string | null; readonly code: string }>
   readText(): Promise<{ readonly ok: boolean; readonly textBytes: number; readonly code: string }>
+  /**
+   * Drive a click or a keystroke on a **live page**, when this target has one.
+   *
+   * Absent means exactly that: the target can fetch and read a document but has no page to
+   * act on. That is the honest position for the Phase 5 managed research target, which is
+   * script-free by design — so a selector action against it is refused with a stated code
+   * rather than faked. Phase 51 supplies a target that does have a live page, and because
+   * this is an optional member on the *existing* interface, it plugs into the same port, the
+   * same gate and the same grant rather than becoming a second browser authority.
+   */
+  act?(request: BrowserPortRequest): Promise<BrowserPortOutcome>
   close(): Promise<void>
 }
 
 export interface DeviceBrowserFactory {
+  /**
+   * The read-only managed target: fetch a document and extract it.
+   *
+   * Unchanged since Phase 35 and still the fallback for a read that no live page is serving.
+   */
   open(): Promise<DeviceBrowserSession>
+  /**
+   * A live, act-capable page for one action, or **null** when no page is on the requested
+   * URL.
+   *
+   * `null` is not a failure and it is not a fallback decision — it is the answer "there is no
+   * live page here", and the caller then does exactly what it did in Phase 35: use the
+   * read-only target for a read, and refuse a click.
+   */
+  openInPage?(request: BrowserPortRequest): Promise<DeviceBrowserSession | null>
 }
 
 /* -------------------------------------------------------------- transfer deps */
@@ -299,25 +324,57 @@ function createClipboardEffects(clipboard: ClipboardLike) {
 
 /* -------------------------------------------------------------- browser body */
 
+/**
+ * The browser effect, with a live-page target preferred when one is serving the URL.
+ *
+ * Three cases, in this order, and the ordering is the policy:
+ *
+ *   1. **A click or a keystroke.** Only a live page can do these. If no live page is serving
+ *      the authorised URL, the answer is the Phase 35 answer — `browser-action-unsupported`
+ *      — because there is genuinely no safe effect to reach.
+ *   2. **A read on a page that is open.** Used in place of a fresh fetch, because re-fetching
+ *      the same URL into a hidden window is both slower and less truthful: what the owner can
+ *      see is the page, and a read should describe *that*.
+ *   3. **A read with no page open.** The Phase 5 managed target, exactly as before.
+ *
+ * The choice of *which window* happens at the last moment, inside the adapter, and it cannot
+ * change whether the action was allowed: the gates ran before this function was entered.
+ */
 function createBrowserEffect(factory: DeviceBrowserFactory) {
   return async function performBrowser(request: BrowserPortRequest): Promise<BrowserPortOutcome> {
-    if (request.selector !== null) {
-      // `browser.click` and `browser.type-text`. The managed browser this host owns is
-      // a script-free, read-only document; a live, scriptable page that could be
-      // clicked and typed into is authority this architecture does not grant a
-      // background runtime. Refused truthfully rather than faked.
-      return {
-        holds: false,
-        evidence: 'reported',
-        code: 'browser-action-unsupported',
-        finalUrl: null,
-        textBytes: 0,
+    let live: DeviceBrowserSession | null = null
+    if (factory.openInPage !== undefined) {
+      try {
+        live = await factory.openInPage(request)
+      } catch {
+        live = null
       }
     }
 
-    let session: DeviceBrowserSession | null = null
+    if (request.selector !== null) {
+      // `browser.click` and `browser.type-text`. The managed research target is a script-free,
+      // read-only document, so a page that could be clicked and typed into is authority this
+      // architecture does not grant it. Refused truthfully when there is no live page, and
+      // driven by that page when there is one.
+      if (live === null || live.act === undefined) {
+        return {
+          holds: false,
+          evidence: 'reported',
+          code: 'browser-action-unsupported',
+          finalUrl: null,
+          textBytes: 0,
+        }
+      }
+      try {
+        return await live.act(request)
+      } catch {
+        return { holds: false, evidence: 'reported', code: 'browser-failed', finalUrl: null, textBytes: 0 }
+      }
+    }
+
+    let session: DeviceBrowserSession | null = live
     try {
-      session = await factory.open()
+      if (session === null) session = await factory.open()
       const navigated = await session.navigate(request.url, request.deadlineAt)
       if (!navigated.ok || navigated.finalUrl === null) {
         return {
@@ -339,7 +396,9 @@ function createBrowserEffect(factory: DeviceBrowserFactory) {
     } catch {
       return { holds: false, evidence: 'reported', code: 'browser-failed', finalUrl: null, textBytes: 0 }
     } finally {
-      if (session !== null) {
+      // A live page is the owner's window: it is not closed after a read. Only the throwaway
+      // managed target is.
+      if (session !== null && session !== live) {
         try {
           await session.close()
         } catch {

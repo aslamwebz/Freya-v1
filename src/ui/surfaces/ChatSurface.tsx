@@ -6,6 +6,7 @@ import {
   ensureConversationAttached,
   visibleMessages,
 } from '../../platform/conversationClient'
+import { voiceMirror } from '../../platform/voiceClient'
 import { readModelCatalog, selectModel } from '../../platform/modelClient'
 import type { ModelView } from '../../../core/protocol/core-protocol'
 import type { ConversationProjection, VoiceProjection } from '../../../core/protocol/conversation'
@@ -52,18 +53,23 @@ export function ChatSurface() {
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
   const [defaultModel, setDefaultModel] = useState<string | null>(null)
   const mirror = conversationMirror()
+  const voiceStatus = voiceMirror()
 
   useEffect(() => {
     let dispose: (() => void) | undefined
+    let disposeVoice: (() => void) | undefined
     let cancelled = false
     void ensureConversationAttached().then((attached) => {
-      if (cancelled) {
-        attached.attachVoice?.()
-        return
-      }
+      if (cancelled) return
       dispose = attached.subscribe(setProjection)
     })
-    void mirror.attachVoice().then(() => mirror.subscribeVoice(setVoice))
+    // The voice mirror is its own subscription, attached on the same mount and
+    // released on the same unmount — a surface that forgot one of the pair would
+    // keep a Core push alive for a window nobody is looking at.
+    void voiceStatus.attach().then((detach) => {
+      if (cancelled) detach()
+      else disposeVoice = voiceStatus.subscribe(setVoice)
+    })
     // Load the existing history so a surface opened on day seven is not empty. A
     // refusal is reported rather than thrown: the transcript below already renders
     // whatever Core could tell us, and an unhandled rejection would only add a
@@ -74,8 +80,9 @@ export function ChatSurface() {
     return () => {
       cancelled = true
       dispose?.()
+      disposeVoice?.()
     }
-  }, [mirror])
+  }, [mirror, voiceStatus])
 
   // Keep the newest line in view without stealing focus from the composer.
   useEffect(() => {

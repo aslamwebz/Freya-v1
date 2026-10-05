@@ -2,6 +2,8 @@ import { createCore, type Core, type CoreOptions } from '../core/index'
 import type { CoreCommandEnvelope, CoreCommandResult, CoreStatus } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
+import type { VoiceTranscriptFragment } from '../core/voice/types'
+import type { VoiceSttAdapter, VoiceTtsAdapter, WakeGate } from '../core/voice/types'
 import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
 import type { MissionProjection } from '../core/missions/types'
@@ -300,7 +302,9 @@ export interface CoreHost {
   activity(): CoreActivityEvent[]
   status(): CoreStatus
   /** Attach to the conversation projection. Returns a disposer. */
-  onConversation(send: (projection: ConversationProjection) => void): () => void
+onConversation(send: (projection: ConversationProjection) => void): () => void
+  onVoice(send: (projection: VoiceProjection) => void): () => void
+  onVoiceTranscript(send: (fragment: VoiceTranscriptFragment) => void): () => void
   conversation(): Promise<ConversationProjection | null>
   voice(): VoiceProjection | null
   /**
@@ -589,6 +593,22 @@ export interface CoreHostOptions {
    */
   providers?: ModelProvider[]
   /**
+   * The desktop speech output adapter, forwarded straight into Core.
+   *
+   * Note the asymmetry with speech *input*: production passes this and passes no
+   * `voiceStt`, because the platform gives us a speech engine and does not give
+   * us a local recogniser. That is not a gap to be papered over with a hosted
+   * service — it is the honest state of this build, and Core reports it as
+   * `configuration-required` and discards recordings rather than sending them.
+   */
+  voiceTts?: VoiceTtsAdapter
+  /** A speech-to-text adapter. Unset in production; see `voiceTts`. */
+  voiceStt?: VoiceSttAdapter
+  /** A local wake gate. Unset in production, so hands-free cannot be armed. */
+  voiceWake?: WakeGate
+  /** Whether the platform offers a capture path at all. */
+  voiceCaptureSupported?: boolean
+  /**
    * Replaces the production research stack wholesale. For tests.
    *
    * Whole-stack rather than per-part, so a test cannot accidentally exercise the
@@ -671,6 +691,8 @@ export class ElectronCoreHost implements CoreHost {
   private readonly windows = new Set<(status: CoreStatus) => void>()
   private readonly activityWindows = new Set<(activity: CoreActivityEvent[]) => void>()
   private readonly conversationWindows = new Set<(projection: ConversationProjection) => void>()
+  private readonly voiceWindows = new Set<(projection: VoiceProjection) => void>()
+  private readonly voiceTranscriptWindows = new Set<(fragment: VoiceTranscriptFragment) => void>()
   private readonly brainWindows = new Set<(projection: BrainProjection) => void>()
   private readonly workWindows = new Set<(projection: WorkProjection) => void>()
   private readonly missionWindows = new Set<(projection: MissionProjection) => void>()
@@ -1002,6 +1024,19 @@ export class ElectronCoreHost implements CoreHost {
         // The *entire* provider set when one is supplied, forwarded verbatim so a
         // test can never exercise the real provider while believing it is offline.
         ...(this.options.providers ? { providers: this.options.providers } : {}),
+        // Speech output, forwarded whole for the same reason as every other seam
+        // above: the adapter reaches Core, not a window, and there is no renderer
+        // name for it. A window never sends text to be spoken — Core reads the words
+        // out of its own conversation store and this adapter forwards them to the
+        // platform. Deliberately absent: a speech *input* adapter. This host supplies
+        // none, so Core reports transcription as `configuration-required` and
+        // discards recordings rather than reaching anywhere for a recogniser.
+        ...(this.options.voiceTts ? { voiceTts: this.options.voiceTts } : {}),
+        ...(this.options.voiceStt ? { voiceStt: this.options.voiceStt } : {}),
+        ...(this.options.voiceWake ? { voiceWake: this.options.voiceWake } : {}),
+        ...(this.options.voiceCaptureSupported === undefined
+          ? {}
+          : { voiceCaptureSupported: this.options.voiceCaptureSupported }),
       })
       await core.start()
       if (this.stopRequested) {
@@ -1013,6 +1048,11 @@ export class ElectronCoreHost implements CoreHost {
       core.subscribe((status) => this.broadcast(status))
       core.onActivity((activity) => this.broadcastActivity(activity))
       core.onConversation((projection) => this.broadcastConversation(projection))
+      // Voice, two channels. The projection is state and goes to every attached
+      // window; transcript fragments are words in flight and are forwarded to
+      // whoever is listening, with Core doing the deciding about what they are.
+      core.onVoice((projection) => this.broadcastVoice(projection))
+      core.onVoiceTranscript((fragment) => this.broadcastVoiceTranscript(fragment))
       core.onBrain((projection) => this.broadcastBrain(projection))
       core.onWork((projection) => this.broadcastWork(projection))
       core.onMission((projection) => this.broadcastMission(projection))
@@ -1156,6 +1196,45 @@ export class ElectronCoreHost implements CoreHost {
 
   voice(): VoiceProjection | null {
     return this.core?.voice() ?? null
+  }
+
+  /**
+   * Follow the voice projection.
+   *
+   * Pushed immediately, so a window that attaches after the microphone was turned
+   * on already sees `micEnabled: true` instead of rendering an off microphone over
+   * an open one. The voice projection's whole job is to make the indicator
+   * truthful, and an indicator that is right for the first frame and wrong for
+   * every one after it is worse than none.
+   */
+  onVoice(send: (projection: VoiceProjection) => void): () => void {
+    this.voiceWindows.add(send)
+    const core = this.core
+    if (core) {
+      try {
+        send(core.voice())
+      } catch (error) {
+        console.error('[freya.core] window voice push threw', error)
+      }
+    }
+    return () => {
+      this.voiceWindows.delete(send)
+    }
+  }
+
+  /**
+   * Follow transcript fragments.
+   *
+   * Not pushed immediately, and deliberately: there is no "current fragment" to
+   * replay, because a fragment is an event that happened rather than a state that
+   * persists. Re-sending the last interim on attach would put a guess on screen
+   * with no capture behind it.
+   */
+  onVoiceTranscript(send: (fragment: VoiceTranscriptFragment) => void): () => void {
+    this.voiceTranscriptWindows.add(send)
+    return () => {
+      this.voiceTranscriptWindows.delete(send)
+    }
   }
 
   onBrain(send: (projection: BrainProjection) => void): () => void {
@@ -1753,6 +1832,28 @@ export class ElectronCoreHost implements CoreHost {
       } catch (error) {
         console.error('[freya.core] window conversation push threw', error)
         this.conversationWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastVoice(projection: VoiceProjection): void {
+    for (const send of [...this.voiceWindows]) {
+      try {
+        send(projection)
+      } catch (error) {
+        console.error('[freya.core] window voice push threw', error)
+        this.voiceWindows.delete(send)
+      }
+    }
+  }
+
+  private broadcastVoiceTranscript(fragment: VoiceTranscriptFragment): void {
+    for (const send of [...this.voiceTranscriptWindows]) {
+      try {
+        send(fragment)
+      } catch (error) {
+        console.error('[freya.core] window voice transcript push threw', error)
+        this.voiceTranscriptWindows.delete(send)
       }
     }
   }

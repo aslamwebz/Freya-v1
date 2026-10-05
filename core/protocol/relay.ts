@@ -125,6 +125,8 @@ export type RelayReadResult =
   | { readonly kind: 'email.messages'; readonly messages: readonly RelayEmailMessageView[]; readonly nextCursor: string | null }
   | { readonly kind: 'calendar.events'; readonly events: readonly RelayCalendarEventView[]; readonly nextCursor: string | null }
   | { readonly kind: 'github.issues'; readonly issues: readonly RelayGitHubIssueView[]; readonly nextCursor: string | null }
+  | { readonly kind: 'drive.files'; readonly files: readonly RelayDriveFileView[]; readonly nextCursor: string | null }
+  | { readonly kind: 'telegram.messages'; readonly messages: readonly RelayTelegramMessageView[]; readonly nextCursor: string | null }
   | { readonly kind: 'external.result'; readonly data: unknown }
 
 /** What an approved write produced. */
@@ -136,6 +138,8 @@ export type RelayWriteResult =
   | { readonly kind: 'calendar.event.cancelled'; readonly eventId: string }
   | { readonly kind: 'github.issue.created'; readonly number: number }
   | { readonly kind: 'github.pr.created'; readonly number: number }
+  | { readonly kind: 'drive.file.created'; readonly fileId: string }
+  | { readonly kind: 'telegram.sent'; readonly messageId: string }
   | { readonly kind: 'external.invoked'; readonly data: unknown }
 
 /** One email message, as a read returns it. */
@@ -170,6 +174,25 @@ export interface RelayGitHubIssueView {
   readonly state: 'open' | 'closed'
   readonly author: string
   readonly updatedAt: string
+}
+
+/** One Google Drive file, as a read returns it. */
+export interface RelayDriveFileView {
+  readonly fileId: string
+  readonly name: string
+  readonly mimeType: string
+  readonly modifiedAt: string
+  readonly sizeBytes: number | null
+  readonly parents: readonly string[]
+}
+
+/** One Telegram message, as a read returns it. */
+export interface RelayTelegramMessageView {
+  readonly messageId: string
+  readonly chatId: string
+  readonly from: string
+  readonly text: string
+  readonly sentAt: string
 }
 
 /* --------------------------------------------------------------- outcome */

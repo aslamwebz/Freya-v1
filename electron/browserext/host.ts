@@ -1,4 +1,5 @@
 import {
+  BROWSER_BRIDGE_COMMAND_ACTION,
   BROWSER_BRIDGE_OBSERVATION_CAPABILITIES,
   createBrowserBridge,
   truncateUtf8,
@@ -69,6 +70,29 @@ export interface BrowserExtensionHostOptions {
 export interface BrowserExtensionHost {
   start(): Promise<{ readonly port: number }>
   stop(): Promise<void>
+  /**
+   * Continue a handed-off URL in the tab the owner has already shared.
+   *
+   * Added in Phase 51 so the dual-browser handoff has a real destination. It is **not** a
+   * new door: the request goes through this host's existing `dispatch`, which walks the
+   * same Device Hands gates and the same session capability, session tab scope and shared
+   * origin check that an inbound `page.navigate` does.
+   *
+   * The honest limit, which is a protocol property rather than an implementation gap:
+   * this host can only navigate a tab the owner has explicitly shared. There is no
+   * "create a tab" command in the Phase 43 protocol, and adding one would mean the host
+   * could put a page in front of the person without them having shared anything. So a
+   * handoff with no shared tab is refused `target-unavailable` rather than half-served.
+   */
+  continueInSharedTab(request: {
+    readonly url: string
+    readonly deadlineAt: number
+  }): Promise<{
+    readonly ok: boolean
+    readonly code: string | null
+    readonly reason: string
+    readonly tabId: number | null
+  }>
   readonly bridge: BrowserBridge
   readonly runtime: DeviceHandsRuntime
   readonly server: BridgeServer
@@ -293,6 +317,65 @@ export function createBrowserExtensionHost(
   })
   transport = server.transport
 
+  /**
+   * Route one `page.navigate` into the tab the owner shared.
+   *
+   * The four refusals are ordered from "there is no session" to "this session cannot
+   * navigate", and each one is a fact about the extension's own state rather than about
+   * Freya's authority. The Device Hands gate is the fifth and last thing that can refuse,
+   * which is the correct order: an answer about the protocol comes before an answer about
+   * authority.
+   */
+  async function continueInSharedTab(request: {
+    readonly url: string
+    readonly deadlineAt: number
+  }): Promise<{ readonly ok: boolean; readonly code: string | null; readonly reason: string; readonly tabId: number | null }> {
+    const refuse = (
+      code: string,
+      reason: string,
+    ): { readonly ok: false; readonly code: string; readonly reason: string; readonly tabId: null } => ({
+      ok: false,
+      code,
+      reason,
+      tabId: null,
+    })
+
+    if (!tokenStore.all().some((record) => record.revokedAt === null)) {
+      return refuse('target-unavailable', 'No extension has ever paired with this Freya, so there is no authenticated context to continue in.')
+    }
+    const live = bridge.sessions().filter((session) => !session.revoked && session.expiresAt > now())
+    const candidate = live.find((session) => session.sharedTabId !== null && session.sharedUrl !== null)
+    if (candidate === undefined || candidate.sharedTabId === null) {
+      return refuse(
+        'target-unavailable',
+        'The extension is connected but the owner has not shared a tab, and this build will not open one on their behalf. Share the tab you want the work continued in.',
+      )
+    }
+    if (!candidate.capabilities.includes('page.navigate')) {
+      return refuse('authority-refused', 'This session does not hold the navigate capability, so the extension is not permitted to move its tab.')
+    }
+    const origin = candidate.sharedOrigin
+    const result = await dispatch({
+      sessionId: candidate.sessionId,
+      connectionId: candidate.connectionId,
+      extensionId: candidate.extensionId,
+      command: 'page.navigate',
+      actionKey: BROWSER_BRIDGE_COMMAND_ACTION['page.navigate'],
+      args: { url: request.url },
+      tabId: candidate.sharedTabId,
+      frameId: 0,
+      url: request.url,
+      origin,
+      at: now(),
+      deadlineAt: request.deadlineAt,
+      actionId: `handoff-${candidate.sessionId}-${String(now())}`,
+    })
+    if (!result.ok) {
+      return refuse(result.code ?? 'adapter-failed', result.reason)
+    }
+    return { ok: true, code: null, reason: result.reason, tabId: candidate.sharedTabId }
+  }
+
   return {
     start: async () => {
       const result = await server.start()
@@ -306,6 +389,7 @@ export function createBrowserExtensionHost(
     stop: async () => {
       await server.stop()
     },
+    continueInSharedTab,
     bridge,
     runtime,
     server,

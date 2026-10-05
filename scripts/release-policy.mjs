@@ -24,8 +24,10 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // the Phase 42 Device Hands seam and so lands in the main process rather than in a
   // separate bundle. Phase 50 then added persistent Eye sessions and bounded parallel
   // Deep Research. Phase 44 adds the connector engine/runtime and host composition;
-  // CI measures the reconciled main.cjs at 2,237,259 bytes. Keep only narrow,
-  // explicit headroom over that measured artifact rather than absorbing future growth.
+  // CI measures that reconciled main.cjs at 2,237,259 bytes. Phase 48 then adds the
+  // manifest door, declarative sandbox, static scan, validation/version pipeline and
+  // encrypted Forge store. Keep only narrow, explicit headroom over the combined
+  // artifact rather than absorbing future growth.
   mainBytes: 2_250_000,
   // Phase 44 adds connector projection/commands to the preload bridge, and
   // Phase 45 adds the bounded Voice command/capability/playback channel. The

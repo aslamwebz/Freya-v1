@@ -5,6 +5,7 @@ import type { ModelUsage, PrincipalId } from './protocol/core-protocol'
 import { initialAttentionState, reduceAttention, type AttentionState } from './attention/state'
 import { initialOfficeState, reduceOfficeState, type OfficeState } from './office/state'
 import { initialRelayState, reduceRelay, type RelayState } from './relay/state'
+import { initialConnectorState, reduceConnector, type ConnectorFold } from './connectors/state'
 import { initialSkillState, reduceSkillState, type SkillState } from './skills/state'
 
 /**
@@ -86,6 +87,12 @@ export interface CoreState {
    */
   relay: RelayState
   /**
+   * Connectors' folded state: connection records, authorization requests, event
+   * metadata and dedupe keys. Derived from `connector.*` events, so revocation
+   * and replay protection survive a restart without a second store.
+   */
+  connectors: ConnectorFold
+  /**
    * Skills' folded state: records, lifecycle status, verification, version history,
    * evaluation records and open improvement proposals. Derived from `skill.*` events
    * like everything else, so promotions, contradictions and retirement survive a
@@ -117,6 +124,7 @@ export function initialCoreState(): CoreState {
     attention: initialAttentionState(),
     office: initialOfficeState(),
     relay: initialRelayState(),
+connectors: initialConnectorState(),
 skills: initialSkillState(),
   }
 }
@@ -355,6 +363,10 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
       if (event.type.startsWith('relay.')) {
         const relay = reduceRelay(state.relay, event)
         return relay === state.relay ? state : { ...state, relay }
+      }
+      if (event.type.startsWith('connector.')) {
+        const connectors = reduceConnector(state.connectors, event)
+        return connectors === state.connectors ? state : { ...state, connectors }
       }
       // Skills own their own slice and their own reducer, for the same reason: the
       // lifecycle table, the version arithmetic and the evidence window are three

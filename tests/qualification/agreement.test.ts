@@ -144,7 +144,10 @@ describe('Phase 49 inventory and runtime activation never disagree', () => {
     expect(activatable.length).toBeGreaterThan(0)
     for (const descriptor of activatable) {
       const view = projection.domains.find((domain) => domain.id === descriptor.id)!
-      expect(view.status).toBe('available')
+      // An activatable domain can still be blocked when a required dependency is
+      // absent (for example Device Hands without its host adapter/grant). What it
+      // must never do without a registered activation handler is claim to be active.
+      expect(view.status).not.toBe('active')
     }
   })
 

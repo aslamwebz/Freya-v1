@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
-import { Settings } from '../../../src/app/screens/Settings'
+import { SettingsOverlay } from '../../../src/app/screens/Settings'
 import { PreferencesStore } from '../../../src/ui-v2/theme/preferences'
 import type { UiSnapshot } from '../../../src/ui-v2/state/contract'
 import { resetCoreMirror, coreMirror } from '../../../src/platform/coreClient'
@@ -44,12 +44,13 @@ function snapshotWith(stopped: boolean): UiSnapshot {
 
 function mountSecurity(stopped: boolean) {
   return render(
-    <>{Settings({
-      snapshot: snapshotWith(stopped),
-      preferences: new PreferencesStore(),
-      category: 'security',
-      onCategory: () => {},
-    }).right}</>,
+    <SettingsOverlay
+      snapshot={snapshotWith(stopped)}
+      preferences={new PreferencesStore()}
+      category="security"
+      onCategory={() => {}}
+      onDone={() => {}}
+    />,
   )
 }
 

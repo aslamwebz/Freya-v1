@@ -75,6 +75,10 @@ async function start(): Promise<void> {
       <App preferences={preferences} dressing={dressing} adapter={adapter} initialLayout={initialLayout} />
     </StrictMode>,
   )
+  // The static boot screen in index.html has covered the time before this
+  // render. React has now committed the live BootScreen, so that cover is
+  // removed here rather than left hiding a shell that failed to mount.
+  document.getElementById('boot-static')?.remove()
 }
 
 void start()

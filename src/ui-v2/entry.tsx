@@ -39,3 +39,5 @@ const adapter: UiAdapter = live ?? createPreviewAdapter()
 if (live) void live.attach()
 
 createRoot(root).render(<StrictMode><App preferences={preferences} windows={windows} adapter={adapter} /></StrictMode>)
+// React has committed; the static pre-JS boot cover in index.html can go.
+document.getElementById('boot-static')?.remove()

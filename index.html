@@ -11,6 +11,132 @@
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      Static boot screen, covering the interval before the renderer's JS loads.
+      Inline styles are allowed by this document's CSP; scripts are not, so this
+      is pure markup: the same two-orbit sigil and wordmark the React boot screen
+      draws, on the same ground as the desktop window's background colour.
+      entry.tsx removes this node once React has mounted.
+    -->
+    <div id="boot-static" aria-hidden="true">
+      <style>
+        #boot-static {
+          position: fixed;
+          inset: 0;
+          z-index: 100;
+          display: grid;
+          place-items: center;
+          align-content: center;
+          gap: 0;
+          background:
+            radial-gradient(ellipse 46% 40% at 50% 44%, rgba(88, 208, 255, 0.13), transparent 68%),
+            radial-gradient(ellipse 70% 55% at 50% 108%, rgba(120, 96, 232, 0.16), transparent 70%),
+            #03080e;
+          color: #dbeaf7;
+          font: 400 14px/1.5 'Segoe UI', system-ui, sans-serif;
+          -webkit-font-smoothing: antialiased;
+        }
+        #boot-static .stage {
+          position: relative;
+          display: grid;
+          place-items: center;
+          width: 168px;
+          height: 168px;
+          margin-bottom: 26px;
+        }
+        #boot-static .halo {
+          position: absolute;
+          inset: 0;
+          border-radius: 50%;
+          background: radial-gradient(circle, rgba(120, 226, 255, 0.16), transparent 62%);
+          animation: boot-static-pulse 2.6s ease-in-out infinite;
+        }
+        #boot-static .sigil {
+          position: relative;
+          display: grid;
+          place-items: center;
+          width: 62px;
+          height: 62px;
+        }
+        #boot-static .sigil i {
+          position: absolute;
+          border-radius: 50%;
+          border: 1.5px solid rgba(140, 232, 255, 0.55);
+        }
+        #boot-static .sigil i:first-child {
+          inset: 0;
+          border-right-color: transparent;
+          border-bottom-color: rgba(180, 150, 255, 0.6);
+          animation: boot-static-spin 3.4s linear infinite;
+        }
+        #boot-static .sigil i:nth-child(2) {
+          inset: 9px;
+          border-color: rgba(180, 150, 255, 0.45);
+          border-left-color: transparent;
+          border-top-color: rgba(120, 255, 226, 0.6);
+          animation: boot-static-spin 2.1s linear infinite reverse;
+        }
+        #boot-static .sigil b {
+          width: 13px;
+          height: 13px;
+          border-radius: 50%;
+          background: #cdf4ff;
+          box-shadow: 0 0 12px #6fe4ff, 0 0 30px #59c8ff80;
+          animation: boot-static-breathe 2.6s ease-in-out infinite;
+        }
+        @keyframes boot-static-spin {
+          to { transform: rotate(360deg); }
+        }
+        @keyframes boot-static-pulse {
+          50% { opacity: 0.55; transform: scale(1.06); }
+        }
+        @keyframes boot-static-breathe {
+          50% { opacity: 0.65; transform: scale(0.86); }
+        }
+        #boot-static .wordmark {
+          margin: 0;
+          font-size: 26px;
+          font-weight: 300;
+          letter-spacing: 0.42em;
+          text-indent: 0.42em;
+          color: #eef6ff;
+        }
+        #boot-static .track {
+          margin-top: 26px;
+          width: min(320px, 52vw);
+          height: 3px;
+          border-radius: 3px;
+          background: rgba(140, 180, 210, 0.18);
+          overflow: hidden;
+        }
+        #boot-static .track span {
+          display: block;
+          height: 100%;
+          border-radius: inherit;
+          background: linear-gradient(90deg, rgba(94, 214, 255, 0.7), rgba(186, 156, 255, 0.85));
+          box-shadow: 0 0 10px rgba(110, 216, 255, 0.5);
+          animation: boot-static-sweep 1.8s ease-in-out infinite;
+        }
+        @keyframes boot-static-sweep {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(300%); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          #boot-static .halo,
+          #boot-static .sigil i,
+          #boot-static .sigil b,
+          #boot-static .track span {
+            animation: none;
+          }
+        }
+      </style>
+      <div class="stage">
+        <span class="halo"></span>
+        <span class="sigil"><i></i><i></i><b></b></span>
+      </div>
+      <h1 class="wordmark">FREYA</h1>
+      <div class="track"><span></span></div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

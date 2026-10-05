@@ -156,28 +156,11 @@ export function Chats({ researchView, busy = false }: { researchView: WorkspaceR
 
   return (
     <div className="chats">
-      <aside className="chats-list" aria-label="Chats">
-        <header className="chats-head">
-          <div className="chats-head-title"><Glyph name="chat" size={18} /><span><b>Chats</b><small>{conversations.length} saved</small></span></div>
-          <button type="button" className="chats-new" disabled={generating} onClick={() => { setNotice(''); void mirror.create() }}>
-            <Glyph name="plus" size={15} /><span>New</span>
-          </button>
-        </header>
-        <div className="chats-sessions">
-          {conversations.length === 0
-            ? <div className="chats-list-empty"><span className="chats-list-empty-ring" aria-hidden="true" /><b>No conversations yet</b><small>Your conversations will live here.</small></div>
-            : conversations.map((conversation) => (
-              <button key={conversation.conversationId} type="button" className="chats-session"
-                aria-current={conversation.conversationId === projection?.activeConversationId ? 'true' : undefined}
-                onClick={() => { setNotice(''); void mirror.read(conversation.conversationId) }}>
-                <span className="chats-session-mark"><Glyph name="chat" size={14} /></span>
-                <span className="chats-session-copy"><b>{conversation.title}</b><small>{conversation.messageCount} message{conversation.messageCount === 1 ? '' : 's'}</small></span>
-                <span className="chats-session-chevron" aria-hidden="true">›</span>
-              </button>
-            ))}
-        </div>
-      </aside>
-
+      {/*
+        The conversation list lives in the left rail, directly under the Chats
+        item (`ChatHistory`), so the history is in the same column as every
+        other list of destinations. This workspace owns the transcript only.
+      */}
       <section className="chats-thread" aria-label="Conversation">
         <header className="chats-workspace-head">
           <div className="chats-workspace-identity">

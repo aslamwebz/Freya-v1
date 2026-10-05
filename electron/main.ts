@@ -1010,7 +1010,11 @@ function registerIpc(): void {
   ipcMain.handle('freya:window:maximize', (event) => {
     const target = BrowserWindow.fromWebContents(event.sender)
     if (!target) return
-    if (target.isMaximized()) target.unmaximize()
+    // Freya launches native-fullscreen, where `isMaximized()` is false and
+    // `maximize()` is a no-op — so leaving fullscreen is the first branch and the
+    // button's first click turns the fullscreen window back into a window.
+    if (target.isFullScreen()) target.setFullScreen(false)
+    else if (target.isMaximized()) target.unmaximize()
     else target.maximize()
   })
   ipcMain.handle('freya:window:close', (event) => {

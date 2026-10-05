@@ -18,13 +18,14 @@ import { Relay } from './screens/Relay'
 import { Focus } from './screens/Focus'
 import { People } from './screens/People'
 import { Memory } from './screens/Memory'
-import { Settings, type SettingsCategory } from './screens/Settings'
+import type { SettingsCategory } from './screens/Settings'
 import { setAppLayout, type AppLayout } from './state/workspace'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
 import { useVoiceDock } from './voice/useVoiceDock'
 import { VoiceSettings } from './voice/VoiceSettings'
+import { BootScreen } from './boot/BootScreen'
 
 interface RailItem {
   readonly id: string
@@ -74,6 +75,7 @@ export function App({
   const [activeEyeSessionId, setActiveEyeSessionId] = useState<string | null>(null)
   const [researchView, setResearchView] = useState<WorkspaceResearchView | null>(null)
   const [voiceTranscriptDraft, setVoiceTranscriptDraft] = useState<{ id: number; text: string } | null>(null)
+  const [booted, setBooted] = useState(false)
 
   const mirror = conversationMirror()
   const research = researchMirror()
@@ -118,14 +120,9 @@ export function App({
                     ? People()
                     : current.id === 'memory'
                       ? Memory()
-                      : current.id === 'settings'
-                        ? Settings({
-                            snapshot,
-                            preferences,
-                            category: settingsCategory,
-                            onCategory: setSettingsCategory,
-                          })
-                        : placeholder(current.label, current.symbol, 'This screen is next in the build.')
+                      /* Settings is rendered by HomeDashboard as a full overlay,
+                         not through the three-column slots. */
+                      : placeholder(current.label, current.symbol, 'This screen is next in the build.')
 
   const send = async (text: string, mode: ComposerMode): Promise<boolean> => {
     if (!text.trim()) return false
@@ -232,6 +229,7 @@ export function App({
   const voice = useVoiceDock(onVoiceTranscript)
 
   return <>
+    {booted ? null : <BootScreen core={snapshot.core} attached={true} onDone={() => setBooted(true)} />}
     <HomeDashboard
       screen={current.id}
       slots={slots}
@@ -239,8 +237,11 @@ export function App({
       generating={generating}
       notice={notice}
       dressing={dressing}
+      preferences={preferences}
       voice={voice.view}
       voiceTranscript={voiceTranscriptDraft}
+      settingsCategory={settingsCategory}
+      onSettingsCategory={setSettingsCategory}
       onOpenDressing={() => setDressingOpen(true)}
       onSend={send}
       onStopResponse={stopResponse}

@@ -16,3 +16,5 @@ createRoot(container).render(
     <App />
   </StrictMode>,
 )
+// React has committed; the static pre-JS boot cover in index.html can go.
+document.getElementById('boot-static')?.remove()

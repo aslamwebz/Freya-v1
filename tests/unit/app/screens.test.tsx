@@ -10,7 +10,7 @@ import { Relay } from '../../../src/app/screens/Relay'
 import { Focus } from '../../../src/app/screens/Focus'
 import { People } from '../../../src/app/screens/People'
 import { Memory } from '../../../src/app/screens/Memory'
-import { Settings } from '../../../src/app/screens/Settings'
+import { SettingsOverlay } from '../../../src/app/screens/Settings'
 import { PreferencesStore } from '../../../src/ui-v2/theme/preferences'
 import type { UiSnapshot } from '../../../src/ui-v2/state/contract'
 
@@ -67,12 +67,13 @@ describe('app tab screens', () => {
   it('mounts Settings with content when no Core is reachable', () => {
     const preferences = new PreferencesStore()
     const { container } = render(
-      <Slots slots={Settings({
-        snapshot: NO_CORE,
-        preferences,
-        category: 'appearance',
-        onCategory: () => {},
-      })} />,
+      <SettingsOverlay
+        snapshot={NO_CORE}
+        preferences={preferences}
+        category="appearance"
+        onCategory={() => {}}
+        onDone={() => {}}
+      />,
     )
     expect((container.textContent ?? '').trim().length).toBeGreaterThan(0)
   })

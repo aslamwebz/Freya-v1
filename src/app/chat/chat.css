@@ -448,3 +448,27 @@
   .chats[data-browser-open] { grid-template-columns:minmax(0,.8fr) minmax(380px,1.2fr); }
   .chats[data-browser-open] .chats-list { display:none; }
 }
+
+
+/* Eye discovery results are product results, not a link dump. Video results get a
+   recognisable play-card treatment; every card still opens through Freya's browser
+   workspace rather than escaping directly from generated/search content. */
+.chats-eye-result-card {
+  width:100%; text-align:left; border:0; background:transparent; color:inherit;
+  cursor:pointer; font:inherit;
+}
+.chats-eye-result-card[data-media='video'] {
+  margin:4px 0; padding:10px !important; border:1px solid #5c91ab4f !important;
+  border-radius:10px; background:linear-gradient(135deg,#102b3ca6,#091724a8) !important;
+}
+.chats-eye-result-card[data-media='video']:hover {
+  border-color:#68d9ef83 !important;
+  background:linear-gradient(135deg,#12364bad,#0b1d2db8) !important;
+}
+.chats-eye-result-card[data-media='video'] .chats-eye-rank {
+  color:#b8f7ff; border-color:#66dced78; background:#12384baf;
+}
+.chats-eye-open {
+  display:inline-flex; align-items:center; gap:4px; align-self:center;
+  color:#7bdff4; font-size:8px; white-space:nowrap;
+}

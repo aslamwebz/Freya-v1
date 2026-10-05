@@ -94,10 +94,20 @@ function ResearchWorkspace({ view, onOpenLink }: { view: WorkspaceResearchView; 
               <summary>{collection} <b>{rows.length}</b></summary>
               <div className="chats-eye-results">
                 {rows.map((result) => (
-                  <button key={result.resultId} type="button" onClick={() => onOpenLink(result.url)}>
-                    <span className="chats-eye-rank">{result.rank}</span>
-                    <span><b>{result.title}</b><small>{result.sourceDomain} · {result.confidence}</small><em>{result.snippet}</em></span>
-                    <Glyph name="arrow" size={13} />
+                  <button
+                    key={result.resultId}
+                    type="button"
+                    className="chats-eye-result-card"
+                    data-media={result.mediaType}
+                    onClick={() => onOpenLink(result.url)}
+                  >
+                    <span className="chats-eye-rank">{result.mediaType === 'video' ? '▶' : result.rank}</span>
+                    <span>
+                      <b>{result.title}</b>
+                      <small>{result.sourceDomain} · {result.confidence}</small>
+                      <em>{result.snippet}</em>
+                    </span>
+                    <span className="chats-eye-open"><Glyph name="world" size={12} /> Open</span>
                   </button>
                 ))}
               </div>

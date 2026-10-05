@@ -7,6 +7,7 @@ import { hostBridge } from '../platform/host'
 import { sendMessage } from '../ui-v2/chat/sendMessage'
 import { researchMirror } from '../platform/researchClient'
 import { routeEyePrompt, type ComposerMode, type WorkspaceResearchView } from './chat/modes'
+import { routePromptIntent } from './chat/intent'
 import type { ScreenSlots } from './screens/Home'
 import { HomeDashboard } from './screens/HomeDashboard'
 import { Mind } from './screens/Mind'
@@ -139,7 +140,22 @@ export function App({
     setNotice('')
     setScreen('chat')
 
-    if (mode === 'chat') {
+    // The owner should not have to choose a tool for a request Freya already
+    // understands. Explicit composer modes always win. In ordinary Chat, only
+    // high-confidence discovery/deep-research shapes are promoted automatically;
+    // everything else stays a normal conversation instead of spawning questions.
+    const inferred = mode === 'chat'
+      ? routePromptIntent(text, { activeEyeSession: activeEyeSessionId !== null })
+      : null
+    const effectiveMode: ComposerMode =
+      inferred?.kind === 'deep-research'
+        ? 'deep-research'
+        : inferred?.kind === 'eye-new' || inferred?.kind === 'eye-follow-up'
+          ? 'eye'
+          : mode
+    const autoNewEye = mode === 'chat' && inferred?.kind === 'eye-new'
+
+    if (effectiveMode === 'chat') {
       setResearchView(null)
       const result = await sendMessage(mirror, conversation?.activeConversationId ?? null, text)
       setNotice(result.ok ? '' : result.notice)
@@ -147,11 +163,11 @@ export function App({
     }
 
     setResearchBusy(true)
-    setActiveResearchMode(mode)
+    setActiveResearchMode(effectiveMode)
     try {
-      if (mode === 'deep-research') {
+      if (effectiveMode === 'deep-research') {
         const outcome = await research.research(text)
-        setResearchView({ mode, outcome })
+        setResearchView({ mode: 'deep-research', outcome })
         if (outcome.operation === 'refused') {
           setNotice(outcome.reason ?? 'Deep Research was refused.')
           return false
@@ -159,7 +175,12 @@ export function App({
         return true
       }
 
-      const route = routeEyePrompt(activeEyeSessionId, text)
+      // A clear standalone discovery request starts a new Eye session even when
+      // another search exists. Short refinements ("only YouTube", "make it 50")
+      // deliberately stay on the active session.
+      const route = autoNewEye
+        ? { kind: 'create' as const, text: text.trim() }
+        : routeEyePrompt(activeEyeSessionId, text)
       let outcome = route.kind === 'create'
         ? await research.createSession(route.text)
         : await research.followUpSession(route.sessionId, route.text)
@@ -174,7 +195,7 @@ export function App({
       setResearchView({ mode: 'eye', outcome })
 
       if (outcome.ambiguous) {
-        setNotice("Freya's Eye needs a little more context before changing this search.")
+        setNotice("Freya's Eye needs one missing detail before changing this existing search.")
         return true
       }
 

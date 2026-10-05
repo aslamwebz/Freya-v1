@@ -151,7 +151,7 @@ describe('A — a transcript is a string, never a directive', () => {
     // foreground grant, and nothing in it carries a name a transcript supplied.
     const { ownerAuthority } = await import('../../../core/testing')
     const grants = ownerAuthority(c).grants()
-    expect(grants.map((grant) => grant.grantId)).not.toContain('g1')
+    expect(grants.map((grant) => grant.id)).not.toContain('g1')
     expect(provider.calls).toBe(1)
   })
 

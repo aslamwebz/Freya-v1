@@ -35,10 +35,19 @@ import type {
  * A single process appends to one journal. There is no lock, no merge and no
  * second writer, because the runtime that owns it is opened once at startup and
  * closed at shutdown — the same single-owner discipline the rest of the host uses.
+ *
+ * ## Why it is parameterised on the event type
+ *
+ * Phase 51 (the dual-browser runtime) writes its own entries into **this same file**
+ * rather than opening a second one, because two journals would mean two integrity
+ * chains and a restart that believed one of them could be in a state the other
+ * contradicted. The generic parameter is what lets it do that without a cast and
+ * without loosening `DeviceHandsEventType` for the runtime that owns the vocabulary:
+ * the *file* is generic, the *runtime* still appends only `hands.*`.
  */
-export interface DeviceHandsJournal {
+export interface DeviceHandsJournal<E extends string = DeviceHandsEventType> {
   /** Durable before it resolves. A refused append rejects rather than swallowing. */
-  append(type: DeviceHandsEventType, payload: DeviceHandsPayload): Promise<void>
+  append(type: E, payload: DeviceHandsPayload): Promise<void>
   /** The whole durable journal, in sequence order. Read once, when the phase opens. */
   replay(): Promise<readonly DeviceHandsJournalEntry[]>
   /** Whether every line read back chained. False refuses every new action. */
@@ -94,10 +103,10 @@ function canonicalPayload(payload: unknown): string {
  * trusted prefix is returned and {@link DeviceHandsJournal.trustworthy} reports
  * false, so the runtime folds what is real and then refuses to act on it.
  */
-export function openDeviceHandsJournal(
+export function openDeviceHandsJournal<E extends string = DeviceHandsEventType>(
   path: string,
   now: () => string = () => new Date().toISOString(),
-): DeviceHandsJournal {
+): DeviceHandsJournal<E> {
   const trusted: DeviceHandsJournalEntry[] = []
   let trustworthy = true
   let lastHash = GENESIS
@@ -153,7 +162,7 @@ export function openDeviceHandsJournal(
   }
 
   return {
-    async append(type: DeviceHandsEventType, payload: DeviceHandsPayload): Promise<void> {
+    async append(type: E, payload: DeviceHandsPayload): Promise<void> {
       const recordedAt = now()
       const entry: DeviceHandsJournalEntry = { type, recordedAt, payload }
       const prev = lastHash

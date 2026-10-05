@@ -28,6 +28,11 @@ interface VisualState {
 }
 
 const SIGNAL_EVENT = 'freya:orb'
+
+export function signalFreyaOrb(signal: FreyaOrbSignal): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent<FreyaOrbSignal>(SIGNAL_EVENT, { detail: signal }))
+}
 const POINTS = 2600
 const TAU = Math.PI * 2
 
@@ -523,8 +528,8 @@ export const LiveOrb = memo(function LiveOrb({ state, energy = 0 }: Props) {
       camera.updateProjectionMatrix()
       renderer.render(scene, camera)
     }
-    const observer = new ResizeObserver(resize)
-    observer.observe(host)
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize)
+    observer?.observe(host)
     resize()
 
     const render = (now: number): void => {
@@ -602,7 +607,7 @@ export const LiveOrb = memo(function LiveOrb({ state, energy = 0 }: Props) {
 
     return () => {
       cancelAnimationFrame(raf)
-      observer.disconnect()
+      observer?.disconnect()
       window.removeEventListener(SIGNAL_EVENT, onSignal)
       window.removeEventListener('pointermove', onPointer)
       geometry.dispose()

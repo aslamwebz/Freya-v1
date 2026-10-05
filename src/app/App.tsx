@@ -154,10 +154,10 @@ export function App({
         return true
       }
 
-      const explicitNewSearch = activeEyeSessionId === null || /^\s*(?:please\s+)?(?:find|search|get|show)\b/i.test(text)
-      let outcome = explicitNewSearch
-        ? await research.createSession(text)
-        : await research.followUpSession(activeEyeSessionId, text)
+      const route = routeEyePrompt(activeEyeSessionId, text)
+      let outcome = route.kind === 'create'
+        ? await research.createSession(route.text)
+        : await research.followUpSession(route.sessionId, route.text)
 
       if (outcome.operation === 'refused' || !outcome.session) {
         setResearchView({ mode: 'eye', outcome })

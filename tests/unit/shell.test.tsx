@@ -5,6 +5,7 @@ import type { ConversationProjection, VoiceProjection } from '../../core/protoco
 import { App } from '../../src/ui/App'
 import { manager } from '../../src/ui/boot'
 import { shellStore } from '../../src/ui/store'
+import { absentVoiceProjection } from '../core/voice/fixture'
 
 /**
  * The shell boots against the browser workspace store in jsdom, which is the
@@ -53,6 +54,7 @@ function installCoreBridge(over: {
 } = {}): void {
   const listeners: ((status: unknown) => void)[] = []
   const conversationListeners: ((projection: unknown) => void)[] = []
+  const voiceListeners: ((projection: unknown) => void)[] = []
   window.freyaHost = {
     isDesktop: true,
     getRuntimeInfo: vi.fn(),
@@ -82,6 +84,20 @@ function installCoreBridge(over: {
       }
     }) as never,
     coreVoice: (over.coreVoice ?? (async () => VOICE)) as never,
+    // Phase 45 gave voice its own push channels rather than folding them into the
+    // conversation projection, so the fake bridge declares them too. Without these
+    // the microphone button cannot attach, and a control that cannot attach is not
+    // the control the rest of this file thinks it is exercising.
+    onCoreVoice: ((handler: (projection: unknown) => void) => {
+      voiceListeners.push(handler)
+      return () => {
+        const index = voiceListeners.indexOf(handler)
+        if (index >= 0) voiceListeners.splice(index, 1)
+      }
+    }) as never,
+    onCoreVoiceTranscript: (() => () => {}) as never,
+    onVoiceOutput: (() => () => {}) as never,
+    reportVoiceCapabilities: vi.fn() as never,
     // Personality, for the expression cue in the status bar. The bridge
     // exposes the pull and the subscription and nothing that writes, so the
     // shell exercises both rather than discovering they are missing.
@@ -103,20 +119,27 @@ const CONVERSATION: ConversationProjection = {
   faults: [],
 }
 
-/** No local speech engine — the state most machines are actually in. */
-const VOICE: VoiceProjection = {
+/** No speech engine — the state most machines are actually in. */
+const VOICE: VoiceProjection = absentVoiceProjection({
   transcription: {
     available: false,
     engine: null,
-    detail: 'No local speech-to-text engine is configured.',
+    kind: 'local',
+    availability: 'configuration-required',
+    // The sentence Core actually builds for an unconfigured engine. The fixture
+    // quotes it rather than paraphrasing, so a tooltip assertion here is testing
+    // the real wording a person would read.
+    detail:
+      'No speech-to-text engine is configured. Capture works, and recordings are discarded rather than sent anywhere.',
   },
-  synthesis: { available: false, engine: null, detail: 'No local text-to-speech engine is configured.' },
-  capturing: false,
-  sessionId: null,
-  limits: { maxDurationMs: 30_000, maxAudioBytes: 4_194_304, format: 'pcm-s16le' },
-  localOnly: true,
-  faults: [],
-}
+  synthesis: {
+    available: false,
+    engine: null,
+    kind: 'platform',
+    availability: 'unavailable',
+    detail: 'No speech output engine is configured.',
+  },
+})
 
 /** A status with nothing claimed about it, so tests can assert against it. */
 const CORE_STATUS: CoreStatus = {
@@ -492,10 +515,15 @@ describe('Freya shell', () => {
     // window says so. What matters here is that the control is *press and hold*:
     // there is no way to leave a microphone open by clicking once and walking away.
     expect(mic).toHaveAttribute('aria-pressed', 'false')
-    // The tooltip says the engine is missing rather than the generic line, because
-    // a person about to press this needs to know the recording will be discarded.
-    expect(mic).toHaveAttribute('title', expect.stringMatching(/no local speech engine/i))
-    expect(mic).toHaveAttribute('title', expect.stringMatching(/never uploaded/i))
+    // The tooltip quotes Core's own reason rather than a fixed line, because a
+    // person about to press this needs to know the recording will be discarded.
+    // Phase 45 made that sentence engine-specific — `configuration-required` is a
+    // different fact from "no engine at all" — so the assertion follows Core.
+    expect(mic).toHaveAttribute('title', expect.stringMatching(/no speech-to-text engine/i))
+    expect(mic).toHaveAttribute('title', expect.stringMatching(/nothing is uploaded/i))
+    // And the state is Core's, not a local flag: this window has no Core, so the
+    // button reports it cannot listen rather than pretending it is ready.
+    expect(mic).toHaveAttribute('data-voice-state')
 
     // And it is not a toggle dressed up as a push-to-talk: a click alone does
     // nothing, because `pointerdown` is what opens a device.

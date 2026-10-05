@@ -20,8 +20,8 @@ import './chat.css'
 export function ChatHistory({ onOpen }: { onOpen?: () => void }) {
   const mirror = conversationMirror()
   const projection = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
-  // The list folds like the reference's rail groups: the chevron on the group
-  // head is the one control, and the conversations are the thing it hides.
+  // The list folds like the reference's rail groups, except the title itself is
+  // the control: click it to show and hide the conversations.
   const [open, setOpen] = useState(true)
 
   useEffect(() => {
@@ -45,35 +45,28 @@ export function ChatHistory({ onOpen }: { onOpen?: () => void }) {
   return (
     <div className="chats-history" data-collapsed={!open || undefined}>
       <header className="chats-history-head">
-        <button type="button" className="chats-history-title" aria-label="Open the Chats workspace" onClick={() => onOpen?.()}>
-          <Glyph name="chat" size={16} />
+        {/* The title is the one control: it shows and hides the conversations.
+            New chat stays beside it. */}
+        <button type="button" className="chats-history-title" aria-expanded={open}
+          aria-label={open ? 'Hide the conversation list' : 'Show the conversation list'}
+          onClick={() => setOpen((value) => !value)}>
+          <Glyph name="chat" size={16} style={open ? undefined : { opacity: 0.55 }} />
           <span>Chats</span>
         </button>
-        <span className="chats-history-tools">
-          <button
-            type="button"
-            className="chats-new"
-            disabled={busy}
-            aria-label="Start a new conversation"
-            title={busy ? 'Freya is answering — stop the response before starting a new conversation' : 'Start a new conversation'}
-            onClick={() => {
-              void mirror.create()
-              onOpen?.()
-            }}
-          >
-            <Glyph name="plus" size={12} />
-            <span>New</span>
-          </button>
-          <button
-            type="button"
-            className="chats-history-fold"
-            aria-expanded={open}
-            aria-label={open ? 'Hide the conversation list' : 'Show the conversation list'}
-            onClick={() => setOpen((value) => !value)}
-          >
-            <Glyph name="chevron" size={13} style={open ? undefined : { transform: 'rotate(-90deg)' }} />
-          </button>
-        </span>
+        <button
+          type="button"
+          className="chats-new"
+          disabled={busy}
+          aria-label="Start a new conversation"
+          title={busy ? 'Freya is answering — stop the response before starting a new conversation' : 'Start a new conversation'}
+          onClick={() => {
+            void mirror.create()
+            onOpen?.()
+          }}
+        >
+          <Glyph name="plus" size={12} />
+          <span>New</span>
+        </button>
       </header>
 
       {open ? (conversations.length === 0 ? (

@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConversationProjection } from '../../core/protocol/conversation'
 import type { CoreCommandResult } from '../../core/protocol/core-protocol'
 import {
-  conversationMirror,
   createConversationMirror,
   resetConversationMirror,
 } from '../../src/platform/conversationClient'
@@ -46,7 +45,7 @@ function mount(over: Partial<ConversationProjection> = {}): void {
     onCoreConversation: (_listener: (p: ConversationProjection) => void) => () => {},
     coreSubmit: async (command: string, payload?: unknown): Promise<CoreCommandResult> => {
       submitted.push({ command, payload })
-      return { requestId: 'r', ok: true, conversation: null }
+      return { requestId: 'r', ok: true }
     },
   }
 }

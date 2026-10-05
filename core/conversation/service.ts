@@ -78,6 +78,10 @@ export type TurnResult =
 
 export type CancelResult = { ok: true; cancelled: boolean }
 
+export type ArchiveResult =
+  | { ok: true; archived: boolean }
+  | { ok: false; reason: string }
+
 export class ConversationService {
   private readonly fabric: EventFabric
   private readonly store: ConversationStore
@@ -211,6 +215,49 @@ export class ConversationService {
     } catch (error) {
       return { ok: false, reason: describeStore(error) }
     }
+  }
+
+  /**
+   * Close a conversation without destroying its encrypted history.
+   *
+   * A running turn is scoped-cancelled first. Its eventual terminal bookkeeping
+   * remains attached to this conversation and can never land in whichever chat the
+   * owner opens next. Archiving is metadata only: no model call and no authority
+   * widening.
+   */
+  async archive(conversationId: string): Promise<ArchiveResult> {
+    const active = this.mind.activeTurn(conversationId)
+    if (active !== null) {
+      this.mind.cancelTurn(active.turnId, 'the owner closed this conversation')
+    }
+
+    let record
+    try {
+      record = await this.store.readConversation(conversationId)
+    } catch (error) {
+      return { ok: false, reason: describeStore(error) }
+    }
+    if (record === null) return { ok: true, archived: false }
+
+    const at = this.now().toISOString()
+    try {
+      await this.store.putConversation({
+        ...record.conversation,
+        updatedAt: at,
+        archivedAt: at,
+      })
+    } catch (error) {
+      return { ok: false, reason: describeStore(error) }
+    }
+
+    await this.fabric.append(
+      'conversation.archived',
+      { conversationId, titleLength: record.conversation.title.length },
+      { actor: 'owner', correlationId: conversationId },
+    )
+    if (this.activeConversationId === conversationId) this.activeConversationId = null
+    this.publish()
+    return { ok: true, archived: true }
   }
 
   /**

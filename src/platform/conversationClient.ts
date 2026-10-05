@@ -36,6 +36,7 @@ export interface ConversationMirror {
   create(): Promise<ConversationCommandOutcome>
   list(): Promise<ConversationCommandOutcome>
   read(conversationId: string): Promise<ConversationCommandOutcome>
+  archive(conversationId: string): Promise<ConversationCommandOutcome>
   submitTurn(conversationId: string, text: string): Promise<ConversationCommandOutcome>
   cancelTurn(turnId: string): Promise<ConversationCommandOutcome>
 
@@ -141,6 +142,7 @@ export function createConversationMirror(): ConversationMirror {
     create: () => submit('conversation.create'),
     list: () => submit('conversation.list'),
     read: (conversationId) => submit('conversation.read', { conversationId }),
+    archive: (conversationId) => submit('conversation.archive', { conversationId }),
 
     submitTurn: (conversationId, text) => submit('conversation.turn.submit', { conversationId, text }),
 

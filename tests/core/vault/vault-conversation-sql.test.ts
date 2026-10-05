@@ -116,6 +116,36 @@ describe('VaultConversationStore', () => {
     })
   })
 
+  it('hides an archived conversation while keeping its relational rows', async () => {
+    const store = new VaultConversationStore(harnessVault())
+    await store.putConversation({
+      conversationId: 'c1',
+      title: 'Archive me',
+      createdAt: '2026-10-05T12:00:00.000Z',
+      updatedAt: '2026-10-05T12:00:00.000Z',
+    })
+    await store.appendMessage({
+      messageId: 'm1',
+      conversationId: 'c1',
+      role: 'user',
+      content: 'history stays',
+      createdAt: '2026-10-05T12:00:01.000Z',
+      turnId: 't1',
+    })
+    await store.putConversation({
+      conversationId: 'c1',
+      title: 'Archive me',
+      createdAt: '2026-10-05T12:00:00.000Z',
+      updatedAt: '2026-10-05T12:02:00.000Z',
+      archivedAt: '2026-10-05T12:02:00.000Z',
+    })
+
+    expect(await store.listConversations(10)).toEqual([])
+    expect(await store.readConversation('c1')).toBeNull()
+    const row = connection.prepare('SELECT content FROM chat_messages WHERE message_id = ?').get('m1') as { content: string }
+    expect(row.content).toBe('history stays')
+  })
+
   it('recovers a pending turn as interrupted and never invents an answer', async () => {
     const store = new VaultConversationStore(harnessVault())
     await store.putConversation({

@@ -42,12 +42,13 @@ export class VaultConversationStore implements ConversationStore {
     try {
       this.vault.transaction((tx) => {
         tx.run(
-          `INSERT INTO chat_conversations (conversation_id, title, created_at, updated_at)
-           VALUES (?, ?, ?, ?)
+          `INSERT INTO chat_conversations (conversation_id, title, created_at, updated_at, archived_at)
+           VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(conversation_id) DO UPDATE SET
              title = excluded.title,
-             updated_at = excluded.updated_at`,
-          [value.conversationId, value.title, value.createdAt, value.updatedAt],
+             updated_at = excluded.updated_at,
+             archived_at = excluded.archived_at`,
+          [value.conversationId, value.title, value.createdAt, value.updatedAt, value.archivedAt ?? null],
         )
       })
     } catch {
@@ -70,6 +71,7 @@ export class VaultConversationStore implements ConversationStore {
               WHERE t.conversation_id = c.conversation_id
               ORDER BY t.started_at DESC, t.turn_id DESC LIMIT 1) AS last_turn_outcome
          FROM chat_conversations c
+         WHERE c.archived_at IS NULL
          ORDER BY c.updated_at DESC, c.conversation_id ASC
          LIMIT ?`,
         [bounded],
@@ -87,7 +89,7 @@ export class VaultConversationStore implements ConversationStore {
     const id = validateId(conversationId, 'conversation')
     try {
       const row = this.vault.get<ConversationRow>(
-        'SELECT conversation_id, title, created_at, updated_at FROM chat_conversations WHERE conversation_id = ?',
+        'SELECT conversation_id, title, created_at, updated_at, archived_at FROM chat_conversations WHERE conversation_id = ? AND archived_at IS NULL',
         [id],
       )
       if (row === undefined) return null
@@ -283,6 +285,7 @@ interface ConversationRow {
   title: string
   created_at: string
   updated_at: string
+  archived_at: string | null
 }
 
 interface SummaryRow extends ConversationRow {
@@ -319,6 +322,7 @@ function decodeConversation(row: ConversationRow): Conversation {
     title: row.title,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    archivedAt: row.archived_at,
   })
 }
 
@@ -376,6 +380,7 @@ function validateConversation(value: Conversation): Conversation {
   }
   validateTime(value.createdAt, 'conversation creation')
   validateTime(value.updatedAt, 'conversation update')
+  if (value.archivedAt != null) validateTime(value.archivedAt, 'conversation archive')
   return { ...value }
 }
 

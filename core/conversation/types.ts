@@ -50,6 +50,11 @@ export interface Conversation {
   title: string
   createdAt: string
   updatedAt: string
+  /**
+   * Null/absent while visible. Closing a chat archives it instead of destroying
+   * encrypted history, so recovery and audit never depend on a destructive UI act.
+   */
+  archivedAt?: string | null
 }
 
 /** The list view. Enough to render a picker, nothing that needs decrypting later. */

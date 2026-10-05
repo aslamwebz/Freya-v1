@@ -77,6 +77,7 @@ export class MemoryConversationStore implements ConversationStore {
   async listConversations(limit: number): Promise<ConversationSummary[]> {
     this.assertOpen()
     return [...this.conversations.values()]
+      .filter((conversation) => conversation.archivedAt == null)
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
       .slice(0, Math.max(0, limit))
       .map((conversation) => this.summarise(conversation))
@@ -85,7 +86,7 @@ export class MemoryConversationStore implements ConversationStore {
   async readConversation(conversationId: string): Promise<ConversationRecord | null> {
     this.assertOpen()
     const conversation = this.conversations.get(conversationId)
-    if (!conversation) return null
+    if (!conversation || conversation.archivedAt != null) return null
     return {
       conversation: { ...conversation },
       messages: [...(this.messages.get(conversationId) ?? [])],

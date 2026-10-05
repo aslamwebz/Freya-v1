@@ -482,6 +482,22 @@ describe('the memory store', () => {
     expect(store.mode).toBe('ephemeral')
     expect(store.faultReason).toBe('no key')
   })
+
+  it('archives a conversation out of the visible list without destroying its body', async () => {
+    const store = new MemoryConversationStore({ mode: 'memory' })
+    const original = conversation()
+    await store.putConversation(original)
+    await store.appendMessage(message('m1', 'user', 'keep this encrypted history'))
+    await store.putConversation({
+      ...original,
+      updatedAt: '2026-03-01T13:00:00.000Z',
+      archivedAt: '2026-03-01T13:00:00.000Z',
+    })
+
+    expect(await store.listConversations(10)).toEqual([])
+    expect(await store.readConversation(original.conversationId)).toBeNull()
+    expect(store.snapshot().messages.map((row) => row.content)).toContain('keep this encrypted history')
+  })
 })
 
 describe('ciphertext is not plaintext with extra steps', () => {

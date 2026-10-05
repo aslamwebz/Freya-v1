@@ -14,7 +14,7 @@ import type { NativeConnection } from './binding'
  * with no extra table to bootstrap.
  */
 
-export const VAULT_SCHEMA_VERSION = 3
+export const VAULT_SCHEMA_VERSION = 4
 
 export interface VaultMigrationContext {
   exec(sql: string): void
@@ -254,6 +254,16 @@ export const VAULT_MIGRATIONS: readonly VaultMigration[] = Object.freeze([
       )
       context.exec(
         'CREATE INDEX IF NOT EXISTS chat_turns_conversation ON chat_turns (conversation_id, started_at, turn_id)',
+      )
+    },
+  },
+  {
+    version: 4,
+    name: 'conversation-archive',
+    up: (context) => {
+      context.exec('ALTER TABLE chat_conversations ADD COLUMN archived_at TEXT')
+      context.exec(
+        'CREATE INDEX IF NOT EXISTS chat_conversations_visible ON chat_conversations (archived_at, updated_at DESC, conversation_id)',
       )
     },
   },

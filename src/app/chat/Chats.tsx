@@ -154,6 +154,28 @@ export function Chats({ researchView, busy = false }: { researchView: WorkspaceR
     if (log) log.scrollTop = log.scrollHeight
   }, [messages.length, generating])
 
+  const archiveConversation = async (conversationId: string) => {
+    setNotice('')
+    const wasActive = projection?.activeConversationId === conversationId
+    const remaining = conversations.filter((conversation) => conversation.conversationId !== conversationId)
+    const outcome = await mirror.archive(conversationId)
+    if (outcome.operation === 'refused') {
+      setNotice(outcome.reason)
+      return
+    }
+    if (outcome.operation !== 'archived') {
+      setNotice('Freya Core did not archive that conversation.')
+      return
+    }
+    if (!wasActive) return
+    const next = remaining[0]
+    if (next) {
+      await mirror.read(next.conversationId)
+    } else {
+      await mirror.create()
+    }
+  }
+
   return (
     <div className="chats">
       <aside className="chats-list" aria-label="Chats">
@@ -167,13 +189,20 @@ export function Chats({ researchView, busy = false }: { researchView: WorkspaceR
           {conversations.length === 0
             ? <div className="chats-list-empty"><span className="chats-list-empty-ring" aria-hidden="true" /><b>No conversations yet</b><small>Your conversations will live here.</small></div>
             : conversations.map((conversation) => (
-              <button key={conversation.conversationId} type="button" className="chats-session"
-                aria-current={conversation.conversationId === projection?.activeConversationId ? 'true' : undefined}
-                onClick={() => { setNotice(''); void mirror.read(conversation.conversationId) }}>
-                <span className="chats-session-mark"><Glyph name="chat" size={14} /></span>
-                <span className="chats-session-copy"><b>{conversation.title}</b><small>{conversation.messageCount} message{conversation.messageCount === 1 ? '' : 's'}</small></span>
-                <span className="chats-session-chevron" aria-hidden="true">›</span>
-              </button>
+              <div key={conversation.conversationId} className="chats-session-row"
+                data-active={conversation.conversationId === projection?.activeConversationId || undefined}>
+                <button type="button" className="chats-session"
+                  aria-current={conversation.conversationId === projection?.activeConversationId ? 'true' : undefined}
+                  onClick={() => { setNotice(''); void mirror.read(conversation.conversationId) }}>
+                  <span className="chats-session-mark"><Glyph name="chat" size={14} /></span>
+                  <span className="chats-session-copy"><b>{conversation.title}</b><small>{conversation.messageCount} message{conversation.messageCount === 1 ? '' : 's'}</small></span>
+                  <span className="chats-session-chevron" aria-hidden="true">›</span>
+                </button>
+                <button type="button" className="chats-session-close"
+                  aria-label={`Close ${conversation.title}`}
+                  title="Close conversation"
+                  onClick={() => { void archiveConversation(conversation.conversationId) }}>×</button>
+              </div>
             ))}
         </div>
       </aside>

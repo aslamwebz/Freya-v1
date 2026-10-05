@@ -5890,6 +5890,33 @@ private async buildForge(): Promise<void> {
           }
         }
 
+        case 'conversation.archive': {
+          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+          const conversationId = readString(envelope.payload, 'conversationId')
+          if (conversationId === null) {
+            return { requestId, ok: false, refusal: { reason: 'conversationId is missing' } }
+          }
+          const result = await this.conversations.archive(conversationId)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              conversation: { operation: 'refused', reason: result.reason },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            conversation: { operation: 'archived', archived: result.archived },
+          }
+        }
+
         case 'conversation.turn.submit': {
           // The one command that spends money, and it is reached from a window.
           //

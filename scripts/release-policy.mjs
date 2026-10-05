@@ -23,9 +23,10 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // Raised from 2.1MB for the Phase 43 browser-extension host, which mounts against
   // the Phase 42 Device Hands seam and so lands in the main process rather than in a
   // separate bundle. Phase 50 then added persistent Eye sessions and bounded parallel
-  // Deep Research to Core; CI measures main.cjs at 2,138,279 bytes. Keep only narrow,
+  // Deep Research. Phase 44 adds the connector engine/runtime and host composition;
+  // CI measures the reconciled main.cjs at 2,237,259 bytes. Keep only narrow,
   // explicit headroom over that measured artifact rather than absorbing future growth.
-  mainBytes: 2_150_000,
+  mainBytes: 2_250_000,
   // Phase 44 adds connector projection/commands to the preload bridge; the
   // completed branch measured ~129KB, so retain narrow explained headroom.
   preloadBytes: 132_000,

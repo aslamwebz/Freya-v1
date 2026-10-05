@@ -22,6 +22,8 @@
 
 import type {
   RelayCalendarEvent,
+  RelayDriveFile,
+  RelayDriveFileInput,
   RelayEmailDraft,
   RelayEmailMessage,
   RelayEmailSend,
@@ -31,6 +33,8 @@ import type {
   RelayGitHubPrInput,
   RelayGitHubRepoRef,
   RelayReadQuery,
+  RelayTelegramMessage,
+  RelayTelegramMessageInput,
 } from './types'
 
 /**
@@ -97,11 +101,37 @@ export interface ExternalAdapter {
   invoke(input: RelayExternalInvoke): Promise<{ data: unknown }>
 }
 
+/**
+ * The Google Drive port. Two methods: bounded read, and create.
+ *
+ * `createFile` receives bounded content once, exactly as the email port does.
+ * There is no recursive sync, no folder walk and no delete — the vocabulary
+ * does not contain them, so they cannot be smuggled.
+ */
+export interface DriveAdapter {
+  listFiles(query: RelayReadQuery): Promise<readonly RelayDriveFile[]>
+  createFile(input: RelayDriveFileInput): Promise<{ fileId: string }>
+}
+
+/**
+ * The Telegram port. Two methods: read configured chats, send to one.
+ *
+ * `listMessages` takes an explicit, allowlisted `chatId`; there is no chat or
+ * contact enumeration in the port, because enumeration is how a bot turns into
+ * a directory of everyone its owner knows.
+ */
+export interface TelegramAdapter {
+  listMessages(chatId: string, query: RelayReadQuery): Promise<readonly RelayTelegramMessage[]>
+  sendMessage(input: RelayTelegramMessageInput): Promise<{ messageId: string }>
+}
+
 /** The whole adapter set the host can supply. Any part may be absent. */
 export interface RelayAdapterSet {
   readonly email?: EmailAdapter
   readonly calendar?: CalendarAdapter
   readonly github?: GitHubAdapter
+  readonly drive?: DriveAdapter
+  readonly telegram?: TelegramAdapter
   /** Named external connectors. Registering one widens nothing by itself. */
   readonly external?: Readonly<Record<string, ExternalAdapter>>
 }
@@ -136,6 +166,9 @@ export class FakeEmailAdapter implements EmailAdapter {
 
   async listMessages(query: RelayReadQuery): Promise<readonly RelayEmailMessage[]> {
     this.maybeFail()
+    if (query.messageId !== undefined && query.messageId !== null) {
+      return this.messages.filter((message) => message.messageId === query.messageId).slice(0, 1)
+    }
     const needle = query.query === null ? null : query.query.toLowerCase()
     const filtered = needle === null
       ? [...this.messages]
@@ -338,5 +371,111 @@ export class FakeExternalAdapter implements ExternalAdapter {
   /** Test seam: the invocations the adapter received. */
   get received(): readonly RelayExternalInvoke[] {
     return this.invocations
+  }
+}
+
+/** A deterministic Google Drive adapter. */
+export class FakeDriveAdapter implements DriveAdapter {
+  private files: RelayDriveFile[] = []
+  private readonly created: RelayDriveFileInput[] = []
+  private remainingTransientFailures = 0
+
+  constructor(initial: readonly RelayDriveFile[] = [], options: { failTimes?: number } = {}) {
+    this.files = [...initial]
+    this.remainingTransientFailures = options.failTimes ?? 0
+  }
+
+  private maybeFail(): void {
+    if (this.remainingTransientFailures > 0) {
+      this.remainingTransientFailures -= 1
+      throw new RelayTransientError('the fake Drive connector timed out')
+    }
+  }
+
+  async listFiles(query: RelayReadQuery): Promise<readonly RelayDriveFile[]> {
+    this.maybeFail()
+    if (query.messageId !== undefined && query.messageId !== null) {
+      return this.files.filter((file) => file.fileId === query.messageId).slice(0, 1)
+    }
+    const needle = query.query === null ? null : query.query.toLowerCase()
+    const filtered = needle === null
+      ? [...this.files]
+      : this.files.filter((file) => file.name.toLowerCase().includes(needle))
+    return filtered.slice(0, query.limit)
+  }
+
+  async createFile(input: RelayDriveFileInput): Promise<{ fileId: string }> {
+    this.maybeFail()
+    const fileId = `file-${this.files.length + 1}`
+    this.files.push({
+      fileId,
+      name: input.name,
+      mimeType: input.mimeType,
+      modifiedAt: new Date().toISOString(),
+      sizeBytes: input.content.length,
+      parents: [],
+    })
+    this.created.push(input)
+    return { fileId }
+  }
+
+  /** Test seam: what the adapter holds. */
+  get currentFiles(): readonly RelayDriveFile[] {
+    return this.files
+  }
+
+  get createdFiles(): readonly RelayDriveFileInput[] {
+    return this.created
+  }
+}
+
+/** A deterministic Telegram adapter. */
+export class FakeTelegramAdapter implements TelegramAdapter {
+  private messages: RelayTelegramMessage[] = []
+  private readonly sent: RelayTelegramMessageInput[] = []
+  private remainingTransientFailures = 0
+
+  constructor(initial: readonly RelayTelegramMessage[] = [], options: { failTimes?: number } = {}) {
+    this.messages = [...initial]
+    this.remainingTransientFailures = options.failTimes ?? 0
+  }
+
+  private maybeFail(): void {
+    if (this.remainingTransientFailures > 0) {
+      this.remainingTransientFailures -= 1
+      throw new RelayTransientError('the fake Telegram connector timed out')
+    }
+  }
+
+  async listMessages(chatId: string, query: RelayReadQuery): Promise<readonly RelayTelegramMessage[]> {
+    this.maybeFail()
+    const needle = query.query === null ? null : query.query.toLowerCase()
+    const filtered = this.messages.filter(
+      (message) => message.chatId === chatId && (needle === null || message.text.toLowerCase().includes(needle)),
+    )
+    return filtered.slice(0, query.limit)
+  }
+
+  async sendMessage(input: RelayTelegramMessageInput): Promise<{ messageId: string }> {
+    this.maybeFail()
+    const messageId = `tg-${this.messages.length + 1}`
+    this.messages.push({
+      messageId,
+      chatId: input.chatId,
+      from: 'owner',
+      text: input.text,
+      sentAt: new Date().toISOString(),
+    })
+    this.sent.push(input)
+    return { messageId }
+  }
+
+  /** Test seam: what the adapter holds. */
+  get currentMessages(): readonly RelayTelegramMessage[] {
+    return this.messages
+  }
+
+  get sentMessages(): readonly RelayTelegramMessageInput[] {
+    return this.sent
   }
 }

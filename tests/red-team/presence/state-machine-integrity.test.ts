@@ -3,7 +3,7 @@ import { derivePresenceState, type PresenceInput } from '../../../core/presence/
 import type { CoreStatus } from '../../../core/protocol/core-protocol'
 import type { AttentionProjection } from '../../../core/protocol/attention'
 import type { WorkProjection } from '../../../core/work/projection'
-import type { VoiceProjection } from '../../../core/protocol/conversation'
+import { absentVoiceProjection } from '../../core/voice/fixture'
 
 function coreStatus(overrides: Partial<CoreStatus> = {}): CoreStatus {
   return {
@@ -136,17 +136,32 @@ describe('red-team: state machine integrity', () => {
   })
 
   it('a voice projection cannot force a listening state without a capture', () => {
-    const voice: VoiceProjection = {
-      transcription: { available: true, engine: 'fake-local', detail: 'fake' },
-      synthesis: { available: true, engine: 'fake-local', detail: 'fake' },
-      capturing: false,
-      sessionId: null,
-      limits: { maxDurationMs: 30_000, maxAudioBytes: 4_194_304, format: 'pcm-s16le' },
-      localOnly: true,
-      faults: [],
-    }
+    const voice = absentVoiceProjection({
+      transcription: {
+        available: true,
+        engine: 'stand-in-stt',
+        kind: 'local',
+        availability: 'available',
+        detail: 'stand-in',
+      },
+      synthesis: {
+        available: true,
+        engine: 'stand-in-tts',
+        kind: 'platform',
+        availability: 'available',
+        detail: 'stand-in',
+      },
+    })
     const state = derivePresenceState(input({ voice }))
     expect(state).not.toBe('listening')
+  })
+
+  it('nor can a forged state field, on its own', () => {
+    // A window that forges `state: 'listening'` while Core reports no capture is
+    // the whole forgery this family is exposed to. The state machine reads
+    // `capturing` — Core's fact — and not the state string a mirror also carries.
+    const forged = absentVoiceProjection({ state: 'listening', capturing: false })
+    expect(derivePresenceState(input({ voice: forged }))).not.toBe('listening')
   })
 
   it('model-call amplification is impossible: the state machine makes no model call', () => {

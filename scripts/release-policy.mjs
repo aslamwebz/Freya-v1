@@ -30,13 +30,16 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // pipeline and encrypted Forge store; CI measures the reconciled P44-P48 main.cjs
   // at 2,473,605 bytes. Phase 49 adds qualification inventory/runtime readiness.
   // Phase 51 adds the embedded Freya Browser, Dual Browser routing/handoff runtime
-  // and Device Hands adapter; CI measures the reconciled final main.cjs at
-  // 2,600,227 bytes. Keep only narrow explicit headroom over that verified artifact.
-  mainBytes: 2_620_000,
+  // and Device Hands adapter; CI measured the reconciled final main.cjs at
+  // 2,600,227 bytes. The persistent Chat/browser workspace, local development
+  // composition and latest main shell/attachment integration now measure main.cjs
+  // at 2,635,967 bytes. Keep only narrow explicit headroom over that verified artifact.
+  mainBytes: 2_660_000,
   // Phase 44 adds connector projection/commands to the preload bridge, and
-  // Phase 45 adds the bounded Voice command/capability/playback channel. CI measures
-  // the reconciled preload at 139,620 bytes, so retain only narrow explicit headroom.
-  preloadBytes: 142_000,
+  // Phase 45 adds the bounded Voice command/capability/playback channel. After the
+  // bounded browser renderer bridge and latest main attachment surface are composed,
+  // CI measures preload.cjs at 186,235 bytes. Retain only narrow explicit headroom.
+  preloadBytes: 190_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,
   // Phase 19 added the ui-v2 shell: a finished design with ~1.9MB of webp imagery and

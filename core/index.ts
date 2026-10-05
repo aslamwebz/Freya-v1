@@ -3217,7 +3217,7 @@ class FreyaCore implements Core {
     const hostAdapters: string[] = []
     if (options.research !== undefined) hostAdapters.push('research')
     if (options.relay !== undefined) hostAdapters.push('relay')
-    if (options.voiceTranscriber !== undefined || options.voiceSynthesizer !== undefined) hostAdapters.push('voice')
+    if (options.voiceStt !== undefined || options.voiceTts !== undefined || options.voiceWake !== undefined) hostAdapters.push('voice')
     // Adapters the host wired but does not route through Core — Phase 42's Device
     // Hands seam is the live case. Declared, never inferred.
     hostAdapters.push(...(options.runtimeFacts?.hostAdapters ?? []))

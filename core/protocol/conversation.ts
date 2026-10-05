@@ -129,56 +129,158 @@ export interface ConversationProjection {
 /**
  * The voice projection.
  *
- * `available: false` is a real, expected state — most machines have no local
- * speech engine configured, and Phase 3 does not download one. It is reported as
- * unavailable rather than silently doing nothing, because a microphone button
- * that looks live and does nothing is the exact thing the whole voice section is
- * built to avoid.
+ * `state` is the honest answer to "what is the microphone doing right now", and
+ * it is a closed union rather than a set of booleans because the states are
+ * genuinely different: "off", "you have not granted permission", "permission was
+ * taken away", "listening", "transcribing", "speaking" and "STOP ALL is latched"
+ * are seven different sentences, and a surface that cannot tell them apart will
+ * eventually say the wrong one.
+ *
+ * ## Nothing here is a capability
+ *
+ * There is no provider name, no endpoint, no key and no audio. `transcription.kind`
+ * and `synthesis.kind` are the *class* of an adapter — `local`, `platform` or
+ * `provider` — carried so a window can say "this would be sent to a third party"
+ * before the first press. Which third party, and with what credential, is a
+ * host-side matter and does not cross.
  */
 export interface VoiceProjection {
+  /** The machine's actual position. Never inferred by the renderer. */
+  state: VoiceStateView
+  /** Whether the owner has turned the microphone on. False from construction. */
+  micEnabled: boolean
+  /** What the operating system last reported. `unknown` until it reports at all. */
+  permission: 'unknown' | 'granted' | 'denied' | 'revoked'
+  capturing: boolean
+  sessionId: string | null
+  /**
+   * The engine's current guess, bounded.
+   *
+   * Display only. It never becomes a turn, and a window reading it has no way to
+   * submit it — the conversation command takes text from a composer, and this is
+   * not on one.
+   */
+  interim: string
+  /** The last confirmed transcript, for a composer. */
+  finalTranscript: string | null
+  finalTranscriptAt: string | null
+  /** Why playback stopped, in words, or null. Never a stack. */
+  lastInterruption: string | null
   transcription: {
     available: boolean
-    /** Named engine, e.g. `fake-local`. Never a cloud service. */
     engine: string | null
+    /** `local`, `platform` or `provider`. Not a vendor. */
+    kind: 'local' | 'platform' | 'provider'
+    /** `configuration-required` is the state one setting away from working. */
+    availability: 'available' | 'unavailable' | 'configuration-required'
     detail: string
   }
   synthesis: {
     available: boolean
     engine: string | null
+    kind: 'local' | 'platform' | 'provider'
+    availability: 'available' | 'unavailable' | 'configuration-required'
     detail: string
   }
-  /** True while a capture session is open. Drives Presence = listening. */
-  capturing: boolean
-  sessionId: string | null
+  speaking: boolean
+  queued: number
+  muted: boolean
+  selectedVoiceId: string | null
+  /**
+   * Whether a confirmed transcript is submitted on the owner's behalf.
+   *
+   * Off by default and durable in exactly one sense: it lives for this process
+   * and nothing else. Turning voice on does not turn this on.
+   */
+  autoSubmit: boolean
+  wake: {
+    armed: boolean
+    available: boolean
+    gate: string
+    /**
+     * What the gate actually is.
+     *
+     * A literal, so a status line cannot call it a wake *word*. This build has a
+     * speech-activity gate and no wake-phrase model, and the type is where that
+     * fact is written down.
+     */
+    kind: 'speech-activity'
+    detail: string
+    maxArmedMs: number
+  }
   /** The deterministic bounds, so the UI can show them. */
   limits: {
     maxDurationMs: number
     maxAudioBytes: number
     format: string
+    maxTranscriptCharacters: number
+    transcriptionTimeoutMs: number
   }
-  /** Invariant, stated rather than assumed. */
-  localOnly: true
   faults: string[]
 }
 
 /**
+ * The voice state machine, as it crosses into the window.
+ *
+ * A separate alias rather than a re-export so the protocol module owns its
+ * vocabulary: a change to what a window may be told is a change to this file.
+ */
+export type VoiceStateView =
+  | 'unsupported'
+  | 'permission-required'
+  | 'permission-denied'
+  | 'ready'
+  | 'listening'
+  | 'transcribing'
+  | 'submitting'
+  | 'speaking'
+  | 'interrupted'
+  | 'degraded'
+  | 'failed'
+  | 'stopped-by-STOP-ALL'
+
+/**
  * The result of a voice command.
  *
- * `transcript` is text for a composer, nothing more. It has already been through
- * the deterministic length bound, and whoever receives it still has to press Send
- * before a single model credit is spent. That is the whole reason transcription
- * and cognition are separate operations.
+ * `text` is a confirmed transcript when one exists, and it has been through the
+ * deterministic length bound. Whether it also became a turn is `turnId`: present
+ * means the canonical conversation path took it, and its absence with a non-null
+ * `text` means it is sitting in a composer waiting for the owner.
  */
 export type VoiceCommandOutcome =
+  | { operation: 'state'; state: VoiceStateView }
+  | { operation: 'permission'; state: VoiceStateView; outcome: 'granted' | 'denied' | 'revoked' }
   | { operation: 'capture-started'; sessionId: string; startedAt: string }
   | {
       operation: 'capture-ended'
-      reason: 'completed' | 'cancelled' | 'too-long' | 'too-large' | 'no-engine' | 'device-lost'
+      reason:
+        | 'completed'
+        | 'cancelled'
+        | 'too-long'
+        | 'too-large'
+        | 'malformed'
+        | 'no-engine'
+        | 'timeout'
+        | 'device-lost'
+        | 'permission-revoked'
+        | 'stopped-by-STOP-ALL'
       text: string | null
       detail: string
       transcribed: boolean
       byteLength: number
       durationMs: number
+      /** The turn this transcript became, or null when it is waiting for a Send. */
+      turnId: string | null
     }
+  | { operation: 'interim'; sessionId: string; accepted: boolean; reason: string | null }
   | { operation: 'cancelled' }
+  | { operation: 'speaking'; utteranceId: string; queued: number }
+  | { operation: 'speech-stopped'; utteranceId: string | null }
+  | { operation: 'speech-interrupted'; utteranceId: string | null; reason: string }
+  | { operation: 'wake-armed' }
+  | { operation: 'wake-disarmed' }
+  | { operation: 'muted'; muted: boolean; state: VoiceStateView }
+  | { operation: 'voice-selected'; voiceId: string }
+  | { operation: 'voices'; voices: readonly { voiceId: string; label: string; language: string | null; isDefault: boolean | null }[] }
+  | { operation: 'auto-submit'; enabled: boolean }
   | { operation: 'refused'; reason: string }

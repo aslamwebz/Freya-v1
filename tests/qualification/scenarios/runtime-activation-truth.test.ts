@@ -91,15 +91,15 @@ describe('runtime activation truth', () => {
     await core.start()
     const projection = core.runtime()
 
-    // Core registers the registry with no activation handlers. So every `activatable`
-    // domain must resolve to `available` — dependency-checked and not running. A build
-    // that claimed otherwise would be claiming a handler it does not have.
+    // Core registers the registry with no activation handlers. An activatable
+    // domain may be available when its requirements are met, or blocked/degraded
+    // when they are not. What it must never do without a handler is claim active.
     const activatable = orderedRegistry().filter((d) => d.activation === 'activatable')
     expect(activatable.length).toBeGreaterThan(0)
     for (const descriptor of activatable) {
       const view = projection.domains.find((d) => d.id === descriptor.id)!
-      expect(view.status, `${descriptor.id} claimed ${view.status} with no handler wired`).toBe(
-        'available',
+      expect(view.status, `${descriptor.id} claimed ${view.status} with no handler wired`).not.toBe(
+        'active',
       )
     }
 

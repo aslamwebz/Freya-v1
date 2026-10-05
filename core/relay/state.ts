@@ -65,6 +65,11 @@ export function draftsInWindow(state: RelayState, now: number): number {
   return instantsInWindow(state.draftInstants, now, RELAY_LIMITS.budgetWindowMs).length
 }
 
+/** Count Telegram sends in the rolling window. */
+export function telegramSendsInWindow(state: RelayState, now: number): number {
+  return instantsInWindow(state.telegramSendInstants, now, RELAY_LIMITS.budgetWindowMs).length
+}
+
 /** Count external invocations in the rolling window. */
 export function externalInvokesInWindow(state: RelayState, now: number): number {
   return instantsInWindow(state.externalInstants, now, RELAY_LIMITS.budgetWindowMs).length
@@ -186,6 +191,7 @@ export function reduceRelay(state: RelayState, event: AnyCoreEvent): RelayState 
       }
       let sendInstants = state.sendInstants
       let draftInstants = state.draftInstants
+      let telegramSendInstants = state.telegramSendInstants
       let externalInstants = state.externalInstants
       if (event.payload.action === 'email.send') {
         sendInstants = pushInstant(sendInstants, settledAt, RELAY_LIMITS.maxSendsPerWindow * 4)
@@ -193,10 +199,13 @@ export function reduceRelay(state: RelayState, event: AnyCoreEvent): RelayState 
       if (event.payload.action === 'email.draft.create') {
         draftInstants = pushInstant(draftInstants, settledAt, RELAY_LIMITS.maxDraftsPerWindow * 4)
       }
+      if (event.payload.action === 'telegram.send') {
+        telegramSendInstants = pushInstant(telegramSendInstants, settledAt, RELAY_LIMITS.maxTelegramSendsPerWindow * 4)
+      }
       if (event.payload.action === 'external.invoke') {
         externalInstants = pushInstant(externalInstants, settledAt, RELAY_LIMITS.maxExternalInvokesPerWindow * 4)
       }
-      return { ...state, actions, actionInstants, sendInstants, draftInstants, externalInstants }
+      return { ...state, actions, actionInstants, sendInstants, draftInstants, telegramSendInstants, externalInstants }
     }
 
     case 'relay.action.failed': {

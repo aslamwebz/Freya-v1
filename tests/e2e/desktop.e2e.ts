@@ -2594,10 +2594,36 @@ async function main(): Promise<void> {
         const bridged = await work.evaluate(() =>
           Object.keys((window as unknown as { freyaHost?: object }).freyaHost ?? {}).sort(),
         )
+        /*
+         * Scoped to Work, on purpose.
+         *
+         * The bare words "capability", "verifier" and "plan" are not Work's alone:
+         * Phase 45 added `reportVoiceCapabilities`, which is a *report* of what the
+         * platform's speech engine turned out to be and carries no authority. A
+         * check written against the bare words would have failed on that name and
+         * the tempting fix would have been to rename it until it passed — which is
+         * how a boundary check stops meaning anything.
+         *
+         * So this asks what it actually means: does any bridge function reach Work's
+         * capability registry, a verifier or a plan body? `workCapability`,
+         * `capabilityRegistry`, `verifierFor` and `planFor` are the shapes that
+         * would do it, and none of them may exist.
+         */
         check(
           'the bridge exposes no capability, verifier or plan for Work',
-          !bridged.some((key) => /capabilit|verifier|plan|registry|executor/i.test(key)),
+          !bridged.some((key) =>
+            /^(workCapability|capabilityRegistry|verifier|verifierFor|plan|planFor|executor|workExecutor)/i.test(key),
+          ),
           bridged.join(', '),
+        )
+        // And the voice channel is the exact set Phase 45 declared: a projection, a
+        // fragment feed, a playback instruction and a capability report. Nothing
+        // there can start a capture, open a device or name what Freya says.
+        check(
+          'the voice channel is a projection, fragments, playback and a capability report — nothing more',
+          bridged.filter((key) => /voice/i.test(key)).sort().join(', ') ===
+            'coreVoice, onCoreVoice, onCoreVoiceTranscript, onVoiceOutput, reportVoiceCapabilities',
+          bridged.filter((key) => /voice/i.test(key)).sort().join(', '),
         )
 
         // --- 9. it survives an application relaunch --------------------

@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { type UiAdapter, uiMode } from '../ui-v2/state/contract'
 import { useUiState } from '../ui-v2/state/useUiState'
 import { type PreferencesStore } from '../ui-v2/theme/preferences'
@@ -23,6 +23,9 @@ import { setAppLayout, type AppLayout } from './state/workspace'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
+import { ChatPanel } from './chat/ChatPanel'
+import { useVoiceDock } from './voice/useVoiceDock'
+import { VoiceSettings } from './voice/VoiceSettings'
 
 interface RailItem {
   readonly id: string
@@ -202,6 +205,29 @@ export function App({
       })
     }
   }
+  /**
+   * A confirmed transcript goes into the composer, not into a turn.
+   *
+   * `turnId` is the branch that matters: it is set only when the owner had turned
+   * auto-submit on *before* speaking and Core therefore entered the canonical
+   * conversation path itself. In that case the words are already in the transcript
+   * and putting them in the composer would send them twice — so the composer is
+   * left alone and the chat opens instead.
+   */
+  const onVoiceTranscript = useCallback(
+    (text: string, turnId: string | null) => {
+      if (turnId !== null) {
+        setDraft('')
+        setChatOpen(true)
+        setNotice('')
+        return
+      }
+      setDraft((current) => (current.trim().length === 0 ? text : `${current} ${text}`))
+    },
+    [],
+  )
+
+  const voice = useVoiceDock(onVoiceTranscript)
 
   return <>
     <HomeDashboard
@@ -211,14 +237,18 @@ export function App({
       generating={generating}
       notice={notice}
       dressing={dressing}
+      voice={voice.view}
       onOpenDressing={() => setDressingOpen(true)}
       onSend={send}
       onStopResponse={stopResponse}
       researchView={researchView}
       onNavigate={setScreen}
+      onVoicePress={voice.press}
+      onVoiceRelease={voice.release}
     />
     <div className="freya-v2" data-theme={settings.theme} data-app-shell="app" data-ui-mode={uiMode(snapshot)}>
       <DressingTable store={dressing} open={dressingOpen} onOpenChange={setDressingOpen} />
+      <VoiceSettings voice={voice} />
     </div>
   </>
 }

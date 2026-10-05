@@ -372,3 +372,54 @@
   .hd-user { width: auto; padding: 4px; }
   .hd-main { left: 86px; }
 }
+
+
+/* --------------------------------------------------------------------------
+   Live Orb dashboard rebuild
+   Home is intentionally reduced to a clear stage for the new reactive core.
+   App chrome, sidebar and global composer remain unchanged.
+   -------------------------------------------------------------------------- */
+.hd-dashboard[data-screen='home'] .hd-main {
+  inset: 0;
+  display: block;
+  max-width: none;
+  margin: 0;
+  pointer-events: none;
+}
+
+.hd-dashboard[data-screen='home'] .hd-panel,
+.hd-dashboard[data-screen='home'] .hd-orbit-label,
+.hd-dashboard[data-screen='home'] .hd-dress {
+  display: none;
+}
+
+.hd-dashboard[data-screen='home'] .hd-presence {
+  position: fixed;
+  z-index: 20;
+  left: 50vw;
+  top: 50vh;
+  width: min(74vmin, 780px);
+  height: min(74vmin, 780px);
+  transform: translate(-50%, -50%);
+  place-self: auto;
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+.hd-dashboard[data-screen='home']::before {
+  content: '';
+  position: fixed;
+  z-index: 0;
+  inset: 44px 0 72px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 48%, #7d4fff12 0 14%, #296fc40b 30%, transparent 55%),
+    radial-gradient(ellipse at 50% 100%, #522a8912, transparent 55%);
+}
+
+@media (max-width: 1100px), (max-height: 760px) {
+  .hd-dashboard[data-screen='home'] .hd-presence {
+    width: min(66vmin, 620px);
+    height: min(66vmin, 620px);
+  }
+}

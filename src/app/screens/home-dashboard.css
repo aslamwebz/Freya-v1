@@ -397,9 +397,9 @@
   position: fixed;
   z-index: 20;
   left: 50vw;
-  top: 50vh;
-  width: min(74vmin, 780px);
-  height: min(74vmin, 780px);
+  top: 49vh;
+  width: min(1180px, 92vw);
+  height: min(760px, calc(100vh - 150px));
   transform: translate(-50%, -50%);
   place-self: auto;
   pointer-events: none;
@@ -419,7 +419,8 @@
 
 @media (max-width: 1100px), (max-height: 760px) {
   .hd-dashboard[data-screen='home'] .hd-presence {
-    width: min(66vmin, 620px);
-    height: min(66vmin, 620px);
+    width: min(1040px, 96vw);
+    height: min(650px, calc(100vh - 132px));
+    top: 48.5vh;
   }
 }

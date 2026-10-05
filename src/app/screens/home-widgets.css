@@ -6,7 +6,9 @@
   gap: 14px; pointer-events: auto; color: var(--hw-ink);
   font-family: 'Segoe UI', sans-serif;
 }
-.hw-left { left: 88px; }
+/* Offsets from the rail, not from the viewport: a hardcoded left assumed the
+   rail was always collapsed, so widening it pushed this column underneath. */
+.hw-left { left: calc(var(--hd-rail-w, 216px) + var(--hd-rail-gutter, 22px)); }
 .hw-right { right: 24px; width: clamp(248px, 19vw, 302px); }
 .hw-widget { flex: none; position: relative; padding: 16px 17px 13px; border: 1px solid #c5d0db38; border-radius: 5px 16px 5px 5px; background: linear-gradient(125deg, #74879720, #151b2399 65%); backdrop-filter: blur(16px); box-shadow: inset 0 1px #edf3fa12, 0 8px 28px #00000024; }
 .hw-widget::before { content: ''; position: absolute; left: 16px; top: -1px; width: 26px; height: 1px; background: #dda69aa6; }
@@ -74,7 +76,7 @@
 .hw-result b { color: #d9d7cf; font-size: 11px; font-weight: 400; line-height: 1.5; }
 .hw-result small { color: #9d9990; font-size: 8px; }
 .hw-empty { color: #b3aca0; font-size: 11px; line-height: 1.6; }
-@media (min-width: 1800px) { .hw-left { left: 244px; } .hw-right { right: 32px; } }
+@media (min-width: 1800px) { .hw-right { right: 32px; } }
 /* The Home rail used to be force-collapsed across this whole range by rules that
    duplicated what `.hd-rail[data-collapsed]` already does — and outranked it, so the
    toggle flipped `aria-pressed` while changing nothing on screen. Collapsing is now

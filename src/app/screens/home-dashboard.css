@@ -5,6 +5,13 @@
    the backdrop so the centre canvas's `screen` blend has a backdrop. */
 .hd-viewport { position: relative; width: 100%; height: 100dvh; overflow: hidden; background: #030911; }
 .hd-frame { position: absolute; inset: 0; }
+.hd-dashboard { --hd-rail-w: 216px; --hd-rail-gutter: 22px; }
+/* One source for the rail's width. The rail, the board and the Home widget
+   columns all derive from this, so widening the rail can never leave one of them
+   positioned for the old width. `:has()` rather than a second attribute because
+   the width is the rail's own business — a duplicate flag is a duplicate that can
+   disagree. */
+.hd-dashboard:has(.hd-rail[data-collapsed]) { --hd-rail-w: 64px; }
 .hd-dashboard { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; color: #d4e6f5; font: 14px 'Segoe UI', sans-serif; background: linear-gradient(180deg, #01070c24, transparent 60%, #02081215), url('../../ui-v2/assets/panorama.webp') center / cover; }
 .hd-dashboard[data-background='space'] { background: linear-gradient(180deg, transparent 35%, #020812cc), url('../assets/earth-night.jpg') center 60% / cover no-repeat, #01030a; }
 .hd-dashboard[data-background='aurora'] { background: radial-gradient(120% 90% at 20% 110%, #c8b2e63d, transparent 55%), radial-gradient(120% 90% at 80% 120%, #7ff0c02e, transparent 55%), #030911; }
@@ -91,7 +98,7 @@
    viewport-wide decorative layer, so at z-index 3 the rail opened *behind* the
    gate cards. Chrome wins over the stage it frames. */
 .hd-rail {
-  position: absolute; top: 56px; bottom: 0; left: 0; width: 216px; z-index: 30;
+  position: absolute; top: 56px; bottom: 0; left: 0; width: var(--hd-rail-w); z-index: 30;
   display: flex; flex-direction: column;
   border-right: 1px solid #8db7d32e;
   background: rgba(5, 10, 16, .55);
@@ -104,7 +111,6 @@
 .hd-railhead { display: flex; justify-content: flex-end; padding: 12px 14px 8px; }
 .hd-rail-toggle { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: #9fb4c7; }
 .hd-rail-toggle:hover { color: #fff; background: rgba(255, 255, 255, .04); }
-.hd-rail[data-collapsed] { width: 64px; }
 .hd-rail[data-collapsed] .hd-railhead { justify-content: center; padding: 12px 0 8px; }
 .hd-rail[data-collapsed] .hd-rail-toggle svg { transform: scaleX(-1); }
 .hd-rail[data-collapsed] .hd-place { justify-content: center; padding: 0; }
@@ -197,7 +203,7 @@
    comfortable size, while the centre column (the orb) is `1fr` and takes the
    slack — so the page widens with the window instead of scaling. Non-Home tabs
    render `TabBody`, which is absolutely positioned and ignores this grid. */
-.hd-main { position: absolute; top: 74px; bottom: 90px; left: 238px; right: 24px; max-width: 1800px; margin: 0 auto; pointer-events: none; }
+.hd-main { position: absolute; top: 74px; bottom: 90px; left: calc(var(--hd-rail-w) + var(--hd-rail-gutter)); right: 24px; max-width: 1800px; margin: 0 auto; pointer-events: none; }
 .hd-workspace-layer { position: absolute; inset: 0; min-width: 0; min-height: 0; pointer-events: none; -webkit-app-region: no-drag; }
 .hd-workspace-layer[hidden] { display: none !important; }
 .hd-workspace-layer[data-workspace='home'] { display: grid; grid-template-columns: minmax(300px, 520px) minmax(360px, 1fr) minmax(300px, 520px); grid-template-rows: repeat(6, minmax(0, 1fr)); gap: 14px; }
@@ -388,14 +394,6 @@
 @keyframes hd-spin { to { transform: rotate(360deg); } }
 .hd-notice { position: absolute; bottom: 62px; left: 18px; margin: 0; border: 1px solid #6fb6d559; border-radius: 10px; padding: 10px 16px; background: #071320f0; font-size: 13px; }
 .hd-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-/* Collapse is driven by one thing only: the `data-collapsed` attribute the toggle
-   writes. An earlier copy of these rules lived in a `max-width: 1360px` query and
-   hid the labels independently of that attribute, so expanding below 1360px left
-   a 216px rail full of icon-only rows. The toggle is the only control. */
-/* The stage gutter follows the rail rather than the viewport, so expanding the rail
-   at any width moves the board out from under it instead of behind it. */
-.hd-rail[data-collapsed] ~ .hd-main { left: 86px; }
-
 
 /* --------------------------------------------------------------------------
    Live Orb dashboard rebuild
@@ -403,7 +401,11 @@
    App chrome, sidebar and global composer remain unchanged.
    -------------------------------------------------------------------------- */
 .hd-dashboard[data-screen='home'] .hd-main {
-  inset: 0;
+  /* `inset: 0` would also reset `left` to 0, which put the whole board — and the
+     widget columns anchored to it — underneath the rail. The stage is full-bleed
+     on purpose; the gutter beside the rail is not. */
+  top: 0; right: 0; bottom: 0;
+  left: calc(var(--hd-rail-w) + var(--hd-rail-gutter));
   display: block;
   max-width: none;
   margin: 0;

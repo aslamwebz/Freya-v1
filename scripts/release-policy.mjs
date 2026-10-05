@@ -1,4 +1,4 @@
-﻿import { stat, readdir, readFile } from 'node:fs/promises'
+import { stat, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export const ALLOWED_INSTALL_SCRIPT_PACKAGES = new Set([

@@ -119,7 +119,8 @@ export class ConversationService {
    */
   async recoverInterruptedTurns(): Promise<string[]> {
     const at = this.now().toISOString()
-    let recovered: string[]
+    let recovered: string[] = []
+
     try {
       recovered = await this.store.recoverInterruptedTurns(at)
     } catch (error) {
@@ -129,8 +130,6 @@ export class ConversationService {
         ...this.faults,
         `interrupted-turn recovery failed: ${describeStore(error)}`,
       ]
-      this.publish()
-      return []
     }
 
     for (const turnId of recovered) {
@@ -151,7 +150,13 @@ export class ConversationService {
         { actor: 'system', correlationId: turnId },
       )
     }
-    if (recovered.length > 0) this.publish()
+
+    // A process restart loses only in-memory selection, not the conversation.
+    // Restore the most recently updated visible conversation before any window can
+    // attach. The store owns ordering and already excludes archived conversations,
+    // so this is deterministic and cannot resurrect a closed chat.
+    const restored = await this.restoreActiveConversation()
+    if (recovered.length > 0 || restored) this.publish()
     return recovered
   }
 
@@ -369,6 +374,23 @@ export class ConversationService {
     if (this.activeConversationId !== null) return this.activeConversationId
     const created = await this.create()
     return created.ok ? created.conversation.conversationId : null
+  }
+
+  private async restoreActiveConversation(): Promise<boolean> {
+    if (this.activeConversationId !== null) return false
+    try {
+      const listed = await this.store.listConversations(1)
+      const next = listed[0]?.conversationId ?? null
+      if (next === null) return false
+      this.activeConversationId = next
+      return true
+    } catch (error) {
+      this.faults = [
+        ...this.faults,
+        `conversation restoration failed: ${describeStore(error)}`,
+      ]
+      return false
+    }
   }
 
   private activeTurnView(): ActiveTurnView | null {

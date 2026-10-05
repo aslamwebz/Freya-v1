@@ -7,7 +7,7 @@ import { createCore, type Core, type CoreOptions } from '../../core/index'
 import { BlockingModelProvider, FakeModelProvider } from '../../core/model/fake-provider'
 import { MemoryConversationStore } from '../../core/conversation/memory-store'
 import { EncryptedConversationStore } from '../../core/conversation/encrypted-store'
-import { FakeVoiceTranscriber } from '../../core/voice/service'
+import { StandInStt } from './voice/fixture'
 import { CORE_EVENT_TYPES } from '../../core/events/envelope'
 import { testConversationKey } from './testKey'
 import type { ConversationCommandOutcome } from '../../core/protocol/conversation'
@@ -220,13 +220,32 @@ describe('the encryption key never leaves the host', () => {
 })
 
 describe('microphone audio never reaches the journal', () => {
+  /**
+   * Open a capture the way the owner would.
+   *
+   * Phase 45 added a permission lifecycle in front of `voice.capture.start`: the
+   * microphone has to be turned on and the platform has to have reported
+   * `granted`, or the capture is refused. These three privacy tests are about what
+   * a capture *leaves behind*, and that question is unchanged — so the setup moved
+   * into one helper rather than being repeated three times.
+   */
+  async function openCapture(c: Core): Promise<string> {
+    await c.handleCommand({ command: 'voice.mic.enable', requestId: 'm1' })
+    await c.handleCommand({
+      command: 'voice.permission.report',
+      requestId: 'p1',
+      payload: { outcome: 'granted' },
+    })
+    const start = await c.handleCommand({ command: 'voice.capture.start', requestId: 'v1' })
+    return (start.voice as { sessionId: string }).sessionId
+  }
+
   it('records a capture as metadata only', async () => {
-    const c = createCore(options({ voiceTranscriber: new FakeVoiceTranscriber('a local transcript') }))
+    const c = createCore(options({ voiceStt: new StandInStt('a local transcript') }))
     core = c
     await c.start()
 
-    const start = await c.handleCommand({ command: 'voice.capture.start', requestId: 'v1' })
-    const sessionId = (start.voice as { sessionId: string }).sessionId
+    const sessionId = await openCapture(c)
 
     // Audio that would be unmistakable in a journal if it got there.
     const audio = new Uint8Array(4096)
@@ -235,7 +254,16 @@ describe('microphone audio never reaches the journal', () => {
     await c.handleCommand({
       command: 'voice.capture.end',
       requestId: 'v2',
-      payload: { sessionId, audio, durationMs: 128 },
+      payload: {
+        sessionId,
+        audio,
+        durationMs: 128,
+        format: 'pcm-s16le',
+        codec: 'pcm_s16le',
+        mimeType: 'audio/pcm',
+        sampleRate: 16_000,
+        channels: 1,
+      },
     })
     await c.stop('test')
 
@@ -253,18 +281,26 @@ describe('microphone audio never reaches the journal', () => {
   })
 
   it('spends nothing to transcribe', async () => {
-    const transcriber = new FakeVoiceTranscriber('a local transcript')
+    const transcriber = new StandInStt('a local transcript')
     const provider = new FakeModelProvider()
-    const c = createCore(options({ providers: [provider], voiceTranscriber: transcriber }))
+    const c = createCore(options({ providers: [provider], voiceStt: transcriber }))
     core = c
     await c.start()
 
-    const start = await c.handleCommand({ command: 'voice.capture.start', requestId: 'v1' })
-    const sessionId = (start.voice as { sessionId: string }).sessionId
+    const sessionId = await openCapture(c)
     const end = await c.handleCommand({
       command: 'voice.capture.end',
       requestId: 'v2',
-      payload: { sessionId, audio: new Uint8Array(1024), durationMs: 64 },
+      payload: {
+        sessionId,
+        audio: new Uint8Array(1024),
+        durationMs: 32,
+        format: 'pcm-s16le',
+        codec: 'pcm_s16le',
+        mimeType: 'audio/pcm',
+        sampleRate: 16_000,
+        channels: 1,
+      },
     })
 
     // A transcript, not a turn.
@@ -282,12 +318,20 @@ describe('microphone audio never reaches the journal', () => {
     core = c
     await c.start()
 
-    const start = await c.handleCommand({ command: 'voice.capture.start', requestId: 'v1' })
-    const sessionId = (start.voice as { sessionId: string }).sessionId
+    const sessionId = await openCapture(c)
     await c.handleCommand({
       command: 'voice.capture.end',
       requestId: 'v2',
-      payload: { sessionId, audio: new Uint8Array(256), durationMs: 16 },
+      payload: {
+        sessionId,
+        audio: new Uint8Array(256),
+        durationMs: 8,
+        format: 'pcm-s16le',
+        codec: 'pcm_s16le',
+        mimeType: 'audio/pcm',
+        sampleRate: 16_000,
+        channels: 1,
+      },
     })
 
     // Nothing about the capture is in the conversation at all.

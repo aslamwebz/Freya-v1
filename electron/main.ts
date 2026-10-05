@@ -18,6 +18,12 @@ import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import { PresenceHost } from './presence/host'
 import { createBrowserExtensionHost, type BrowserExtensionHost } from './browserext'
 import { HostVoiceOutput, registerVoiceOutputIpc } from './voiceHost'
+import {
+  createDualBrowserActivation,
+  createFreyaBrowserAdapter,
+  ElectronFreyaWindowFactory,
+  type DualBrowserActivation,
+} from './browser'
 import { installSingleInstanceGuard } from './startup/singleInstance'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ProviderConfigInput } from './providerConfig'
@@ -69,6 +75,25 @@ let presenceHost: PresenceHost | null = null
  * shutdown path can reach it.
  */
 let browserExtensionHost: BrowserExtensionHost | null = null
+/**
+ * Phase 51's dual-browser runtime.
+ *
+ * **Null unless the owner opted in twice**: `FREYA_DEVICE_HANDS=1` *and*
+ * `FREYA_PUBLIC_BROWSER=1`. The first is Phase 42's switch and the second is this phase's,
+ * and the second cannot be useful without the first — the browser surfaces are gated by a
+ * Device Hands runtime, so a public browser with no runtime behind it would have no gates at
+ * all. That is the same rule Phase 43 followed when it refused to be `active` without Phase 42.
+ */
+let dualBrowser: DualBrowserActivation | null = null
+/**
+ * The Freya Browser's adapter, created before Device Hands so the effects can resolve it lazily.
+ *
+ * It is a *factory*, not an activation: nothing is opened by constructing it, and it only
+ * becomes reachable through `openInPage` when a live window is serving the authorised URL. A
+ * build that never opens the Freya Browser never reaches it, and every read falls through to
+ * the Phase 5 managed target exactly as it did before this phase existed.
+ */
+let publicBrowserAdapter: ReturnType<typeof createFreyaBrowserAdapter> | null = null
 /**
  * The bounded attention wake.
  *
@@ -125,7 +150,20 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
   const userData = app.getPath('userData')
   const grants = readDeviceHandsGrants(join(userData, 'device-hands.grants.json'))
   const journal = openDeviceHandsJournal(join(userData, 'device-hands.jsonl'))
-  const effects = createElectronDeviceHandsEffects()
+  const effects = createElectronDeviceHandsEffects({
+    /**
+     * Phase 51's second door, resolved **per call** rather than at construction.
+     *
+     * This is the whole wiring. The adapter is added to the managed browser factory rather
+     * than replacing it, so:
+     *
+     *   - a read that no live window is serving still goes to the Phase 5 managed target;
+     *   - a click with no live window still resolves to `browser-action-unsupported`;
+     *   - and a click **with** one is driven by the Freya Browser, through the same runtime,
+     *     the same grant and the same ten gates as everything else.
+     */
+    inPageFactory: () => publicBrowserAdapter?.inPage ?? null,
+  })
   const authority = denyAllAuthority({
     enabled: () => true,
     activeGrant: (principalId, scope) =>
@@ -147,6 +185,48 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
     grants,
     enabled: true,
   }
+}
+
+/**
+ * Build the Phase 51 adapter and activation, but only when both switches are on.
+ *
+ * Returns null — not a disabled object — because "there is no dual-browser runtime" is the
+ * honest description of a build that was not opted in, and a caller that got an object would
+ * reasonably assume there was something behind it.
+ *
+ * Approvals are denied in exactly the shape Phase 42 denies them. That means `page.click` and
+ * `page.type` are refused at the Phase 35 approval gate in a default build, while the reads
+ * run. Saying so here is more useful than quietly inventing an approval channel: the acts are
+ * implemented and gated, and the missing piece is a Phase 35 seam, not a Phase 51 one.
+ */
+function buildDualBrowserSeam(extension: BrowserExtensionHost | null): DualBrowserActivation | null {
+  if (process.env.FREYA_DEVICE_HANDS !== '1') return null
+  if (process.env.FREYA_PUBLIC_BROWSER !== '1') return null
+
+  const adapter = createFreyaBrowserAdapter({
+    factory: new ElectronFreyaWindowFactory({
+      allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+    }),
+    publicAvailable: () => true,
+  })
+  publicBrowserAdapter = adapter
+
+  const journal = coreHost?.deviceHandsJournal() ?? null
+  if (journal === null) return null
+
+  return createDualBrowserActivation({
+    authority: {
+      // Core's own latch is composed in by `coreHost`, exactly as it is for Device Hands.
+      stopAllActive: () => false,
+      perform: (request) => requireCore().performDeviceHandsAction(request),
+    },
+    // The **same** hash-chained journal Device Hands already appends to. One writer, one chain.
+    journal,
+    adapter,
+    extension,
+    allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+    onLog: (line) => console.log(`[freya] ${line}`),
+  })
 }
 
 // The E2E harness sometimes opens two throwaway processes against the same
@@ -449,6 +529,12 @@ function shutdownCoreAndThen(finish: () => void): void {
     clearInterval(attentionTimer)
     attentionTimer = null
   }
+  // Phase 51: close every Freya Browser window before the app goes. A window that outlived its
+  // runtime would be a page nothing is gating any more.
+  const seam = dualBrowser
+  dualBrowser = null
+  publicBrowserAdapter = null
+  if (seam !== null) void seam.dispose().catch(() => undefined)
   presenceHost?.stop()
   presenceHost = null
   // Before Core stops, so the bridge is closed while its authority is still readable
@@ -1256,6 +1342,33 @@ app.whenReady().then(async () => {
           // leave a half-started host behind pretending to be available.
           console.error('[freya] the browser extension bridge failed to start', error)
           browserExtensionHost = null
+        })
+    }
+
+    /**
+     * Mount the Freya Browser, but only when the owner asked for it *and* Device Hands is on.
+     *
+     * The activation is deliberately built **after** the bridge and given it, so a handoff to
+     * Chrome has a real destination and a refusal has a real reason. Activation is async and
+     * cannot block the window: a Freya Browser that fails to open leaves `dualBrowser` null
+     * and the app exactly as it was, which is the safe direction.
+     */
+    const dualBrowserSeam = buildDualBrowserSeam(browserExtensionHost)
+    if (dualBrowserSeam !== null) {
+      dualBrowserSeam
+        .activate()
+        .then((result) => {
+          if (!result.ok) {
+            console.error(`[freya] the Freya Browser did not activate: ${result.reason}`)
+            dualBrowser = null
+            return
+          }
+          dualBrowser = dualBrowserSeam
+          console.log(`[freya] ${result.reason}`)
+        })
+        .catch((error: unknown) => {
+          console.error('[freya] the Freya Browser failed to activate', error)
+          dualBrowser = null
         })
     }
 

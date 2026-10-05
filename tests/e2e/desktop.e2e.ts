@@ -2512,17 +2512,12 @@ async function main(): Promise<void> {
         // Wait for the fixed, code-owned verification failure reason. Verifier
         // explanations can contain Step input or Observation data, so they are not
         // durable UI text and must not be echoed back through the Work projection.
-        await work.waitForFunction(
-          () =>
-            [...document.querySelectorAll('[role="dialog"][aria-label="Work"] .work-step-meta')].some(
-              (row) =>
-                (row.textContent ?? '').includes('failed') &&
-                (row.textContent ?? '').includes('verification did not establish the intended result'),
-            ),
-          undefined,
-          { timeout: 30_000 },
-        )
-        const stepText = (await board.locator('.work-step-meta').allTextContents()).join(' ')
+        const verificationFailure = board
+          .locator('.work-step-meta')
+          .filter({ hasText: 'verification did not establish the intended result' })
+          .first()
+        await verificationFailure.waitFor({ state: 'visible', timeout: 30_000 })
+        const stepText = (await verificationFailure.textContent()) ?? ''
         check(
           'a step whose action succeeded but whose verification failed is shown as failed',
           stepText.includes('failed'),

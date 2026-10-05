@@ -170,6 +170,10 @@ export {
   forbiddenClaimCode,
   subjectDigest,
   forbiddenActions,
+  // Exported so a policy module *before* the gate can decline to offer a locator the gate
+  // would refuse, rather than describing one and having it turned away later. Phase 51's
+  // page-description module is the first caller.
+  FORBIDDEN_SELECTOR_TOKENS,
   type DeviceHandsActionRequest,
   type DeviceHandsGateContext,
   type GateDecision,

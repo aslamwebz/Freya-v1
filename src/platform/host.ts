@@ -91,6 +91,18 @@ export interface ProviderConfigPatch {
   apiKey?: string
 }
 
+/** Renderer-safe description of one bounded file attachment. */
+export interface AttachmentResult {
+  readonly name: string
+  readonly path: string
+  readonly kind: 'text' | 'image' | 'unsupported'
+  readonly contentType: string
+  readonly sizeBytes: number
+  readonly text: string | null
+  readonly truncated: boolean
+  readonly detail: string | null
+}
+
 export interface FreyaHostBridge {
   isDesktop: true
 

@@ -8,6 +8,10 @@ on:
       # pushes are verified here so the branch cannot rot silently while it waits.
       # This adds coverage; it removes none.
       - phase-5-research
+      # Phase 49's qualification lane lives on its own branch until it is reviewed
+      # and merged. Verifying it here means the sixteen gates cannot rot while it
+      # waits. This adds coverage; it removes none.
+      - runtime/phase49-release-evaluation
 
   pull_request:
     branches:
@@ -30,7 +34,11 @@ jobs:
     name: Freya Verify
     runs-on: ubuntu-latest
 
-    timeout-minutes: 20
+    # Phase 49 added the qualification pass, which executes every gate again rather than
+    # reading what the earlier steps already proved. That is deliberate — the roll-up has to
+    # be computed from real exit codes, not from CI's opinion of them — but it does mean
+    # the job runs its suites twice. The bound is raised to fit the work, not to hide it.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -59,3 +67,22 @@ jobs:
       # unreliable on GitHub runners and is unnecessary for headless steps.
       - name: Run Electron E2E
         run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npm run test:e2e
+
+      # Phase 49. This runs every gate itself rather than re-running the commands CI
+      # has already run, because the point of the layer is the roll-up: one verdict
+      # computed from real exit codes, with an unrun gate recorded as an unrun gate.
+      # It is deliberately last, so its report describes the tree CI actually built.
+      - name: Run Phase 49 release qualification
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npm run qualify
+
+      # The report is the artifact. Uploading it means a reviewer can read the verdict
+      # and the per-capability readiness without re-running anything.
+      - name: Upload the qualification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qualification
+          path: |
+            release/release-qualification.json
+            release/release-qualification.md
+          if-no-files-found: warn

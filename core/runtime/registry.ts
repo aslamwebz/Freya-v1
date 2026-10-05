@@ -433,6 +433,12 @@ export function registryById(id: string): RuntimeDomainDescriptor | undefined {
   return RUNTIME_REGISTRY.find((entry) => entry.id === id)
 }
 
+/**
+ * Re-exported so a consumer that only needs to know which domain STOP ALL exempts does
+ * not have to reach past this module into the controller. It is one constant, named once.
+ */
+export { STOP_ALL_EXEMPT_DOMAIN } from './controller'
+
 /** The registry in deterministic activation order. */
 export function orderedRegistry(): readonly RuntimeDomainDescriptor[] {
   return [...RUNTIME_REGISTRY].sort((a, b) => a.order - b.order)

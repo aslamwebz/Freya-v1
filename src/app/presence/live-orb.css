@@ -1,0 +1,74 @@
+/* Dashboard-only live orb. It is independent from the shared legacy presence. */
+.freya-live-orb {
+  position: absolute;
+  inset: 0;
+  isolation: isolate;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.freya-live-orb::before,
+.freya-live-orb::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  border-radius: 50%;
+}
+
+.freya-live-orb::before {
+  inset: 10%;
+  background:
+    radial-gradient(circle at 50% 46%, #ad72ff1f 0 16%, #5a9dff12 28%, transparent 62%);
+  filter: blur(28px);
+  opacity: .72;
+  animation: freya-orb-breathe 6.8s ease-in-out infinite;
+}
+
+.freya-live-orb::after {
+  left: 20%;
+  right: 20%;
+  bottom: 7%;
+  height: 8%;
+  background: radial-gradient(ellipse, #875fff42, #53cfff18 42%, transparent 72%);
+  filter: blur(13px);
+  opacity: .68;
+}
+
+.freya-live-orb-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  filter:
+    drop-shadow(0 0 18px #855fff32)
+    drop-shadow(0 0 34px #4acbff1f);
+}
+
+.freya-live-orb-fallback {
+  display: none;
+  position: absolute;
+  inset: 25%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 38% 30%, #c4a1ff90, transparent 18%),
+    radial-gradient(circle at 55% 58%, #884fffcc, #185cd9a8 46%, #09051c 72%);
+  box-shadow:
+    inset 0 0 26px #a78affaa,
+    inset 0 0 70px #3d7ff188,
+    0 0 32px #9c62ff66,
+    0 0 70px #42c8ff36;
+}
+
+.freya-live-orb[data-failed='true'] .freya-live-orb-fallback {
+  display: block;
+}
+
+@keyframes freya-orb-breathe {
+  0%, 100% { transform: scale(.96); opacity: .58; }
+  50% { transform: scale(1.04); opacity: .88; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .freya-live-orb::before { animation: none; }
+}

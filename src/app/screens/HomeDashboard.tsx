@@ -5,6 +5,8 @@ import { Clock } from '../../ui-v2/primitives/Clock'
 import { ready } from '../state/view'
 import type { ScreenSlots } from './Home'
 import { FreyaCentre } from '../presence/FreyaCentre'
+import { StargateHub } from '../presence/StargateHub'
+import { HomeWidgets } from './HomeWidgets'
 import { Chats } from '../chat/Chats'
 import type { ComposerMode, WorkspaceResearchView } from '../chat/modes'
 import type { VoiceView } from '../voice/useVoiceDock'
@@ -273,6 +275,7 @@ export function HomeDashboard({ screen, slots, snapshot, generating, notice, dre
       </aside>
       <main className="hd-main" aria-label={preview ? 'Freya dashboard · Sample data' : 'Freya dashboard'}>
         {screen === 'home' ? (<>
+        <HomeWidgets snapshot={snapshot} onNavigate={onNavigate} />
         <Panel name="focus" title="Current focus" icon="focus" onOpen={open('focus')}>
           <h3>{focus?.title ?? 'No focus reported'}</h3>
           <p className="hd-description">{preview ? 'Finalizing system architecture, workspace designs, and go-to-market plan.' : focus?.detail}</p>
@@ -283,8 +286,8 @@ export function HomeDashboard({ screen, slots, snapshot, generating, notice, dre
           <h3>{home?.mission ?? 'No mission reported'}</h3>
           <ul className="hd-goals">{home?.goals?.map((goal, i) => <li key={goal.id}><span className={preview && i === 0 ? 'hd-check hd-checked' : 'hd-check'} aria-hidden="true">{preview && i === 0 ? '✓' : ''}</span>{goal.text}</li>)}</ul>
         </Panel>
-        <div className="hd-presence" role="img" aria-label="Freya surrounded by luminous orbital rings">
-          <FreyaCentre centre={design.centre} style={design.style} rings={design.rings === 'on'} state={cognition} />
+        <div className="hd-presence" role="region" aria-label="Freya containment dashboard">
+          <StargateHub state={cognition} energy={generating ? 1 : Math.min(1, workingCount * .16)} onNavigate={onNavigate} />
           <button className="hd-dress" aria-label="Dressing table" aria-haspopup="dialog" onClick={onOpenDressing}><Glyph name="dress" size={15} /></button>
           <span className="hd-orbit-label hd-understand">UNDERSTAND</span><span className="hd-orbit-label hd-plan">PLAN</span><span className="hd-orbit-label hd-create">CREATE</span><span className="hd-orbit-label hd-remember">REMEMBER</span><span className="hd-orbit-label hd-act">ACT</span>
         </div>

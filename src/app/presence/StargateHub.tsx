@@ -41,16 +41,16 @@ const HOT_BY_STATE: Record<BrainState, readonly string[]> = {
   uncertainty: ['focus', 'relay'],
 }
 
-// Every port lies on a physical fragment, including the lower/upper pairs.
-const PORT_ANGLES: Readonly<Record<string, number>> = {
-  mind: 0, focus: 40, people: 72, workforce: 112, world: 144,
-  memory: 180, life: 205, foundry: 252, relay: 290, mission: 322,
-}
+// One fragment per subsystem, centred on that subsystem's angle. The socket is
+// machined at the fragment's midpoint, so a port cannot drift off its fragment:
+// the invariant is structural rather than hand-tuned.
+const SEGMENT_HALF = 15
 
-const GATE_SEGMENTS: readonly [number, number][] = [
-  [-24, 24], [35, 87], [105, 153],
-  [167, 209], [223, 271], [284, 328],
-]
+/** Unit-ish step pointing outward along `degrees`, used to slide a hot fragment open. */
+function radialStep(degrees: number, distance: number): { x: string; y: string } {
+  const angle = (degrees - 90) * Math.PI / 180
+  return { x: `${(Math.cos(angle) * distance).toFixed(2)}px`, y: `${(Math.sin(angle) * distance).toFixed(2)}px` }
+}
 
 const COMPONENT_EVENT = 'freya:component-fire'
 
@@ -128,7 +128,7 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
   const thickness = Math.min(82, Math.max(58, outer * .23))
   const inner = outer - thickness
   const strands = Object.fromEntries(COMPONENTS.map((card) => {
-    const portAngle = PORT_ANGLES[card.id] ?? card.angle
+    const portAngle = card.angle
     const start = polar(cx, cy, frame.gate * 224 / 500, portAngle)
     const control = polar(cx, cy, frame.gate * 224 / 500 + 18, portAngle)
     const end = polar(cx, cy, inner, card.angle)
@@ -192,41 +192,44 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
           </filter>
         </defs>
 
-        <circle className="sg-gate-guide" cx="250" cy="250" r="202" />
-        {GATE_SEGMENTS.map(([start, end], index) => {
-          const mid = (start + end) / 2
-          const marker = polar(250, 250, 201, mid)
+        {/* Ten keyed fragments. Each owns its subsystem, and its socket sits at the
+            fragment's own midpoint, so a port can never slide off its fragment.
+            The only motion is the outward slide of an engaged fragment. */}
+        {COMPONENTS.map((card) => {
+          const start = card.angle - SEGMENT_HALF
+          const end = card.angle + SEGMENT_HALF
+          const marker = polar(250, 250, 201, card.angle)
+          const port = polar(250, 250, 224, card.angle)
+          const step = radialStep(card.angle, 4)
           return (
-            <g className="sg-gate-segment" key={start} style={{ '--sg-seg': index } as CSSProperties}>
+            <g key={card.id} className="sg-gate-segment" data-hot={hot.has(card.id) || undefined}
+              style={{ '--sg-sx': step.x, '--sg-sy': step.y } as CSSProperties}>
               <path className="sg-gate-back" d={arcPath(250, 250, 201, start, end)} />
               <path className="sg-gate-body" d={arcPath(250, 250, 201, start + 1.5, end - 1.5)} />
               <path className="sg-gate-rim sg-gate-rim-outer" d={arcPath(250, 250, 224, start + 2, end - 2)} />
               <path className="sg-gate-rim sg-gate-rim-inner" d={arcPath(250, 250, 178, start + 2, end - 2)} />
               <path className="sg-gate-track" d={arcPath(250, 250, 211, start + 4, end - 4)} />
-              {[start + 6, start + 13, end - 13, end - 6].map((angle) => {
+              {[start + 5, end - 5].map((angle) => {
                 const point = polar(250, 250, 197, angle)
                 return <g key={angle} transform={`translate(${point.x} ${point.y}) rotate(${angle})`}>
                   <path className="sg-gate-engraving" d="M-3 -8H3V-2H-3V5H3 M0 8V12" />
                   <circle className="sg-gate-bolt" cy="20" r="1.8" />
                 </g>
               })}
-              {[start + 1, end - 1].map((angle) => {
+              {[start, end].map((angle) => {
                 const point = polar(250, 250, 201, angle)
                 return <path key={angle} className="sg-gate-fracture" transform={`translate(${point.x} ${point.y}) rotate(${angle})`} d="M0 -23 3 -15 -2 -7 2 2 -3 13 0 23" />
               })}
-              <g transform={`translate(${marker.x} ${marker.y}) rotate(${mid})`}>
+              <g transform={`translate(${marker.x} ${marker.y}) rotate(${card.angle})`}>
                 <path className="sg-gate-chevron" d="M0 -10 9 7 0 3 -9 7Z" />
                 <circle className="sg-gate-node" cx="0" cy="0" r="3.2" />
               </g>
+              <g className="sg-gate-socket" transform={`translate(${port.x} ${port.y}) rotate(${card.angle})`}>
+                <path d="M-7 5V-4L-4 -7H4L7 -4V5Z" />
+                <path className="sg-gate-socket-light" d="M-3 -3H3" />
+              </g>
             </g>
           )
-        })}
-        {COMPONENTS.map((card) => {
-          const port = polar(250, 250, 224, PORT_ANGLES[card.id] ?? card.angle)
-          return <g key={card.id} className="sg-gate-socket" data-hot={hot.has(card.id) || undefined} transform={`translate(${port.x} ${port.y}) rotate(${PORT_ANGLES[card.id]})`}>
-            <path d="M-7 5V-4L-4 -7H4L7 -4V5Z" />
-            <path className="sg-gate-socket-light" d="M-3 -3H3" />
-          </g>
         })}
       </svg>
 

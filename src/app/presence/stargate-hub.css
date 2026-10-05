@@ -31,28 +31,39 @@
 }
 .sg-strand-group { --sg-delay: 0s; }
 .sg-strand-aura, .sg-strand-core, .sg-strand-pulse { fill: none; vector-effect: non-scaling-stroke; }
-.sg-strand-aura { stroke: #83c8bf; stroke-width: 5; opacity: .05; filter: url(#sg-strand-glow); }
+/* Idle strands are static: no animation and no blur, so nothing composites while
+   Freya is at rest. The blur is scoped to engaged strands only. */
+.sg-strand-aura { stroke: #83c8bf; stroke-width: 5; opacity: .05; }
 .sg-strand-core { stroke: url(#sg-strand-signal); stroke-width: 1; opacity: .32; }
-.sg-strand-pulse {
-  stroke: #e1f6f1; stroke-width: 1.8; stroke-linecap: round;
-  stroke-dasharray: 1.5 98.5; opacity: .3;
+.sg-strand-pulse { stroke: #e1f6f1; stroke-width: 1.8; stroke-linecap: round; opacity: 0; }
+.sg-strand-group[data-hot='true'] .sg-strand-aura { opacity: .18; stroke-width: 8; filter: url(#sg-strand-glow); }
+.sg-strand-group[data-hot='true'] .sg-strand-core { opacity: .85; stroke-width: 1.4; }
+.sg-strand-group[data-hot='true'] .sg-strand-pulse {
+  opacity: 1; stroke: var(--sg-signal-hi);
+  stroke-dasharray: 5 95;
   filter: url(#sg-strand-glow);
-  animation: sg-strand-travel 6.6s linear infinite;
+  animation: sg-strand-travel 1.35s linear infinite;
   animation-delay: var(--sg-delay);
 }
-.sg-strand-group[data-hot='true'] .sg-strand-aura { opacity: .18; stroke-width: 8; }
-.sg-strand-group[data-hot='true'] .sg-strand-core { opacity: .85; stroke-width: 1.4; }
-.sg-strand-group[data-hot='true'] .sg-strand-pulse { opacity: 1; stroke: var(--sg-signal-hi); stroke-dasharray: 5 95; animation-duration: 1.35s; }
 @keyframes sg-strand-travel { to { stroke-dashoffset: -100; } }
 
-/* Six separate machined fragments with exposed ends and dedicated sockets. */
+/* Ten keyed fragments, one per subsystem. The ring is still at rest: an engaged
+   fragment is the only thing that moves, sliding outward along its own radius. */
 .sg-gate {
   position: absolute; z-index: 5; left: 50%; top: 50%;
   width: min(47%, 520px); aspect-ratio: 1;
   transform: translate(-50%, -50%); overflow: visible;
   pointer-events: none; filter: drop-shadow(0 7px 10px #000a);
 }
-.sg-gate-guide { fill: none; stroke: #c3b89525; stroke-width: .65; stroke-dasharray: 1 18; }
+/* The slide direction is baked per fragment from its own angle, so the travel
+   reads as that subsystem's port opening rather than a ring spinning. */
+.sg-gate-segment {
+  --sg-sx: 0px; --sg-sy: 0px;
+  transform: translate(0, 0);
+  transition: transform 520ms cubic-bezier(.22, .8, .3, 1);
+}
+.sg-gate-segment[data-hot='true'] { transform: translate(var(--sg-sx), var(--sg-sy)); }
+.sg-gate-segment[data-hot='true'] .sg-gate-rim-outer { stroke: #d9f4e8; stroke-width: 3.2; }
 .sg-gate-back { fill: none; stroke: #0b202850; stroke-width: 48; stroke-linecap: butt; }
 .sg-gate-body { fill: none; stroke: url(#sg-metal-face); stroke-width: 40; stroke-linecap: butt; }
 .sg-gate-rim { fill: none; stroke: url(#sg-edge); stroke-linecap: square; }
@@ -66,7 +77,7 @@
 .sg-gate-node { fill: #d1c5a5; opacity: .65; }
 .sg-gate-socket { fill: #19292b; stroke: #a69875; stroke-width: 1.4; }
 .sg-gate-socket-light { fill: none; stroke: #bdb28e; stroke-width: 2; }
-.sg-gate-socket[data-hot='true'] .sg-gate-socket-light { stroke: #dcfff2; filter: drop-shadow(0 0 4px #9bffdf); }
+.sg-gate-segment[data-hot='true'] .sg-gate-socket-light { stroke: #dcfff2; filter: drop-shadow(0 0 4px #9bffdf); }
 .sg-hub[data-busy='true'] .sg-gate-node { fill: #dffbf6; filter: drop-shadow(0 0 6px #b8fff5); animation: sg-gate-fire 1.8s ease-in-out infinite; }
 @keyframes sg-gate-fire { 0%, 100% { opacity: .5; } 45% { opacity: 1; } }
 
@@ -94,5 +105,6 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .sg-strand-pulse, .sg-hub[data-busy='true'] .sg-gate-node { animation: none; }
+  .sg-gate-segment { transition: none; }
   .sg-card-face { transition: none; }
 }

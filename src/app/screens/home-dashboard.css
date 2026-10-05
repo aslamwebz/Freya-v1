@@ -236,12 +236,7 @@
 .hd-presence { grid-area: 1 / 2 / 5 / 3; position: relative; place-self: center; width: min(100%, 640px); height: min(100%, 640px); pointer-events: auto; -webkit-app-region: no-drag; }
 .hd-dress { position: absolute; top: 38px; right: 46px; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 1px solid #8fc8e64d; background: #0a1826cc; color: #cfe6f7; box-shadow: 0 0 12px #66c9ff22; pointer-events: auto; -webkit-app-region: no-drag; z-index: 4; }
 .hd-dress:hover { color: #fff; background: #12324ae6; }
-.hd-orbit-label { position: absolute; font-size: 10px; letter-spacing: 1.55px; color: #b4dcf4; text-shadow: 0 0 8px #64bde455; }
-.hd-understand { top: 4%; left: 50%; transform: translateX(-50%); }
-.hd-plan { left: 3%; top: 48%; }
-.hd-create { right: 3%; top: 48%; }
-.hd-remember { left: 17%; bottom: 10%; }
-.hd-act { right: 17%; bottom: 10%; }
+
 .hd-attention { grid-area: 1 / 3 / 3 / 4; }
 .hd-attention .hd-panel-head { gap: 23px; }
 .hd-attention .hd-panel-body { margin: 9px 0 0 33px; }
@@ -397,7 +392,7 @@
 }
 
 .hd-dashboard[data-screen='home'] .hd-panel,
-.hd-dashboard[data-screen='home'] .hd-orbit-label,
+
 .hd-dashboard[data-screen='home'] .hd-dress {
   display: none;
 }

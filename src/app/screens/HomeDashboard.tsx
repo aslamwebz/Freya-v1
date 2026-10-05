@@ -302,7 +302,6 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
         <div className="hd-presence" role="region" aria-label="Freya containment dashboard">
           <StargateHub state={cognition} energy={generating ? 1 : Math.min(1, workingCount * .16)} onNavigate={onNavigate} />
           <button className="hd-dress" aria-label="Dressing table" aria-haspopup="dialog" onClick={onOpenDressing}><Glyph name="dress" size={15} /></button>
-          <span className="hd-orbit-label hd-understand">UNDERSTAND</span><span className="hd-orbit-label hd-plan">PLAN</span><span className="hd-orbit-label hd-create">CREATE</span><span className="hd-orbit-label hd-remember">REMEMBER</span><span className="hd-orbit-label hd-act">ACT</span>
         </div>
         <Panel name="attention" title="Attention" icon="life" onOpen={open('focus')}>
           <div className="hd-attention-content"><div className="hd-attention-ring" role="meter" aria-label="Attention" aria-valuemin={0} aria-valuemax={100} aria-valuenow={attention?.focused}><svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="43" className="hd-ring-track" /><circle cx="50" cy="50" r="43" className="hd-ring-fill" pathLength="100" strokeDasharray={`${attention?.focused ?? 0} 100`} /></svg><b>{attention ? `${attention.focused}%` : '—'}</b></div>

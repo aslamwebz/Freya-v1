@@ -17,6 +17,7 @@ import { createOwnWindowProvider, createSystemWindowProvider } from './context/w
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import { PresenceHost } from './presence/host'
 import { createBrowserExtensionHost, type BrowserExtensionHost } from './browserext'
+import { HostVoiceOutput, registerVoiceOutputIpc } from './voiceHost'
 import { installSingleInstanceGuard } from './startup/singleInstance'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ProviderConfigInput } from './providerConfig'
@@ -50,6 +51,14 @@ let workspace: WorkspaceFile | null = null
 let providerStore: ProviderConfigStore | null = null
 /** One Core per process. Survives renderer reloads; dies only with the app. */
 let coreHost: ElectronCoreHost | null = null
+/**
+ * Speech output, hosted.
+ *
+ * Created once, before Core, and lives independently of it so a Core rebuild —
+ * which happens every time the provider settings change — does not lose the list
+ * of voices the window reported or strand an utterance that was playing.
+ */
+const voiceOutput = new HostVoiceOutput()
 /** The presence host. Owns the presence window and pushes frames to it. */
 let presenceHost: PresenceHost | null = null
 /**
@@ -549,6 +558,11 @@ function createWindow(): BrowserWindow {
 
   window.once('ready-to-show', () => window.show())
 
+  // Speech output: this window is a candidate speaker. Removing it on close takes
+  // every utterance with it, so a window that has gone away cannot leave Core
+  // reporting `speaking` for an answer nobody can hear.
+  const detachVoiceOutput = voiceOutput.add(window)
+
   // The host pushes the current status on attach, so a freshly loaded or
   // reloaded renderer knows the Core state without polling for it.
   const detachCore = coreHost?.attach((status) => {
@@ -726,10 +740,34 @@ function createWindow(): BrowserWindow {
     if (!window.isDestroyed()) window.webContents.send('freya:core:life', projection)
   })
 
+  // Voice, on two channels, and the split is the design.
+  //
+  // The *projection* is state: where the machine is, whether the microphone is on,
+  // what the last capture produced. It moves on a schedule nothing else does — a
+  // permission prompt resolving, an engine finishing, STOP ALL landing — so it gets
+  // its own channel rather than riding along inside `freya:core:status`, where it
+  // would be copied and cached wherever a security projection is kept.
+  //
+  // The *transcript fragments* are words in flight, and they get a second channel
+  // for two reasons. A window that wants an animated interim line needs every
+  // fragment; a window that only cares about the final transcript should not be
+  // handed a stream of guesses to filter. And the two have opposite trust: a
+  // fragment marked `interim` is a guess the engine is still revising, and there
+  // is no command anywhere that would submit one.
+  const detachVoice = coreHost?.onVoice((projection) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:voice', projection)
+  })
+  const detachVoiceTranscript = coreHost?.onVoiceTranscript((fragment) => {
+    if (!window.isDestroyed()) window.webContents.send('freya:core:voice:transcript', fragment)
+  })
+
   window.on('closed', () => {
     detachCore?.()
     detachActivity?.()
     detachConversation?.()
+    detachVoice?.()
+    detachVoiceTranscript?.()
+    detachVoiceOutput()
     detachBrain?.()
     detachWork?.()
     detachMission?.()
@@ -815,6 +853,11 @@ function startPresenceFor(window: BrowserWindow): void {
  * ------------------------------------------------------------------ */
 
 function registerIpc(): void {
+  // Speech capability reporting. The only message a window may send about voice
+  // that is not a Core command, and it carries no words and no authority — just
+  // what the platform's speech engine turned out to be.
+  registerVoiceOutputIpc(voiceOutput)
+
   ipcMain.handle('freya:runtime', () => ({
     version: app.getVersion(),
     electron: process.versions.electron,
@@ -872,8 +915,21 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:submit', (_event, envelope: CoreCommandEnvelope) => {
     const result = requireCore().submit(envelope)
     // The microphone gate follows Core's verdict rather than the request, so a
-    // refused capture never opens the device.
-    void result.then((settled) => trackVoiceCapture(envelope, settled))
+    // refused capture never opens the device and a refusal cannot leave the gate
+    // latched open for whatever asks next.
+    void result.then((settled) => {
+      trackVoiceCapture(envelope, settled)
+      // And a settlement releases the utterance Core was waiting on. Core is what
+      // decides what the report means; this only stops the promise from hanging,
+      // which is what keeps `voice.speaking` true only while something is audible.
+      if (envelope.command === 'voice.tts.settle') {
+        const utteranceId = (envelope.payload as { utteranceId?: unknown } | undefined)?.utteranceId
+        const outcome = (envelope.payload as { outcome?: unknown } | undefined)?.outcome
+        if (typeof utteranceId === 'string' && settled.ok) {
+          voiceOutput.settle(utteranceId, outcome === 'completed')
+        }
+      }
+    })
     return result
   })
   ipcMain.handle('freya:core:status', () => requireCore().status())
@@ -1097,6 +1153,24 @@ app.whenReady().then(async () => {
         // carries the real adapters, a durable journal and an owner-authored grant
         // file; Core's own STOP ALL is composed on top of it by the host.
         ...(deviceHandsSeam ? { deviceHands: deviceHandsSeam } : {}),
+        /*
+         * Speech output, and nothing for speech input.
+         *
+         * The platform does give the window a speech engine, so `voiceTts` is
+         * wired and Freya can genuinely read a stored answer aloud. It does *not*
+         * give this build a recogniser, so no `voiceStt` is passed — and that is
+         * the whole reason Core reports transcription as `configuration-required`
+         * and discards recordings. The tempting move here is to attach a hosted
+         * recogniser to close the gap; it is refused because audio would then leave
+         * the machine over a path a window cannot see and a credential would sit in
+         * this process, and the honest gap is cheaper than that.
+         *
+         * `voiceCaptureSupported` is not asserted either: main has no microphone to
+         * ask about, so the renderer reports that from `navigator.mediaDevices` and
+         * a machine without a device gets `unsupported` from the renderer instead
+         * of a button that cannot work.
+         */
+        voiceTts: voiceOutput,
       },
     )
     registerIpc()
@@ -1217,8 +1291,9 @@ app.on('before-quit', (event) => {
  *
  * Everything is denied by default, which is the posture the rest of the security
  * story rests on. The single exception is the microphone, and it is granted only
- * when all three of these hold:
+ * when all four of these hold:
  *
+ *   - the owner has turned the microphone on, as **Core** reported it;
  *   - a voice capture is actually open, as Core reported it;
  *   - the request is for audio only, never a camera;
  *   - the browser raised it as a direct result of the user pressing the
@@ -1228,6 +1303,19 @@ app.on('before-quit', (event) => {
  * no always-on stream, and no way for a window to hold a microphone open between
  * captures. A request at any other time, or for anything other than audio, is
  * refused.
+ *
+ * ## Why there are two handlers
+ *
+ * `setPermissionRequestHandler` covers the prompt. `setPermissionCheckHandler`
+ * covers the *synchronous* question a renderer asks when a `MediaStream` is
+ * constructed from an already-granted source, and — more importantly here — it
+ * is the only place a renderer can be caught asking whether it is allowed to use
+ * the microphone *between* captures. Installing only the first leaves a window that
+ * polls permission as a way to learn whether a capture is expected, which is a
+ * side channel into Core's state; installing both means both answers come from
+ * Core's own projection and neither can be used as a probe.
+ *
+ * Both read the same two facts, and both are cleared together.
  */
 app.on('web-contents-created', (_event, contents) => {
   if (!ownsProfile) return
@@ -1238,29 +1326,65 @@ app.on('web-contents-created', (_event, contents) => {
     const mediaTypes = (details as { mediaTypes?: readonly string[] } | undefined)?.mediaTypes
     const audioOnly = Array.isArray(mediaTypes) && mediaTypes.length > 0 &&
       mediaTypes.every((kind) => kind === 'audio')
-    callback(permission === 'media' && voiceCaptureOpen && audioOnly)
+    callback(permission === 'media' && microphoneExpected() && audioOnly)
+  })
+  contents.session.setPermissionCheckHandler((_wc, permission) => {
+    // Deliberately origin-blind and content-blind: a request is allowed only when
+    // Core has an open capture, and a page loaded into any window therefore cannot
+    // obtain a stream by asking while an unrelated capture happens to be running.
+    // Web content cannot activate the microphone at all, because it has no path to
+    // `getUserMedia` — the permission gate is the second lock, not the only one.
+    if (permission !== 'media') return false
+    return microphoneExpected()
   })
 })
 
 /**
- * Whether a capture is currently open.
+ * Whether the operating system should hand over a microphone right now.
  *
- * Set from **Core's answer**, not from a renderer claim. The renderer opens and
+ * Set from **Core's answer**, never from a renderer claim. The renderer opens and
  * closes the device itself — that is where the Web Audio API is — but the host
  * only relaxes the permission gate once the trusted half has agreed a capture is
- * running, so a compromised window cannot open a stream by asking nicely.
+ * running *and* that the owner turned the microphone on, so a compromised window
+ * cannot open a stream by asking nicely and cannot hold one open by asking again.
  */
 let voiceCaptureOpen = false
+let voiceMicEnabled = false
 
-/** Follow Core's verdict on a voice capture command. */
-function trackVoiceCapture(envelope: CoreCommandEnvelope, result: { ok: boolean }): void {
-  if (envelope.command === 'voice.capture.start') {
-    voiceCaptureOpen = result.ok
-    presenceHost?.updateVoice(requireCore().voice())
-    return
+function microphoneExpected(): boolean {
+  return voiceCaptureOpen && voiceMicEnabled
+}
+
+/**
+ * Follow Core's verdict on a voice command.
+ *
+ * Every arm reads the same Core projection afterwards rather than tracking a
+ * separate local model of it, because the projection is the truth and a second
+ * copy is a second thing that can be wrong. The two booleans above are only the
+ * hot path's cache of "does Core's projection currently say an open capture on an
+ * enabled microphone", and they are rewritten from it on every voice command.
+ */
+function trackVoiceCapture(envelope: CoreCommandEnvelope, _result: { ok: boolean }): void {
+  switch (envelope.command) {
+    case 'voice.capture.start':
+    case 'voice.capture.end':
+    case 'voice.capture.cancel':
+    case 'voice.mic.enable':
+    case 'voice.mic.disable':
+    case 'voice.permission.report':
+    case 'voice.tts.cancel':
+    case 'voice.wake.arm':
+    case 'voice.wake.disarm':
+      break
+    default:
+      return
   }
-  if (envelope.command === 'voice.capture.end' || envelope.command === 'voice.capture.cancel') {
-    voiceCaptureOpen = false
-    presenceHost?.updateVoice(requireCore().voice())
-  }
+  const voice = requireCore().voice()
+  // A refused start must not leave the gate open: the previous value is only
+  // replaced when Core actually agrees a session exists. Before Core has built
+  // the service at all, both stay false — which is the safe reading, since there
+  // is no capture for a window to be asking about.
+  voiceMicEnabled = voice?.micEnabled === true
+  voiceCaptureOpen = voice?.capturing === true
+  presenceHost?.updateVoice(voice)
 }

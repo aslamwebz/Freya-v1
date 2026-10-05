@@ -27,9 +27,9 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // CI measured Phase 44 at 2,237,259 bytes; after the final Phase 45 Voice API
   // migration and Phase 46 Memory Identity composition, main.cjs is 2,312,063 bytes.
   // Phase 48 adds the Forge manifest door, sandbox, static scan, validation/version
-  // pipeline and encrypted Forge store. Keep only narrow explicit headroom over the
-  // measured combined artifact; CI will tighten this again if Forge moves the build.
-  mainBytes: 2_325_000,
+  // pipeline and encrypted Forge store. CI measures the reconciled P44-P48 main.cjs
+  // at 2,473,605 bytes. Keep only narrow explicit headroom over that artifact.
+  mainBytes: 2_490_000,
   // Phase 44 adds connector projection/commands to the preload bridge, and
   // Phase 45 adds the bounded Voice command/capability/playback channel. CI measures
   // the reconciled preload at 139,620 bytes, so retain only narrow explicit headroom.

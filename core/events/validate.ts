@@ -731,16 +731,65 @@ const PAYLOAD_RULES: {
 
   /* --------------------------------------------------------------- voice */
 
+  // Metadata only. The rules below are the complete list of what "metadata"
+  // means for voice, and they are field-by-field rather than a passthrough so a
+  // hand-edited journal line cannot smuggle in a field the schema does not name.
+  // For this family that distinction is the whole security property: audio and
+  // transcripts are personal data of a kind that has no business in a file that
+  // gets copied into backups and emailed to whoever is debugging something.
   'voice.capture.started': (p) =>
-    isEventId(p.sessionId) && isNonEmptyString(p.format) && isPositiveInt(p.sampleRate),
+    isEventId(p.sessionId) &&
+    isNonEmptyString(p.format) &&
+    isPositiveInt(p.sampleRate) &&
+    isPositiveInt(p.channels) &&
+    (p.activation === 'explicit' || p.activation === 'wake'),
   'voice.capture.completed': (p) =>
     isEventId(p.sessionId) &&
     isNonNegativeInt(p.byteLength) &&
     isNonNegativeInt(p.durationMs) &&
+    isNonNegativeInt(p.frames) &&
     typeof p.transcribed === 'boolean' &&
-    isNonNegativeInt(p.transcriptLength),
+    isNonNegativeInt(p.transcriptLength) &&
+    isNonNegativeInt(p.interimFragments),
   'voice.capture.cancelled': (p) =>
-    isEventId(p.sessionId) && isNonNegativeInt(p.byteLength) && isNonEmptyString(p.reason),
+    isEventId(p.sessionId) &&
+    isNonNegativeInt(p.byteLength) &&
+    isNonNegativeInt(p.durationMs) &&
+    isNonEmptyString(p.reason),
+  'voice.transcribe.started': (p) =>
+    isEventId(p.sessionId) && isNonEmptyString(p.engine) && isNonEmptyString(p.kind) && isNonNegativeInt(p.frames),
+  'voice.transcribe.completed': (p) =>
+    isEventId(p.sessionId) &&
+    isNonEmptyString(p.engine) &&
+    isNonNegativeInt(p.transcriptLength) &&
+    isNonNegativeInt(p.interimFragments),
+  'voice.transcribe.failed': (p) =>
+    isEventId(p.sessionId) &&
+    isNonEmptyString(p.engine) &&
+    (p.reason === 'timeout' || p.reason === 'unconfigured' || p.reason === 'engine-failed'),
+  'voice.submitted': (p) =>
+    isEventId(p.sessionId) &&
+    isNonEmptyString(p.turnId) &&
+    isNonEmptyString(p.outcome) &&
+    isNonNegativeInt(p.transcriptLength),
+  'voice.speech.started': (p) =>
+    isNonEmptyString(p.utteranceId) &&
+    isNonEmptyString(p.turnId) &&
+    isNonNegativeInt(p.characters) &&
+    (p.voice === 'default' || p.voice === 'selected') &&
+    isNonNegativeInt(p.queued),
+  'voice.speech.stopped': (p) =>
+    isNonEmptyString(p.utteranceId) && isNonEmptyString(p.turnId) && typeof p.completed === 'boolean',
+  'voice.speech.interrupted': (p) =>
+    isNonEmptyString(p.utteranceId) && isNonEmptyString(p.turnId) && isNonEmptyString(p.reason),
+  'voice.permission.changed': (p) =>
+    p.category === 'microphone' &&
+    (p.outcome === 'granted' || p.outcome === 'denied' || p.outcome === 'revoked') &&
+    (p.source === 'idle' || p.source === 'capturing'),
+  'voice.wake.armed': (p) => isNonEmptyString(p.gate) && isNonNegativeInt(p.threshold) && isPositiveInt(p.maxArmedMs),
+  'voice.wake.fired': (p) => isNonEmptyString(p.gate) && isNonNegativeInt(p.sustainedMs),
+  'voice.wake.disarmed': (p) => isNonEmptyString(p.gate) && isNonEmptyString(p.reason),
+  'voice.stopped': (p) => p.scope === 'all' && isNonEmptyString(p.reason),
 
   /* --------------------------------------------------------------- brain */
 

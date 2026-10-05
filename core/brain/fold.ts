@@ -24,6 +24,7 @@ const RECORD_KINDS: readonly BrainRecordKind[] = [
   'memory-candidate',
   'memory-record',
   'memory-review',
+  'memory-ownership',
   'experience',
 ]
 
@@ -81,6 +82,13 @@ export function applyRecord(state: BrainState, record: BrainRecord): void {
       if (!state.reviews.has(record.review.candidateId)) {
         state.reviews.set(record.review.candidateId, record.review)
       }
+      return
+    case 'memory-ownership':
+      // Last write wins, and deliberately *not* idempotent per id: two pinning
+      // decisions about one memory are two decisions, and only the later one is
+      // current. An earlier version stays in the log, so the sequence of owner
+      // decisions remains readable even though the map holds one.
+      state.ownership.set(record.ownership.memoryId, record.ownership)
       return
     case 'experience':
       if (!state.experiences.has(record.experience.experienceId)) {
@@ -265,6 +273,33 @@ export function validateRecord(value: unknown): { ok: true; record: BrainRecord 
       if (!review || !isId(review.candidateId)) return { ok: false, reason: 'review record has no id' }
       if (typeof review.decision !== 'string') return { ok: false, reason: 'review decision is malformed' }
       if (!isInstant(review.reviewedAt)) return { ok: false, reason: 'review timestamp is malformed' }
+      return ok()
+    }
+    case 'memory-ownership': {
+      const ownership = record.ownership as Record<string, unknown> | undefined
+      if (!ownership || !isId(ownership.memoryId)) {
+        return { ok: false, reason: 'ownership record has no memory id' }
+      }
+      if (typeof ownership.pinned !== 'boolean') {
+        return { ok: false, reason: 'ownership record is malformed' }
+      }
+      if (!isInstant(ownership.decidedAt)) {
+        return { ok: false, reason: 'ownership timestamp is malformed' }
+      }
+      // The single most important check in this case. A record claiming any other
+      // principal is refused on read, so a log written by a future bug — or
+      // hand-crafted with the key — still cannot make the fold believe that a
+      // subsystem or a model decided what the owner keeps in view.
+      if (ownership.decidedBy !== 'owner') {
+        return { ok: false, reason: 'only the owner decides what Freya keeps in view' }
+      }
+      if (
+        typeof ownership.reason !== 'string' ||
+        ownership.reason.length === 0 ||
+        ownership.reason.length > BRAIN_LIMITS.maxReasonChars
+      ) {
+        return { ok: false, reason: 'an ownership decision must state a reason, within the reason limit' }
+      }
       return ok()
     }
     case 'experience': {

@@ -17,7 +17,7 @@ afterEach(() => {
   cleanup()
 })
 
-function dock(overrides: Partial<VoiceView> = {}): VoiceDock & { pressed: string[] } {
+function dock(overrides: Partial<VoiceView> & { autoSubmit?: boolean } = {}): VoiceDock & { pressed: string[] } {
   const pressed: string[] = []
   const projection = absentVoiceProjection({
     micEnabled: overrides.micEnabled ?? true,

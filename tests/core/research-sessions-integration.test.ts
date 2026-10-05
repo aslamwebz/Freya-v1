@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCore, type Core } from '../../core'
+import type { CoreCommandResult } from '../../core/protocol/core-protocol'
 import { FakeModelProvider } from '../../core/model/fake-provider'
 import type { SearchProvider, SearchResult } from '../../core/research/types'
 import type { BrowserTarget, BrowserTargetFactory, ReadableDocument } from '../../core/research/browser'
@@ -74,8 +75,15 @@ class PagedProvider implements SearchProvider {
   }
 }
 
+type ResearchTestOutcome = NonNullable<CoreCommandResult['research']> & {
+  session: NonNullable<NonNullable<CoreCommandResult['research']>['session']>
+  sessions: NonNullable<NonNullable<CoreCommandResult['research']>['sessions']>
+}
+
 function command(name: string, payload?: unknown, requestId = name) {
-  return core!.handleCommand({ command: name, requestId, payload } as never) as Promise<any>
+  return core!.handleCommand({ command: name, requestId, payload } as never) as Promise<
+    CoreCommandResult & { research: ResearchTestOutcome }
+  >
 }
 
 async function start(
@@ -158,7 +166,9 @@ describe("Freya's Eye Core integration", () => {
 
     const sessions = await command('research.session.list')
     expect(sessions.research.sessions).toHaveLength(1)
-    expect(sessions.research.sessions[0].sessionId).toBe(id)
+    const onlySession = sessions.research.sessions[0]
+    if (!onlySession) throw new Error('expected the active Eye session to be listed')
+    expect(onlySession.sessionId).toBe(id)
   })
 
   it('returns ambiguity rather than silently changing intent for an unclear short follow-up', async () => {

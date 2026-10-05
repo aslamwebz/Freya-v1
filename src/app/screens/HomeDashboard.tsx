@@ -247,7 +247,7 @@ export function HomeDashboard({ screen, slots, snapshot, generating, notice, dre
       </header>
       <aside className="hd-rail" data-collapsed={collapsed || undefined}>
         <div className="hd-railhead">
-          <button className="hd-rail-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={() => setCollapsed(value => !value)}><Glyph name="arrow" size={16} /></button>
+          <button className="hd-rail-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={() => setCollapsed(value => !value)}><Glyph name="panel" size={16} /></button>
         </div>
         <div className="hd-rail-list">
           <button className="hd-place" aria-label="Home" aria-current={screen === 'home' ? 'page' : undefined} onClick={open('home')}><Glyph name="home" size={20} /><span>Home</span></button>

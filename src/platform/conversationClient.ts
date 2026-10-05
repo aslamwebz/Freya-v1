@@ -138,7 +138,23 @@ export function createConversationMirror(): ConversationMirror {
       }
     },
 
-    create: () => submit('conversation.create'),
+    create: () => {
+      /*
+       * One empty conversation at a time. Pressing New while a conversation
+       * with no messages already exists would mint a twin nobody asked for and
+       * leave two rows indistinguishable forever, so instead the existing one
+       * is selected. Only when everything on the list has words does a new
+       * conversation actually get created.
+       */
+      const empty = current?.conversations?.find((conversation) => conversation.messageCount === 0)
+      if (empty) {
+        if (current?.activeConversationId !== empty.conversationId) {
+          void submit('conversation.read', { conversationId: empty.conversationId })
+        }
+        return Promise.resolve({ operation: 'refused', reason: 'An empty conversation already exists — it is open now.' })
+      }
+      return submit('conversation.create')
+    },
     list: () => submit('conversation.list'),
     read: (conversationId) => submit('conversation.read', { conversationId }),
 

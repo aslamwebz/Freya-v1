@@ -916,6 +916,16 @@ describe('voice does not spend cognition', () => {
     const provider = new FakeModelProvider()
     const c = await started({ providers: [provider] })
 
+    // Phase 45 put a lifecycle in front of the capture: the owner turns the
+    // microphone on, and the platform reports the permission. A window that could
+    // open a capture without those two would have a device Core never agreed to,
+    // so the test walks the same path the composer does.
+    await c.handleCommand({ command: 'voice.mic.enable', requestId: 'v0' })
+    await c.handleCommand({
+      command: 'voice.permission.report',
+      requestId: 'v0b',
+      payload: { outcome: 'granted' },
+    })
     const startedResult = await c.handleCommand({ command: 'voice.capture.start', requestId: 'v1' })
     const voice = startedResult.voice as VoiceCommandOutcome
     expect(voice.operation).toBe('capture-started')
@@ -925,7 +935,7 @@ describe('voice does not spend cognition', () => {
     const ended = await c.handleCommand({
       command: 'voice.capture.end',
       requestId: 'v2',
-      payload: { sessionId, audio: new Uint8Array(512), durationMs: 250 },
+      payload: { sessionId, audio: new Uint8Array(512), durationMs: 16 },
     })
     const outcome = ended.voice as VoiceCommandOutcome
     expect(outcome.operation).toBe('capture-ended')

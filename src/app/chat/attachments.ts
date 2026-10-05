@@ -1,5 +1,3 @@
-import type { AttachmentResult } from '../../platform/host'
-
 /**
  * Turning attachments into something a turn can carry.
  *
@@ -32,11 +30,13 @@ export const TURN_MAX_CHARACTERS = 8_000
 /** How much of one file may go into a turn, below the ceiling above. */
 export const PER_ATTACHMENT_MAX_CHARS = 6_000
 
+export type AttachmentKind = 'text' | 'image' | 'unsupported'
+
 export interface AttachmentDraft {
   /** Identity for dedupe and removal. The composer supplies the file's path. */
   readonly id: string
   readonly name: string
-  readonly kind: AttachmentResult['kind']
+  readonly kind: AttachmentKind
   readonly sizeBytes: number
   /** The text that will be sent for this file, if any. */
   readonly text: string | null

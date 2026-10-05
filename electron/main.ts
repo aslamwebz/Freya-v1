@@ -1293,6 +1293,19 @@ app.whenReady().then(async () => {
     const vaultBinding = process.platform === 'win32'
       ? createFreyaVaultBinding(join(ROOT, 'native', 'sqlcipher', 'win32-x64', 'better_sqlite3-electron44.node'))
       : undefined
+
+    // CI runs Electron on Linux, while the repository intentionally ships a
+    // SQLCipher native binding only for the supported Windows desktop build.
+    // Passing a Vault config without a binding makes Core correctly fail closed
+    // to ephemeral conversation memory, which cannot survive the E2E process
+    // relaunch. In the explicit E2E harness only, omit that unavailable Vault so
+    // Core exercises its existing encrypted conversation compatibility store
+    // using the deterministic E2E conversation key. This is not a production
+    // fallback: packaged/local Windows still receives the canonical SQLCipher
+    // Vault, and a non-E2E unsupported platform still reports the Vault failure.
+    const e2eEncryptedConversationCompatibility =
+      process.env.FREYA_E2E === '1' && vaultBinding === undefined
+
     const deviceHandsSeam = buildDeviceHandsSeam()
     coreHost = new ElectronCoreHost(
       dataPath,
@@ -1320,11 +1333,15 @@ app.whenReady().then(async () => {
         personalityKey: result.personality.key,
         skillKey: result.skill.key,
         forgeKey: result.forge.key,
-        vault: {
-          path: vaultPath,
-          keyProvider: { load: async () => ({ key: result.vault.key, reason: result.vault.reason }) },
-          ...(vaultBinding ? { binding: vaultBinding } : {}),
-        },
+        ...(e2eEncryptedConversationCompatibility
+          ? {}
+          : {
+              vault: {
+                path: vaultPath,
+                keyProvider: { load: async () => ({ key: result.vault.key, reason: result.vault.reason }) },
+                ...(vaultBinding ? { binding: vaultBinding } : {}),
+              },
+            }),
         // Explicit host setting; own-app sees only Freya. System is honestly unsupported.
         ...(['own-app', 'system'].includes(process.env.FREYA_CONTEXT_WINDOW_OBSERVATION ?? '') ? {
           windowObservation: {

@@ -2,8 +2,9 @@
    Fills the board's main region (`.hd-main`), so it follows the same rail,
    header and dock as every other tab. */
 /* The conversation list lives in the left rail (ChatHistory), so the workspace
-   is the transcript alone and takes the full board width. */
+   owns the transcript plus the optional bounded browser controller. */
 .chats { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.chats[data-browser-open] { grid-template-columns: minmax(320px, .8fr) minmax(390px, 1.05fr); }
 
 .chats-list,
 .chats-thread {
@@ -46,6 +47,17 @@
 .chats-session-copy small { color:#7290a7; font-size:10px; }
 .chats-session-mark { display:grid; place-items:center; width:27px; height:27px; border-radius:9px; border:1px solid #5e8aa55e; background:#0c2132b0; color:#81dff7; }
 .chats-session-chevron { color:#66859c; font:19px/1 Georgia,serif; }
+.chats-session-row { display:grid; grid-template-columns:minmax(0,1fr) 28px; align-items:center; gap:2px; min-width:0; border-radius:10px; }
+.chats-session-row .chats-session { width:100%; min-width:0; }
+.chats-session-close {
+  display:grid; place-items:center; width:26px; height:26px; padding:0; border:1px solid transparent;
+  border-radius:8px; background:transparent; color:#68879e; font:18px/1 system-ui,sans-serif;
+  opacity:0; transition:opacity 120ms ease,color 120ms ease,background 120ms ease,border-color 120ms ease;
+}
+.chats-session-row:hover .chats-session-close,
+.chats-session-row[data-active] .chats-session-close,
+.chats-session-close:focus-visible { opacity:1; }
+.chats-session-close:hover { color:#ffd5d5; background:#4b20286b; border-color:#ad5c6c55; }
 .chats-list-empty { display:grid; justify-items:center; align-content:center; gap:5px; min-height:180px; padding:22px; text-align:center; color:#7795ab; }
 .chats-list-empty b { color:#bcd3e3; font-size:12px; font-weight:500; }
 .chats-list-empty small { max-width:160px; font-size:10px; line-height:1.45; }
@@ -246,8 +258,8 @@
 
 .chats-source-list,
 .chats-eye-results { display: grid; }
-.chats-source-list a,
-.chats-eye-results a {
+.chats-source-list button,
+.chats-eye-results button {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -257,12 +269,12 @@
   color: inherit;
   text-decoration: none;
 }
-.chats-source-list a:first-child,
-.chats-eye-results a:first-child { border-top: 0; }
-.chats-source-list a:hover,
-.chats-eye-results a:hover { background: #11304a5c; }
-.chats-source-list a > span,
-.chats-eye-results a > span:not(.chats-eye-rank) { display: grid; gap: 2px; min-width: 0; }
+.chats-source-list button:first-child,
+.chats-eye-results button:first-child { border-top: 0; }
+.chats-source-list button:hover,
+.chats-eye-results button:hover { background: #11304a5c; }
+.chats-source-list button > span,
+.chats-eye-results button > span:not(.chats-eye-rank) { display: grid; gap: 2px; min-width: 0; }
 .chats-source-list b,
 .chats-eye-results b {
   overflow: hidden;
@@ -309,7 +321,7 @@
 }
 .chats-eye-persistence[data-durable] { color: #69d9bb; }
 
-.chats-eye-results a {
+.chats-eye-results button {
   grid-template-columns: 24px minmax(0, 1fr) auto;
   align-items: start;
 }
@@ -338,4 +350,127 @@
   .hd-tool-mode > span { display: none; }
   .hd-tool-mode { min-width: 28px; padding-inline: 6px !important; }
   .chats-research-card { width: 100%; }
+}
+
+
+/* Rich assistant content. Every string is rendered through React text nodes; these
+   rules are presentation only and never turn model output into HTML. */
+.chats-user-text { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.chats-rich { display:grid; gap:9px; min-width:0; }
+.chats-rich > * { margin:0; }
+.chats-rich p,
+.chats-rich li,
+.chats-rich blockquote,
+.chats-rich td,
+.chats-rich th { overflow-wrap:anywhere; line-height:1.55; }
+.chats-rich h2 { font-size:17px; font-weight:600; color:#eff9ff; }
+.chats-rich h3 { font-size:15px; font-weight:600; color:#e4f5ff; }
+.chats-rich h4 { font-size:13px; font-weight:600; color:#d8edf9; }
+.chats-rich ul,
+.chats-rich ol { margin:0; padding-left:22px; display:grid; gap:4px; }
+.chats-rich blockquote { padding:7px 10px; border-left:2px solid #69dff0a8; background:#0b26386b; color:#b9cede; }
+.chats-rich code { font-family:'Cascadia Code','SFMono-Regular',Consolas,monospace; font-size:.92em; color:#b9f2ff; background:#07131ead; border:1px solid #5c83994a; border-radius:5px; padding:1px 4px; }
+.chats-code { overflow:hidden; border:1px solid #557c9566; border-radius:9px; background:#06111bd9; }
+.chats-code figcaption { padding:6px 10px; border-bottom:1px solid #557c953f; color:#81a9bf; font:9px/1.2 'Segoe UI',sans-serif; letter-spacing:1px; text-transform:uppercase; }
+.chats-code pre { margin:0; padding:10px 12px; overflow:auto; }
+.chats-code pre code { padding:0; border:0; background:none; color:#d5ecf7; font-size:11px; line-height:1.5; white-space:pre; }
+.chats-table-wrap { max-width:100%; overflow:auto; border:1px solid #557c954d; border-radius:8px; }
+.chats-rich table { width:100%; border-collapse:collapse; font-size:11px; }
+.chats-rich th,
+.chats-rich td { padding:6px 8px; text-align:left; border-bottom:1px solid #557c9538; border-right:1px solid #557c9528; }
+.chats-rich th { color:#cfeaf7; background:#10283a94; font-weight:600; }
+.chats-rich tr:last-child td { border-bottom:0; }
+.chats-rich-link { display:inline; padding:0; border:0; background:none; color:#7de7fa; text-decoration:underline; text-underline-offset:2px; font:inherit; }
+.chats-rich-link:not(:disabled) { cursor:pointer; }
+.chats-rich-link:disabled { color:#86a8b9; text-decoration-style:dotted; cursor:not-allowed; }
+
+
+/* Chat-owned browser controller. The web page itself stays in the isolated Electron
+   browser window; this panel exposes only the Phase 51 projection and bounded actions. */
+.chats-browser {
+  min-width:0; min-height:0; overflow:hidden; display:grid;
+  grid-template-rows:auto auto auto auto minmax(0,1fr) auto;
+  border:1px solid #b0daf0bd; border-radius:12px;
+  background:linear-gradient(145deg,#112a3cc9,#06111be8 58%,#0d2030d7);
+  box-shadow:inset 1px 1px 1px #dcf1ff48,0 7px 24px #0003;
+  backdrop-filter:blur(9px);
+}
+.chats-browser-head { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:54px; padding:8px 12px; border-bottom:1px solid #739cb32f; }
+.chats-browser-head > span { display:flex; align-items:center; gap:8px; color:#8eeaff; }
+.chats-browser-head b { color:#dff5fb; font-size:11px; letter-spacing:.12em; text-transform:uppercase; }
+.chats-browser-head > div { display:flex; align-items:center; gap:7px; }
+.chats-browser-head small { padding:3px 7px; border:1px solid #6b879849; border-radius:999px; color:#8da3b2; font-size:8px; text-transform:uppercase; }
+.chats-browser-head small[data-ready] { color:#83edd5; border-color:#66d5bc5a; }
+.chats-browser-head button { width:26px; height:26px; padding:0; border-radius:8px; color:#839daf; font-size:18px; }
+.chats-browser-head button:hover { color:#fff; background:#20384a7d; }
+
+.chats-browser-address { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; padding:10px 11px 8px; }
+.chats-browser-address input,
+.chats-browser-field input { min-width:0; border:1px solid #56798f69; border-radius:8px; outline:none; background:#07131dc7; color:#e3f0f8; padding:7px 9px; font-size:10px; }
+.chats-browser-address input:focus,
+.chats-browser-field input:focus { border-color:#6ddff6a8; box-shadow:0 0 0 2px #5edcf20e; }
+.chats-browser-address button,
+.chats-browser-actions button,
+.chats-browser-field button,
+.chats-browser-element > button,
+.chats-browser-handoff button { border:1px solid #557d9666; border-radius:8px; background:#10293ba8; color:#c8deeb; padding:6px 9px; font-size:9px; }
+.chats-browser button:disabled { opacity:.42; cursor:not-allowed; }
+.chats-browser button:not(:disabled):hover { border-color:#6ec8e898; color:#fff; background:#153a50c7; }
+
+.chats-browser-state { display:flex; flex-wrap:wrap; gap:6px; padding:0 11px 8px; color:#7895a9; font-size:8px; text-transform:uppercase; letter-spacing:.06em; }
+.chats-browser-state span { display:inline-flex; align-items:center; gap:5px; padding:3px 6px; border:1px solid #53758b40; border-radius:999px; }
+.chats-browser-state i { width:6px; height:6px; border-radius:50%; background:#687986; }
+.chats-browser-state i[data-on] { background:#6fe8cc; box-shadow:0 0 7px #6fe8cc77; }
+.chats-browser-title { margin:0; padding:0 12px 8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#dcebf4; font:400 14px/1.2 Georgia,serif; }
+
+.chats-browser-empty { align-self:center; display:grid; justify-items:center; gap:7px; padding:28px 20px; text-align:center; color:#7693a6; }
+.chats-browser-empty svg { color:#65dcee; }
+.chats-browser-empty b { color:#c4dce8; font-size:11px; }
+.chats-browser-empty p { margin:0; max-width:280px; font-size:9px; line-height:1.5; }
+
+.chats-browser-actions { display:flex; flex-wrap:wrap; gap:6px; padding:0 11px 8px; border-bottom:1px solid #63839924; }
+.chats-browser-elements { min-height:0; overflow:auto; display:grid; align-content:start; gap:6px; padding:9px 11px 12px; }
+.chats-browser-elements > p { margin:5px 2px; color:#7895a9; font-size:9px; line-height:1.5; }
+.chats-browser-element { display:grid; gap:5px; padding:8px; border:1px solid #56788e47; border-radius:9px; background:#0a1925a6; }
+.chats-browser-element > header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.chats-browser-element > header span { color:#7fe7f5; font-size:8px; letter-spacing:.08em; text-transform:uppercase; }
+.chats-browser-element code { overflow:hidden; text-overflow:ellipsis; color:#68879a; font-size:8px; }
+.chats-browser-element > b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#d1e4ee; font-size:10px; font-weight:500; }
+.chats-browser-element > small { color:#df9e87; font-size:8px; }
+.chats-browser-field { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:5px; }
+
+.chats-browser-handoff { display:grid; gap:6px; margin:0 11px 8px; padding:9px; border:1px solid #9a87d65e; border-radius:9px; background:#241d3a61; }
+.chats-browser-handoff b { color:#d9caff; font-size:10px; }
+.chats-browser-handoff p { margin:0; color:#a397ba; font-size:8px; line-height:1.45; }
+.chats-browser-notice { margin:0 11px 10px; padding:6px 8px; border-left:2px solid #69cfe9; border-radius:4px 8px 8px 4px; background:#0a2232b0; color:#9fc3d4; font-size:8px; line-height:1.45; }
+
+.hd-tool-browser[aria-pressed='true'] { color:#b8f6ff !important; border-color:#69dcef91 !important; background:#10364aa8 !important; box-shadow:inset 0 0 8px #68dcff14; }
+
+@media (max-width: 1420px) {
+  .chats[data-browser-open] { grid-template-columns:minmax(0,.8fr) minmax(380px,1.2fr); }
+  .chats[data-browser-open] .chats-list { display:none; }
+}
+
+
+/* Eye discovery results are product results, not a link dump. Video results get a
+   recognisable play-card treatment; every card still opens through Freya's browser
+   workspace rather than escaping directly from generated/search content. */
+.chats-eye-result-card {
+  width:100%; text-align:left; border:0; background:transparent; color:inherit;
+  cursor:pointer; font:inherit;
+}
+.chats-eye-result-card[data-media='video'] {
+  margin:4px 0; padding:10px !important; border:1px solid #5c91ab4f !important;
+  border-radius:10px; background:linear-gradient(135deg,#102b3ca6,#091724a8) !important;
+}
+.chats-eye-result-card[data-media='video']:hover {
+  border-color:#68d9ef83 !important;
+  background:linear-gradient(135deg,#12364bad,#0b1d2db8) !important;
+}
+.chats-eye-result-card[data-media='video'] .chats-eye-rank {
+  color:#b8f7ff; border-color:#66dced78; background:#12384baf;
+}
+.chats-eye-open {
+  display:inline-flex; align-items:center; gap:4px; align-self:center;
+  color:#7bdff4; font-size:8px; white-space:nowrap;
 }

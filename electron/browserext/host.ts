@@ -54,6 +54,8 @@ export interface BrowserExtensionHostOptions {
   readonly now?: () => number
   readonly policy?: unknown
   readonly urlOptions?: BridgeUrlOptions
+  /** Local development: no grant/approval/control friction. */
+  readonly localUnrestricted?: boolean
   readonly tokenStore?: BridgeTokenStore
   /** Core's grant source. Absent means "no grant", which refuses every action. */
   readonly activeGrant?: (principalId: string, scope: string) => GrantFact | null
@@ -156,13 +158,22 @@ export function createBrowserExtensionHost(
 
   // A minimal, locked-down policy. Phase 42 is expected to supply the real one.
   const policy =
-    options.policy ?? {
-      allowedRoots: ['/freya-none'],
-      deniedRoots: [vaultRoot, keyringRoot],
-      allowedHosts: ['localhost'],
-      allowedCommands: ['echo'],
-      allowedEnvNames: ['LANG'],
-    }
+    options.policy ?? (options.localUnrestricted === true
+      ? {
+          localUnrestricted: true,
+          allowedRoots: [],
+          deniedRoots: [],
+          allowedHosts: [],
+          allowedCommands: [],
+          allowedEnvNames: [],
+        }
+      : {
+          allowedRoots: ['/freya-none'],
+          deniedRoots: [vaultRoot, keyringRoot],
+          allowedHosts: ['localhost'],
+          allowedCommands: ['echo'],
+          allowedEnvNames: ['LANG'],
+        })
 
   let stopped = false
   const enabled = options.activation === 'active'
@@ -220,16 +231,21 @@ export function createBrowserExtensionHost(
     onChange: () => undefined,
   }
 
-  const runtime = createDeviceHandsRuntime({ ports })
+  const runtime = createDeviceHandsRuntime({
+    ports,
+    localUnrestricted: options.localUnrestricted === true,
+  })
 
   async function dispatch(request: BridgeDispatchRequest): Promise<BridgeDispatchResult> {
     if (request.command === 'control.request') {
       // Control is an owner decision, routed to the owner and only the owner. Absent a
       // decision the answer is no.
       const granted =
-        options.requestControl === undefined
-          ? false
-          : await options.requestControl(request.sessionId, request.extensionId)
+        options.localUnrestricted === true
+          ? true
+          : options.requestControl === undefined
+            ? false
+            : await options.requestControl(request.sessionId, request.extensionId)
       return granted
         ? { ok: true, code: null, reason: 'The owner enabled agent-driven control for this session.' }
         : {

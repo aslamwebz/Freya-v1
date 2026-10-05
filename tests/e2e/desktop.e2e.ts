@@ -2028,32 +2028,56 @@ async function main(): Promise<void> {
           Object.keys((window as unknown as { freyaHost?: object }).freyaHost ?? {}).sort(),
         )
         /**
-         * The bridge must not hand a window a browser handle, a session, a storage
-         * path, or a provider.
+         * The bridge must not hand a window a raw browser handle, browser session,
+         * storage path, provider, credential or generic capability tunnel.
          *
-         * "Provider" here means a *capability to infer* — something a window could
-         * call to spend. Two members match the word and are not that:
-         * `providerConfig` and `saveProviderConfig`, which read and write settings.
-         * They are allowed by exact name, and only by exact name, so a third
-         * provider-shaped member added later still fails this check rather than
-         * being quietly admitted by a widened pattern.
+         * Four exact members intentionally match the broad audit vocabulary:
          *
-         * What makes them settings rather than a handle is on the host side and is
-         * asserted there: the read returns base URL, model, live flag and `hasKey`
-         * with no field a credential could occupy, the write takes the key one way
-         * and never returns it, and the credential is wrapped by the OS keyring in
-         * the main process. Nothing here can name a model for a turn, raise a token
-         * ceiling or reach a provider — a turn still goes through the Gateway and the
-         * Governor whatever this screen is set to.
+         * - `providerConfig` / `saveProviderConfig` are bounded settings only.
+         * - `browserState` is the renderer-safe Phase 51 projection.
+         * - `browserExecute` accepts only the closed BrowserRequest vocabulary and
+         *   is rebuilt again at preload/main before the existing Dual Browser runtime
+         *   routes the action through Device Hands.
+         *
+         * Exact-name admission is important. A future `browserWindow`,
+         * `browserSession`, `browserStorage`, `providerClient` or similar member
+         * must still fail this test instead of being hidden by a wider regex exception.
          */
         const SETTINGS_MEMBERS = new Set(['providerConfig', 'saveProviderConfig'])
+        const BOUNDED_BROWSER_MEMBERS = new Set(['browserState', 'browserExecute'])
         const handles = keys.filter(
-          (key) => !SETTINGS_MEMBERS.has(key) && /browser|target|session|provider|store|path|file|key/i.test(key),
+          (key) =>
+            !SETTINGS_MEMBERS.has(key) &&
+            !BOUNDED_BROWSER_MEMBERS.has(key) &&
+            /browser|target|session|provider|store|path|file|key/i.test(key),
         )
         check(
-          'the bridge exposes no browser handle, provider or storage path',
+          'the bridge exposes no raw browser handle, provider or storage path',
           handles.length === 0,
           handles.length > 0 ? handles.join(', ') : keys.join(', '),
+        )
+
+        const browserProjection = await research.evaluate(async () => {
+          const host = (window as unknown as {
+            freyaHost?: {
+              browserState?: () => Promise<Record<string, unknown>>
+            }
+          }).freyaHost
+          return host?.browserState ? await host.browserState() : null
+        })
+        const browserProjectionKeys =
+          browserProjection && typeof browserProjection === 'object'
+            ? Object.keys(browserProjection).sort()
+            : []
+        const leakedBrowserProjectionKeys = browserProjectionKeys.filter((key) =>
+          /window|webcontents|cookie|credential|token|storage|profile|partition|provider|apikey|secret/i.test(key),
+        )
+        check(
+          'the bounded browser projection exposes no raw handle or credential-shaped field',
+          leakedBrowserProjectionKeys.length === 0,
+          leakedBrowserProjectionKeys.length > 0
+            ? leakedBrowserProjectionKeys.join(', ')
+            : browserProjectionKeys.join(', '),
         )
 
         // Search is driven first and Research is opened afterwards, because these

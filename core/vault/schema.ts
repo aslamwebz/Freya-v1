@@ -14,7 +14,7 @@ import type { NativeConnection } from './binding'
  * with no extra table to bootstrap.
  */
 
-export const VAULT_SCHEMA_VERSION = 2
+export const VAULT_SCHEMA_VERSION = 4
 
 export interface VaultMigrationContext {
   exec(sql: string): void
@@ -205,5 +205,67 @@ export const VAULT_MIGRATIONS: readonly VaultMigration[] = Object.freeze([
         '0',
       ])
     },
+  },  {
+    version: 3,
+    name: 'conversation-relational',
+    up: (context) => {
+      // Conversation bodies are private user data and therefore live in the same
+      // SQLCipher Vault as the other structured durable domains. They are relational
+      // rather than packed into vault_kv because ordering, turn outcomes and message
+      // ownership are first-class query properties of a conversation.
+      context.exec(
+        `CREATE TABLE IF NOT EXISTS chat_conversations (
+           conversation_id TEXT PRIMARY KEY,
+           title           TEXT NOT NULL,
+           created_at      TEXT NOT NULL,
+           updated_at      TEXT NOT NULL
+         )`,
+      )
+      context.exec(
+        'CREATE INDEX IF NOT EXISTS chat_conversations_updated ON chat_conversations (updated_at DESC, conversation_id)',
+      )
+      context.exec(
+        `CREATE TABLE IF NOT EXISTS chat_messages (
+           message_id      TEXT PRIMARY KEY,
+           conversation_id TEXT NOT NULL,
+           role            TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+           content         TEXT NOT NULL,
+           created_at      TEXT NOT NULL,
+           turn_id         TEXT NOT NULL
+         )`,
+      )
+      context.exec(
+        'CREATE INDEX IF NOT EXISTS chat_messages_conversation ON chat_messages (conversation_id, created_at, message_id)',
+      )
+      context.exec(
+        `CREATE TABLE IF NOT EXISTS chat_turns (
+           turn_id              TEXT PRIMARY KEY,
+           conversation_id      TEXT NOT NULL,
+           user_message_id      TEXT NOT NULL,
+           assistant_message_id TEXT,
+           outcome              TEXT NOT NULL CHECK (outcome IN ('pending', 'completed', 'denied', 'cancelled', 'failed', 'interrupted')),
+           started_at           TEXT NOT NULL,
+           ended_at             TEXT,
+           request_id           TEXT,
+           provider_id          TEXT,
+           model                TEXT,
+           reason               TEXT
+         )`,
+      )
+      context.exec(
+        'CREATE INDEX IF NOT EXISTS chat_turns_conversation ON chat_turns (conversation_id, started_at, turn_id)',
+      )
+    },
   },
+  {
+    version: 4,
+    name: 'conversation-archive',
+    up: (context) => {
+      context.exec('ALTER TABLE chat_conversations ADD COLUMN archived_at TEXT')
+      context.exec(
+        'CREATE INDEX IF NOT EXISTS chat_conversations_visible ON chat_conversations (archived_at, updated_at DESC, conversation_id)',
+      )
+    },
+  },
+
 ])

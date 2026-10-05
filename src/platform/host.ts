@@ -4,6 +4,8 @@ import type {
   CoreStatus,
 } from '../../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../../core/protocol/activity'
+import type { BrowserRequest, BrowserResult } from '../../core/browser'
+import type { BrowserBridgeState } from '../../electron/browser/rendererRequest'
 import type { ConversationProjection, VoiceProjection } from '../../core/protocol/conversation'
 import type { VoiceTranscriptFragment } from '../../core/voice/types'
 import type { VoiceOutputInstruction } from '../../electron/voiceHost'
@@ -89,6 +91,18 @@ export interface ProviderConfigPatch {
   apiKey?: string
 }
 
+/** Renderer-safe description of one bounded file attachment. */
+export interface AttachmentResult {
+  readonly name: string
+  readonly path: string
+  readonly kind: 'text' | 'image' | 'unsupported'
+  readonly contentType: string
+  readonly sizeBytes: number
+  readonly text: string | null
+  readonly truncated: boolean
+  readonly detail: string | null
+}
+
 export interface FreyaHostBridge {
   isDesktop: true
 
@@ -102,6 +116,16 @@ export interface FreyaHostBridge {
   windowMinimize(): Promise<void>
   windowMaximize(): Promise<void>
   windowClose(): Promise<void>
+
+  /**
+   * The renderer-safe dual-browser surface.
+   *
+   * No Electron window, adapter, journal or browser authority crosses this seam.
+   * A request submitted here is re-bounded by preload/main and then routed through
+   * the existing dual-browser runtime, which remains behind Device Hands.
+   */
+  browserState(): Promise<BrowserBridgeState>
+  browserExecute(request: BrowserRequest): Promise<BrowserResult>
 
   /**
    * The provider settings, and the one place a credential crosses this bridge — in

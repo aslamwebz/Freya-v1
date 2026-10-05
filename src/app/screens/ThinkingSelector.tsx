@@ -1,25 +1,29 @@
-import { useState } from 'react'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 
-/** The thinking levels the composer offers. */
-export const THINK = ['None', 'Think', 'Deep', 'Fast'] as const
-
 /**
- * The thinking-level picker, self-contained so its open/closed state never
- * re-renders the board.
+ * Reasoning effort is intentionally display-only until the provider contract can
+ * carry it end to end.
+ *
+ * A local selector that never reaches Core is worse than no selector: it makes a
+ * person believe a paid/model behaviour changed when the request is identical. The
+ * control stays in the canonical composer so the layout does not churn when the
+ * capability arrives, but it tells the truth about today's contract.
  */
 export function ThinkingSelector() {
-  const [open, setOpen] = useState(false)
-  const [level, setLevel] = useState<typeof THINK[number]>('Think')
+  const label = 'Provider reasoning'
+  const detail = 'Reasoning effort is controlled by the selected provider in this build; Freya does not yet send an effort setting.'
 
   return (
-    <div className="hd-select">
-      <button type="button" className="hd-tool hd-tool-think" aria-label="Thinking level" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(value => !value)}>
-        <Glyph name="mind" size={18} /><span>{level}</span><Glyph name="chevron" size={13} />
-      </button>
-      {open && <ul className="hd-menu" role="listbox" aria-label="Thinking level">
-        {THINK.map(entry => <li key={entry}><button type="button" role="option" aria-selected={entry === level} onClick={() => { setLevel(entry); setOpen(false) }}>{entry}</button></li>)}
-      </ul>}
-    </div>
+    <button
+      type="button"
+      className="hd-tool hd-tool-think"
+      aria-label={label}
+      aria-disabled="true"
+      title={detail}
+      onClick={event => event.preventDefault()}
+    >
+      <Glyph name="mind" size={18} />
+      <span>Provider</span>
+    </button>
   )
 }

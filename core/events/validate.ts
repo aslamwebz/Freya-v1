@@ -796,6 +796,8 @@ const PAYLOAD_RULES: {
 
   'conversation.created': (p) =>
     isEventId(p.conversationId) && isNonNegativeInt(p.titleLength),
+  'conversation.archived': (p) =>
+    isEventId(p.conversationId) && isNonNegativeInt(p.titleLength),
 
   // One rule for all six turn outcomes, applied to each. A conversation event is
   // metadata, and this is the list of what "metadata" is allowed to mean — a

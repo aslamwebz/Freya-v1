@@ -137,11 +137,17 @@
 .chats-history .chats-new:disabled { opacity: .5; cursor: not-allowed; }
 .chats-history-list { display: grid; gap: 1px; margin: 0; padding: 2px 0 4px; list-style: none; max-height: 264px; overflow-y: auto; scrollbar-width: none; }
 .chats-history-list::-webkit-scrollbar { display: none; }
+.chats-history-list li { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 2px; }
 .chats-history-item {
   display: flex; align-items: center; width: 100%; height: 36px; padding: 0 10px 0 54px;
   text-align: left; border: 0; border-radius: 8px; color: #a9c2d4; background: none; font-size: 12.5px;
 }
 .chats-history-item:hover { color: #e6f4ff; background: rgba(255, 255, 255, .045); }
+.chats-history-close { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #64839a; opacity: 0; }
+.chats-history-list li:hover .chats-history-close,
+.chats-history-close:focus-visible { opacity: 1; }
+.chats-history-close:hover { color: #e8f7ff; background: rgba(255, 255, 255, .055); }
+.chats-history-close:disabled { opacity: .25; cursor: not-allowed; }
 .chats-history-item[aria-current='true'] { color: #eafcff; background: #59e0ff17; }
 .chats-history-mark { display: none; }
 .chats-history-copy { display: grid; min-width: 0; gap: 1px; }
@@ -172,8 +178,11 @@
    comfortable size, while the centre column (the orb) is `1fr` and takes the
    slack — so the page widens with the window instead of scaling. Non-Home tabs
    render `TabBody`, which is absolutely positioned and ignores this grid. */
-.hd-main { position: absolute; top: 74px; bottom: 90px; left: 238px; right: 24px; max-width: 1800px; margin: 0 auto; pointer-events: none; display: grid; grid-template-columns: minmax(300px, 520px) minmax(360px, 1fr) minmax(300px, 520px); grid-template-rows: repeat(6, minmax(0, 1fr)); gap: 14px; }
-.hd-main > * { pointer-events: auto; -webkit-app-region: no-drag; }
+.hd-main { position: absolute; top: 74px; bottom: 90px; left: 238px; right: 24px; max-width: 1800px; margin: 0 auto; pointer-events: none; }
+.hd-workspace-layer { position: absolute; inset: 0; min-width: 0; min-height: 0; pointer-events: none; -webkit-app-region: no-drag; }
+.hd-workspace-layer[hidden] { display: none !important; }
+.hd-workspace-layer[data-workspace='home'] { display: grid; grid-template-columns: minmax(300px, 520px) minmax(360px, 1fr) minmax(300px, 520px); grid-template-rows: repeat(6, minmax(0, 1fr)); gap: 14px; }
+.hd-workspace-layer > * { pointer-events: auto; }
 
 /* The swappable main region for every non-Home tab: left cards · Freya centre ·
    right cards, with an optional lower row. Same board coordinates as Home. */

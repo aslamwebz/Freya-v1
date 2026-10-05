@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { ModelSelector } from './ModelSelector'
 import { ThinkingSelector } from './ThinkingSelector'
@@ -86,6 +86,9 @@ export function GlobalComposer({
   onStopResponse,
   onVoicePress,
   onVoiceRelease,
+  maxMessageCharacters,
+  browserOpen,
+  onBrowserToggle,
 }: {
   generating: boolean
   notice: string
@@ -96,11 +99,15 @@ export function GlobalComposer({
   onStopResponse: () => void
   onVoicePress: () => void
   onVoiceRelease: (cancelled?: boolean) => void
+  maxMessageCharacters: number | null
+  browserOpen: boolean
+  onBrowserToggle: () => void
 }) {
   const [text, setText] = useState('')
   const [voiceNotice, setVoiceNotice] = useState('')
   const [sending, setSending] = useState(false)
   const [mode, setMode] = useState<ComposerMode>('chat')
+  const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
     if (voiceTranscript === null) return
@@ -108,6 +115,17 @@ export function GlobalComposer({
       ? voiceTranscript.text
       : `${current} ${voiceTranscript.text}`)
   }, [voiceTranscript])
+
+  useEffect(() => {
+    const field = textAreaRef.current
+    if (!field) return
+    field.style.height = '0px'
+    field.style.height = `${Math.min(field.scrollHeight, 132)}px`
+  }, [text])
+
+  const nearLimit = maxMessageCharacters !== null &&
+    maxMessageCharacters > 0 &&
+    text.length >= Math.floor(maxMessageCharacters * 0.9)
 
   const submit = async () => {
     const value = text.trim()
@@ -125,11 +143,36 @@ export function GlobalComposer({
   return <footer className="hd-dock" data-state={voice.capturing ? 'listening' : generating ? 'responding' : 'idle'}>
     <form aria-label="Freya composer" onSubmit={event => { event.preventDefault(); void submit() }}>
       <VoiceDockButton voice={voice} onPress={onVoicePress} onRelease={onVoiceRelease} />
-      <label className="hd-input"><span className="hd-sr-only">Ask Freya</span><input value={text} onChange={event => setText(event.target.value)} placeholder={voice.capturing ? 'Listening…' : generating ? 'Freya is responding…' : 'Ask Freya...'} /></label>
+      <label className="hd-input">
+        <span className="hd-sr-only">Ask Freya</span>
+        <textarea
+          ref={textAreaRef}
+          value={text}
+          rows={1}
+          maxLength={maxMessageCharacters && maxMessageCharacters > 0 ? maxMessageCharacters : undefined}
+          onChange={event => setText(event.target.value)}
+          onKeyDown={event => {
+            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+            event.preventDefault()
+            void submit()
+          }}
+          placeholder={voice.capturing ? 'Listening…' : generating ? 'Freya is responding…' : 'Ask Freya...'}
+        />
+        {nearLimit ? <small className="hd-input-count" aria-live="polite">{text.length} / {maxMessageCharacters}</small> : null}
+      </label>
       <span className="hd-wave" aria-hidden="true">{Array.from({ length: 5 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 0.13}s` }} />)}</span>
       <div className="hd-tools">
         <button type="button" className="hd-tool" aria-label="Attach a file" onClick={() => setVoiceNotice('Attachments are not connected yet.')}><Glyph name="attach" size={18} /></button>
         <ModeSelector mode={mode} onChange={setMode} />
+        <button
+          type="button"
+          className="hd-tool hd-tool-browser"
+          aria-pressed={browserOpen}
+          title={browserOpen ? 'Close browser workspace' : 'Open browser workspace'}
+          onClick={onBrowserToggle}
+        >
+          <Glyph name="world" size={16} /><span>Browser</span>
+        </button>
         <ModelSelector defaultModel={defaultModel} />
         <ThinkingSelector />
       </div>

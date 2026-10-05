@@ -7,6 +7,8 @@ import {
 } from '../../platform/conversationClient'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import type { WorkspaceResearchView } from './modes'
+import { RichMessage } from './RichMessage'
+import { BrowserWorkspace } from './BrowserWorkspace'
 import './chat.css'
 
 function timeLabel(value: string): string {
@@ -15,7 +17,7 @@ function timeLabel(value: string): string {
   return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 }
 
-function ResearchWorkspace({ view }: { view: WorkspaceResearchView }) {
+function ResearchWorkspace({ view, onOpenLink }: { view: WorkspaceResearchView; onOpenLink: (url: string) => void }) {
   const outcome = view.outcome
 
   if (outcome.operation === 'refused') {
@@ -52,9 +54,9 @@ function ResearchWorkspace({ view }: { view: WorkspaceResearchView }) {
           <summary>Sources <b>{result.sources.length}</b></summary>
           <div className="chats-source-list">
             {result.sources.map((source) => (
-              <a key={source.sourceId} href={source.url} target="_blank" rel="noreferrer">
+              <button key={source.sourceId} type="button" onClick={() => onOpenLink(source.url)}>
                 <span><b>{source.title}</b><small>{source.domain}</small></span><Glyph name="arrow" size={13} />
-              </a>
+              </button>
             ))}
           </div>
         </details>
@@ -92,11 +94,21 @@ function ResearchWorkspace({ view }: { view: WorkspaceResearchView }) {
               <summary>{collection} <b>{rows.length}</b></summary>
               <div className="chats-eye-results">
                 {rows.map((result) => (
-                  <a key={result.resultId} href={result.url} target="_blank" rel="noreferrer">
-                    <span className="chats-eye-rank">{result.rank}</span>
-                    <span><b>{result.title}</b><small>{result.sourceDomain} · {result.confidence}</small><em>{result.snippet}</em></span>
-                    <Glyph name="arrow" size={13} />
-                  </a>
+                  <button
+                    key={result.resultId}
+                    type="button"
+                    className="chats-eye-result-card"
+                    data-media={result.mediaType}
+                    onClick={() => onOpenLink(result.url)}
+                  >
+                    <span className="chats-eye-rank">{result.mediaType === 'video' ? '▶' : result.rank}</span>
+                    <span>
+                      <b>{result.title}</b>
+                      <small>{result.sourceDomain} · {result.confidence}</small>
+                      <em>{result.snippet}</em>
+                    </span>
+                    <span className="chats-eye-open"><Glyph name="world" size={12} /> Open</span>
+                  </button>
                 ))}
               </div>
             </details>
@@ -114,7 +126,23 @@ function ResearchWorkspace({ view }: { view: WorkspaceResearchView }) {
  * and the transcript only. Nothing is inserted optimistically: conversations,
  * messages, running state and persistence all come from Core's projection.
  */
-export function Chats({ researchView, busy = false }: { researchView: WorkspaceResearchView | null; busy?: boolean }) {
+export function Chats({
+  researchView,
+  busy = false,
+  browserOpen,
+  browserRequestedUrl,
+  onBrowserOpenUrl,
+  onBrowserRequestedUrlHandled,
+  onBrowserClose,
+}: {
+  researchView: WorkspaceResearchView | null
+  busy?: boolean
+  browserOpen: boolean
+  browserRequestedUrl: string | null
+  onBrowserOpenUrl: (url: string) => void
+  onBrowserRequestedUrlHandled: () => void
+  onBrowserClose: () => void
+}) {
   const mirror = conversationMirror()
   const projection = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
   const [notice, setNotice] = useState('')
@@ -155,11 +183,10 @@ export function Chats({ researchView, busy = false }: { researchView: WorkspaceR
   }, [messages.length, generating])
 
   return (
-    <div className="chats">
+    <div className="chats" data-browser-open={browserOpen || undefined}>
       {/*
-        The conversation list lives in the left rail, directly under the Chats
-        item (`ChatHistory`), so the history is in the same column as every
-        other list of destinations. This workspace owns the transcript only.
+        Conversation history lives in the left rail. This workspace owns the
+        transcript and, when opened, Freya's bounded browser controller.
       */}
       <section className="chats-thread" aria-label="Conversation">
         <header className="chats-workspace-head">
@@ -187,11 +214,15 @@ export function Chats({ researchView, busy = false }: { researchView: WorkspaceR
               </span>
               <div className="chats-turn-content">
                 <header><b>{message.role === 'user' ? 'You' : 'Freya'}</b><time>{timeLabel(message.createdAt)}</time></header>
-                <div className="chats-bubble">{message.content}</div>
+                <div className="chats-bubble">
+                  {message.role === 'assistant'
+                    ? <RichMessage content={message.content} onOpenLink={onBrowserOpenUrl} />
+                    : <p className="chats-user-text">{message.content}</p>}
+                </div>
               </div>
             </article>
           ))}
-          {researchView ? <ResearchWorkspace view={researchView} /> : null}
+          {researchView ? <ResearchWorkspace view={researchView} onOpenLink={onBrowserOpenUrl} /> : null}
           {generating ? (
             <article className="chats-turn" data-role="assistant" aria-live="polite">
               <span className="chats-turn-avatar chats-turn-avatar-live" aria-hidden="true"><Glyph name="core" size={15} /></span>
@@ -209,6 +240,13 @@ export function Chats({ researchView, busy = false }: { researchView: WorkspaceR
           </div>
         ) : null}
       </section>
+      {browserOpen ? (
+        <BrowserWorkspace
+          requestedUrl={browserRequestedUrl}
+          onRequestedUrlHandled={onBrowserRequestedUrlHandled}
+          onClose={onBrowserClose}
+        />
+      ) : null}
     </div>
   )
 }

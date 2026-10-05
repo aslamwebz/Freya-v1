@@ -87,6 +87,10 @@ export interface DualBrowserActivationOptions {
   /** Absent means "no extension", which refuses the authenticated target. */
   readonly extension?: BrowserExtensionHost | null
   readonly allowedHosts?: readonly string[]
+  /** Development-only: remove browser budget friction. */
+  readonly localUnrestricted?: boolean
+  /** Development-only: permit localhost/private hosts and dev ports. */
+  readonly allowPrivateHosts?: boolean
   readonly autoEscalate?: boolean
   readonly now?: () => number
   readonly newId?: () => string
@@ -211,6 +215,8 @@ export function createDualBrowserActivation(options: DualBrowserActivationOption
     clockMs: now,
     newId: options.newId ?? (() => randomUUID()),
     ...(options.allowedHosts === undefined ? {} : { allowedHosts: options.allowedHosts }),
+    localUnrestricted: options.localUnrestricted === true,
+    allowPrivateHosts: options.allowPrivateHosts === true,
     ...(options.autoEscalate === undefined ? {} : { autoEscalate: options.autoEscalate }),
     ...(options.limits === undefined
       ? {}

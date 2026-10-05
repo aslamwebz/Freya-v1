@@ -229,6 +229,12 @@ describe('A — an explicit user turn', () => {
     core = second
     await second.start()
 
+    const projection = await second.conversation()
+    expect(projection.activeConversationId).toBe(conversationId)
+    expect(projection.messages).toHaveLength(2)
+    expect(projection.messages[0]?.content).toBe('do you remember this?')
+    expect(projection.messages[1]?.content).toContain('do you remember this?')
+
     const read = await readMessages(second, conversationId)
     expect(read.messages).toHaveLength(2)
     expect(read.messages[1]?.content).toContain('do you remember this?')

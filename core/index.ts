@@ -57,6 +57,7 @@ import { EncryptedMissionStore } from './missions/encrypted-store'
 import { MemoryMissionStore } from './missions/memory-store'
 import {
   Vault,
+  VaultConversationStore,
   VaultMissionStore,
   VaultResearchSessionStore,
   VaultWorldStore,
@@ -5889,6 +5890,33 @@ private async buildForge(): Promise<void> {
           }
         }
 
+        case 'conversation.archive': {
+          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+          const conversationId = readString(envelope.payload, 'conversationId')
+          if (conversationId === null) {
+            return { requestId, ok: false, refusal: { reason: 'conversationId is missing' } }
+          }
+          const result = await this.conversations.archive(conversationId)
+          if (!result.ok) {
+            return {
+              requestId,
+              ok: false,
+              refusal: { reason: result.reason },
+              conversation: { operation: 'refused', reason: result.reason },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            conversation: { operation: 'archived', archived: result.archived },
+          }
+        }
+
         case 'conversation.turn.submit': {
           // The one command that spends money, and it is reached from a window.
           //
@@ -8969,6 +8997,24 @@ case 'forge.run': {
 
   private async buildConversationStore(): Promise<ConversationStore> {
     if (this.options.conversationStore) return this.options.conversationStore
+
+    // The canonical durable path is the one SQLCipher Vault. When a Vault is
+    // configured, conversation bodies never fall through to a second durable file:
+    // either the Vault opens and owns them, or this process reports an explicitly
+    // ephemeral conversation. That keeps "one encrypted structured store" true.
+    if (this.options.vault !== undefined) {
+      const vault = await this.ensureVault()
+      if (vault !== null) return new VaultConversationStore(vault)
+      return new MemoryConversationStore({
+        mode: 'ephemeral',
+        faultReason:
+          `conversation history is held in memory only: ${this.vaultFault ?? 'the encrypted Vault is unavailable'}`,
+      })
+    }
+
+    // Compatibility for test/embedding hosts that have not adopted the Vault yet.
+    // Production Electron supplies the Vault, so this path is not a second write and
+    // is never used as fallback after a Vault failure.
     if (this.options.conversationKey) {
       // Beside the journal, named from the Core's *data path*.
       //

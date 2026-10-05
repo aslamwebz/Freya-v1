@@ -108,6 +108,7 @@ export const CORE_EVENT_TYPES = [
   // how did it end" and nothing more, because this file is audit surface: it is
   // read, copied and backed up far more freely than the conversation itself.
   'conversation.created',
+  'conversation.archived',
   'conversation.turn.started',
   'conversation.turn.completed',
   'conversation.turn.cancelled',
@@ -846,6 +847,11 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
   'conversation.created': {
     conversationId: string
     /** Length of the derived title. The title's text is not here. */
+    titleLength: number
+  }
+  'conversation.archived': {
+    conversationId: string
+    /** Length only; closing a chat never copies its title into the audit journal. */
     titleLength: number
   }
 

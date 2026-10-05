@@ -29,6 +29,9 @@ import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ProviderConfigInput } from './providerConfig'
 import type { ModelProvider } from '../core/model/provider'
 import type { GrantFact } from '../core/devicehands'
+import type { BrowserResult } from '../core/browser'
+import { normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
+import { EncryptedConversationStore } from '../core/conversation/encrypted-store'
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
@@ -131,6 +134,16 @@ function splitDeviceHandsList(value: string | undefined): string[] {
     .filter((entry) => entry.length > 0)
 }
 
+/**
+ * Local development is permissive by default so capability testing exercises Freya
+ * rather than approval plumbing. Packaged builds stay strict. Set
+ * FREYA_LOCAL_UNRESTRICTED=0 to test the strict path locally.
+ */
+function localUnrestrictedMode(): boolean {
+  if (process.env.FREYA_LOCAL_UNRESTRICTED === '0') return false
+  return process.env.FREYA_LOCAL_UNRESTRICTED === '1' || !app.isPackaged
+}
+
 function readDeviceHandsGrants(path: string): GrantFact[] {
   if (!existsSync(path)) return []
   try {
@@ -146,9 +159,12 @@ function readDeviceHandsGrants(path: string): GrantFact[] {
 }
 
 function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
-  if (process.env.FREYA_DEVICE_HANDS !== '1') return undefined
+  const localUnrestricted = localUnrestrictedMode()
+  if (!localUnrestricted && process.env.FREYA_DEVICE_HANDS !== '1') return undefined
   const userData = app.getPath('userData')
-  const grants = readDeviceHandsGrants(join(userData, 'device-hands.grants.json'))
+  const grants = localUnrestricted
+    ? []
+    : readDeviceHandsGrants(join(userData, 'device-hands.grants.json'))
   const journal = openDeviceHandsJournal(join(userData, 'device-hands.jsonl'))
   const effects = createElectronDeviceHandsEffects({
     /**
@@ -175,15 +191,25 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
     effects,
     journal,
     authority,
-    policy: {
-      allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
-      deniedRoots: [join(userData, 'vault')],
-      allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
-      allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
-      allowedEnvNames: [],
-    },
+    policy: localUnrestricted
+      ? {
+          localUnrestricted: true,
+          allowedRoots: [],
+          deniedRoots: [],
+          allowedHosts: [],
+          allowedCommands: [],
+          allowedEnvNames: [],
+        }
+      : {
+          allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
+          deniedRoots: [join(userData, 'vault')],
+          allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+          allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
+          allowedEnvNames: [],
+        },
     grants,
     enabled: true,
+    localUnrestricted,
   }
 }
 
@@ -200,14 +226,22 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
  * implemented and gated, and the missing piece is a Phase 35 seam, not a Phase 51 one.
  */
 function buildDualBrowserSeam(extension: BrowserExtensionHost | null): DualBrowserActivation | null {
-  if (process.env.FREYA_DEVICE_HANDS !== '1') return null
-  if (process.env.FREYA_PUBLIC_BROWSER !== '1') return null
+  const localUnrestricted = localUnrestrictedMode()
+  if (!localUnrestricted && process.env.FREYA_DEVICE_HANDS !== '1') return null
+  if (!localUnrestricted && process.env.FREYA_PUBLIC_BROWSER !== '1') return null
 
+  const allowedHosts = localUnrestricted
+    ? []
+    : splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS)
   const adapter = createFreyaBrowserAdapter({
     factory: new ElectronFreyaWindowFactory({
-      allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+      allowedHosts,
+      localUnrestricted,
+      allowPrivateHosts: localUnrestricted,
+      allowProtectedFields: localUnrestricted,
     }),
     publicAvailable: () => true,
+    localUnrestricted,
   })
   publicBrowserAdapter = adapter
 
@@ -224,9 +258,63 @@ function buildDualBrowserSeam(extension: BrowserExtensionHost | null): DualBrows
     journal,
     adapter,
     extension,
-    allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+    allowedHosts,
+    localUnrestricted,
+    allowPrivateHosts: localUnrestricted,
     onLog: (line) => console.log(`[freya] ${line}`),
   })
+}
+
+function browserBridgeState(): BrowserBridgeState {
+  const seam = dualBrowser
+  if (seam === null) {
+    return {
+      available: false,
+      active: false,
+      reason: 'The dual-browser runtime is not enabled in this build.',
+      publicAvailable: false,
+      extensionPaired: false,
+      extensionLive: false,
+      journalTrustworthy: false,
+      summary: 'dual-browser runtime unavailable',
+      sessions: [],
+      handoffs: [],
+      described: 0,
+      staleRefs: 0,
+      mediaObserved: 0,
+      refusals: 0,
+    }
+  }
+
+  const status = seam.status()
+  const projection = seam.projection()
+  return {
+    available: seam.active(),
+    active: seam.active(),
+    reason: seam.active() ? null : status.summary,
+    publicAvailable: status.publicAvailable,
+    extensionPaired: status.extensionPaired,
+    extensionLive: status.extensionLive,
+    journalTrustworthy: status.journalTrustworthy,
+    summary: status.summary,
+    sessions: projection.sessions,
+    handoffs: [...projection.handoffs.entries()].map(([handoffId, state]) => ({ handoffId, state })),
+    described: projection.described,
+    staleRefs: projection.staleRefs,
+    mediaObserved: projection.mediaObserved,
+    refusals: projection.refusals,
+  }
+}
+
+function browserUnavailable(command: BrowserResult['command'], reason: string): BrowserResult {
+  return {
+    ok: false,
+    command,
+    target: null,
+    code: 'subsystem-disabled',
+    reason,
+    escalation: null,
+  }
 }
 
 // The E2E harness sometimes opens two throwaway processes against the same
@@ -1010,9 +1098,6 @@ function registerIpc(): void {
   ipcMain.handle('freya:window:maximize', (event) => {
     const target = BrowserWindow.fromWebContents(event.sender)
     if (!target) return
-    // Freya launches native-fullscreen, where `isMaximized()` is false and
-    // `maximize()` is a no-op — so leaving fullscreen is the first branch and the
-    // button's first click turns the fullscreen window back into a window.
     if (target.isFullScreen()) target.setFullScreen(false)
     else if (target.isMaximized()) target.unmaximize()
     else target.maximize()
@@ -1043,6 +1128,24 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:status', () => requireCore().status())
   ipcMain.handle('freya:core:activity', () => requireCore().activity())
   ipcMain.handle('freya:core:conversation', () => requireCore().conversation())
+
+  // Phase 51 stays the browser authority boundary. The window can read this
+  // display projection and submit one closed-vocabulary request; it cannot reach
+  // the BrowserWindow, adapter, extension session, journal or Device Hands runtime.
+  ipcMain.handle('freya:browser:state', () => browserBridgeState())
+  ipcMain.handle('freya:browser:execute', async (_event, input: unknown) => {
+    const bounded = normaliseRendererBrowserRequest(input)
+    if (!bounded.ok) throw new Error(bounded.reason)
+    const seam = dualBrowser
+    if (seam === null) {
+      return browserUnavailable(
+        bounded.request.command,
+        'The dual-browser runtime is not enabled, so no page was opened or changed.',
+      )
+    }
+    return seam.execute(bounded.request)
+  })
+
   ipcMain.handle('freya:core:voice', () => requireCore().voice())
   ipcMain.handle('freya:core:brain', () => requireCore().brain())
   ipcMain.handle('freya:core:work', () => requireCore().work())
@@ -1152,7 +1255,7 @@ app.whenReady().then(async () => {
         vault: { key: testKeys.vault, reason: null as string | null },
       })
     : loadKeyring(dataPath)
-  void keyResult.then((result) => {
+  void keyResult.then(async (result) => {
     // Reported per domain, because the two failures are genuinely independent: a
     // machine can open an existing conversation key and be unable to create a Brain
     // one. A single warning would hide which half is missing.
@@ -1191,6 +1294,24 @@ app.whenReady().then(async () => {
     const vaultBinding = process.platform === 'win32'
       ? createFreyaVaultBinding(join(ROOT, 'native', 'sqlcipher', 'win32-x64', 'better_sqlite3-electron44.node'))
       : undefined
+
+    // CI runs Electron on Linux, while the repository intentionally ships a
+    // SQLCipher native binding only for the supported Windows desktop build. Keep
+    // the Vault configuration present so every other domain reports the same
+    // honest platform posture it has in production. For conversation bodies only,
+    // the explicit E2E harness injects Core's existing encrypted compatibility
+    // store so the process-relaunch test can exercise real encrypted persistence
+    // rather than ephemeral memory. Production Windows never takes this branch.
+    const e2eEncryptedConversationCompatibility =
+      process.env.FREYA_E2E === '1' && vaultBinding === undefined
+    const e2eConversationStore =
+      e2eEncryptedConversationCompatibility && result.conversation.key !== null
+        ? await EncryptedConversationStore.open({
+            path: `${dataPath}.conversations`,
+            key: result.conversation.key,
+          })
+        : undefined
+
     const deviceHandsSeam = buildDeviceHandsSeam()
     coreHost = new ElectronCoreHost(
       dataPath,
@@ -1212,6 +1333,7 @@ app.whenReady().then(async () => {
       },
       {
         conversationKey: result.conversation.key,
+        ...(e2eConversationStore ? { conversationStore: e2eConversationStore } : {}),
         brainKey: result.brain.key,
         missionKey: result.mission.key,
         contextKey: result.context.key,
@@ -1312,29 +1434,41 @@ app.whenReady().then(async () => {
      * extension actions on the same turn as everything else.
      */
     if (deviceHandsSeam !== undefined) {
-      const seamGrants = readDeviceHandsGrants(join(app.getPath('userData'), 'device-hands.grants.json'))
+      const localUnrestricted = localUnrestrictedMode()
+      const seamGrants = localUnrestricted
+        ? []
+        : readDeviceHandsGrants(join(app.getPath('userData'), 'device-hands.grants.json'))
       browserExtensionHost = createBrowserExtensionHost({
         activation: 'active',
+        localUnrestricted,
+        urlOptions: { allowPrivateHosts: localUnrestricted },
         activeGrant: (principalId, scope) =>
           seamGrants.find(
             (grant) => grant.principalId === principalId && grant.scope === scope && grant.revokedAt === null,
           ) ?? null,
-        // Denied in exactly the shape Phase 42 denies: `granted: false` with
-        // `decidedBy: 'unknown'`, because nobody decided. Recording it as an owner
-        // refusal would put a decision in the journal that was never made.
         requestOwnerApproval: async (ask) => ({
           approvalId: ask.approvalId,
-          granted: false,
-          decidedBy: 'unknown',
+          granted: localUnrestricted,
+          decidedBy: localUnrestricted ? 'owner' : 'unknown',
           decidedAt: new Date().toISOString(),
         }),
-        policy: {
-          allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
-          deniedRoots: [join(app.getPath('userData'), 'vault')],
-          allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
-          allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
-          allowedEnvNames: [],
-        },
+        requestControl: async () => localUnrestricted,
+        policy: localUnrestricted
+          ? {
+              localUnrestricted: true,
+              allowedRoots: [],
+              deniedRoots: [],
+              allowedHosts: [],
+              allowedCommands: [],
+              allowedEnvNames: [],
+            }
+          : {
+              allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
+              deniedRoots: [join(app.getPath('userData'), 'vault')],
+              allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+              allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
+              allowedEnvNames: [],
+            },
       })
       browserExtensionHost
         .start()

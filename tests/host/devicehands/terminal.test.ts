@@ -43,6 +43,15 @@ describe('terminal host adapter', () => {
     expect(h.counts.resolve).toBe(0)
   })
 
+  it('refuses a destructive command after authority has been decided and before spawning', async () => {
+    const h = await hostHarness()
+    const outcome = await h.effects.runTerminal({ command: command({ args: ['clean', '-f'] }) })
+    expect(outcome.holds).toBe(false)
+    expect(outcome.code).toBe('forbidden-action')
+    expect(h.counts.spawn).toBe(0)
+    expect(h.counts.resolve).toBe(0)
+  })
+
   it('refuses a command that is not a bare program name without spawning', async () => {
     const h = await hostHarness()
     const outcome = await h.effects.runTerminal({ command: command({ command: '../evil' }) })

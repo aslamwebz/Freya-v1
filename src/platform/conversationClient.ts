@@ -36,6 +36,7 @@ export interface ConversationMirror {
   create(): Promise<ConversationCommandOutcome>
   list(): Promise<ConversationCommandOutcome>
   read(conversationId: string): Promise<ConversationCommandOutcome>
+  archive(conversationId: string): Promise<ConversationCommandOutcome>
   submitTurn(conversationId: string, text: string): Promise<ConversationCommandOutcome>
   cancelTurn(turnId: string): Promise<ConversationCommandOutcome>
 
@@ -139,13 +140,6 @@ export function createConversationMirror(): ConversationMirror {
     },
 
     create: () => {
-      /*
-       * One empty conversation at a time. Pressing New while a conversation
-       * with no messages already exists would mint a twin nobody asked for and
-       * leave two rows indistinguishable forever, so instead the existing one
-       * is selected. Only when everything on the list has words does a new
-       * conversation actually get created.
-       */
       const empty = current?.conversations?.find((conversation) => conversation.messageCount === 0)
       if (empty) {
         if (current?.activeConversationId !== empty.conversationId) {
@@ -157,6 +151,7 @@ export function createConversationMirror(): ConversationMirror {
     },
     list: () => submit('conversation.list'),
     read: (conversationId) => submit('conversation.read', { conversationId }),
+    archive: (conversationId) => submit('conversation.archive', { conversationId }),
 
     submitTurn: (conversationId, text) => submit('conversation.turn.submit', { conversationId, text }),
 

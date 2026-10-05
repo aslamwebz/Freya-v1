@@ -42,6 +42,17 @@ export function ChatHistory({ onOpen }: { onOpen?: () => void }) {
     onOpen?.()
   }
 
+  const archive = async (conversationId: string): Promise<void> => {
+    const wasActive = conversationId === active
+    const remaining = conversations.filter((conversation) => conversation.conversationId !== conversationId)
+    const outcome = await mirror.archive(conversationId)
+    if (outcome.operation !== 'archived' || !wasActive) return
+    const next = remaining[0]
+    if (next) await mirror.read(next.conversationId)
+    else await mirror.create()
+    onOpen?.()
+  }
+
   return (
     <div className="chats-history" data-collapsed={!open || undefined}>
       <header className="chats-history-head">
@@ -90,6 +101,16 @@ export function ChatHistory({ onOpen }: { onOpen?: () => void }) {
                 {busy && conversation.conversationId === active ? (
                   <span className="chats-history-dot" aria-label="Freya is answering in this conversation" />
                 ) : null}
+              </button>
+              <button
+                type="button"
+                className="chats-history-close"
+                aria-label={`Close ${conversation.title}`}
+                title="Close conversation"
+                disabled={busy && conversation.conversationId === active}
+                onClick={() => { void archive(conversation.conversationId) }}
+              >
+                ×
               </button>
             </li>
           ))}

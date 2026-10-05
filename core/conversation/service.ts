@@ -78,6 +78,10 @@ export type TurnResult =
 
 export type CancelResult = { ok: true; cancelled: boolean }
 
+export type ArchiveResult =
+  | { ok: true; archived: boolean }
+  | { ok: false; reason: string }
+
 export class ConversationService {
   private readonly fabric: EventFabric
   private readonly store: ConversationStore
@@ -115,7 +119,8 @@ export class ConversationService {
    */
   async recoverInterruptedTurns(): Promise<string[]> {
     const at = this.now().toISOString()
-    let recovered: string[]
+    let recovered: string[] = []
+
     try {
       recovered = await this.store.recoverInterruptedTurns(at)
     } catch (error) {
@@ -125,8 +130,6 @@ export class ConversationService {
         ...this.faults,
         `interrupted-turn recovery failed: ${describeStore(error)}`,
       ]
-      this.publish()
-      return []
     }
 
     for (const turnId of recovered) {
@@ -147,7 +150,13 @@ export class ConversationService {
         { actor: 'system', correlationId: turnId },
       )
     }
-    if (recovered.length > 0) this.publish()
+
+    // A process restart loses only in-memory selection, not the conversation.
+    // Restore the most recently updated visible conversation before any window can
+    // attach. The store owns ordering and already excludes archived conversations,
+    // so this is deterministic and cannot resurrect a closed chat.
+    const restored = await this.restoreActiveConversation()
+    if (recovered.length > 0 || restored) this.publish()
     return recovered
   }
 
@@ -211,6 +220,49 @@ export class ConversationService {
     } catch (error) {
       return { ok: false, reason: describeStore(error) }
     }
+  }
+
+  /**
+   * Close a conversation without destroying its encrypted history.
+   *
+   * A running turn is scoped-cancelled first. Its eventual terminal bookkeeping
+   * remains attached to this conversation and can never land in whichever chat the
+   * owner opens next. Archiving is metadata only: no model call and no authority
+   * widening.
+   */
+  async archive(conversationId: string): Promise<ArchiveResult> {
+    const active = this.mind.activeTurn(conversationId)
+    if (active !== null) {
+      this.mind.cancelTurn(active.turnId, 'the owner closed this conversation')
+    }
+
+    let record
+    try {
+      record = await this.store.readConversation(conversationId)
+    } catch (error) {
+      return { ok: false, reason: describeStore(error) }
+    }
+    if (record === null) return { ok: true, archived: false }
+
+    const at = this.now().toISOString()
+    try {
+      await this.store.putConversation({
+        ...record.conversation,
+        updatedAt: at,
+        archivedAt: at,
+      })
+    } catch (error) {
+      return { ok: false, reason: describeStore(error) }
+    }
+
+    await this.fabric.append(
+      'conversation.archived',
+      { conversationId, titleLength: record.conversation.title.length },
+      { actor: 'owner', correlationId: conversationId },
+    )
+    if (this.activeConversationId === conversationId) this.activeConversationId = null
+    this.publish()
+    return { ok: true, archived: true }
   }
 
   /**
@@ -322,6 +374,23 @@ export class ConversationService {
     if (this.activeConversationId !== null) return this.activeConversationId
     const created = await this.create()
     return created.ok ? created.conversation.conversationId : null
+  }
+
+  private async restoreActiveConversation(): Promise<boolean> {
+    if (this.activeConversationId !== null) return false
+    try {
+      const listed = await this.store.listConversations(1)
+      const next = listed[0]?.conversationId ?? null
+      if (next === null) return false
+      this.activeConversationId = next
+      return true
+    } catch (error) {
+      this.faults = [
+        ...this.faults,
+        `conversation restoration failed: ${describeStore(error)}`,
+      ]
+      return false
+    }
   }
 
   private activeTurnView(): ActiveTurnView | null {

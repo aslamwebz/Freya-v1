@@ -7,6 +7,7 @@ import { hostBridge } from '../platform/host'
 import { sendMessage } from '../ui-v2/chat/sendMessage'
 import { researchMirror } from '../platform/researchClient'
 import { routeEyePrompt, type ComposerMode, type WorkspaceResearchView } from './chat/modes'
+import { routePromptIntent } from './chat/intent'
 import type { ScreenSlots } from './screens/Home'
 import { HomeDashboard } from './screens/HomeDashboard'
 import { Mind } from './screens/Mind'
@@ -20,7 +21,6 @@ import { People } from './screens/People'
 import { Memory } from './screens/Memory'
 import type { SettingsCategory } from './screens/Settings'
 import { setAppLayout, type AppLayout } from './state/workspace'
-import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
 import { useVoiceDock } from './voice/useVoiceDock'
@@ -76,6 +76,8 @@ export function App({
   const [researchView, setResearchView] = useState<WorkspaceResearchView | null>(null)
   const [voiceTranscriptDraft, setVoiceTranscriptDraft] = useState<{ id: number; text: string } | null>(null)
   const [booted, setBooted] = useState(false)
+  const [browserOpen, setBrowserOpen] = useState(false)
+  const [browserRequestedUrl, setBrowserRequestedUrl] = useState<string | null>(null)
 
   const mirror = conversationMirror()
   const research = researchMirror()
@@ -96,33 +98,17 @@ export function App({
     void ensureConversationAttached()
   }, [])
 
-  const current = screen === 'settings'
-    ? { id: 'settings', label: 'Settings', symbol: 'settings' }
-    : RAIL.find((item) => item.id === screen) ?? RAIL[0]!
-
-  const slots: ScreenSlots = current.id === 'home' || current.id === 'chat'
-    ? { left: null, right: null, bottom: null }
-    : current.id === 'mind'
-      ? Mind()
-      : current.id === 'world'
-        ? World()
-        : current.id === 'life'
-          ? Life()
-          : current.id === 'workforce'
-            ? Workforce()
-            : current.id === 'create'
-              ? Foundry()
-              : current.id === 'relay'
-                ? Relay()
-                : current.id === 'focus'
-                  ? Focus()
-                  : current.id === 'people'
-                    ? People()
-                    : current.id === 'memory'
-                      ? Memory()
-                      /* Settings is rendered by HomeDashboard as a full overlay,
-                         not through the three-column slots. */
-                      : placeholder(current.label, current.symbol, 'This screen is next in the build.')
+  const slotsByScreen: Readonly<Record<string, ScreenSlots>> = {
+    mind: Mind(),
+    world: World(),
+    life: Life(),
+    workforce: Workforce(),
+    create: Foundry(),
+    relay: Relay(),
+    focus: Focus(),
+    people: People(),
+    memory: Memory(),
+  }
 
   const send = async (text: string, mode: ComposerMode): Promise<boolean> => {
     if (!text.trim()) return false
@@ -134,7 +120,22 @@ export function App({
     setNotice('')
     setScreen('chat')
 
-    if (mode === 'chat') {
+    // The owner should not have to choose a tool for a request Freya already
+    // understands. Explicit composer modes always win. In ordinary Chat, only
+    // high-confidence discovery/deep-research shapes are promoted automatically;
+    // everything else stays a normal conversation instead of spawning questions.
+    const inferred = mode === 'chat'
+      ? routePromptIntent(text, { activeEyeSession: activeEyeSessionId !== null })
+      : null
+    const effectiveMode: ComposerMode =
+      inferred?.kind === 'deep-research'
+        ? 'deep-research'
+        : inferred?.kind === 'eye-new' || inferred?.kind === 'eye-follow-up'
+          ? 'eye'
+          : mode
+    const autoNewEye = mode === 'chat' && inferred?.kind === 'eye-new'
+
+    if (effectiveMode === 'chat') {
       setResearchView(null)
       const result = await sendMessage(mirror, conversation?.activeConversationId ?? null, text)
       setNotice(result.ok ? '' : result.notice)
@@ -142,11 +143,11 @@ export function App({
     }
 
     setResearchBusy(true)
-    setActiveResearchMode(mode)
+    setActiveResearchMode(effectiveMode)
     try {
-      if (mode === 'deep-research') {
+      if (effectiveMode === 'deep-research') {
         const outcome = await research.research(text)
-        setResearchView({ mode, outcome })
+        setResearchView({ mode: 'deep-research', outcome })
         if (outcome.operation === 'refused') {
           setNotice(outcome.reason ?? 'Deep Research was refused.')
           return false
@@ -154,7 +155,12 @@ export function App({
         return true
       }
 
-      const route = routeEyePrompt(activeEyeSessionId, text)
+      // A clear standalone discovery request starts a new Eye session even when
+      // another search exists. Short refinements ("only YouTube", "make it 50")
+      // deliberately stay on the active session.
+      const route = autoNewEye
+        ? { kind: 'create' as const, text: text.trim() }
+        : routeEyePrompt(activeEyeSessionId, text)
       let outcome = route.kind === 'create'
         ? await research.createSession(route.text)
         : await research.followUpSession(route.sessionId, route.text)
@@ -169,7 +175,7 @@ export function App({
       setResearchView({ mode: 'eye', outcome })
 
       if (outcome.ambiguous) {
-        setNotice("Freya's Eye needs a little more context before changing this search.")
+        setNotice("Freya's Eye needs one missing detail before changing this existing search.")
         return true
       }
 
@@ -228,11 +234,26 @@ export function App({
 
   const voice = useVoiceDock(onVoiceTranscript)
 
+  const openBrowserUrl = useCallback((url: string) => {
+    setScreen('chat')
+    setBrowserOpen(true)
+    setBrowserRequestedUrl(url)
+  }, [])
+
+  const handleBrowserToggle = useCallback(() => {
+    setScreen('chat')
+    setBrowserOpen((open) => !open)
+  }, [])
+
+  const handleBrowserRequestedUrlHandled = useCallback(() => {
+    setBrowserRequestedUrl(null)
+  }, [])
+
   return <>
     {booted ? null : <BootScreen core={snapshot.core} attached={true} onDone={() => setBooted(true)} />}
     <HomeDashboard
-      screen={current.id}
-      slots={slots}
+      screen={screen}
+      slotsByScreen={slotsByScreen}
       snapshot={snapshot}
       generating={generating}
       notice={notice}
@@ -249,6 +270,13 @@ export function App({
       onNavigate={setScreen}
       onVoicePress={voice.press}
       onVoiceRelease={voice.release}
+      maxMessageCharacters={conversation?.maxMessageCharacters ?? null}
+      browserOpen={browserOpen}
+      browserRequestedUrl={browserRequestedUrl}
+      onBrowserToggle={handleBrowserToggle}
+      onBrowserOpenUrl={openBrowserUrl}
+      onBrowserRequestedUrlHandled={handleBrowserRequestedUrlHandled}
+      onBrowserClose={() => setBrowserOpen(false)}
     />
     <div className="freya-v2" data-theme={settings.theme} data-app-shell="app" data-ui-mode={uiMode(snapshot)}>
       <DressingTable store={dressing} open={dressingOpen} onOpenChange={setDressingOpen} />

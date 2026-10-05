@@ -5,8 +5,8 @@ import type { VoiceView } from '../../../src/app/voice/useVoiceDock'
 
 afterEach(cleanup)
 
-function input(): HTMLInputElement {
-  return screen.getByRole('textbox', { name: 'Ask Freya' }) as HTMLInputElement
+function input(): HTMLTextAreaElement {
+  return screen.getByRole('textbox', { name: 'Ask Freya' }) as HTMLTextAreaElement
 }
 
 function voice(): VoiceView {
@@ -42,6 +42,9 @@ describe('GlobalComposer', () => {
         voiceTranscript={null}
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
+        maxMessageCharacters={8000}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -66,6 +69,9 @@ describe('GlobalComposer', () => {
         voiceTranscript={null}
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
+        maxMessageCharacters={8000}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -90,6 +96,9 @@ describe('GlobalComposer', () => {
         voiceTranscript={null}
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
+        maxMessageCharacters={8000}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -115,6 +124,9 @@ describe('GlobalComposer', () => {
         voiceTranscript={null}
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
+        maxMessageCharacters={8000}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
         onSend={vi.fn(async () => true)}
         onStopResponse={onStopResponse}
       />,
@@ -122,5 +134,58 @@ describe('GlobalComposer', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop response' }))
     expect(onStopResponse).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+describe('GlobalComposer keyboard and bounds', () => {
+  it('Enter sends while Shift+Enter keeps a newline in the draft', async () => {
+    const onSend = vi.fn(async () => true)
+
+    render(
+      <GlobalComposer
+        generating={false}
+        notice=""
+        defaultModel={null}
+        voice={voice()}
+        voiceTranscript={null}
+        onVoicePress={vi.fn()}
+        onVoiceRelease={vi.fn()}
+        maxMessageCharacters={8000}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
+        onSend={onSend}
+        onStopResponse={vi.fn()}
+      />,
+    )
+
+    fireEvent.change(input(), { target: { value: 'first line' } })
+    fireEvent.keyDown(input(), { key: 'Enter', shiftKey: true })
+    expect(onSend).not.toHaveBeenCalled()
+
+    fireEvent.change(input(), { target: { value: 'first line\nsecond line' } })
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('first line\nsecond line', 'chat'))
+  })
+
+  it('takes the message ceiling from Core instead of inventing a renderer limit', () => {
+    render(
+      <GlobalComposer
+        generating={false}
+        notice=""
+        defaultModel={null}
+        voice={voice()}
+        voiceTranscript={null}
+        onVoicePress={vi.fn()}
+        onVoiceRelease={vi.fn()}
+        maxMessageCharacters={1234}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
+        onSend={vi.fn(async () => true)}
+        onStopResponse={vi.fn()}
+      />,
+    )
+
+    expect(input().maxLength).toBe(1234)
   })
 })

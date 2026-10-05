@@ -29,3 +29,5 @@ export {
   VaultResearchSessionStore,
   MAX_VAULT_SEARCH_SESSION_BYTES,
 } from './repositories/research-session-store'
+
+export { VaultConversationStore } from './repositories/conversation-store'

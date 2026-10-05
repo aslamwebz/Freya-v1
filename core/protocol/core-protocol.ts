@@ -496,6 +496,8 @@ export type CoreCommandName =
   | 'conversation.create'
   | 'conversation.list'
   | 'conversation.read'
+  /** Close from the workspace by archiving encrypted history, never deleting it. */
+  | 'conversation.archive'
   /** The only door from a window into cognition. */
   | 'conversation.turn.submit'
   /** Scoped: stops one response. Does not latch STOP ALL. */

@@ -84,6 +84,32 @@ export const MIND_TOOL_LIMITS = Object.freeze({
   /** Characters allowed in the whole observation block handed back to the model. */
   maxObservationChars: 2_400,
 
+  /* ---------------------------------------------------------- provenance */
+
+  /**
+   * Bounds on {@link ToolProvenance}, the channel a tool uses to say *who* did the work
+   * and *what came back*.
+   *
+   * Separate from `maxSummaryChars` on purpose. The summary is the tool's one-sentence
+   * account and stays short enough to be quoted in a refusal; the provenance block is the
+   * evidence behind it, and evidence is allowed to be longer than the sentence. Both are
+   * bounded, and together they still fit inside `maxObservationChars`.
+   */
+  /** Characters allowed in the name of the system that actually served a request. */
+  maxProvenanceActorChars: 120,
+
+  /** Steps listed in one observation. Enough for a multi-step task, not a crawl. */
+  maxProvenanceSteps: 8,
+
+  /** Characters allowed in one step line. */
+  maxProvenanceStepChars: 240,
+
+  /** Lines of verbatim material one observation may carry back. */
+  maxProvenanceExtractLines: 12,
+
+  /** Characters allowed across one observation's verbatim material. */
+  maxProvenanceExtractChars: 1_200,
+
   /** Characters allowed in any single tool argument, before it is checked. */
   maxArgumentChars: 200,
 
@@ -127,6 +153,35 @@ export interface ToolSource {
 }
 
 /**
+ * Evidence behind an observation, from a tool that did something a search cannot.
+ *
+ * `web_search` needs none of this: it asked a search engine a question and got a list of
+ * rows back, and the rows are the evidence. A tool that drives a *system* — a browser, a
+ * window, an application — has to answer a different question, and the answer has to be in
+ * the transcript rather than in the tool's own head:
+ *
+ *   - `actor` — **which** implementation answered. Two ports can serve the same command,
+ *     and a turn that cannot say which one ran is a turn whose owner cannot tell what
+ *     happened to their own machine.
+ *   - `steps` — what was actually issued, in order, with each one's real outcome. Written
+ *     so that a step that did nothing reads as a step that did nothing.
+ *   - `extract` — verbatim material read off the thing, bounded, and quoted as data. Never
+ *     an instruction, whatever it says.
+ *
+ * Every field is optional and every one is bounded, because the point of the channel is
+ * evidence and a channel that can carry an unbounded transcript is a transcript with extra
+ * steps.
+ */
+export interface ToolProvenance {
+  /** Which system actually serviced this request, in the tool's own words. */
+  readonly actor?: string
+  /** One bounded line per issued step, in the order the loop ran them. */
+  readonly steps?: readonly string[]
+  /** Bounded material read off the thing, quoted. Data, never instruction. */
+  readonly extract?: readonly string[]
+}
+
+/**
  * What a tool call produced.
  *
  * A closed union on `kind`, because the three cases have opposite consequences
@@ -140,6 +195,10 @@ export interface ToolSource {
  *
  * Collapsing `denied` and `failed` into `ok`-with-an-empty-list is precisely the
  * silent downgrade this type exists to prevent.
+ *
+ * `provenance` rides only on `ok`, because a denial has no actor and a failure has no
+ * evidence: a refusal that named a system that did the work would be the lie this whole
+ * type is built to make impossible.
  */
 export type ToolObservation =
   | {
@@ -148,6 +207,7 @@ export type ToolObservation =
       readonly capability: Capability
       readonly summary: string
       readonly sources: readonly ToolSource[]
+      readonly provenance?: ToolProvenance
     }
   | {
       readonly kind: 'denied'
@@ -215,6 +275,14 @@ export interface MindTool {
   run(request: { readonly arguments: Readonly<Record<string, string>>; readonly signal?: AbortSignal }): Promise<{
     readonly summary: string
     readonly sources: readonly ToolSource[]
+    /**
+     * Evidence, for a tool that drove a system rather than asked a question.
+     *
+     * Optional and bounded by the registry, and — like everything else a tool returns —
+     * sanitised before it is spliced into the next request. A tool that omits it is not
+     * penalised; `web_search` has nothing to say beyond its rows.
+     */
+    readonly provenance?: ToolProvenance
   }>
 }
 
@@ -344,6 +412,7 @@ export class MindToolRegistry {
           capability: tool.capability,
           summary: sanitiseUntrustedText(raw.summary, MIND_TOOL_LIMITS.maxSummaryChars),
           sources: boundSources(raw.sources),
+          provenance: boundProvenance(raw.provenance),
         },
         executed: true,
       }
@@ -403,6 +472,12 @@ export class MindToolRegistry {
       'nothing you have is sourced from it. Say so plainly in your answer — "I could not',
       'check that" — rather than answering as though you had. Never present an answer',
       'you did not look up as though you had.',
+      '',
+      'A report may also list what was actually done, one step per line, and name which',
+      'system did it. That list is the truth about your own actions. Do not claim you',
+      'clicked, typed, logged in, submitted or opened anything that is not on it. If it',
+      'says a page was read and not driven, then you read a page and did not drive it —',
+      'report it that way, and do not describe reading a page as "using the browser".',
       '',
       'Cite anything the reports actually gave you as [1], [2] and so on, matching the',
       'numbered sources in the report. Do not cite a number that is not there.',
@@ -529,6 +604,21 @@ export function renderObservation(observation: ToolObservation): ModelMessage {
         if (source.snippet !== '') lines.push(`    ${source.snippet}`)
       }
     }
+    // Which system answered, and what it actually issued. A model that read a page
+    // through somebody's logged-in browser has to know that, because the two have
+    // different safety properties and the owner will be asked to care.
+    const provenance = observation.provenance
+    if (provenance !== undefined && provenance.actor !== undefined) {
+      lines.push(`Which browser served this: ${provenance.actor}.`)
+    }
+    if (provenance !== undefined && provenance.steps !== undefined && provenance.steps.length > 0) {
+      lines.push('What was actually done, in order:')
+      for (const step of provenance.steps) lines.push(`  - ${step}`)
+    }
+    if (provenance !== undefined && provenance.extract !== undefined && provenance.extract.length > 0) {
+      lines.push('Text read off that page, quoted:')
+      for (const line of provenance.extract) lines.push(`  ${line}`)
+    }
   } else if (observation.kind === 'denied') {
     lines.push(
       `Status: NOT PERMITTED. The lookup did not run and nothing was fetched. Reason: ${observation.reason}`,
@@ -564,6 +654,13 @@ export function renderToolFooter(steps: readonly ToolStepRecord[], observations:
       lines.push(
         `Used the "${step.tool}" lookup and read ${step.sourceCount} result${step.sourceCount === 1 ? '' : 's'}.`,
       )
+      // The one line a person reading the transcript actually needs: *where* it happened.
+      // Two browsers in this build have different safety properties, so "read one result"
+      // without naming the port is an incomplete account even when it is not a false one.
+      const actor = observation.provenance?.actor
+      if (actor !== undefined && actor !== '') {
+        lines.push(`That was read through ${actor}.`)
+      }
     } else if (observation.kind === 'denied') {
       lines.push(
         `Tried to use the "${step.tool}" lookup and was NOT PERMITTED, so nothing was looked up. ` +
@@ -708,6 +805,80 @@ function boundSources(sources: readonly ToolSource[]): ToolSource[] {
       rank: out.length + 1,
       retrievedAt: source.retrievedAt ?? null,
     })
+  }
+  return out
+}
+
+/**
+ * Bound a tool's provenance, dropping anything it did not shape like provenance.
+ *
+ * `actor` is a name, not a report, so it gets a short bound. `steps` and `extract` are
+ * quoted material and get the sanitising treatment: control characters flattened, the
+ * envelope markers defanged, and each list **truncated rather than sliced at a character
+ * boundary** — a truncated list says the rest existed, which is the difference between a
+ * bound and a lie.
+ */
+function boundProvenance(value: ToolProvenance | undefined): ToolProvenance | undefined {
+  if (value === undefined || typeof value !== 'object' || value === null) return undefined
+
+  const actor =
+    typeof value.actor === 'string'
+      ? sanitiseUntrustedText(value.actor, MIND_TOOL_LIMITS.maxProvenanceActorChars)
+      : ''
+
+  const steps = boundLines(value.steps, MIND_TOOL_LIMITS.maxProvenanceSteps, MIND_TOOL_LIMITS.maxProvenanceStepChars)
+  const extract: string[] = []
+  let extractChars = 0
+  let extractCut = false
+  const rawExtract = Array.isArray(value.extract) ? value.extract : []
+  for (const line of rawExtract) {
+    if (extract.length >= MIND_TOOL_LIMITS.maxProvenanceExtractLines) {
+      extractCut = true
+      break
+    }
+    if (typeof line !== 'string') continue
+    const remaining = MIND_TOOL_LIMITS.maxProvenanceExtractChars - extractChars
+    if (remaining <= 0) {
+      extractCut = true
+      break
+    }
+    const bounded = sanitiseUntrustedText(line, remaining)
+    if (bounded === '') continue
+    // Shorter than it arrived means the bound cut it. Compared rather than inferred from a
+    // trailing ellipsis, because a page may legitimately end in one and a quote that was
+    // silently shortened is the exact thing the marker exists to prevent.
+    if (bounded.length < line.length) extractCut = true
+    extract.push(bounded)
+    extractChars += bounded.length
+  }
+  if (rawExtract.length > extract.length) extractCut = true
+
+  return {
+    ...(actor === '' ? {} : { actor }),
+    ...(steps.length === 0 ? {} : { steps }),
+    ...(extract.length === 0 ? {} : { extract }),
+    ...(extractCut ? { extract: [...extract, EXTRACT_CUT_MARKER] } : {}),
+  }
+}
+
+/**
+ * What a shortened extract says, in the observation rather than in a flag nobody reads.
+ *
+ * Spelled out here rather than inlined so that `renderObservation`, the tests and any
+ * future tool all agree on the words a person would see.
+ */
+export const EXTRACT_CUT_MARKER = '(the extract was cut; the page said more than this)'
+
+/** Take at most `limit` non-empty strings, each bounded, and say whether any were dropped. */
+function boundLines(value: unknown, limit: number, maxChars: number): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  for (const line of value) {
+    if (out.length >= limit) break
+    if (typeof line !== 'string') continue
+    const bounded = sanitiseUntrustedText(line, maxChars)
+    if (bounded === '') continue
+    out.push(bounded)
   }
   return out
 }

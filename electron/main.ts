@@ -1531,6 +1531,10 @@ app.whenReady().then(async () => {
             return
           }
           dualBrowser = dualBrowserSeam
+          // Hand Core the seam. Until this runs a turn asking for a browser is
+          // refused honestly; after it, the tool reaches the real Freya Browser
+          // through Device Hands, on the native/public port.
+          coreHost?.attachDualBrowser(dualBrowserSeam.runtime)
           console.log(`[freya] ${result.reason}`)
         })
         .catch((error: unknown) => {

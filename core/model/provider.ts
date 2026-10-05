@@ -201,6 +201,87 @@ export interface ModelRequest {
   model: string | null
 }
 
+/**
+ * Why a provider stopped generating, as the endpoint reported it.
+ *
+ * A closed union over the reasons the OpenAI-compatible chat API actually sends,
+ * plus `other` for a reason this code does not model. It is deliberately *not* a
+ * `string`: the whole point of carrying this fact is that one particular member
+ * means "the model ran out of room", and a wide `string` would push that decision
+ * to whichever call site happened to remember the spelling. `other` says "a
+ * provider said something, and it was not one of these", which is honest and
+ * carries no claim.
+ *
+ * `tool_calls` is here because it is a *normal* reason and the distinction matters
+ * more than the similarity: a turn that stopped to ask for a tool has not been
+ * cut off, and treating it as truncated would fail every turn in which a model
+ * used a lookup.
+ */
+export type ModelFinishReason =
+  | 'stop'
+  | 'length'
+  | 'tool_calls'
+  | 'content_filter'
+  | 'other'
+
+/**
+ * Narrow a remote `finish_reason` to {@link ModelFinishReason}, or null.
+ *
+ * Takes `unknown` on purpose, for the same reason `validateModelAttachments`
+ * does: this is a field off a network response, and a value typed as
+ * already-correct is a value nobody re-checks at the boundary.
+ *
+ * `null` means *the provider did not say*, which is different from `other`
+ * (it said something unrecognised) and different again from `stop` (it said it
+ * finished). Absence is never upgraded to a favourable answer.
+ */
+export function readFinishReason(raw: unknown): ModelFinishReason | null {
+  if (typeof raw !== 'string' || raw === '') return null
+  switch (raw) {
+    case 'stop':
+    case 'length':
+    case 'tool_calls':
+    case 'content_filter':
+      return raw
+    default:
+      return 'other'
+  }
+}
+
+/** The one finish reason that means the answer did not get to finish. */
+export const TRUNCATION_FINISH_REASON: ModelFinishReason = 'length'
+
+/**
+ * Whether a finish reason is the one that means "cut off".
+ *
+ * Exactly one reason qualifies, and the exclusion of `tool_calls` is deliberate
+ * rather than incidental: a turn that stopped to request a tool is a turn that
+ * did what it was asked to do, and calling that truncation would make every
+ * tool-using turn look broken.
+ *
+ * Null and `other` are both "not truncation", because neither is a claim about
+ * the output budget. An unreported reason is not evidence of a cut-off answer.
+ */
+export function isTruncationReason(reason: ModelFinishReason | null | undefined): boolean {
+  return reason === TRUNCATION_FINISH_REASON
+}
+
+/**
+ * Whether a finished result was truncated.
+ *
+ * Structural, so the same question can be asked of a provider result and of a
+ * cognition outcome that carries the same two fields forward. An explicit
+ * `truncated` wins when present; otherwise it is derived from the reason, which
+ * is what makes a provider that reports only `finish_reason` still answer
+ * correctly.
+ */
+export function isTruncationSignal(
+  result: { finishReason?: ModelFinishReason | null; truncated?: boolean },
+): boolean {
+  if (typeof result.truncated === 'boolean') return result.truncated
+  return isTruncationReason(result.finishReason)
+}
+
 export interface ModelResult {
   requestId: string
   /** Which provider answered. Known only after the call. */
@@ -210,6 +291,41 @@ export interface ModelResult {
   /** Null when the provider did not report them. Never estimated. */
   inputTokens: number | null
   outputTokens: number | null
+  /**
+   * Why the provider stopped, as it reported it. Null when it reported nothing.
+   *
+   * Optional and additive: a provider written before this field existed still
+   * satisfies the interface, and its results still mean exactly what they meant
+   * before. Nothing is inferred from the text — an empty string is not evidence
+   * of truncation, and a short one is not either.
+   */
+  readonly finishReason?: ModelFinishReason | null
+  /**
+   * Whether this answer was cut off by the output budget.
+   *
+   * Derived from {@link finishReason} and never from the content, by
+   * {@link resolveFinish} on the way out of the gateway. Optional here so a
+   * provider may state either fact and a consumer can always ask
+   * {@link isTruncationSignal} rather than trusting a possibly-absent flag.
+   */
+  readonly truncated?: boolean
+}
+
+/**
+ * Settle a provider's finish facts into both fields, once.
+ *
+ * The gateway runs this on the way out so every caller above it — Cognition, the
+ * Mind, the transcript — reads one answer rather than re-deriving truncation from
+ * a field that may or may not be present. It only ever *adds* the two fields: the
+ * text, the model, the token counts and the ids are returned untouched, so a
+ * normally-finished answer carries exactly the bytes it always did.
+ */
+export function resolveFinish<T extends ModelResult>(result: T): T & {
+  readonly finishReason: ModelFinishReason | null
+  readonly truncated: boolean
+} {
+  const finishReason = result.finishReason ?? null
+  return { ...result, finishReason, truncated: isTruncationReason(finishReason) }
 }
 
 export type ModelAttachmentErrorCode =

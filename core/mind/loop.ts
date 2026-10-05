@@ -1,5 +1,5 @@
 import type { OwnerAuthority } from '../authority'
-import type { ModelMessage } from '../model/provider'
+import { isTruncationSignal, type ModelFinishReason, type ModelMessage } from '../model/provider'
 import {
   MIND_TOOL_LIMITS,
   parseToolResponse,
@@ -105,6 +105,24 @@ export interface ToolIteration {
 export type LoopOutcome =
   /** The model produced an answer. `text` is what it said, plus the tool footer. */
   | { readonly kind: 'answer'; readonly text: string; readonly providerId: string; readonly model: string; readonly iterations: readonly ToolIteration[] }
+  /**
+   * The answer was cut off by the output budget.
+   *
+   * Its own outcome rather than an `answer`, because the loop must never spend a
+   * further call on a reply that is known to be incomplete: the text is partial,
+   * and in the tool case so are the tool arguments. `text` is whatever the model
+   * had produced when the ceiling landed — kept so the transcript can show what
+   * was generated alongside the sentence that says it was not finished, never as
+   * an answer.
+   */
+  | {
+      readonly kind: 'truncated'
+      readonly text: string
+      readonly finishReason: ModelFinishReason
+      readonly providerId: string
+      readonly model: string
+      readonly iterations: readonly ToolIteration[]
+    }
   /** The Governor refused. Nobody was asked, and the turn says so. */
   | { readonly kind: 'denied'; readonly reason: string }
   /** Somebody stopped it. `providerContacted` is the gateway's own account. */
@@ -189,6 +207,35 @@ export async function runToolLoop(
       }
     }
     providerContacted = true
+
+    /**
+     * Truncation is decided before the tool envelope is parsed, and that ordering
+     * is the whole correctness of this branch.
+     *
+     * A reply that hit the output ceiling is incomplete *whatever it looks like*.
+     * If it happens to be readable text, the answer stops mid-sentence; if it
+     * happens to open a tool envelope, the arguments are as likely to be a JSON
+     * fragment as a complete request. Parsing first would turn the second case
+     * into a malformed-tool observation, the loop would tell the model its request
+     * could not be read, and the turn would end as though Freya had merely made a
+     * formatting mistake — which is the silent downgrade this rule exists to
+     * prevent. So: no tool is executed from a reply known to be cut off, and no
+     * further call is spent trying to repair it.
+     *
+     * The converse is the important half. A reply that stopped to *ask* for a tool
+     * reports `tool_calls` and is not truncation, so it falls through to exactly
+     * the observation it always produced.
+     */
+    if (isTruncationSignal(outcome)) {
+      return {
+        kind: 'truncated',
+        text: outcome.text,
+        finishReason: outcome.finishReason ?? 'length',
+        providerId: outcome.providerId,
+        model: outcome.model,
+        iterations,
+      }
+    }
 
     const parsed = parseToolResponse(outcome.text, (name) => deps.tools.has(name))
     if (parsed.kind === 'answer') {

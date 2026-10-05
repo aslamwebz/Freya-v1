@@ -4,7 +4,7 @@ import { isGrantActive, type CognitionGrant, type CognitionGrantSpec } from './g
 import { evaluateCognition, type CognitionRequest } from './governor'
 import { wasProviderContacted } from '../model/gateway'
 import type { ModelGateway, GatewayPermit, GatewayRecorder } from '../model/gateway'
-import { isModelRequestCancelled } from '../model/provider'
+import { isModelRequestCancelled, isTruncationSignal, type ModelFinishReason } from '../model/provider'
 import type { CoreState } from '../state'
 import { findGrant, reduceCoreState } from '../state'
 import type { ModelUsage, PrincipalId } from '../protocol/core-protocol'
@@ -37,7 +37,32 @@ import { ALL_CAPABILITIES, type Capability, type CognitionOrigin, type Cognition
  */
 
 export type CognitionOutcome =
-  | { status: 'allowed'; requestId: string; text: string; providerId: string; model: string }
+  | {
+      status: 'allowed'
+      requestId: string
+      text: string
+      providerId: string
+      model: string
+      /**
+       * Why the provider stopped generating, as it reported it.
+       *
+       * Optional because every producer of a `CognitionOutcome` — including the
+       * test doubles several suites construct by hand — predates it, and making
+       * it required would break a file this change does not own for no gain. What
+       * is not optional is the *meaning*: read it with
+       * {@link cognitionOutcomeTruncated}, never by testing the spelling here.
+       */
+      finishReason?: ModelFinishReason | null
+      /**
+       * Whether the answer was cut off by the output budget.
+       *
+       * The reason this service is the wrong place to decide anything about it.
+       * Cognition's job is to report what the provider said; whether a cut-off
+       * answer may be stored as an answer is the Mind's judgement, made where the
+       * turn and the transcript are.
+       */
+      truncated?: boolean
+    }
   | { status: 'denied'; requestId: string; reason: string }
   | {
       status: 'failed'
@@ -59,6 +84,31 @@ export type CognitionOutcome =
    * caller that saw `failed` would be reporting a defect that never happened.
    */
   | { status: 'cancelled'; requestId: string; reason: string; providerContacted: boolean }
+
+/**
+ * Whether an allowed outcome's answer was cut off before it finished.
+ *
+ * The one place the question is asked, so "did it get truncated?" is answered
+ * identically by the Mind on the single-call path and by the tool loop — and so
+ * neither of them can quietly disagree with the other about what truncation is.
+ * Structural on the outcome, which is why it also accepts the plain result shape
+ * a provider hands the gateway.
+ *
+ * False for every non-`allowed` status, and that is the whole truth of a denial
+ * or a cancellation: nothing came back to have been cut off.
+ *
+ * Generic in its argument rather than a bare union so a caller may hand it a whole
+ * {@link CognitionOutcome}, a subset of one, or anything else that has a `status`
+ * and the two finish fields — which is what several call sites and test doubles in
+ * other layers actually have.
+ */
+export function cognitionOutcomeTruncated<T extends {
+  status: string
+  finishReason?: ModelFinishReason | null
+  truncated?: boolean
+}>(outcome: T): boolean {
+  return outcome.status === 'allowed' && isTruncationSignal(outcome)
+}
 
 /**
  * What a caller may say. `CognitionCall` does not exist any more: it had
@@ -409,6 +459,10 @@ export class CognitionService {
         text: result.text,
         providerId: result.providerId,
         model: result.model,
+        // Carried, not interpreted. The gateway has already settled both fields,
+        // so a caller above reads one fact rather than a spelling it has to know.
+        finishReason: result.finishReason ?? null,
+        truncated: result.truncated === true,
       }
     } catch (error) {
       // Only a grant that was actually put at risk needs its usage marked.

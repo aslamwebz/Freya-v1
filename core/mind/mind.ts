@@ -3,6 +3,7 @@ import type { EventFabric } from '../events/fabric'
 import type { ConversationTurnEvent } from '../events/envelope'
 import type { OwnerAuthority } from '../authority'
 import type { CognitionGrantSpec } from '../cognition/grants'
+import { cognitionOutcomeTruncated } from '../cognition/service'
 import type { ModelGateway } from '../model/gateway'
 import type { ModelMessage } from '../model/provider'
 import { FREYA_IDENTITY, type FreyaIdentity } from '../identity/identity'
@@ -129,6 +130,49 @@ export interface MindSubmitInput {
   conversationId: string
   turnId: string
   text: string
+}
+
+/**
+ * Why a turn ended because the model ran out of room.
+ *
+ * One string, in plain words, with no numbers and no jargon, because it goes into
+ * the turn record next to an outcome of `failed` and a person reads it. It says
+ * what happened and it does not apologise for it or blame a model by name: the
+ * output budget is Freya's own ceiling, and the owner pressed send.
+ */
+export const TRUNCATION_REASON =
+  "Freya's answer was cut off before it finished: the model reached the limit set for one " +
+  "answer and stopped mid-reply. Nothing after the cut was ever generated."
+
+/**
+ * The stored transcript entry for a turn whose answer was cut off.
+ *
+ * Two parts, and the second is the reason this function exists at all.
+ *
+ * **What the model actually produced**, unchanged, because throwing it away would
+ * be its own kind of dishonesty — the owner can see that the first half of an
+ * answer was real. It is placed first and immediately followed by the notice, so
+ * there is no reading of the transcript in which the text above looks finished.
+ * (This is the same shape as `renderToolFooter`: the model's words, then a truth
+ * about them that the model cannot remove and no instruction can suppress.)
+ *
+ * **The notice**, written here in code from the provider's own finish reason. It
+ * never guesses at the missing text, never paraphrases it, and never implies a
+ * different answer was received. There is nothing to complete it with, so it
+ * completes nothing: it says the answer stopped, and that the rest was never
+ * generated.
+ *
+ * No retry happens here, and none is implied by the wording. Raising the ceiling
+ * would change what a turn costs, which is a decision this code does not get to
+ * make on the owner's behalf.
+ */
+export function renderTruncatedAnswer(text: string, footer = ''): string {
+  const produced = text.trim()
+  const body = [produced, footer.trim()].filter((part) => part !== '').join('\n\n')
+  const lead = body === '' ? '' : `${body}\n\n—\n`
+  const before = produced === '' ? 'Freya produced no text at all. ' : 'Everything above is all that was produced. '
+  return `${lead}${before}The reply was cut off before it finished, so it is incomplete and is not ` +
+    `Freya's finished answer. The rest was never generated and has not been guessed at.`
 }
 
 /**
@@ -395,6 +439,23 @@ type Cognition =
       text: string
       providerId: string
       model: string
+      providerContacted: true
+      steps: readonly ToolIteration[]
+    }
+  /**
+   * The provider answered, and its answer did not finish.
+   *
+   * Separate from `answer` because the difference is not cosmetic: an `answer`
+   * is something the transcript may present as Freya's reply, and this is not.
+   * `text` is whatever existed when the output ceiling landed and must never be
+   * stored or shown as a complete reply on its own.
+   */
+  | {
+      kind: 'truncated'
+      text: string
+      providerId: string
+      model: string
+      /** True: a truncated reply is a reply, so a provider was reached and paid. */
       providerContacted: true
       steps: readonly ToolIteration[]
     }
@@ -880,6 +941,10 @@ export class MindService {
         })
       }
 
+      if (cognition.kind === 'truncated') {
+        return await this.finishTruncatedTurn(input, turn, cognition, text)
+      }
+
       // --- 6. the answer, stored before anyone is told it exists ------------
       const endedAt = this.now().toISOString()
       const assistantMessage: ConversationMessage = {
@@ -1012,6 +1077,21 @@ export class MindService {
       if (outcome.status === 'failed') {
         return { kind: 'failed', reason: outcome.reason, providerContacted: outcome.providerContacted }
       }
+      // Checked before the text is read as an answer, and on the same helper the
+      // tool loop uses, so "truncated" means one thing in both paths. The single
+      // call has no tool envelope to protect and no second call to spend, so this
+      // is the whole of what it does about a cut-off reply: refuse to present it
+      // as an answer.
+      if (cognitionOutcomeTruncated(outcome)) {
+        return {
+          kind: 'truncated',
+          text: outcome.text,
+          providerId: outcome.providerId,
+          model: outcome.model,
+          providerContacted: true,
+          steps: [],
+        }
+      }
       return {
         kind: 'answer',
         text: outcome.text,
@@ -1045,6 +1125,20 @@ export class MindService {
       if (outcome.kind === 'failed') {
         return { kind: 'failed', reason: outcome.reason, providerContacted: outcome.providerContacted }
       }
+      // Carried through rather than re-decided: the loop already refused to spend
+      // a further call or execute a tool from a reply it knew was incomplete, and
+      // it still holds the iterations it had legitimately made before that. The
+      // Mind's job is only to render what they did and what is missing.
+      if (outcome.kind === 'truncated') {
+        return {
+          kind: 'truncated',
+          text: outcome.text,
+          providerId: outcome.providerId,
+          model: outcome.model,
+          providerContacted: true,
+          steps: outcome.iterations,
+        }
+      }
       // The footer is appended here, in code, from the loop's own record of what
       // it did. The model's text is stored exactly as it answered; the truth about
       // the tools is added beside it and cannot be edited away by anything the
@@ -1067,6 +1161,99 @@ export class MindService {
   }
 
   /* ---------------------------------------------------------------- private */
+
+  /**
+   * A turn whose answer was cut off by the output budget.
+   *
+   * ### The outcome is `failed`, and that is the only truthful one
+   *
+   * `failed` in the existing vocabulary means "it was attempted and did not
+   * work", which is exactly what happened: a provider was asked, it answered, and
+   * what it answered is not an answer. The other four are all wrong in a way that
+   * would put a false claim in the transcript:
+   *
+   *  - `completed` claims an answer exists and is stored. It does not.
+   *  - `denied` claims the Governor refused and nobody was asked. A provider was
+   *    asked, generated, and was very probably billed.
+   *  - `cancelled` claims somebody stopped it deliberately. Nobody did. The budget
+   *    is not a person.
+   *  - `interrupted` is recovery's word for a turn that was still running when the
+   *    process died. Nothing died, and a Mind that claimed otherwise would be
+   *    taking a durable state it has no evidence for.
+   *
+   * So the reason field carries the truth in words instead, and the terminal event
+   * is `conversation.turn.failed` — the same event a provider error produces,
+   * which is correct: both are turns that were attempted and did not yield an
+   * answer.
+   *
+   * ### What is stored
+   *
+   * One assistant message holding what the model produced *and* the sentence that
+   * says it did not finish. Not stored instead of the partial text — the partial
+   * text is real and throwing it away would be its own dishonesty — and never
+   * stored without the sentence. `assistantMessageId` is set so the transcript and
+   * the turn agree, which also means recovery will not later find a terminal turn
+   * with no message and re-report it as `interrupted`.
+   *
+   * There is no retry here and no larger budget asked for. What a turn costs is
+   * not a decision this method gets to take.
+   */
+  private async finishTruncatedTurn(
+    input: MindSubmitInput,
+    turn: ConversationTurn,
+    cognition: Extract<Cognition, { kind: 'truncated' }>,
+    ownerText: string,
+  ): Promise<MindTurnResult> {
+    const endedAt = this.now().toISOString()
+    // A turn that looked something up before being cut off still says so, so the
+    // footer is rendered exactly as it is for a finished answer.
+    const footer = renderToolFooter(
+      cognition.steps.map((iteration) => iteration.step),
+      cognition.steps.map((iteration) => iteration.observation),
+    )
+    const assistantMessage: ConversationMessage = {
+      messageId: this.newId(),
+      conversationId: input.conversationId,
+      role: 'assistant',
+      content: renderTruncatedAnswer(cognition.text, footer),
+      createdAt: endedAt,
+      turnId: turn.turnId,
+    }
+
+    try {
+      await this.store.appendMessage(assistantMessage)
+    } catch (error) {
+      // Nothing survived, not even the correction, so the turn is reported with
+      // the reason it has and no message id — the same state a store failure on a
+      // complete answer produces, which is the honest one.
+      return await this.finishTurn(input, turn, 'failed', {
+        reason: `${TRUNCATION_REASON} (the explanation could not be stored: ${conversationFault(error)})`,
+        providerId: cognition.providerId,
+        model: cognition.model,
+        providerContacted: true,
+        ownerText,
+      })
+    }
+
+    return await this.finishTurn(
+      input,
+      turn,
+      'failed',
+      {
+        endedAt,
+        assistantMessageId: assistantMessage.messageId,
+        reason: TRUNCATION_REASON,
+        providerId: cognition.providerId,
+        model: cognition.model,
+        // Passed explicitly because the default for a `failed` turn is `false`, and
+        // "did not yield an answer" is not the same claim as "nothing was spent".
+        // The provider generated whatever the transcript now shows.
+        providerContacted: true,
+        ownerText,
+      },
+      assistantMessage,
+    )
+  }
 
   /**
    * A turn that never started.

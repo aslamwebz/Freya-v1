@@ -37,6 +37,7 @@ import type { SearchProvider } from '../core/research/types'
 import type { ModelProvider } from '../core/model/provider'
 import type { DeviceHandsActionKey, GrantFact } from '../core/devicehands'
 import type { BrowserTargetFactory } from '../core/research/browser'
+import type { BrowserTaskPort } from '../core/mind/browser-tool'
 import { randomUUID } from 'node:crypto'
 import {
   createDeviceHandsActivation,
@@ -789,6 +790,26 @@ export class ElectronCoreHost implements CoreHost {
    * nothing to read.
    */
   private deviceHands: DeviceHandsActivation | null = null
+  /**
+   * The activated dual-browser runtime, once the host has one.
+   *
+   * Attached after construction because activation is asynchronous and optional, so
+   * it cannot be a constructor argument. The lazy port handed to Core resolves this
+   * at call time, which is what lets a turn ask for a browser before one exists and
+   * receive an honest refusal rather than a tool that was never offered.
+   */
+  private dualBrowserRuntime: BrowserTaskPort | null = null
+
+  /**
+   * Hand Core the browser seam, once a Freya Browser has actually activated.
+   *
+   * Safe to call more than once; the last activation wins. Never called with a null
+   * runtime — an activation that failed leaves the port refusing, which is the
+   * correct state and not something to "undo".
+   */
+  attachDualBrowser(runtime: BrowserTaskPort): void {
+    this.dualBrowserRuntime = runtime
+  }
 
   constructor(
     private readonly dataPath: string,
@@ -1048,6 +1069,33 @@ export class ElectronCoreHost implements CoreHost {
         dataPath: this.dataPath,
         env: this.env,
         ...(research ? { research } : {}),
+        /*
+         * The browser seam for a turn's `browser_read` tool, as a **lazy** port.
+         *
+         * The dual-browser runtime is activated asynchronously by the host, and only
+         * when the owner asked for it, so it does not exist yet at this point and may
+         * never exist. Passing the value would therefore mean always passing null. A
+         * port that resolves at call time keeps the ordering honest: the tool is
+         * present from the first turn and refuses with `subsystem-disabled` until an
+         * activation actually attaches, which is what the runtime itself would have
+         * said.
+         */
+        dualBrowser: {
+          execute: (request) => {
+            const runtime = this.dualBrowserRuntime
+            if (runtime === null) {
+              return Promise.resolve({
+                ok: false,
+                command: request.command,
+                target: null,
+                code: 'subsystem-disabled' as const,
+                reason: 'Freya\'s own browser is not running, so this turn cannot use one.',
+                escalation: null,
+              })
+            }
+            return runtime.execute(request)
+          },
+        },
         // Bytes in, and nowhere else. Core does not persist it, journal it, log it
         // or put it in a projection, so there is nothing for it to leak through.
         ...(this.options.conversationKey

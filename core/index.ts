@@ -14,6 +14,7 @@ import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
 import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
 import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
 import { createWebSearchTool, MindToolRegistry } from './mind/tools'
+import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
 import type { ReferenceKnowledge } from './mind/context-compiler'
 import { Brain, buildIdentityRoot, buildSelfDefinition, type BrainProjection } from './brain/brain'
 import { ResearchIntegration } from './research/coreIntegration'
@@ -586,9 +587,21 @@ export interface CoreOptions {
     /** Test/embedding seam. Production uses the canonical encrypted Vault when available. */
     sessionStore?: SearchSessionStore
   }
+  /**
+   * The dual-browser runtime, for a turn's `browser_read` tool.
+   *
+   * Optional, and absent means "no browser tool" — the Mind treats that as unwired,
+   * so the turn takes the single-request path and the model is never *offered* the
+   * tool. Core never constructs one: `createDualBrowserActivation` in
+   * `electron/browser/activation.ts` owns it and hands the seam across.
+   *
+   * Held as the narrow `BrowserTaskPort` rather than the concrete runtime, because
+   * the tool needs `execute` and nothing else, and a wider handle is a wider thing
+   * to place in front of a model-driven loop.
+   */
+  readonly dualBrowser?: BrowserTaskPort
   /** A speech-to-text engine. Absent means none is configured. */
-  voiceStt?: VoiceSttAdapter
-  /** A speech output engine. Absent means none is configured. */
+  voiceStt?: VoiceSttAdapter  /** A speech output engine. Absent means none is configured. */
   voiceTts?: VoiceTtsAdapter
   /** A local wake gate. Absent means hands-free cannot be armed at all. */
   voiceWake?: WakeGate
@@ -1365,6 +1378,13 @@ class FreyaCore implements Core {
   /** Null when the host configured no research stack. Every command then refuses. */
   private researchIntegration: ResearchIntegration | null = null
   /**
+   * The browser seam for a turn's tool, or null when the host has not activated a
+   * dual-browser runtime. Kept separate from `researchIntegration` on purpose: the
+   * two are different capabilities with different hosts, and an install can have
+   * either without the other.
+   */
+  private dualBrowser: BrowserTaskPort | null = null
+  /**
    * Research admission.
    *
    * Closed synchronously by STOP ALL, before that command's first `await`. A
@@ -1677,6 +1697,11 @@ class FreyaCore implements Core {
     // Research, once an owner authority exists to issue its bounded grants. The
     // stack is opened here and never again: research starts only on an explicit
     // owner request, so boot does no network, browser or model work at all.
+    //
+    // The browser seam is taken here because the Mind is built further down and
+    // this is the only place that knows whether the host activated one. Absent,
+    // the turn never offers a browser tool at all.
+    this.dualBrowser = this.options.dualBrowser ?? null
     if (this.options.research) {
       const sessionStore = await this.buildResearchSessionStore()
       this.researchIntegration = new ResearchIntegration({
@@ -1890,33 +1915,43 @@ class FreyaCore implements Core {
       // they mean; the Mind never does.
       onOwnerMessage: (message) => this.observeOwnerMessage(message),
       /**
-       * The one tool a turn can reach, wired here because this is the only place
-       * that constructs the Mind.
+       * The tools a turn can reach, and a registry only if there is anything in it.
        *
-       * Null when research is not configured, and a null registry is treated as
-       * "unwired" — the turn takes the original single-request path with no code
-       * that can reach a provider twice. So an install without search is not
-       * merely refused if a turn asks for it; it never even offers the model the
-       * option.
+       * Built as a list rather than a single conditional, because gating the whole
+       * registry on `researchIntegration` alone would make the browser tool vanish
+       * whenever search was unconfigured, and vice versa. An empty registry is
+       * already treated as unwired — the turn takes the original single-request
+       * path and the model is never *offered* a tool — so an install with neither
+       * is a plain chat window rather than a loop whose every request must fail.
        *
-       * The adapter calls `researchIntegration.searchWeb`, which is already
-       * Guard-gated on `search.web` inside that module. The registry evaluates
-       * the same capability again before invoking it: two checks of one fact is
-       * deliberate, and the alternative is a tool body that is the only caller in
-       * the codebase reaching the network without asking.
+       * Both tools are evaluated by the registry before their body runs, and both
+       * bodies reach the real subsystems, which check authority again. Two checks
+       * of one fact is deliberate: the registry answers "may this turn spend this
+       * capability", the subsystem answers "may this action, on this page, for this
+       * principal, right now".
        */
-      tools: this.researchIntegration
-        ? new MindToolRegistry({
-          tools: [
-            createWebSearchTool({
+      tools: (() => {
+        const tools = [
+          ...(this.researchIntegration
+            ? [createWebSearchTool({
               searchWeb: (query, signal) => this.researchIntegration!.searchWeb(query, signal),
-            }),
-          ],
+            })]
+            : []),
+          ...(this.dualBrowser
+            ? [createBrowserTaskTool({ browser: this.dualBrowser })]
+            : []),
+        ]
+        if (tools.length === 0) return null
+        return new MindToolRegistry({
+          tools,
           guard: this.guard,
+          // The owner principal. `browser.read` is the owner's alone, as
+          // `CAPABILITIES` says, so a principal that does not hold it is refused the
+          // browser tool and keeps the search tool.
           principal: this.owner,
           stopped: () => this.state.stopAll.active || !this.gateway.gateStatus().open,
         })
-        : null,
+      })(),
     })
     this.conversations = new ConversationService({
       fabric: this.fabric,

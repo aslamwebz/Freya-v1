@@ -2,6 +2,7 @@ import {
   flattenMessages,
   isModelRequestCancelled,
   ModelRequestCancelled,
+  resolveFinish,
   type ModelCallOptions,
   type ModelCatalogEntry,
   type ModelMessage,
@@ -505,7 +506,17 @@ export class ModelGateway {
       // gateway" to "the provider has been handed the request". Presence and
       // usage become live only here, not when execute() merely begins.
       this.onActivityChange()
-      const result = await provider.complete(request, options)
+      /**
+       * The finish reason crosses the gateway with the result, settled here.
+       *
+       * The gateway is the last place that can be sure the fact is present: a
+       * provider may report only `finish_reason`, only `truncated`, or (being
+       * additive) neither, and every consumer above this line would otherwise have
+       * to know which of those a given provider is. `resolveFinish` adds both
+       * fields and changes nothing else, so a normally-finished answer is returned
+       * byte-identical to what it always was, with two extra facts attached.
+       */
+      const result = resolveFinish(await provider.complete(request, options))
       this.markProviderSettled(call)
       this.assertContactable(call)
 

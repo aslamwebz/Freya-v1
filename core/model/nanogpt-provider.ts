@@ -1,6 +1,8 @@
 import {
   throwIfAborted,
   ModelRequestCancelled,
+  readFinishReason,
+  resolveFinish,
   validateModelAttachments,
   type ModelAttachment,
   type ModelCallOptions,
@@ -603,19 +605,38 @@ export class NanoGptProvider implements ModelProvider {
 
       const body = (await response.json()) as {
         model?: string
-        choices?: { message?: { content?: string } }[]
+        choices?: { message?: { content?: string }; finish_reason?: unknown }[]
         usage?: { prompt_tokens?: number; completion_tokens?: number }
       }
 
-      return {
+      /**
+       * The finish reason is read here and nowhere else in the provider, and it
+       * is read from `choices[0]` rather than inferred from anything about the
+       * text.
+       *
+       * `finish_reason: "length"` is the provider saying the output budget ran
+       * out mid-answer, which is a fact about what Freya is about to store as if
+       * it were a complete reply. Dropping it here — as this call used to — makes
+       * a truncated answer indistinguishable from a finished one, and there is no
+       * later hop that could recover it: the text alone cannot tell a model that
+       * stopped from a model that was stopped.
+       *
+       * `readFinishReason` narrows an untrusted field and maps anything
+       * unrecognised to `'other'`, so an endpoint that invents a spelling
+       * produces "said something else" rather than a silent `stop`.
+       */
+      const choice = body.choices?.[0]
+
+      return resolveFinish({
         requestId: request.requestId,
         providerId: this.id,
         model: body.model ?? request.model ?? this.config.model,
-        text: body.choices?.[0]?.message?.content ?? '',
+        text: choice?.message?.content ?? '',
         inputTokens: typeof body.usage?.prompt_tokens === 'number' ? body.usage.prompt_tokens : null,
         outputTokens:
           typeof body.usage?.completion_tokens === 'number' ? body.usage.completion_tokens : null,
-      }
+        finishReason: readFinishReason(choice?.finish_reason),
+      })
     } catch (error) {
       // An external cancellation stays a cancellation even though `fetch` sees it
       // as a transport abort, so a stop is never recorded as a provider failure.

@@ -5,6 +5,7 @@ import type {
 } from '../../core/browserext'
 import { truncateUtf8, utf8Bytes } from '../../core/browserext'
 import type { BrowserPortOutcome } from '../../core/devicehands'
+import { browserDeleteReason } from '../../core/safety/no-delete'
 import type { ExtensionRequest, ExtensionResponse } from './protocol'
 
 /**
@@ -156,6 +157,38 @@ export function createBrowserAdapter(options: BrowserAdapterOptions): BrowserAda
           textBytes: 0,
         }
       }
+      if (context.command === 'element.click' && portRequest.selector !== null) {
+        const selectorReason = browserDeleteReason(portRequest.selector)
+        if (selectorReason !== null) {
+          return { holds: false, evidence: 'observed', code: 'no-delete', finalUrl: null, textBytes: 0 }
+        }
+
+        // The extension already knows the live element. Inspect it immediately before
+        // the click so the no-delete rule follows the element's own accessible identity,
+        // not only the selector Freya happened to use.
+        const inspected = await request(
+          context.connectionId,
+          `${portRequest.actionId.slice(0, 96)}-inspect`,
+          'element.inspect',
+          { selector: portRequest.selector },
+          context.tabId,
+          portRequest.url,
+          Date.parse(portRequest.deadlineAt),
+        )
+        if (inspected.ok) {
+          const result = inspected.result
+          if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
+            const row = result as Record<string, unknown>
+            const identity = [row.ariaLabel, row.name, row.id, row.placeholder]
+              .filter((value): value is string => typeof value === 'string' && value.length > 0)
+              .join(' ')
+            if (browserDeleteReason(identity) !== null) {
+              return { holds: false, evidence: 'observed', code: 'no-delete', finalUrl: null, textBytes: 0 }
+            }
+          }
+        }
+      }
+
       const response = await request(
         context.connectionId,
         portRequest.actionId,

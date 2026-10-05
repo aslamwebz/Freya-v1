@@ -218,14 +218,36 @@ export function assertPublicBrowserUrl(
   }
 
   let normalised: URL
-  try {
-    normalised = assertPublicUrl(candidate)
-  } catch {
-    return {
-      ok: false,
-      code: 'url-refused',
-      reason:
-        'That address is not one Freya opens. It must be http or https, with no userinfo, no port, and a host that is a public address rather than a loopback, private or reserved one.',
+  if (options.allowPrivateHosts === true) {
+    // Local development profile: localhost/private hosts and explicit dev ports are
+    // allowed. Non-web schemes and credential-bearing URLs remain malformed inputs,
+    // not permission decisions.
+    try {
+      normalised = new URL(candidate)
+    } catch {
+      return { ok: false, code: 'url-refused', reason: 'That address is not a URL Freya can parse.' }
+    }
+    if (
+      !PUBLIC_BROWSER_ALLOWED_SCHEMES.includes(normalised.protocol) ||
+      normalised.username !== '' ||
+      normalised.password !== ''
+    ) {
+      return {
+        ok: false,
+        code: 'url-refused',
+        reason: 'Local browser testing accepts http/https URLs, but not credential-bearing or non-web URLs.',
+      }
+    }
+  } else {
+    try {
+      normalised = assertPublicUrl(candidate)
+    } catch {
+      return {
+        ok: false,
+        code: 'url-refused',
+        reason:
+          'That address is not one Freya opens. It must be http or https, with no userinfo, no port, and a host that is a public address rather than a loopback, private or reserved one.',
+      }
     }
   }
 

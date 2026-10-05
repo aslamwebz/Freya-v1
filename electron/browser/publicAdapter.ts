@@ -76,6 +76,8 @@ export interface FreyaBrowserAdapterOptions {
   publicAvailable: () => boolean
   readonly now?: () => number
   readonly poolSize?: number
+  /** Development-only: remove pool/protected-field friction. */
+  readonly localUnrestricted?: boolean
 }
 
 /* ---------------------------------------------------------------- the adapter */
@@ -103,6 +105,7 @@ export interface FreyaBrowserAdapter extends BrowserAdapterPort, BrowserSessionP
 export function createFreyaBrowserAdapter(options: FreyaBrowserAdapterOptions): FreyaBrowserAdapter {
   const now = options.now ?? (() => Date.now())
   const poolSize = Math.min(options.poolSize ?? PUBLIC_BROWSER_POOL_SIZE, PUBLIC_BROWSER_POOL_SIZE)
+  const localUnrestricted = options.localUnrestricted === true
   const pages = new Map<string, FreyaBrowserPage>()
   const contexts = new Map<string, BrowserActionContext>()
   const observed = new Map<string, { readonly value: BrowserObservation; readonly expiresAt: number }>()
@@ -151,7 +154,7 @@ export function createFreyaBrowserAdapter(options: FreyaBrowserAdapterOptions): 
   return {
     async openSession(sessionId, partition) {
       if (pages.has(sessionId)) return
-      if (pages.size >= poolSize) {
+      if (!localUnrestricted && pages.size >= poolSize) {
         throw new Error(`The Freya Browser holds at most ${String(poolSize)} session(s) at once.`)
       }
       const checked = assertNonPersistentPartition(partition)
@@ -226,7 +229,7 @@ export function createFreyaBrowserAdapter(options: FreyaBrowserAdapterOptions): 
         // know which locator or which session. Refused, not guessed at.
         return failure(context === null ? 'no-page-for-url' : 'session-closed')
       }
-      return await drivePage(page, command, request, stash)
+      return await drivePage(page, command, request, stash, localUnrestricted)
     },
 
     /**
@@ -255,19 +258,19 @@ return {
             // would reload the page behind the owner's back and lose the state they can see, so
             // "already there" is the honest answer and no work is done.
             if (page.currentUrl() === url) return { ok: true, finalUrl: url, code: 'already-there' }
-            const result = await drivePage(page, 'page.navigate', { ...request, url }, stash)
+            const result = await drivePage(page, 'page.navigate', { ...request, url }, stash, localUnrestricted)
             return { ok: result.holds, finalUrl: result.finalUrl, code: result.code }
           },
           async readText(): Promise<{ ok: boolean; textBytes: number; code: string }> {
             // One read produces the prose **and** the element list, so `page.read` and
             // `page.describe` are one `browser.read-text` action seen two ways rather than two
             // actions — which is what keeps them the same Device Hands key.
-            const result = await drivePage(page, command ?? 'page.describe', request, stash)
+            const result = await drivePage(page, command ?? 'page.describe', request, stash, localUnrestricted)
             return { ok: result.holds, textBytes: result.textBytes, code: result.code }
           },
           async act(action: BrowserPortRequest): Promise<BrowserPortOutcome> {
             const key = action.selector !== null && action.text !== null ? 'page.type' : 'page.click'
-            return await drivePage(page, key, action, stash)
+            return await drivePage(page, key, action, stash, localUnrestricted)
           },
           async close(): Promise<void> {
             // Deliberately a no-op: this is the owner's window, not a throwaway target. The
@@ -291,11 +294,13 @@ async function drivePage(
   command: BrowserCommand | null,
   request: BrowserPortRequest,
   stash: (actionId: string, value: BrowserObservation) => void,
+  localUnrestricted = false,
 ): Promise<BrowserPortOutcome> {
   const notHeld = (code: string, textBytes = 0): BrowserPortOutcome => ({ holds: false, evidence: 'observed', code, finalUrl: null, textBytes })
 
   /** Whether a field is one this browser will never touch. Shared with the extension. */
   const protectedKind = async (selector: string): Promise<boolean> => {
+    if (localUnrestricted) return false
     const inspected = await page.inspect(selector)
     return inspected.ok && inspected.field !== null && classifyProtectedField(inspected.field) !== null
   }
@@ -355,7 +360,7 @@ case 'page.describe': {
       if (page.currentUrl() !== request.url) return notHeld('page-moved')
       if (await protectedKind(request.selector)) return notHeld('protected-field')
       const result = await page.click(request.selector)
-      if (result.protectedKind !== null) return notHeld('protected-field')
+      if (!localUnrestricted && result.protectedKind !== null) return notHeld('protected-field')
       if (!result.ok) return notHeld(result.code)
       // The observation gate. A click the page did not react to is reported as not done,
       // because "the element was clicked" is a claim about the element and the useful claim is
@@ -370,7 +375,7 @@ case 'page.describe': {
       if (page.currentUrl() !== request.url) return notHeld('page-moved')
       if (await protectedKind(request.selector)) return notHeld('protected-field')
       const result = await page.type(request.selector, request.text)
-      if (result.protectedKind !== null) return notHeld('protected-field')
+      if (!localUnrestricted && result.protectedKind !== null) return notHeld('protected-field')
       if (!result.ok) return notHeld(result.code)
       if (result.readBack !== request.text) return notHeld('type-unobserved')
       if (!result.changed) return notHeld('click-unobserved')

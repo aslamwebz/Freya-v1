@@ -138,7 +138,9 @@ export const DENIED_ENV_NAME_WORDS: readonly string[] = Object.freeze([
 
 /** The narrowed policy one session operates within. */
 export interface SurfacePolicy {
-  /** Normalised absolute roots. Never empty: an empty list is refused. */
+  /** Explicit local-development profile. Omitted/false means the strict policy. */
+  readonly localUnrestricted?: boolean
+  /** Normalised absolute roots. Strict mode refuses an empty list. */
   readonly allowedRoots: readonly string[]
   /** Normalised absolute denied roots. Never empty: a policy without them is refused. */
   readonly deniedRoots: readonly string[]
@@ -163,6 +165,8 @@ export type PolicyReading =
     }
 
 export interface PolicyInput {
+  /** Explicit local-development profile. Packaged/production callers omit this. */
+  readonly localUnrestricted?: boolean
   readonly allowedRoots: readonly string[]
   readonly deniedRoots: readonly string[]
   readonly allowedHosts: readonly string[]
@@ -311,10 +315,11 @@ export function pathDenialReason(
 /** Whether a normalised path is inside an allowed root. Exact, never case-folded. */
 export function isPathAllowed(
   candidate: string,
-  policy: Pick<SurfacePolicy, 'allowedRoots'>,
+  policy: Pick<SurfacePolicy, 'allowedRoots' | 'localUnrestricted'>,
 ): boolean {
   const normalised = normalisePath(candidate)
   if (normalised === null) return false
+  if (policy.localUnrestricted) return true
   return policy.allowedRoots.some((root) => isInside(normalised, root))
 }
 
@@ -327,11 +332,17 @@ export function isPathAllowed(
  */
 export function checkPath(
   candidate: string,
-  policy: Pick<SurfacePolicy, 'allowedRoots' | 'deniedRoots'>,
+  policy: Pick<SurfacePolicy, 'allowedRoots' | 'deniedRoots' | 'localUnrestricted'>,
 ): { readonly ok: true; readonly normalised: string } | { readonly ok: false; readonly code: DeviceHandsRefusalCode; readonly reason: string } {
+  const normalised = normalisePath(candidate)
+  if (policy.localUnrestricted) {
+    if (normalised === null) {
+      return { ok: false, code: 'path-malformed', reason: 'That path is not one this build can interpret.' }
+    }
+    return { ok: true, normalised }
+  }
   const denial = pathDenialReason(candidate, policy)
   if (denial !== null) return { ok: false, code: denial.code, reason: denial.reason }
-  const normalised = normalisePath(candidate)
   if (normalised === null) {
     return {
       ok: false,
@@ -368,7 +379,7 @@ export const DEVICE_HANDS_ALLOWED_URL_SCHEMES: readonly string[] = Object.freeze
  */
 export function checkUrl(
   candidate: unknown,
-  policy: Pick<SurfacePolicy, 'allowedHosts'>,
+  policy: Pick<SurfacePolicy, 'allowedHosts' | 'localUnrestricted'>,
 ): UrlReading {
   if (typeof candidate !== 'string' || candidate.length === 0 || candidate.length > 2048) {
     return {
@@ -405,7 +416,7 @@ export function checkUrl(
   if (host === '') {
     return { ok: false, code: 'url-host-not-allowed', reason: 'That URL has no host.' }
   }
-  if (!policy.allowedHosts.includes(host)) {
+  if (!policy.localUnrestricted && !policy.allowedHosts.includes(host)) {
     return {
       ok: false,
       code: 'url-host-not-allowed',
@@ -443,9 +454,14 @@ function refuse(code: DeviceHandsRefusalCode, reason: string): PolicyReading {
   return { ok: false, code, reason }
 }
 
-function readList(value: unknown, label: string, ceiling: number): string[] | { readonly error: string } {
+function readList(
+  value: unknown,
+  label: string,
+  ceiling: number,
+  allowEmpty = false,
+): string[] | { readonly error: string } {
   if (!Array.isArray(value)) return { error: `${label} must be a list.` }
-  if (value.length === 0) return { error: `${label} must name at least one entry.` }
+  if (value.length === 0 && !allowEmpty) return { error: `${label} must name at least one entry.` }
   if (value.length > ceiling) return { error: `${label} is capped at ${String(ceiling)} entries.` }
   const out: string[] = []
   for (const entry of value) {
@@ -476,25 +492,32 @@ export function normaliseSurfacePolicy(input: unknown): PolicyReading {
     return refuse('request-malformed', 'A surface policy must be an object.')
   }
   const raw = input as Record<string, unknown>
+  const localUnrestricted = raw.localUnrestricted === true
 
-  const deniedRootsRaw = readList(raw.deniedRoots, 'deniedRoots', DEVICE_HANDS_LIMITS.maxAllowedRoots)
+  const deniedRootsRaw = readList(
+    raw.deniedRoots,
+    'deniedRoots',
+    DEVICE_HANDS_LIMITS.maxAllowedRoots,
+    localUnrestricted,
+  )
   if ('error' in deniedRootsRaw) {
     return refuse(
       'policy-missing',
       `A surface policy must name the directories it protects, and this one does not: ${deniedRootsRaw.error}`,
     )
   }
-  const allowedRootsRaw = readList(raw.allowedRoots, 'allowedRoots', DEVICE_HANDS_LIMITS.maxAllowedRoots)
+  const allowedRootsRaw = readList(raw.allowedRoots, 'allowedRoots', DEVICE_HANDS_LIMITS.maxAllowedRoots, localUnrestricted)
   if ('error' in allowedRootsRaw) return refuse('request-malformed', allowedRootsRaw.error)
-  const hostsRaw = readList(raw.allowedHosts, 'allowedHosts', DEVICE_HANDS_LIMITS.maxAllowedHosts)
+  const hostsRaw = readList(raw.allowedHosts, 'allowedHosts', DEVICE_HANDS_LIMITS.maxAllowedHosts, localUnrestricted)
   if ('error' in hostsRaw) return refuse('request-malformed', hostsRaw.error)
   const commandsRaw = readList(
     raw.allowedCommands,
     'allowedCommands',
     DEVICE_HANDS_LIMITS.maxAllowedCommands,
+    localUnrestricted,
   )
   if ('error' in commandsRaw) return refuse('request-malformed', commandsRaw.error)
-  const envRaw = readList(raw.allowedEnvNames, 'allowedEnvNames', DEVICE_HANDS_LIMITS.maxAllowedEnvNames)
+  const envRaw = readList(raw.allowedEnvNames, 'allowedEnvNames', DEVICE_HANDS_LIMITS.maxAllowedEnvNames, localUnrestricted)
   if ('error' in envRaw) return refuse('request-malformed', envRaw.error)
 
   const deniedRoots: string[] = []
@@ -569,6 +592,7 @@ export function normaliseSurfacePolicy(input: unknown): PolicyReading {
   )
 
   const policy: SurfacePolicy = Object.freeze({
+    localUnrestricted,
     allowedRoots: Object.freeze(allowedRoots),
     deniedRoots: Object.freeze(deniedRoots),
     allowedHosts: Object.freeze(allowedHosts),
@@ -578,6 +602,7 @@ export function normaliseSurfacePolicy(input: unknown): PolicyReading {
     // Counted, then ordered as declared. `listDigest` is order-sensitive on purpose:
     // two roots swapped is a different policy and must not share a digest.
     digest: listDigest([
+      localUnrestricted ? 'local-unrestricted' : 'strict',
       ...[...allowedRoots].sort(),
       ...[...deniedRoots].sort(),
       ...[...allowedHosts].sort(),
@@ -587,11 +612,14 @@ export function normaliseSurfacePolicy(input: unknown): PolicyReading {
     ]),
   })
 
-  // A final self-check: the policy that was just built must refuse a Vault-shaped
-  // path. If it does not, this build has a bug and must not act on the policy.
-  const probe = pathDenialReason(`${deniedRoots[0] ?? '/'}/probe`, policy)
-  if (probe === null) {
-    return refuse('policy-missing', 'The policy this build just read would not refuse its own protected root, so it is not a policy.')
+  // Strict mode proves its protected roots. Local development deliberately has no
+  // path denylist; its one hard prohibition (delete/destructive removal) is enforced
+  // at the action semantics layer instead of hiding parts of the developer machine.
+  if (!localUnrestricted) {
+    const probe = pathDenialReason(`${deniedRoots[0] ?? '/'}/probe`, policy)
+    if (probe === null) {
+      return refuse('policy-missing', 'The policy this build just read would not refuse its own protected root, so it is not a policy.')
+    }
   }
 
   return { ok: true, policy }

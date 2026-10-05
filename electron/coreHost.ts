@@ -531,6 +531,8 @@ export interface DeviceHandsHostOptions {
   readonly grants?: readonly GrantFact[]
   /** Whether to switch the phase on at start. Default false. */
   readonly enabled?: boolean
+  /** Development profile: no grant/approval/allowlist friction, but no deletion. */
+  readonly localUnrestricted?: boolean
   /** Whether a journal that does not chain refuses to open. Default true. */
   readonly requireTrustworthyJournal?: boolean
 }
@@ -939,6 +941,7 @@ export class ElectronCoreHost implements CoreHost {
       authority,
       now: () => new Date().toISOString(),
       newId: () => randomUUID(),
+      localUnrestricted: seam.localUnrestricted === true,
       ...(seam.requireTrustworthyJournal === undefined
         ? {}
         : { requireTrustworthyJournal: seam.requireTrustworthyJournal }),

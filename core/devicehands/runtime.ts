@@ -79,6 +79,8 @@ export interface DeviceHandsOutcome {
 
 export interface DeviceHandsRuntimeOptions {
   readonly ports: DeviceHandsPorts
+  /** Development profile: remove grants/approvals/allowlists, while keeping no-delete. */
+  readonly localUnrestricted?: boolean
   /** Whether an untrustworthy journal refuses to open. Default true. */
   readonly requireTrustworthyJournal?: boolean
 }
@@ -139,6 +141,7 @@ export interface DeviceHandsRuntime {
 export function createDeviceHandsRuntime(options: DeviceHandsRuntimeOptions): DeviceHandsRuntime {
   const { ports } = options
   const requireTrustworthy = options.requireTrustworthyJournal !== false
+  const localUnrestricted = options.localUnrestricted === true
 
   let state: DeviceHandsState = initialDeviceHandsState()
   let policy: SurfacePolicy | null = null
@@ -507,6 +510,7 @@ export function createDeviceHandsRuntime(options: DeviceHandsRuntimeOptions): De
 
     const decision = authoriseDeviceAction(
       {
+        localUnrestricted,
         enabled: ports.enabled(),
         journalTrustworthy: ports.journalTrustworthy(),
         stopped: ports.stopAllActive(),

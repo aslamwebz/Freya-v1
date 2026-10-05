@@ -1,5 +1,6 @@
 import { DEVICE_HANDS_LIMITS, type DeviceHandsRefusalCode } from './types'
 import { checkPath, type SurfacePolicy } from './paths'
+import { terminalDeleteReason } from '../safety/no-delete'
 
 /**
  * The terminal: what one command may be, and what may never reach the program.
@@ -180,17 +181,18 @@ export function readTerminalCommand(
   if (typeof raw.command !== 'string') {
     return refuse('request-malformed', 'A terminal request must name a program.')
   }
-  const command = raw.command.trim().toLowerCase()
+  const command = raw.command.trim()
+  const commandKey = command.toLowerCase()
   if (command.length === 0) {
     return refuse('command-not-allowed', 'A terminal request must name a program.')
   }
-  if (metacharactersIn(command).length > 0) {
+  if (!policy.localUnrestricted && metacharactersIn(command).length > 0) {
     return refuse(
       'command-argument-unsafe',
       `The program name "${command}" contains a shell metacharacter. Program names are bare words on this allowlist.`,
     )
   }
-  if (!policy.allowedCommands.includes(command)) {
+  if (!policy.localUnrestricted && !policy.allowedCommands.includes(commandKey)) {
     return refuse(
       'command-not-allowed',
       `"${command}" is not on the command allowlist (${policy.allowedCommands.join(', ')}). Nothing outside that list may be started.`,
@@ -223,21 +225,23 @@ export function readTerminalCommand(
       )
     }
     const unsafe = metacharactersIn(entry)
-    if (unsafe.length > 0) {
+    if (!policy.localUnrestricted && unsafe.length > 0) {
       return refuse(
         'command-argument-unsafe',
         `The argument "${entry}" contains ${unsafe.map((c) => `"${c}"`).join(', ')}. Arguments are passed as a vector and never parsed by a shell, so a shell character is refused rather than escaped.`,
       )
     }
-    if (!SAFE_VALUE.test(entry)) {
+    if (!policy.localUnrestricted && !SAFE_VALUE.test(entry)) {
       return refuse(
         'command-argument-invalid',
         'An argument may only contain letters, digits, space and . _ - : / @ = + , — and nothing else.',
       )
     }
-    const forbidden = FORBIDDEN_ARGUMENT_PATTERNS.find((pattern) =>
-      entry.toLowerCase().includes(pattern.toLowerCase()),
-    )
+    const forbidden = policy.localUnrestricted
+      ? undefined
+      : FORBIDDEN_ARGUMENT_PATTERNS.find((pattern) =>
+          entry.toLowerCase().includes(pattern.toLowerCase()),
+        )
     if (forbidden !== undefined) {
       return refuse(
         'command-argument-unsafe',
@@ -256,6 +260,11 @@ export function readTerminalCommand(
       }
     }
     args.push(entry)
+  }
+
+  const deleteReason = terminalDeleteReason(command, args)
+  if (deleteReason !== null) {
+    return refuse('forbidden-action', `Freya is currently in no-delete mode: ${deleteReason}.`)
   }
 
   /* -------------------------------------------------- the working directory */
@@ -284,7 +293,7 @@ export function readTerminalCommand(
     )
   }
   for (const [name, value] of envEntries) {
-    if (!policy.allowedEnvNames.includes(name)) {
+    if (!policy.localUnrestricted && !policy.allowedEnvNames.includes(name)) {
       return refuse(
         'environment-variable-not-allowed',
         `"${name}" is not on this policy's environment allowlist (${policy.allowedEnvNames.join(', ')}). The environment is built from that list and never inherited from the process.`,
@@ -299,7 +308,7 @@ export function readTerminalCommand(
         `The value of "${name}" must be between 1 and ${String(DEVICE_HANDS_LIMITS.maxCommandArgBytes)} characters.`,
       )
     }
-    if (metacharactersIn(value).length > 0 || !SAFE_VALUE.test(value)) {
+    if (!policy.localUnrestricted && (metacharactersIn(value).length > 0 || !SAFE_VALUE.test(value))) {
       return refuse(
         'command-argument-invalid',
         `The value of "${name}" contains a character this build will not pass to a program.`,

@@ -7,6 +7,7 @@ import type {
 } from '../devicehands'
 import { BROWSER_LIMITS, BROWSER_COMMAND_ACTION, type BrowserCommand, type BrowserMode, type BrowserRefusalCode, type BrowserTarget, type BrowserEventType } from './types'
 import { assertPublicBrowserUrl, publicBrowserPartition } from './isolation'
+import { browserDeleteReason } from '../safety/no-delete'
 import { RefTable, describePage, type PageElement, type PageSnapshot } from './refs'
 import { routeBrowserIntent, type AuthenticatedContext, type AuthNeedObservation, type BrowserIntent, type RouteEscalation, type RouteReading, type RoutingContext } from './routing'
 import { createHandoffEnvelope, foldHandoffs, settleUnfinished, verifyHandoffEnvelope, type HandoffEnvelope, type HandoffLedgerState } from './handoff'
@@ -183,6 +184,10 @@ export interface DualBrowserRuntimeOptions {
   readonly principalId?: string
   /** The owner's host allowlist for the Freya Browser. */
   readonly allowedHosts?: readonly string[]
+  /** Development-only: remove browser budgets/host restrictions except no-delete. */
+  readonly localUnrestricted?: boolean
+  /** Development-only: permit localhost/private hosts and explicit dev ports. */
+  readonly allowPrivateHosts?: boolean
   /** Whether the router may *propose* the authenticated target. Off by default. */
   readonly autoEscalate?: boolean
   /**
@@ -264,6 +269,8 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     maxOpenHandoffs: BROWSER_LIMITS.maxOpenHandoffs,
   })
   const allowedHosts = options.allowedHosts ?? []
+  const localUnrestricted = options.localUnrestricted === true
+  const allowPrivateHosts = options.allowPrivateHosts === true
 
   let stopped = false
   let enabled = false
@@ -370,6 +377,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
   }
 
   function budget(command: BrowserCommand): BrowserResult | null {
+    if (localUnrestricted) return null
     if (liveSessionCount(state) >= limits.maxSessions) {
       return refusal(command, 'public', 'budget-exceeded', `This runtime already holds ${String(limits.maxSessions)} browser session(s). Close one first.`)
     }
@@ -659,7 +667,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
 
   async function navigate(request: BrowserRequest, target: BrowserTarget, escalation: RouteEscalation | null): Promise<BrowserResult> {
     const sessionId = request.sessionId ?? ''
-    const address = assertPublicBrowserUrl(request.url, { allowedHosts, allowPrivateHosts: false })
+    const address = assertPublicBrowserUrl(request.url, { allowedHosts, allowPrivateHosts })
     if (!address.ok) return refusal('page.navigate', target, 'url-refused', address.reason)
 
     const result = await gated({
@@ -831,6 +839,20 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     }
 
     const element = resolved.element
+    if (command === 'page.click') {
+      const deleteReason = browserDeleteReason(element.label)
+      if (deleteReason !== null) {
+        return {
+          refused: true,
+          result: refusal(
+            command,
+            target,
+            'authority-refused',
+            `Freya is currently in no-delete mode: ${deleteReason}.`,
+          ),
+        }
+      }
+    }
     const input: Record<string, unknown> = { url: entry.url, selector: element.selector }
     if (command === 'page.type') {
       if (typeof request.text !== 'string' || request.text.length === 0) {
@@ -919,7 +941,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
   async function offerHandoff(request: BrowserRequest, target: BrowserTarget, escalation: RouteEscalation | null): Promise<BrowserResult> {
     const from = target
     const to: BrowserTarget = from === 'public' ? 'authenticated' : 'public'
-    if (openHandoffCount(state) >= limits.maxOpenHandoffs) {
+    if (!localUnrestricted && openHandoffCount(state) >= limits.maxOpenHandoffs) {
       return refusal('handoff.offer', target, 'budget-exceeded', `This runtime already holds ${String(limits.maxOpenHandoffs)} unsettled handoff(s).`)
     }
     const entry = request.sessionId === undefined ? undefined : state.sessions.get(request.sessionId)

@@ -133,6 +133,16 @@ function splitDeviceHandsList(value: string | undefined): string[] {
     .filter((entry) => entry.length > 0)
 }
 
+/**
+ * Local development is permissive by default so capability testing exercises Freya
+ * rather than approval plumbing. Packaged builds stay strict. Set
+ * FREYA_LOCAL_UNRESTRICTED=0 to test the strict path locally.
+ */
+function localUnrestrictedMode(): boolean {
+  if (process.env.FREYA_LOCAL_UNRESTRICTED === '0') return false
+  return process.env.FREYA_LOCAL_UNRESTRICTED === '1' || !app.isPackaged
+}
+
 function readDeviceHandsGrants(path: string): GrantFact[] {
   if (!existsSync(path)) return []
   try {
@@ -148,9 +158,12 @@ function readDeviceHandsGrants(path: string): GrantFact[] {
 }
 
 function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
-  if (process.env.FREYA_DEVICE_HANDS !== '1') return undefined
+  const localUnrestricted = localUnrestrictedMode()
+  if (!localUnrestricted && process.env.FREYA_DEVICE_HANDS !== '1') return undefined
   const userData = app.getPath('userData')
-  const grants = readDeviceHandsGrants(join(userData, 'device-hands.grants.json'))
+  const grants = localUnrestricted
+    ? []
+    : readDeviceHandsGrants(join(userData, 'device-hands.grants.json'))
   const journal = openDeviceHandsJournal(join(userData, 'device-hands.jsonl'))
   const effects = createElectronDeviceHandsEffects({
     /**
@@ -177,15 +190,25 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
     effects,
     journal,
     authority,
-    policy: {
-      allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
-      deniedRoots: [join(userData, 'vault')],
-      allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
-      allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
-      allowedEnvNames: [],
-    },
+    policy: localUnrestricted
+      ? {
+          localUnrestricted: true,
+          allowedRoots: [],
+          deniedRoots: [],
+          allowedHosts: [],
+          allowedCommands: [],
+          allowedEnvNames: [],
+        }
+      : {
+          allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
+          deniedRoots: [join(userData, 'vault')],
+          allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+          allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
+          allowedEnvNames: [],
+        },
     grants,
     enabled: true,
+    localUnrestricted,
   }
 }
 
@@ -202,14 +225,22 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
  * implemented and gated, and the missing piece is a Phase 35 seam, not a Phase 51 one.
  */
 function buildDualBrowserSeam(extension: BrowserExtensionHost | null): DualBrowserActivation | null {
-  if (process.env.FREYA_DEVICE_HANDS !== '1') return null
-  if (process.env.FREYA_PUBLIC_BROWSER !== '1') return null
+  const localUnrestricted = localUnrestrictedMode()
+  if (!localUnrestricted && process.env.FREYA_DEVICE_HANDS !== '1') return null
+  if (!localUnrestricted && process.env.FREYA_PUBLIC_BROWSER !== '1') return null
 
+  const allowedHosts = localUnrestricted
+    ? []
+    : splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS)
   const adapter = createFreyaBrowserAdapter({
     factory: new ElectronFreyaWindowFactory({
-      allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+      allowedHosts,
+      localUnrestricted,
+      allowPrivateHosts: localUnrestricted,
+      allowProtectedFields: localUnrestricted,
     }),
     publicAvailable: () => true,
+    localUnrestricted,
   })
   publicBrowserAdapter = adapter
 
@@ -226,7 +257,9 @@ function buildDualBrowserSeam(extension: BrowserExtensionHost | null): DualBrows
     journal,
     adapter,
     extension,
-    allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+    allowedHosts,
+    localUnrestricted,
+    allowPrivateHosts: localUnrestricted,
     onLog: (line) => console.log(`[freya] ${line}`),
   })
 }
@@ -1380,29 +1413,41 @@ app.whenReady().then(async () => {
      * extension actions on the same turn as everything else.
      */
     if (deviceHandsSeam !== undefined) {
-      const seamGrants = readDeviceHandsGrants(join(app.getPath('userData'), 'device-hands.grants.json'))
+      const localUnrestricted = localUnrestrictedMode()
+      const seamGrants = localUnrestricted
+        ? []
+        : readDeviceHandsGrants(join(app.getPath('userData'), 'device-hands.grants.json'))
       browserExtensionHost = createBrowserExtensionHost({
         activation: 'active',
+        localUnrestricted,
+        urlOptions: { allowPrivateHosts: localUnrestricted },
         activeGrant: (principalId, scope) =>
           seamGrants.find(
             (grant) => grant.principalId === principalId && grant.scope === scope && grant.revokedAt === null,
           ) ?? null,
-        // Denied in exactly the shape Phase 42 denies: `granted: false` with
-        // `decidedBy: 'unknown'`, because nobody decided. Recording it as an owner
-        // refusal would put a decision in the journal that was never made.
         requestOwnerApproval: async (ask) => ({
           approvalId: ask.approvalId,
-          granted: false,
-          decidedBy: 'unknown',
+          granted: localUnrestricted,
+          decidedBy: localUnrestricted ? 'owner' : 'unknown',
           decidedAt: new Date().toISOString(),
         }),
-        policy: {
-          allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
-          deniedRoots: [join(app.getPath('userData'), 'vault')],
-          allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
-          allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
-          allowedEnvNames: [],
-        },
+        requestControl: async () => localUnrestricted,
+        policy: localUnrestricted
+          ? {
+              localUnrestricted: true,
+              allowedRoots: [],
+              deniedRoots: [],
+              allowedHosts: [],
+              allowedCommands: [],
+              allowedEnvNames: [],
+            }
+          : {
+              allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
+              deniedRoots: [join(app.getPath('userData'), 'vault')],
+              allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+              allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
+              allowedEnvNames: [],
+            },
       })
       browserExtensionHost
         .start()

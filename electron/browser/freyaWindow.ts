@@ -189,14 +189,14 @@ const CLICK_SCRIPT = String.raw`((selector) => {
  * tracks its own value will not see a plain assignment — which is exactly the case where
  * reporting a successful keystroke would be a lie.
  */
-const TYPE_SCRIPT = String.raw`((selector, text) => {
+const TYPE_SCRIPT = String.raw`((selector, text, allowProtected) => {
   const node = document.querySelector(selector);
   if (!node) return { ok: false, changed: false, readBack: null, protectedKind: null, reason: 'not-found' };
   if (node.disabled === true || node.getAttribute('aria-disabled') === 'true') return { ok: false, changed: false, readBack: null, protectedKind: null, reason: 'disabled' };
   const PROTECTED_HINT = /pass(word|wd|phrase)?|\bpwd\b|credit.?card|\bcc.?num|\bcvc\b|\bcvv\b|\bcsc\b|security.?code|social.?security|\bssn\b|\botp\b|one.?time|\b2fa\b|\bmfa\b|auth.?token|access.?token|api.?key|secret|passphrase/i;
   const type = (node.type || '').toLowerCase();
   const haystack = ((node.name || '') + ' ' + (node.id || '') + ' ' + (node.placeholder || '') + ' ' + (node.getAttribute('aria-label') || '')).toLowerCase();
-  if (type === 'password' || type === 'hidden' || PROTECTED_HINT.test(haystack)) {
+  if (allowProtected !== '1' && (type === 'password' || type === 'hidden' || PROTECTED_HINT.test(haystack))) {
     return { ok: false, changed: false, readBack: null, protectedKind: type === 'password' ? 'password' : 'authentication' };
   }
   if (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA') {
@@ -225,8 +225,14 @@ const SIGNATURE_SCRIPT = String.raw`(() => {
 /* ------------------------------------------------------------------ the page */
 
 export interface FreyaWindowOptions {
-  /** The owner's host allowlist. Empty means no host is allowlisted. */
+  /** The owner's host allowlist. Empty means no host is allowlisted in strict mode. */
   readonly allowedHosts?: readonly string[]
+  /** Development-only: remove browser permission friction. */
+  readonly localUnrestricted?: boolean
+  /** Development-only: permit loopback/private hosts and explicit dev ports. */
+  readonly allowPrivateHosts?: boolean
+  /** Development-only: permit normal interaction with protected fields. */
+  readonly allowProtectedFields?: boolean
   /** Called for every download the page starts. The window has already cancelled it. */
   readonly onMedia?: (observation: {
     readonly sessionId: string
@@ -303,7 +309,10 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
     this.mediaSequence += 1
     const mediaId = `${this.sessionId}-download-${String(this.mediaSequence)}`
     const url = item.getURL()
-    const address = assertPublicBrowserUrl(url, { allowedHosts: this.allowedHosts })
+    const address = assertPublicBrowserUrl(url, {
+      allowedHosts: this.allowedHosts,
+      allowPrivateHosts: this.allowPrivateHosts,
+    })
     const at = this.currentTime()
     this.options.onMedia?.({
       sessionId: this.sessionId,
@@ -326,6 +335,9 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
   }
 
   private readonly allowedHosts: readonly string[]
+  private readonly localUnrestricted: boolean
+  private readonly allowPrivateHosts: boolean
+  private readonly allowProtectedFields: boolean
   private readonly settleMs: number
 
   constructor(
@@ -334,6 +346,9 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
     private readonly options: FreyaWindowOptions,
   ) {
     this.allowedHosts = options.allowedHosts ?? []
+    this.localUnrestricted = options.localUnrestricted === true
+    this.allowPrivateHosts = options.allowPrivateHosts === true
+    this.allowProtectedFields = options.allowProtectedFields === true
     this.settleMs = options.settleMs ?? DEFAULT_SETTLE_MS
     // Held, and asserted rather than trusted: a partition name that would be persistent is
     // refused here, at the point a window would be created, rather than further down.
@@ -354,13 +369,16 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
   }
 
   private allowedUrl(candidate: string): boolean {
-    return assertPublicBrowserUrl(candidate, { allowedHosts: this.allowedHosts }).ok
+    return assertPublicBrowserUrl(candidate, {
+      allowedHosts: this.allowedHosts,
+      allowPrivateHosts: this.allowPrivateHosts,
+    }).ok
   }
 
   initialize(ses: Session): void {
     this.ses = ses
-    ses.setPermissionCheckHandler(() => false)
-    ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+    ses.setPermissionCheckHandler(() => this.localUnrestricted)
+    ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(this.localUnrestricted))
     ses.on('will-download', this.onDownload)
     // Nothing on this partition may reach a private or local address, from any origin, for
     // any resource type. This is the reason the Freya Browser is not a doorway to the
@@ -424,7 +442,7 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
     const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '')
-    if (isPrivateOrLocalHost(host)) return false
+    if (!this.allowPrivateHosts && isPrivateOrLocalHost(host)) return false
     return resourceType !== 'mainFrame' || this.allowedUrl(candidate)
   }
 
@@ -527,7 +545,14 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
     const result = await this.eval<{ elements?: unknown; title?: string }>(DESCRIBE_SCRIPT)
     if (result === null) return { ok: false, payload: null, code: 'describe-failed' }
     if (typeof result.title === 'string') this.title = result.title.slice(0, 200)
-    return { ok: true, payload: result.elements, code: 'described' }
+    const payload = this.allowProtectedFields && Array.isArray(result.elements)
+      ? result.elements.map((entry) =>
+          typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+            ? { ...(entry as Record<string, unknown>), protected: false }
+            : entry,
+        )
+      : result.elements
+    return { ok: true, payload, code: 'described' }
   }
 
   async inspect(selector: string): Promise<{ ok: boolean; field: FieldDescriptor | null; code: string }> {
@@ -569,7 +594,10 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
   }
 
   async type(selector: string, text: string): Promise<{ ok: boolean; changed: boolean; readBack: string | null; protectedKind: string | null; code: string }> {
-    const result = await this.eval<{ ok?: boolean; changed?: boolean; readBack?: string | null; protectedKind?: string | null; reason?: string }>(TYPE_SCRIPT, [selector, text])
+    const result = await this.eval<{ ok?: boolean; changed?: boolean; readBack?: string | null; protectedKind?: string | null; reason?: string }>(
+      TYPE_SCRIPT,
+      [selector, text, this.allowProtectedFields ? '1' : '0'],
+    )
     if (result === null || result.ok !== true) {
       return { ok: false, changed: false, readBack: null, protectedKind: null, code: result?.reason ?? 'type-failed' }
     }

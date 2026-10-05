@@ -121,6 +121,8 @@ export type PreparedAction =
     }
 
 export interface DeviceHandsGateContext {
+  /** Local development: bypass grant/approval/allowlist/budget friction. */
+  readonly localUnrestricted?: boolean
   readonly enabled: boolean
   readonly journalTrustworthy: boolean
   readonly stopped: boolean
@@ -311,7 +313,7 @@ export function authoriseDeviceAction(
       remaining: [],
       prepared,
       subject,
-      approvalRequired: deviceHandsApprovalRequired(request.actionKey),
+      approvalRequired: context.localUnrestricted ? false : deviceHandsApprovalRequired(request.actionKey),
       projectedBytes,
     }
   }
@@ -328,7 +330,7 @@ export function authoriseDeviceAction(
     // this exact action*. It is the digest of a normalised action, so it cannot be
     // used to smuggle a different body past the approval gate later.
     subject: prepared === null ? null : buildSubject(request.actionKey, prepared, request.actionId),
-    approvalRequired: deviceHandsApprovalRequired(request.actionKey),
+    approvalRequired: context.localUnrestricted ? false : deviceHandsApprovalRequired(request.actionKey),
     projectedBytes,
   })
 
@@ -408,7 +410,7 @@ function evaluateGate(
           reason: `Action "${request.actionId}" has already been used. A retry is a new id with a new approval, not a second run of the old one.`,
         }
       }
-      if (context.inFlightActions >= DEVICE_HANDS_LIMITS.maxInFlightActions) {
+      if (!context.localUnrestricted && context.inFlightActions >= DEVICE_HANDS_LIMITS.maxInFlightActions) {
         return {
           code: 'budget-exceeded',
           reason: `${String(context.inFlightActions)} actions are already in flight, which is the ceiling.`,
@@ -425,7 +427,7 @@ function evaluateGate(
       if (typeof request.actionId !== 'string' || request.actionId.length === 0 || request.actionId.length > 128) {
         return { code: 'request-malformed', reason: 'An action needs an id of at most 128 characters.' }
       }
-      if (request.claimsAction !== null) {
+      if (!context.localUnrestricted && request.claimsAction !== null) {
         const code = forbiddenClaimCode(request.claimsAction)
         if (code !== null) {
           return { code, reason: forbiddenClaimReason(request.claimsAction, code) }
@@ -436,6 +438,7 @@ function evaluateGate(
 
     /* ------------------------------------------------------------- 6. the grant */
     case 'grant': {
+      if (context.localUnrestricted) return null
       const grant = context.grant
       if (grant === null) {
         return { code: 'grant-missing', reason: 'No grant covers this action. Possession of nothing is not a permission.' }
@@ -485,7 +488,7 @@ function evaluateGate(
       // A deadline *beyond* the ceiling is refused rather than clamped: a caller asking
       // for an hour has asked for something this build does not do, and silently
       // shortening it would leave the owner believing they approved a longer window.
-      if (deadline - at > DEVICE_HANDS_LIMITS.maxActionTimeoutMs) {
+      if (!context.localUnrestricted && deadline - at > DEVICE_HANDS_LIMITS.maxActionTimeoutMs) {
         return {
           code: 'deadline-expired',
           reason: `A single action may occupy at most ${String(DEVICE_HANDS_LIMITS.maxActionTimeoutMs / 1000)} seconds, and this one was given ${String(deadline - at)} milliseconds.`,
@@ -496,6 +499,7 @@ function evaluateGate(
 
     /* ---------------------------------------------------------- 8. the ceilings */
     case 'budget': {
+      if (context.localUnrestricted) return null
       if (context.actionCountThisSession >= DEVICE_HANDS_LIMITS.maxActionsPerSession) {
         return {
           code: 'action-count-exceeded',
@@ -515,7 +519,7 @@ function evaluateGate(
             'No surface policy is loaded, so no path, command or URL can be judged. A session with no policy refuses every action.',
         }
       }
-      if (context.policyDigest !== null && !policyMatchesDigest(policy, context.policyDigest)) {
+      if (!context.localUnrestricted && context.policyDigest !== null && !policyMatchesDigest(policy, context.policyDigest)) {
         return {
           code: 'policy-mismatch',
           reason:
@@ -526,7 +530,7 @@ function evaluateGate(
       if (refusal !== null) return refusal
       // The transfer ceilings are session-cumulative, so they are checked here rather
       // than in `readTransferRequest`, which only knows about one transfer.
-      if (request.actionKey.startsWith('transfer.')) {
+      if (!context.localUnrestricted && request.actionKey.startsWith('transfer.')) {
         if (context.transferCountThisSession >= DEVICE_HANDS_LIMITS.maxTransfersPerSession) {
           return {
             code: 'transfer-count-exceeded',
@@ -556,7 +560,7 @@ function evaluateGate(
           reason: 'The approval gate was reached with no normalised action to approve.',
         }
       }
-      if (!deviceHandsApprovalRequired(request.actionKey)) return null
+      if (context.localUnrestricted || !deviceHandsApprovalRequired(request.actionKey)) return null
       const subject = buildSubject(request.actionKey, approved, request.actionId)
       const verdict = approvalCovers(context.approvals, subject, request.at)
       if (!verdict.satisfied) {

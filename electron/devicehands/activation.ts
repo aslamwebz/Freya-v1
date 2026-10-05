@@ -66,6 +66,8 @@ export interface DeviceHandsActivationOptions {
   readonly journal: DeviceHandsJournal
   readonly now: () => string
   readonly newId: () => string
+  /** Development profile: no grant/approval/allowlist friction. */
+  readonly localUnrestricted?: boolean
   /** Default true. A false journal refuses to open rather than acting on a record. */
   readonly requireTrustworthyJournal?: boolean
 }
@@ -175,6 +177,7 @@ export function createDeviceHandsActivation(
 
   const runtime = createDeviceHandsRuntime({
     ports,
+    localUnrestricted: options.localUnrestricted === true,
     ...(options.requireTrustworthyJournal === undefined
       ? {}
       : { requireTrustworthyJournal: options.requireTrustworthyJournal }),

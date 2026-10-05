@@ -62,8 +62,11 @@
    comfortable size, while the centre column (the orb) is `1fr` and takes the
    slack — so the page widens with the window instead of scaling. Non-Home tabs
    render `TabBody`, which is absolutely positioned and ignores this grid. */
-.hd-main { position: absolute; top: 82px; bottom: 90px; left: 198px; right: 24px; max-width: 1800px; margin: 0 auto; pointer-events: none; display: grid; grid-template-columns: minmax(300px, 520px) minmax(360px, 1fr) minmax(300px, 520px); grid-template-rows: repeat(6, minmax(0, 1fr)); gap: 14px; }
-.hd-main > * { pointer-events: auto; -webkit-app-region: no-drag; }
+.hd-main { position: absolute; top: 82px; bottom: 90px; left: 198px; right: 24px; max-width: 1800px; margin: 0 auto; pointer-events: none; }
+.hd-workspace-layer { position: absolute; inset: 0; min-width: 0; min-height: 0; pointer-events: none; -webkit-app-region: no-drag; }
+.hd-workspace-layer[hidden] { display: none !important; }
+.hd-workspace-layer[data-workspace='home'] { display: grid; grid-template-columns: minmax(300px, 520px) minmax(360px, 1fr) minmax(300px, 520px); grid-template-rows: repeat(6, minmax(0, 1fr)); gap: 14px; }
+.hd-workspace-layer > * { pointer-events: auto; }
 
 /* The swappable main region for every non-Home tab: left cards · Freya centre ·
    right cards, with an optional lower row. Same board coordinates as Home. */

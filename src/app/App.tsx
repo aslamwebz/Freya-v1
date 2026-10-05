@@ -21,7 +21,6 @@ import { People } from './screens/People'
 import { Memory } from './screens/Memory'
 import { Settings, type SettingsCategory } from './screens/Settings'
 import { setAppLayout, type AppLayout } from './state/workspace'
-import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
 import { useVoiceDock } from './voice/useVoiceDock'
@@ -97,38 +96,23 @@ export function App({
     void ensureConversationAttached()
   }, [])
 
-  const current = screen === 'settings'
-    ? { id: 'settings', label: 'Settings', symbol: 'settings' }
-    : RAIL.find((item) => item.id === screen) ?? RAIL[0]!
-
-  const slots: ScreenSlots = current.id === 'home' || current.id === 'chat'
-    ? { left: null, right: null, bottom: null }
-    : current.id === 'mind'
-      ? Mind()
-      : current.id === 'world'
-        ? World()
-        : current.id === 'life'
-          ? Life()
-          : current.id === 'workforce'
-            ? Workforce()
-            : current.id === 'create'
-              ? Foundry()
-              : current.id === 'relay'
-                ? Relay()
-                : current.id === 'focus'
-                  ? Focus()
-                  : current.id === 'people'
-                    ? People()
-                    : current.id === 'memory'
-                      ? Memory()
-                      : current.id === 'settings'
-                        ? Settings({
-                            snapshot,
-                            preferences,
-                            category: settingsCategory,
-                            onCategory: setSettingsCategory,
-                          })
-                        : placeholder(current.label, current.symbol, 'This screen is next in the build.')
+  const slotsByScreen: Readonly<Record<string, ScreenSlots>> = {
+    mind: Mind(),
+    world: World(),
+    life: Life(),
+    workforce: Workforce(),
+    create: Foundry(),
+    relay: Relay(),
+    focus: Focus(),
+    people: People(),
+    memory: Memory(),
+    settings: Settings({
+      snapshot,
+      preferences,
+      category: settingsCategory,
+      onCategory: setSettingsCategory,
+    }),
+  }
 
   const send = async (text: string, mode: ComposerMode): Promise<boolean> => {
     if (!text.trim()) return false
@@ -271,8 +255,8 @@ export function App({
 
   return <>
     <HomeDashboard
-      screen={current.id}
-      slots={slots}
+      screen={screen}
+      slotsByScreen={slotsByScreen}
       snapshot={snapshot}
       generating={generating}
       notice={notice}

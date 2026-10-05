@@ -12,11 +12,12 @@ import { brainState, type BrainState } from '../presence/state'
 import { GlobalComposer } from './GlobalComposer'
 import { hostBridge } from '../../platform/host'
 import type { DressingStore, DressingState } from '../dressing/store'
+import { PersistentWorkspaceLayers } from './PersistentWorkspaceLayers'
 import './home-dashboard.css'
 
 interface Props {
   screen: string
-  slots?: ScreenSlots
+  slotsByScreen: Readonly<Record<string, ScreenSlots>>
   snapshot: UiSnapshot
   generating: boolean
   notice: string
@@ -43,6 +44,8 @@ const NAV = [['home', 'Home', 'home'], ['chat', 'Chats', 'chat'], ['mind', 'Mind
   ['people', 'People', 'people'], ['workforce', 'Workforce', 'workforce'], ['world', 'World', 'world'],
   ['memory', 'Memory', 'memory'], ['life', 'Life', 'life'], ['create', 'Foundry', 'forge'],
   ['relay', 'Relay', 'relay']] as const
+
+const WORKSPACE_IDS: readonly string[] = [...NAV.map(([id]) => id), 'settings']
 
 // Existing reference artwork supplies decorative face thumbnails, never UI text.
 const FACES = [[290, 219], [378, 236], [291, 310], [470, 199]] as const
@@ -108,7 +111,7 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slots, snapshot, generating, notice, dressing, voice, voiceTranscript, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserToggle, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
+export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, voice, voiceTranscript, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserToggle, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   const [collapsed, setCollapsed] = useState(false)
@@ -154,7 +157,10 @@ export function HomeDashboard({ screen, slots, snapshot, generating, notice, dre
         </div>
       </aside>
       <main className="hd-main" aria-label={preview ? 'Freya dashboard · Sample data' : 'Freya dashboard'}>
-        {screen === 'home' ? (<>
+        <PersistentWorkspaceLayers
+          active={screen}
+          workspaceIds={WORKSPACE_IDS}
+          renderWorkspace={(workspaceId) => workspaceId === 'home' ? (<>
         <Panel name="focus" title="Current focus" icon="focus" onOpen={open('focus')}>
           <h3>{focus?.title ?? 'No focus reported'}</h3>
           <p className="hd-description">{preview ? 'Finalizing system architecture, workspace designs, and go-to-market plan.' : focus?.detail}</p>
@@ -201,7 +207,7 @@ export function HomeDashboard({ screen, slots, snapshot, generating, notice, dre
             ['Product strategy review completed', '2h ago'], ['Drafted Phase 19 launch plan', '4h ago'], ['Spoke with Alex about partnership idea', '6h ago'], ['Researched EU AI regulatory updates', '12h ago'], ['Created visual concepts for new workspace', '1d ago'],
           ] : activity?.slice(0, 5).map(item => [item.text, new Date(item.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })]) ?? []).map(([text, time], i) => <button key={text} onClick={open('memory')}><span className={`hd-memory-icon hd-memory-icon-${i}`}><Glyph name={['mind', 'mission', 'relay', 'people', 'create'][i]!} size={17} /></span><span>{text}</span><small>{time}</small></button>)}</div>
         </Panel>
-        </>) : screen === 'chat' ? (
+        </>) : workspaceId === 'chat' ? (
           <Chats
             researchView={researchView}
             busy={generating}
@@ -211,7 +217,8 @@ export function HomeDashboard({ screen, slots, snapshot, generating, notice, dre
             onBrowserRequestedUrlHandled={onBrowserRequestedUrlHandled}
             onBrowserClose={onBrowserClose}
           />
-        ) : <TabBody slots={slots} design={design} cognition={cognition} />}
+        ) : <TabBody slots={slotsByScreen[workspaceId]} design={design} cognition={cognition} />}
+        />
       </main>
       <GlobalComposer
         generating={generating}

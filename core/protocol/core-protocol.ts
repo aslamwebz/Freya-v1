@@ -500,10 +500,58 @@ export type CoreCommandName =
   /** Scoped: stops one response. Does not latch STOP ALL. */
   | 'conversation.turn.cancel'
   /* -------------------------------------------------------------- voice */
+
+  /**
+   * The voice family.
+   *
+   * Read the comment before adding a name. Every one of these is reachable only
+   * by the owner's own window, and every one of them is either a display concern
+   * or an *input* concern. None of them is a way to say something to Freya that
+   * she did not already write:
+   *
+   * - `voice.tts.speak` takes a **turn id**. Core reads the stored answer out of
+   *   its own conversation store. A window cannot supply the words, so it cannot
+   *   synthesise a sentence in Freya's voice.
+   * - `voice.permission.report` is a *report* of what the operating system said.
+   *   Core cannot grant permission, and capture is refused unless the last thing
+   *   reported was `granted`.
+   * - `voice.transcript.interim` is display text. It is not on a composer and
+   *   there is no command that would submit it.
+   * - `voice.submit.set` decides whether a *confirmed* transcript is submitted on
+   *   the owner's behalf. It defaults to off, it never chooses the conversation,
+   *   the turn id, the grant or the model, and it changes nothing until the next
+   *   time somebody speaks.
+   */
   | 'voice.status.read'
+  /** Turn the microphone on. Explicit, and the only thing that sets `micEnabled`. */
+  | 'voice.mic.enable'
+  /** Turn the microphone off and release any open capture. */
+  | 'voice.mic.disable'
+  /** What the OS said. Never a request, and never a grant. */
+  | 'voice.permission.report'
   | 'voice.capture.start'
+  /** Display-only interim text from a streaming engine. */
+  | 'voice.transcript.interim'
   | 'voice.capture.end'
   | 'voice.capture.cancel'
+  /** Whether a confirmed transcript enters the conversation path unprompted. */
+  | 'voice.submit.set'
+  /** Read a stored turn aloud. The payload is a turn id and nothing else. */
+  | 'voice.tts.speak'
+  /** Finish at a boundary and drop the queue. */
+  | 'voice.tts.stop'
+  /** Cut off mid-word. Barge-in and STOP ALL both come through here. */
+  | 'voice.tts.cancel'
+  /** The output adapter reports playback finished, or failed. */
+  | 'voice.tts.settle'
+  | 'voice.tts.voice.read'
+  | 'voice.tts.voice.select'
+  | 'voice.mute.set'
+  /** Arm or disarm the local speech-activity gate. Off until asked. */
+  | 'voice.wake.arm'
+  | 'voice.wake.disarm'
+  /** A local energy reading. Arms nothing; may only ask for a capture. */
+  | 'voice.wake.energy'
   /* -------------------------------------------------------------- brain */
   /** Read-only. Reports what the Brain is and what it holds. */
   | 'brain.status.read'

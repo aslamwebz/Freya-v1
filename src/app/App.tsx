@@ -6,7 +6,7 @@ import { conversationMirror, ensureConversationAttached } from '../platform/conv
 import { hostBridge } from '../platform/host'
 import { sendMessage } from '../ui-v2/chat/sendMessage'
 import { researchMirror } from '../platform/researchClient'
-import type { ComposerMode, WorkspaceResearchView } from './chat/modes'
+import { routeEyePrompt, type ComposerMode, type WorkspaceResearchView } from './chat/modes'
 import type { ScreenSlots } from './screens/Home'
 import { HomeDashboard } from './screens/HomeDashboard'
 import { Mind } from './screens/Mind'

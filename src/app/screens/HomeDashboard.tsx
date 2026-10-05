@@ -6,6 +6,7 @@ import { ready } from '../state/view'
 import type { ScreenSlots } from './Home'
 import { FreyaCentre } from '../presence/FreyaCentre'
 import { Chats } from '../chat/Chats'
+import type { ComposerMode, WorkspaceResearchView } from '../chat/modes'
 import { brainState, type BrainState } from '../presence/state'
 import { GlobalComposer } from './GlobalComposer'
 import { hostBridge } from '../../platform/host'
@@ -20,8 +21,9 @@ interface Props {
   notice: string
   dressing: DressingStore
   onOpenDressing: () => void
-  onSend: (text: string) => Promise<boolean>
+  onSend: (text: string, mode: ComposerMode) => Promise<boolean>
   onStopResponse: () => void
+  researchView: WorkspaceResearchView | null
   onNavigate: (screen: string) => void
 }
 
@@ -94,7 +96,7 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slots, snapshot, generating, notice, dressing, onOpenDressing, onSend, onStopResponse, onNavigate }: Props) {
+export function HomeDashboard({ screen, slots, snapshot, generating, notice, dressing, onOpenDressing, onSend, onStopResponse, researchView, onNavigate }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   const [collapsed, setCollapsed] = useState(false)
@@ -187,7 +189,7 @@ export function HomeDashboard({ screen, slots, snapshot, generating, notice, dre
             ['Product strategy review completed', '2h ago'], ['Drafted Phase 19 launch plan', '4h ago'], ['Spoke with Alex about partnership idea', '6h ago'], ['Researched EU AI regulatory updates', '12h ago'], ['Created visual concepts for new workspace', '1d ago'],
           ] : activity?.slice(0, 5).map(item => [item.text, new Date(item.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })]) ?? []).map(([text, time], i) => <button key={text} onClick={open('memory')}><span className={`hd-memory-icon hd-memory-icon-${i}`}><Glyph name={['mind', 'mission', 'relay', 'people', 'create'][i]!} size={17} /></span><span>{text}</span><small>{time}</small></button>)}</div>
         </Panel>
-        </>) : screen === 'chat' ? <Chats /> : <TabBody slots={slots} design={design} cognition={cognition} />}
+        </>) : screen === 'chat' ? <Chats researchView={researchView} busy={generating} /> : <TabBody slots={slots} design={design} cognition={cognition} />}
       </main>
       <GlobalComposer generating={generating} notice={notice} defaultModel={provider?.model ?? null} onSend={onSend} onStopResponse={onStopResponse} />
     </div></div>

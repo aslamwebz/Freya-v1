@@ -45,6 +45,15 @@ export interface ResearchMirror {
   cancel(researchId: string): Promise<ResearchCommandOutcome>
   statusRead(): Promise<ResearchCommandOutcome>
 
+  createSession(request: string): Promise<ResearchCommandOutcome>
+  listSessions(): Promise<ResearchCommandOutcome>
+  readSession(sessionId: string): Promise<ResearchCommandOutcome>
+  followUpSession(sessionId: string, text: string): Promise<ResearchCommandOutcome>
+  collectSession(sessionId: string): Promise<ResearchCommandOutcome>
+  pauseSession(sessionId: string): Promise<ResearchCommandOutcome>
+  resumeSession(sessionId: string): Promise<ResearchCommandOutcome>
+  cancelSession(sessionId: string): Promise<ResearchCommandOutcome>
+
   reset(): void
 }
 
@@ -80,7 +89,20 @@ export function createResearchMirror(): ResearchMirror {
   }
 
   const submit = async (
-    command: 'search.web' | 'browser.read' | 'research.start' | 'research.cancel' | 'research.status.read',
+    command:
+      | 'search.web'
+      | 'browser.read'
+      | 'research.start'
+      | 'research.cancel'
+      | 'research.status.read'
+      | 'research.session.create'
+      | 'research.session.list'
+      | 'research.session.read'
+      | 'research.session.followup'
+      | 'research.session.collect'
+      | 'research.session.pause'
+      | 'research.session.resume'
+      | 'research.session.cancel',
     payload?: unknown,
   ): Promise<ResearchCommandOutcome> => {
     const bridge = hostBridge()
@@ -138,6 +160,15 @@ export function createResearchMirror(): ResearchMirror {
     research: (question) => submit('research.start', { question }),
     cancel: (researchId) => submit('research.cancel', { researchId }),
     statusRead: () => submit('research.status.read'),
+
+    createSession: (request) => submit('research.session.create', { request }),
+    listSessions: () => submit('research.session.list'),
+    readSession: (sessionId) => submit('research.session.read', { sessionId }),
+    followUpSession: (sessionId, text) => submit('research.session.followup', { sessionId, text }),
+    collectSession: (sessionId) => submit('research.session.collect', { sessionId }),
+    pauseSession: (sessionId) => submit('research.session.pause', { sessionId }),
+    resumeSession: (sessionId) => submit('research.session.resume', { sessionId }),
+    cancelSession: (sessionId) => submit('research.session.cancel', { sessionId }),
 
     reset() {
       current = IDLE

@@ -5,6 +5,8 @@ import { type PreferencesStore } from '../ui-v2/theme/preferences'
 import { conversationMirror, ensureConversationAttached } from '../platform/conversationClient'
 import { hostBridge } from '../platform/host'
 import { sendMessage } from '../ui-v2/chat/sendMessage'
+import { researchMirror } from '../platform/researchClient'
+import type { ComposerMode, WorkspaceResearchView } from './chat/modes'
 import type { ScreenSlots } from './screens/Home'
 import { HomeDashboard } from './screens/HomeDashboard'
 import { Mind } from './screens/Mind'
@@ -65,10 +67,16 @@ export function App({
   const [dressingOpen, setDressingOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('appearance')
+  const [researchBusy, setResearchBusy] = useState(false)
+  const [activeResearchMode, setActiveResearchMode] = useState<Exclude<ComposerMode, 'chat'> | null>(null)
+  const [activeEyeSessionId, setActiveEyeSessionId] = useState<string | null>(null)
+  const [researchView, setResearchView] = useState<WorkspaceResearchView | null>(null)
 
   const mirror = conversationMirror()
+  const research = researchMirror()
   const conversation = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
-  const generating = conversation?.activeTurn != null
+  const conversationGenerating = conversation?.activeTurn != null
+  const generating = conversationGenerating || researchBusy
   const activeTurnId = conversation?.activeTurn?.turnId ?? null
 
   useEffect(() => {
@@ -116,7 +124,7 @@ export function App({
                           })
                         : placeholder(current.label, current.symbol, 'This screen is next in the build.')
 
-  const send = async (text: string): Promise<boolean> => {
+  const send = async (text: string, mode: ComposerMode): Promise<boolean> => {
     if (!text.trim()) return false
     if (!hostBridge()) {
       setNotice('This window cannot reach Freya Core.')
@@ -125,13 +133,74 @@ export function App({
 
     setNotice('')
     setScreen('chat')
-    const result = await sendMessage(mirror, conversation?.activeConversationId ?? null, text)
-    setNotice(result.ok ? '' : result.notice)
-    return result.ok
+
+    if (mode === 'chat') {
+      setResearchView(null)
+      const result = await sendMessage(mirror, conversation?.activeConversationId ?? null, text)
+      setNotice(result.ok ? '' : result.notice)
+      return result.ok
+    }
+
+    setResearchBusy(true)
+    setActiveResearchMode(mode)
+    try {
+      if (mode === 'deep-research') {
+        const outcome = await research.research(text)
+        setResearchView({ mode, outcome })
+        if (outcome.operation === 'refused') {
+          setNotice(outcome.reason ?? 'Deep Research was refused.')
+          return false
+        }
+        return true
+      }
+
+      const explicitNewSearch = activeEyeSessionId === null || /^\s*(?:please\s+)?(?:find|search|get|show)\b/i.test(text)
+      let outcome = explicitNewSearch
+        ? await research.createSession(text)
+        : await research.followUpSession(activeEyeSessionId, text)
+
+      if (outcome.operation === 'refused' || !outcome.session) {
+        setResearchView({ mode: 'eye', outcome })
+        setNotice(outcome.reason ?? "Freya's Eye could not start that search.")
+        return false
+      }
+
+      setActiveEyeSessionId(outcome.session.sessionId)
+      setResearchView({ mode: 'eye', outcome })
+
+      if (outcome.ambiguous) {
+        setNotice("Freya's Eye needs a little more context before changing this search.")
+        return true
+      }
+
+      outcome = await research.collectSession(outcome.session.sessionId)
+      setResearchView({ mode: 'eye', outcome })
+      if (outcome.operation === 'refused') {
+        setNotice(outcome.reason ?? "Freya's Eye could not continue that search.")
+        return false
+      }
+      return true
+    } finally {
+      setResearchBusy(false)
+      setActiveResearchMode(null)
+    }
   }
 
   const stopResponse = () => {
-    if (activeTurnId) void mirror.cancelTurn(activeTurnId)
+    if (activeTurnId) {
+      void mirror.cancelTurn(activeTurnId)
+      return
+    }
+    if (!researchBusy) return
+    if (activeResearchMode === 'eye' && activeEyeSessionId) {
+      void research.cancelSession(activeEyeSessionId)
+      return
+    }
+    if (activeResearchMode === 'deep-research') {
+      void research.statusRead().then((status) => {
+        if (status.status?.operationId) void research.cancel(status.status.operationId)
+      })
+    }
   }
 
   return <>
@@ -145,6 +214,7 @@ export function App({
       onOpenDressing={() => setDressingOpen(true)}
       onSend={send}
       onStopResponse={stopResponse}
+      researchView={researchView}
       onNavigate={setScreen}
     />
     <div className="freya-v2" data-theme={settings.theme} data-app-shell="app" data-ui-mode={uiMode(snapshot)}>

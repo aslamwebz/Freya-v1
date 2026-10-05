@@ -25,7 +25,7 @@ describe('GlobalComposer', () => {
     fireEvent.change(input(), { target: { value: 'do not lose me' } })
     fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
 
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('do not lose me'))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('do not lose me', 'chat'))
     expect(input().value).toBe('do not lose me')
   })
 
@@ -46,7 +46,28 @@ describe('GlobalComposer', () => {
     fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
 
     await waitFor(() => expect(input().value).toBe(''))
-    expect(onSend).toHaveBeenCalledWith('hello freya')
+    expect(onSend).toHaveBeenCalledWith('hello freya', 'chat')
+  })
+
+  it('sends the selected Freya mode with the draft', async () => {
+    const onSend = vi.fn(async () => true)
+
+    render(
+      <GlobalComposer
+        generating={false}
+        notice=""
+        defaultModel={null}
+        onSend={onSend}
+        onStopResponse={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Chat/i }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Freya's Eye/i }))
+    fireEvent.change(input(), { target: { value: 'find 100 cat videos' } })
+    fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('find 100 cat videos', 'eye'))
   })
 
   it('turns the send control into a real stop-response control while generating', () => {

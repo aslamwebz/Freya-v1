@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { ModelSelector } from './ModelSelector'
 import { ThinkingSelector } from './ThinkingSelector'
+import { ModeSelector } from './ModeSelector'
+import type { ComposerMode } from '../chat/modes'
 
 /**
  * The global dock composer, self-contained.
@@ -16,13 +18,14 @@ export function GlobalComposer({ generating, notice, defaultModel, onSend, onSto
   generating: boolean
   notice: string
   defaultModel: string | null
-  onSend: (text: string) => Promise<boolean>
+  onSend: (text: string, mode: ComposerMode) => Promise<boolean>
   onStopResponse: () => void
 }) {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
   const [voiceNotice, setVoiceNotice] = useState('')
   const [sending, setSending] = useState(false)
+  const [mode, setMode] = useState<ComposerMode>('chat')
 
   const submit = async () => {
     const value = text.trim()
@@ -30,7 +33,7 @@ export function GlobalComposer({ generating, notice, defaultModel, onSend, onSto
     setVoiceNotice('')
     setSending(true)
     try {
-      const accepted = await onSend(value)
+      const accepted = await onSend(value, mode)
       if (accepted) setText('')
     } finally {
       setSending(false)
@@ -44,6 +47,7 @@ export function GlobalComposer({ generating, notice, defaultModel, onSend, onSto
       <span className="hd-wave" aria-hidden="true">{Array.from({ length: 5 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 0.13}s` }} />)}</span>
       <div className="hd-tools">
         <button type="button" className="hd-tool" aria-label="Attach a file" onClick={() => setVoiceNotice('Attachments are not connected yet.')}><Glyph name="attach" size={18} /></button>
+        <ModeSelector mode={mode} onChange={setMode} />
         <ModelSelector defaultModel={defaultModel} />
         <ThinkingSelector />
       </div>

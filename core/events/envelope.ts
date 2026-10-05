@@ -134,6 +134,8 @@ export const CORE_EVENT_TYPES = [
   'brain.memory.admitted',
   'brain.memory.reviewed',
   'brain.memory.archived',
+  'brain.memory.ownership_set',
+  'brain.memory.corrected',
   'brain.world.entity_noted',
   'brain.world.related',
   'brain.world.observed',
@@ -951,6 +953,28 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
 
   /** A memory was withdrawn deliberately. Archived, never deleted. */
   'brain.memory.archived': { memoryId: string; reason: string }
+
+  /**
+   * The owner changed what Freya keeps in view.
+   *
+   * Metadata only, and the shape is the defence: `reasonLength` rather than
+   * `reason`, because the journal is audit surface that gets read, copied and
+   * backed up far more freely than the Brain itself, and an owner's explanation of
+   * why they pinned something is exactly the kind of private aside that has no
+   * business in it. The words stay in the encrypted record; only the fact, the
+   * target and the size of the explanation are journalled.
+   */
+  'brain.memory.ownership_set': { memoryId: string; pinned: boolean; reasonLength: number }
+
+  /**
+   * The owner corrected a memory.
+   *
+   * `corrects` names the superseded record rather than replacing it. A correction
+   * that erased its target would be indistinguishable, from the outside, from a
+   * memory quietly changing its own mind — so both ids are here, and the old one
+   * stays readable in the Brain.
+   */
+  'brain.memory.corrected': { memoryId: string; corrects: string; source: string }
 
   /** Something was noted. The name itself is not here, only its length. */
   'brain.world.entity_noted': {

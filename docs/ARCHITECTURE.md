@@ -549,7 +549,7 @@ The intended shape, stated so the seams can be checked against it:
 | Context (what was shared, what "here" means) | **built in Phase 9** — Core-owned integration, an encrypted store with its own key, and a read-only `context` surface | OS-wide screen capture, or a context command a window can name |
 | Personality (temperament, relationship, expression) | **built in Phase 11** — a `personality.*` event family, a Core-owned `PersonalityIntegration`, an encrypted store with its own key, and a read-only `personality` surface | a `personality.*` command a window can name, or a way for a record to grant anything |
 | Workforce | **built in Phase 8** — a `workforce.*` event family, a `WorkforceEngine`, and two authority objects that keep the subordinate relationship a type rather than a convention | agents running in the renderer |
-| Harness | surfaces that request a PTY from the main process | the renderer owning process handles |
+| Skills + Forge (generated modules) | **built in Phase 48** � a `forge.*` event family, a `ForgeEngine`, an encrypted package store with its own key, a declarative interpreter instead of a code sandbox, and a push-only `forge` projection | a general-purpose code sandbox, a capability grant, a command that installs *and* enables, or any path from a manifest to a filesystem write || Harness | surfaces that request a PTY from the main process | the renderer owning process handles |
 | Vault (files, Obsidian-compatible import) | **the `vault` surface is now the Brain**; a file-backed vault is a *future* capability-scoped access path | direct fs from the renderer |
 | Guard | every privileged call routed through main | the UI holding secrets |
 | Governor | budgets enforced in main | the UI being able to raise a budget |

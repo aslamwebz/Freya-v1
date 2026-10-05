@@ -1,0 +1,98 @@
+.sg-hub {
+  --sg-energy: 0;
+  --sg-paper: #e6e9df;
+  --sg-signal: #a8ddd6;
+  --sg-signal-hi: #e7fff9;
+  position: absolute;
+  inset: 0;
+  isolation: isolate;
+  overflow: visible;
+  pointer-events: none;
+}
+.sg-hub::before {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%; width: 43%; aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffffff08 0 20%, #8eb8ad07 34%, transparent 64%);
+  filter: blur(26px);
+  opacity: calc(.42 + var(--sg-energy) * .16);
+}
+/* The existing orb's position, scale and renderer are preserved. */
+.sg-core {
+  position: absolute; z-index: 4; left: 50%; top: 50%;
+  width: min(39%, 430px); aspect-ratio: 1;
+  transform: translate(-50%, -50%); pointer-events: none;
+}
+.sg-strands {
+  position: absolute; z-index: 2; inset: 0; width: 100%; height: 100%;
+  overflow: visible; pointer-events: none;
+}
+.sg-strand-group { --sg-delay: 0s; }
+.sg-strand-aura, .sg-strand-core, .sg-strand-pulse { fill: none; vector-effect: non-scaling-stroke; }
+.sg-strand-aura { stroke: #83c8bf; stroke-width: 5; opacity: .05; filter: url(#sg-strand-glow); }
+.sg-strand-core { stroke: url(#sg-strand-signal); stroke-width: 1; opacity: .32; }
+.sg-strand-pulse {
+  stroke: #e1f6f1; stroke-width: 1.8; stroke-linecap: round;
+  stroke-dasharray: 1.5 98.5; opacity: .3;
+  filter: url(#sg-strand-glow);
+  animation: sg-strand-travel 6.6s linear infinite;
+  animation-delay: var(--sg-delay);
+}
+.sg-strand-group[data-hot='true'] .sg-strand-aura { opacity: .18; stroke-width: 8; }
+.sg-strand-group[data-hot='true'] .sg-strand-core { opacity: .85; stroke-width: 1.4; }
+.sg-strand-group[data-hot='true'] .sg-strand-pulse { opacity: 1; stroke: var(--sg-signal-hi); stroke-dasharray: 5 95; animation-duration: 1.35s; }
+@keyframes sg-strand-travel { to { stroke-dashoffset: -100; } }
+
+/* Six separate machined fragments with exposed ends and dedicated sockets. */
+.sg-gate {
+  position: absolute; z-index: 5; left: 50%; top: 50%;
+  width: min(47%, 520px); aspect-ratio: 1;
+  transform: translate(-50%, -50%); overflow: visible;
+  pointer-events: none; filter: drop-shadow(0 7px 10px #000a);
+}
+.sg-gate-guide { fill: none; stroke: #c3b89525; stroke-width: .65; stroke-dasharray: 1 18; }
+.sg-gate-back { fill: none; stroke: #0b202850; stroke-width: 48; stroke-linecap: butt; }
+.sg-gate-body { fill: none; stroke: url(#sg-metal-face); stroke-width: 40; stroke-linecap: butt; }
+.sg-gate-rim { fill: none; stroke: url(#sg-edge); stroke-linecap: square; }
+.sg-gate-rim-outer { stroke-width: 2.6; }
+.sg-gate-rim-inner { stroke-width: 1.6; opacity: .7; }
+.sg-gate-track { fill: none; stroke: #b6d2d03b; stroke-width: 5; }
+.sg-gate-engraving { fill: none; stroke: #c7d9cf; stroke-width: 1.2; opacity: .8; }
+.sg-gate-bolt { fill: #10191b; stroke: #a6a791; stroke-width: .8; }
+.sg-gate-fracture { fill: none; stroke: #bfac85; stroke-width: 2; }
+.sg-gate-chevron { fill: #172629; stroke: #cbbb95; stroke-width: 1.5; }
+.sg-gate-node { fill: #d1c5a5; opacity: .65; }
+.sg-gate-socket { fill: #19292b; stroke: #a69875; stroke-width: 1.4; }
+.sg-gate-socket-light { fill: none; stroke: #bdb28e; stroke-width: 2; }
+.sg-gate-socket[data-hot='true'] .sg-gate-socket-light { stroke: #dcfff2; filter: drop-shadow(0 0 4px #9bffdf); }
+.sg-hub[data-busy='true'] .sg-gate-node { fill: #dffbf6; filter: drop-shadow(0 0 6px #b8fff5); animation: sg-gate-fire 1.8s ease-in-out infinite; }
+@keyframes sg-gate-fire { 0%, 100% { opacity: .5; } 45% { opacity: 1; } }
+
+/* The ten cards are sectors of one concentric outer gate. */
+.sg-card-layer { position: absolute; z-index: 8; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.sg-card { cursor: pointer; pointer-events: auto; outline: none; -webkit-app-region: no-drag; }
+.sg-card-face { fill: url(#sg-card-glass); stroke: #aec8c377; stroke-width: 1; transition: fill 180ms, stroke 180ms; }
+.sg-card-outer-rim { fill: none; stroke: #c4d3c58c; stroke-width: 1; }
+.sg-card-inner-rim { fill: none; stroke: #b2d4d091; stroke-width: 1.2; }
+.sg-card-track { fill: none; stroke: #8ca8a44a; stroke-width: 3; stroke-dasharray: 1 4; }
+.sg-label-guide { fill: none; stroke: none; pointer-events: none; }
+.sg-card-label { fill: #e6f0eb; font-family: 'Segoe UI', sans-serif; font-weight: 500; letter-spacing: 1.8px; pointer-events: none; }
+.sg-card-chevron { fill: none; stroke: #dbd0ad; stroke-width: 1.1; pointer-events: none; }
+.sg-card-rune { fill: none; stroke: #b9cec4; stroke-width: .8; opacity: .62; pointer-events: none; }
+.sg-card-socket { fill: #152d3499; stroke: #9bbaaf; stroke-width: 1; }
+.sg-card-contact { fill: none; stroke: #c5d7c5; stroke-width: 2; }
+.sg-card[data-hot='true'] .sg-card-contact { stroke: #e5fff5; filter: drop-shadow(0 0 5px #b6ffe0); }
+.sg-card[data-hot='true'] .sg-card-inner-rim { stroke: #d1f7e7; filter: drop-shadow(0 0 3px #c1f9e055); }
+.sg-card:hover .sg-card-face, .sg-card:focus-visible .sg-card-face { fill: #8ebbb32c; stroke: #ebead0; stroke-width: 2; }
+.sg-card:hover .sg-card-label, .sg-card:focus-visible .sg-card-label { fill: #fff; }
+.sg-card:focus-visible .sg-card-outer-rim { stroke: #fff1bf; stroke-width: 2; }
+@media (max-width: 1050px), (max-height: 760px) {
+  .sg-core { width: min(36%, 360px); }
+  .sg-gate { width: min(44%, 450px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sg-strand-pulse, .sg-hub[data-busy='true'] .sg-gate-node { animation: none; }
+  .sg-card-face { transition: none; }
+}

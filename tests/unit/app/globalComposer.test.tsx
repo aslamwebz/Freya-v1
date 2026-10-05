@@ -43,6 +43,8 @@ describe('GlobalComposer', () => {
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={8000}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -68,6 +70,8 @@ describe('GlobalComposer', () => {
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={8000}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -93,6 +97,8 @@ describe('GlobalComposer', () => {
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={8000}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -119,6 +125,8 @@ describe('GlobalComposer', () => {
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={8000}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
         onSend={vi.fn(async () => true)}
         onStopResponse={onStopResponse}
       />,
@@ -144,6 +152,8 @@ describe('GlobalComposer keyboard and bounds', () => {
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={8000}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -169,6 +179,8 @@ describe('GlobalComposer keyboard and bounds', () => {
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={1234}
+        browserOpen={false}
+        onBrowserToggle={vi.fn()}
         onSend={vi.fn(async () => true)}
         onStopResponse={vi.fn()}
       />,

@@ -142,7 +142,7 @@ describe('VaultConversationStore', () => {
 
     expect(await store.listConversations(10)).toEqual([])
     expect(await store.readConversation('c1')).toBeNull()
-    const row = connection.prepare('SELECT content FROM chat_messages WHERE message_id = ?').get('m1') as { content: string }
+    const row = connection.prepare('SELECT content FROM chat_messages WHERE message_id = ?').get(['m1']) as { content: string }
     expect(row.content).toBe('history stays')
   })
 

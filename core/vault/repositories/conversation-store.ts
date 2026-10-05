@@ -79,8 +79,9 @@ export class VaultConversationStore implements ConversationStore {
       return rows.map((row) => decodeSummary(row))
     } catch (error) {
       if (error instanceof ConversationStoreError) throw error
-      this.degrade('conversation rows in the encrypted Vault could not be read')
-      throw new ConversationStoreError('invalid-record', this.degraded)
+      const reason = 'conversation rows in the encrypted Vault could not be read'
+      this.degrade(reason)
+      throw new ConversationStoreError('invalid-record', reason)
     }
   }
 
@@ -114,8 +115,9 @@ export class VaultConversationStore implements ConversationStore {
       return { conversation, messages, turns }
     } catch (error) {
       if (error instanceof ConversationStoreError) throw error
-      this.degrade('conversation history in the encrypted Vault could not be read')
-      throw new ConversationStoreError('invalid-record', this.degraded)
+      const reason = 'conversation history in the encrypted Vault could not be read'
+      this.degrade(reason)
+      throw new ConversationStoreError('invalid-record', reason)
     }
   }
 

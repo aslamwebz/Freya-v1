@@ -81,7 +81,14 @@ export function normaliseRendererBrowserRequest(value: unknown): BrowserRequestR
   const reason = stringField(record, 'reason', 200)
   const mediaId = stringField(record, 'mediaId', 128)
 
-  if ([sessionId, url, ref, handoffId, reason, mediaId].some((entry) => entry === null)) {
+  if (
+    sessionId === null ||
+    url === null ||
+    ref === null ||
+    handoffId === null ||
+    reason === null ||
+    mediaId === null
+  ) {
     return { ok: false, reason: 'one of the browser request fields is invalid or too large' }
   }
 

@@ -17,6 +17,7 @@ import type { FoundryCommandOutcome } from './foundry'
 import type { RelayCommandOutcome } from './relay'
 import type { ConnectorCommandOutcome } from './connectors'
 import type { SkillCommandOutcome } from './skills'
+import type { ForgeCommandOutcome } from './forge'
 import type { LifeCommandOutcome } from './life'
 import type { WorldCommandOutcome } from './world'
 
@@ -837,6 +838,38 @@ export type CoreCommandName =
   | 'skill.select'
   | 'skill.detail.read'
 
+  /* -------------------------------------------------------------- forge */
+  /**
+   * Phase 48. The Skills + Forge control surface: one read and eleven owner acts.
+   *
+   * The absences are the argument:
+   *
+   * - **No `forge.installAndEnable`.** There is no command that installs and turns
+   *   on, and no flag that means "and enable it". `forge.install` writes metadata;
+   *   `forge.enable` is a second, separate decision a person makes.
+   * - **No capability anything.** Nothing in this vocabulary grants, widens or
+   *   approves. `forge.approve` records *the owner's* decision about one exact
+   *   version; it cannot decide on their behalf and it cannot approve itself.
+   * - **No `forge.core.*`.** There is no command that writes a package into Core, a
+   *   policy, a grant, or a protected file. Forge produces candidates; a Core change
+   *   remains developer work in the repository.
+   * - **No `forge.setVerified`, `forge.setStatus`, `forge.setEnabled`.** Status is
+   *   derived from `forge.*` events and from the pipeline, so there is nothing for a
+   *   caller to assert.
+   */
+  | 'forge.status.read'
+  | 'forge.generate'
+  | 'forge.validate'
+  | 'forge.install'
+  | 'forge.enable'
+  | 'forge.disable'
+  | 'forge.run'
+  | 'forge.rollback'
+  | 'forge.remove'
+  | 'forge.approve'
+  | 'forge.search'
+  | 'forge.export'
+  | 'forge.detail.read'
   /* --------------------------------------------------------- world & self */
   /**
    * Phase 22. Five reads and two owner acts, and the shape of the group is the whole
@@ -1029,6 +1062,20 @@ export interface CoreCommandResult {
    * without parsing a sentence.
    */
   skill?: SkillCommandOutcome
+
+  /**
+   * The Forge view of a forge command's result.
+   *
+   * Its own slot for the same reason every other subsystem's exists: whether Core
+   * validated, installed, enabled or ran a package is a fact about Forge, and it must
+   * never have to be dug out of a security projection where it would be cached and
+   * copied wherever status is.
+   *
+   * Every refusal lands here with a **closed code**, so a surface can tell "this may
+   * never be true" from "this is not true yet" without parsing a sentence, and a run that
+   * failed says so rather than reporting an absence.
+   */
+  forge?: ForgeCommandOutcome
 
   /**
    * The Life History view of a life command's result.

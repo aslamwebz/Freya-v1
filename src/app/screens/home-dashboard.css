@@ -315,19 +315,24 @@
 .hd-memory-icon-2 { color: #e7baff; background: #8d4eb866; }
 .hd-memory-icon-3 { color: #ffddb3; background: #a7672c66; }
 .hd-memory-icon-4 { color: #b7d6ff; background: #516bb566; }
-.hd-dock { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(960px, 60vw); height: 54px; }
-.hd-dock form { display: flex; align-items: center; gap: 10px; height: 54px; padding: 5px 12px 5px 7px; border: 1px solid #b3e0fc; border-radius: 28px; background: linear-gradient(170deg, #425d7480, #07131bf5 35%, #0b1825f5 74%, #36566fca); box-shadow: inset 0 2px 4px #b9dfffaa, inset 0 -2px 4px #acddffaa, 0 0 9px #84a9ff87, 0 0 27px #65c9ff27, 0 8px 24px #0008; }
+.hd-dock { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(960px, 60vw); min-height: 54px; }
+/* min-height, not height: the composer field grows to 132px as the draft wraps,
+   and a fixed 54px row clipped it. */
+.hd-dock form { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 5px 12px 5px 7px; border: 1px solid #b3e0fc; border-radius: 28px; background: linear-gradient(170deg, #425d7480, #07131bf5 35%, #0b1825f5 74%, #36566fca); box-shadow: inset 0 2px 4px #b9dfffaa, inset 0 -2px 4px #acddffaa, 0 0 9px #84a9ff87, 0 0 27px #65c9ff27, 0 8px 24px #0008; }
 .hd-mic { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border: 2px solid #9bffeb !important; border-radius: 50%; color: #edf7ff !important; background: radial-gradient(circle, #143445, #183252 60%, #142436) !important; box-shadow: 0 0 9px #86c9ff, 0 0 16px #5aefd286, inset 0 0 10px #45ffdd44; }
 .hd-mic[aria-pressed='true'] { border-color: #ffd98a !important; box-shadow: 0 0 12px #8bf1ff, 0 0 22px #7fe3c4aa; }
-.hd-input { flex: 1; min-width: 0; border-left: 1px solid #6c9bb14d; padding-left: 13px; }
-.hd-dashboard .hd-input input { width: 100%; color: #edf6ff; border: 0; outline: none; background: none; font-size: 15px; padding: 4px 0; }
-.hd-dashboard .hd-input input::placeholder { color: #c0cada; opacity: .9; }
+.hd-input { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
+/* The composer field is a textarea, so it needs its own rules. Targeting `input`
+   here left every one of these declarations matching nothing and the field fell
+   back to the UA default box. */
+.hd-dashboard .hd-input textarea {
+  display: block; width: 100%; max-height: 132px; overflow-y: auto;
+  color: #edf6ff; border: 0; outline: none; background: none; resize: none;
+  font: inherit; font-size: 15px; line-height: 20px; padding: 4px 0;
+}
+.hd-dashboard .hd-input textarea::placeholder { color: #c0cada; opacity: .9; }
+.hd-input-count { position: absolute; right: 0; top: -18px; font-size: 10px; color: #8fb4c9; }
 .hd-input:focus-within { border-color: #bafaff; }
-/* Listening waveform: still when idle, alive while listening or answering. */
-.hd-wave { display: flex; align-items: center; gap: 2px; height: 18px; flex: none; }
-.hd-wave i { width: 2px; height: 30%; border-radius: 2px; background: #7fd4ff; animation: hd-wave 1.1s ease-in-out infinite; animation-play-state: paused; }
-.hd-dock[data-state='listening'] .hd-wave i, .hd-dock[data-state='responding'] .hd-wave i { animation-play-state: running; }
-@keyframes hd-wave { 50% { height: 100%; background: #cdf3ff; } }
 .hd-tools { display: flex; align-items: center; gap: 5px; }
 .hd-dashboard .hd-tool { display: flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; font-size: 10px; border: 1px solid #54789080; border-radius: 14px; background: #06111b80; color: #c9dced; white-space: nowrap; }
 .hd-dashboard .hd-tool:hover { color: #fff; border-color: #73bad9b0; }
@@ -354,9 +359,13 @@
 .hd-dashboard .hd-menu .hd-model-pick[aria-pressed='true'] { background: #12324a99; color: #fff; }
 .hd-send { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(#3f6f8c, #1c3346) !important; box-shadow: inset 0 1px 2px #cdeaff33, 0 0 12px #4fd8ff33; }
 .hd-send:disabled { opacity: .55; }
-.hd-stop-response { border-color: #ffb2b266 !important; background: linear-gradient(#633743, #3d2029) !important; box-shadow: inset 0 1px 2px #ffd4d433, 0 0 12px #ff707033; }
-.hd-stop-square { width: 10px; height: 10px; border-radius: 2px; background: #ffd9d9; box-shadow: 0 0 8px #ff9e9e88; }
+/* One control for the whole turn: the orb spins from submit until Core answers,
+   and it doubles as the stop button so cancelling never needs a second target. */
+.hd-send-busy { cursor: progress; }
 .hd-send-orb { width: 18px; height: 18px; border-radius: 50%; background: conic-gradient(from 0deg, #8fe9ff, #b79cff, #8fe9ff); box-shadow: 0 0 12px #6fd8ffaa; animation: hd-spin .9s linear infinite; }
+.hd-send-busy:not(:disabled) { cursor: pointer; }
+.hd-send-busy:not(:disabled):hover { box-shadow: 0 0 14px #ff9ea955; }
+.hd-send-busy:not(:disabled) .hd-send-orb { box-shadow: 0 0 12px #ff9ea988; }
 @keyframes hd-spin { to { transform: rotate(360deg); } }
 .hd-notice { position: absolute; bottom: 62px; left: 18px; margin: 0; border: 1px solid #6fb6d559; border-radius: 10px; padding: 10px 16px; background: #071320f0; font-size: 13px; }
 .hd-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

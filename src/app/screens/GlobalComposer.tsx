@@ -123,6 +123,12 @@ export function GlobalComposer({
     field.style.height = `${Math.min(field.scrollHeight, 132)}px`
   }, [text])
 
+  // A turn is in flight from the moment the draft is submitted until Core reports
+  // it finished. `sending` covers only the bridge call; `generating` covers the
+  // provider request that follows. The control has to span both, or the orb
+  // vanishes and is replaced by a stale send button mid-turn.
+  const inFlight = sending || generating
+
   const nearLimit = maxMessageCharacters !== null &&
     maxMessageCharacters > 0 &&
     text.length >= Math.floor(maxMessageCharacters * 0.9)
@@ -160,7 +166,6 @@ export function GlobalComposer({
         />
         {nearLimit ? <small className="hd-input-count" aria-live="polite">{text.length} / {maxMessageCharacters}</small> : null}
       </label>
-      <span className="hd-wave" aria-hidden="true">{Array.from({ length: 5 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 0.13}s` }} />)}</span>
       <div className="hd-tools">
         <button type="button" className="hd-tool" aria-label="Attach a file" onClick={() => setVoiceNotice('Attachments are not connected yet.')}><Glyph name="attach" size={18} /></button>
         <ModeSelector mode={mode} onChange={setMode} />
@@ -176,9 +181,18 @@ export function GlobalComposer({
         <ModelSelector defaultModel={defaultModel} />
         <ThinkingSelector />
       </div>
-      {generating
-        ? <button className="hd-send hd-stop-response" type="button" aria-label="Stop response" title="Stop this response" onClick={onStopResponse}><span className="hd-stop-square" aria-hidden="true" /></button>
-        : <button className="hd-send" type="submit" aria-label={sending ? 'Sending message' : 'Send message'} disabled={!text.trim() || sending}>{sending ? <span className="hd-send-orb" aria-hidden="true" /> : <Glyph name="send" size={20} />}</button>}
+      {inFlight
+        ? <button className="hd-send hd-send-busy" type="button"
+            aria-label={generating ? 'Stop response' : 'Sending message'}
+            title={generating ? 'Stop this response' : 'Sending'}
+            disabled={!generating}
+            onClick={onStopResponse}>
+          <span className="hd-send-orb" aria-hidden="true" />
+        </button>
+        : <button className="hd-send" type="submit" aria-label="Send message" disabled={!text.trim()}><Glyph name="send" size={20} /></button>}
+      <span className="hd-sr-only" role="status" aria-live="polite">
+        {generating ? 'Freya is responding.' : sending ? 'Sending your message.' : ''}
+      </span>
     </form>
     {(voice.notice || notice || voiceNotice || generating) && <p className="hd-notice" role="status">{voice.notice || notice || voiceNotice || 'Freya is thinking…'}</p>}
   </footer>

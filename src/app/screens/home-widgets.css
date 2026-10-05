@@ -75,8 +75,13 @@
 .hw-result small { color: #9d9990; font-size: 8px; }
 .hw-empty { color: #b3aca0; font-size: 11px; line-height: 1.6; }
 @media (min-width: 1800px) { .hw-left { left: 244px; } .hw-right { right: 32px; } }
+/* At this width the Home rail is forced to the icon column: an expanded 216px rail
+   does not leave the stage enough room. Because this rule outranks `.hd-rail` and
+   `.hd-rail[data-collapsed]` on specificity, the toggle could not visibly change
+   anything here — so it is hidden rather than left looking broken. */
 @media (min-width: 1200px) and (max-width: 1799px) {
   .hd-dashboard[data-screen='home'] .hd-rail { width: 64px; }
+  .hd-dashboard[data-screen='home'] .hd-railhead .hd-rail-toggle { display: none; }
   .hd-dashboard[data-screen='home'] .hd-rail .hd-place span,
   .hd-dashboard[data-screen='home'] .hd-rail .chats-history,
   .hd-dashboard[data-screen='home'] .hd-rail .hd-online > span:not(.hd-status-dot),

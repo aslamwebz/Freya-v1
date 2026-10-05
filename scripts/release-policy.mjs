@@ -22,9 +22,10 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   //
   // Raised from 2.1MB for the Phase 43 browser-extension host, which mounts against
   // the Phase 42 Device Hands seam and so lands in the main process rather than in a
-  // separate bundle. 2.1MB was already exceeded at the start of that work, so this
-  // records the real size rather than absorbing the overrun.
-  mainBytes: 2_110_000,
+  // separate bundle. Phase 50 then added persistent Eye sessions and bounded parallel
+  // Deep Research to Core; CI measures main.cjs at 2,138,279 bytes. Keep only narrow,
+  // explicit headroom over that measured artifact rather than absorbing future growth.
+  mainBytes: 2_150_000,
   preloadBytes: 120_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,

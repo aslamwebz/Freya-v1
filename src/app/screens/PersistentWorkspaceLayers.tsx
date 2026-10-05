@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 
 /**
  * Mount-once workspace stack.
@@ -7,8 +7,9 @@ import { useRef, type ReactNode } from 'react'
  * first time it is visited and is never removed merely because navigation changed.
  * Switching screens therefore changes visibility, not component identity.
  *
- * This matters for Freya's expensive presence rendering, chat scroll/drafts,
- * browser controllers, forms and any future canvas/native-view coordination.
+ * The active workspace is rendered immediately even before the bookkeeping effect
+ * records it as visited. When the effect runs the same keyed section stays in the
+ * same place, so React does not remount it.
  */
 export function PersistentWorkspaceLayers({
   active,
@@ -19,14 +20,24 @@ export function PersistentWorkspaceLayers({
   readonly workspaceIds: readonly string[]
   readonly renderWorkspace: (workspaceId: string) => ReactNode
 }) {
-  const mounted = useRef<Set<string> | null>(null)
-  if (mounted.current === null) mounted.current = new Set(['home', active])
-  mounted.current.add(active)
+  const [visited, setVisited] = useState<ReadonlySet<string>>(
+    () => new Set(['home', active]),
+  )
+
+  useEffect(() => {
+    if (visited.has(active)) return
+    setVisited((current) => {
+      if (current.has(active)) return current
+      const next = new Set(current)
+      next.add(active)
+      return next
+    })
+  }, [active, visited])
 
   return (
     <>
       {workspaceIds.map((workspaceId) => {
-        if (!mounted.current?.has(workspaceId)) return null
+        if (!visited.has(workspaceId) && workspaceId !== active) return null
         const visible = workspaceId === active
         return (
           <section

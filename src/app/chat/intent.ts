@@ -32,12 +32,12 @@ export function routePromptIntent(
     return { kind: 'eye-follow-up', reason: 'search-refinement' }
   }
 
-  if (isExplicitSearch(lower)) {
-    return { kind: 'eye-new', reason: 'explicit-search' }
-  }
-
   if (isMediaDiscovery(lower)) {
     return { kind: 'eye-new', reason: 'media-discovery' }
+  }
+
+  if (isExplicitSearch(lower)) {
+    return { kind: 'eye-new', reason: 'explicit-search' }
   }
 
   if (isFreshInformationRequest(lower)) {

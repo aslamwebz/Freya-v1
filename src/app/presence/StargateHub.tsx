@@ -60,14 +60,12 @@ const STRANDS: Readonly<Record<string, string>> = {
 }
 
 const GATE_SEGMENTS: readonly [number, number][] = [
-  [-84, -52],
-  [-40, -6],
-  [8, 42],
-  [55, 87],
-  [101, 134],
-  [149, 182],
-  [198, 231],
-  [247, 281],
+  [-84, -36],
+  [-18, 27],
+  [46, 91],
+  [111, 160],
+  [184, 229],
+  [249, 296],
 ]
 
 const COMPONENT_EVENT = 'freya:component-fire'
@@ -128,9 +126,9 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
             <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
           <linearGradient id="sg-strand-violet" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#c363ff" />
-            <stop offset=".52" stopColor="#7f6cff" />
-            <stop offset="1" stopColor="#62d9ff" />
+            <stop offset="0" stopColor="#9cb8b3" />
+            <stop offset=".52" stopColor="#d8ece7" />
+            <stop offset="1" stopColor="#8fd8d0" />
           </linearGradient>
         </defs>
         {COMPONENTS.map((card, index) => (
@@ -145,16 +143,22 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
       <svg className="sg-gate" viewBox="0 0 500 500" aria-hidden="true">
         <defs>
           <linearGradient id="sg-metal" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#1a1730" />
-            <stop offset=".28" stopColor="#40365d" />
-            <stop offset=".48" stopColor="#151528" />
-            <stop offset=".72" stopColor="#32294c" />
-            <stop offset="1" stopColor="#0b0d18" />
+            <stop offset="0" stopColor="#0a0d0e" />
+            <stop offset=".22" stopColor="#34393a" />
+            <stop offset=".46" stopColor="#15191a" />
+            <stop offset=".72" stopColor="#2c2d29" />
+            <stop offset="1" stopColor="#07090a" />
+          </linearGradient>
+          <linearGradient id="sg-metal-face" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#444744" />
+            <stop offset=".18" stopColor="#252928" />
+            <stop offset=".62" stopColor="#141718" />
+            <stop offset="1" stopColor="#2f302b" />
           </linearGradient>
           <linearGradient id="sg-edge" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#5bceff" />
-            <stop offset=".5" stopColor="#b058ff" />
-            <stop offset="1" stopColor="#ff63d8" />
+            <stop offset="0" stopColor="#8a806d" />
+            <stop offset=".5" stopColor="#c0b08d" />
+            <stop offset="1" stopColor="#6d685b" />
           </linearGradient>
           <filter id="sg-gate-glow" x="-35%" y="-35%" width="170%" height="170%">
             <feGaussianBlur stdDeviation="4" result="blur" />
@@ -168,9 +172,10 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
           const marker = polar(250, 250, 201, mid)
           return (
             <g className="sg-gate-segment" key={start} style={{ '--sg-seg': index } as CSSProperties}>
-              <path className="sg-gate-body" d={arcPath(250, 250, 201, start, end)} />
-              <path className="sg-gate-rim sg-gate-rim-outer" d={arcPath(250, 250, 219, start + 1, end - 1)} />
-              <path className="sg-gate-rim sg-gate-rim-inner" d={arcPath(250, 250, 181, start + 1, end - 1)} />
+              <path className="sg-gate-back" d={arcPath(250, 250, 201, start, end)} />
+              <path className="sg-gate-body" d={arcPath(250, 250, 201, start + 1.5, end - 1.5)} />
+              <path className="sg-gate-rim sg-gate-rim-outer" d={arcPath(250, 250, 224, start + 2, end - 2)} />
+              <path className="sg-gate-rim sg-gate-rim-inner" d={arcPath(250, 250, 178, start + 2, end - 2)} />
               <g transform={`translate(${marker.x} ${marker.y}) rotate(${mid})`}>
                 <path className="sg-gate-chevron" d="M0 -10 9 7 0 3 -9 7Z" />
                 <circle className="sg-gate-node" cx="0" cy="0" r="3.2" />
@@ -199,6 +204,7 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
             <span className="sg-card-icon"><Glyph name={card.icon} size={21} /></span>
             <span className="sg-card-copy"><b>{card.label}</b><small>{card.description}</small></span>
             <span className="sg-card-meter" aria-hidden="true"><i /><i /><i /></span>
+            <span className="sg-card-coupler" aria-hidden="true" />
             <span className="sg-card-port" aria-hidden="true" />
           </button>
         ))}

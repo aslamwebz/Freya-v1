@@ -139,7 +139,16 @@ export function createConversationMirror(): ConversationMirror {
       }
     },
 
-    create: () => submit('conversation.create'),
+    create: () => {
+      const empty = current?.conversations?.find((conversation) => conversation.messageCount === 0)
+      if (empty) {
+        if (current?.activeConversationId !== empty.conversationId) {
+          void submit('conversation.read', { conversationId: empty.conversationId })
+        }
+        return Promise.resolve({ operation: 'refused', reason: 'An empty conversation already exists — it is open now.' })
+      }
+      return submit('conversation.create')
+    },
     list: () => submit('conversation.list'),
     read: (conversationId) => submit('conversation.read', { conversationId }),
     archive: (conversationId) => submit('conversation.archive', { conversationId }),

@@ -1,8 +1,10 @@
 /* Chats — a real board tab: session list on the left, live thread on the right.
    Fills the board's main region (`.hd-main`), so it follows the same rail,
    header and dock as every other tab. */
-.chats { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(220px, 290px) minmax(0, 1fr); gap: 16px; }
-.chats[data-browser-open] { grid-template-columns: minmax(190px, 240px) minmax(320px, .8fr) minmax(390px, 1.05fr); }
+/* The conversation list lives in the left rail (ChatHistory), so the workspace
+   owns the transcript plus the optional bounded browser controller. */
+.chats { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.chats[data-browser-open] { grid-template-columns: minmax(320px, .8fr) minmax(390px, 1.05fr); }
 
 .chats-list,
 .chats-thread {

@@ -1097,7 +1097,8 @@ function registerIpc(): void {
   ipcMain.handle('freya:window:maximize', (event) => {
     const target = BrowserWindow.fromWebContents(event.sender)
     if (!target) return
-    if (target.isMaximized()) target.unmaximize()
+    if (target.isFullScreen()) target.setFullScreen(false)
+    else if (target.isMaximized()) target.unmaximize()
     else target.maximize()
   })
   ipcMain.handle('freya:window:close', (event) => {

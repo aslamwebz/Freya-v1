@@ -19,12 +19,13 @@ import { Relay } from './screens/Relay'
 import { Focus } from './screens/Focus'
 import { People } from './screens/People'
 import { Memory } from './screens/Memory'
-import { Settings, type SettingsCategory } from './screens/Settings'
+import type { SettingsCategory } from './screens/Settings'
 import { setAppLayout, type AppLayout } from './state/workspace'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
 import { useVoiceDock } from './voice/useVoiceDock'
 import { VoiceSettings } from './voice/VoiceSettings'
+import { BootScreen } from './boot/BootScreen'
 
 interface RailItem {
   readonly id: string
@@ -74,6 +75,7 @@ export function App({
   const [activeEyeSessionId, setActiveEyeSessionId] = useState<string | null>(null)
   const [researchView, setResearchView] = useState<WorkspaceResearchView | null>(null)
   const [voiceTranscriptDraft, setVoiceTranscriptDraft] = useState<{ id: number; text: string } | null>(null)
+  const [booted, setBooted] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
   const [browserRequestedUrl, setBrowserRequestedUrl] = useState<string | null>(null)
 
@@ -106,12 +108,6 @@ export function App({
     focus: Focus(),
     people: People(),
     memory: Memory(),
-    settings: Settings({
-      snapshot,
-      preferences,
-      category: settingsCategory,
-      onCategory: setSettingsCategory,
-    }),
   }
 
   const send = async (text: string, mode: ComposerMode): Promise<boolean> => {
@@ -254,6 +250,7 @@ export function App({
   }, [])
 
   return <>
+    {booted ? null : <BootScreen core={snapshot.core} attached={true} onDone={() => setBooted(true)} />}
     <HomeDashboard
       screen={screen}
       slotsByScreen={slotsByScreen}
@@ -261,8 +258,11 @@ export function App({
       generating={generating}
       notice={notice}
       dressing={dressing}
+      preferences={preferences}
       voice={voice.view}
       voiceTranscript={voiceTranscriptDraft}
+      settingsCategory={settingsCategory}
+      onSettingsCategory={setSettingsCategory}
       onOpenDressing={() => setDressingOpen(true)}
       onSend={send}
       onStopResponse={stopResponse}

@@ -30,6 +30,9 @@ const paths: Record<string, string> = {
   chevron: 'm6 9 6 6 6-6',
   star: 'm12 3 2.55 5.9 6.45.55-4.9 4.2 1.5 6.35L12 16.9 6.4 20l1.5-6.35-4.9-4.2 6.45-.55L12 3Z',
   dress: 'M8 3h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm4 12v4m-3 0h6',
+  activity: 'M3 12h3l2-5 4 10 3-7 2 2h4',
+  bell: 'M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6m4 10a2.4 2.4 0 0 0 4 0',
+  panel: 'M3.5 4.5h17a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-17a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1ZM9 4.5v15',
 }
 export function Glyph({ name, size = 20, style }: { name: string; size?: number; style?: CSSProperties }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"

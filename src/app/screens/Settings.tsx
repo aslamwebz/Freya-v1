@@ -1,15 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Card, Chip, Row } from '../cards/Card'
-import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { hostBridge } from '../../platform/host'
 import { coreMirror } from '../../platform/coreClient'
 import { THEMES, type ThemeId } from '../../ui-v2/theme/tokens'
 import type { PreferencesStore } from '../../ui-v2/theme/preferences'
 import type { CoreView, ProviderView, Resource } from '../../ui-v2/state/contract'
-import type { ScreenSlots } from './Home'
 import { ready, reason } from '../state/view'
 
-/**
+/*
  * Settings — the real controls, in the same visual language as every other screen.
  *
  * This screen used to be a row of hardcoded claims: `Gmail Connected`,
@@ -20,30 +18,6 @@ import { ready, reason } from '../state/view'
  * can each be absent, and window observation is a launch-time environment variable
  * that has never been a user choice. A settings screen that asserts things Freya
  * cannot do is worse than none, because it is believed.
- *
- * Every value now comes from one of three places and nowhere else:
- *
- *   - `snapshot.provider` — the host's masked provider view, including *why* a
- *     credential is in the state it is in;
- *   - `snapshot.core` — what Core reports about itself: lifecycle, journal
- *     integrity, stop latch, recorded faults;
- *   - the preferences store — the appearance settings App Mode actually reads.
- *
- * Where the backend cannot supply a value, the row says so. There is no third
- * option, and no default that looks like a fact.
- *
- * ## Why `Settings` itself holds no hooks
- *
- * `App.tsx` calls every screen as a plain function — `Settings({ … })` — and a hook
- * called from there runs outside a component render, which React rejects outright.
- * So the selected category is owned by `App.tsx` and passed in, and the interactive
- * cards are components rendered *inside* the returned slots. The screen contract is
- * unchanged, the two-column layout is untouched, and the hooks live one level down
- * where React can see them.
- *
- * The provider form reuses the proven `?ui=v2` semantics rather than a second set: a
- * key is sent only when typed, an empty field leaves the stored key alone, and
- * forgetting one is its own explicit action.
  */
 
 export type SettingsCategory = 'appearance' | 'provider' | 'privacy' | 'security' | 'about'
@@ -105,66 +79,53 @@ function errorMessage(error: unknown): string {
   return 'the reason was not reported'
 }
 
-function SettingsCentre({ preferences, category }: { preferences: PreferencesStore; category: SettingsCategory }) {
-  const current = preferences.getSnapshot()
-  const label = CATEGORIES.find(([id]) => id === category)?.[1] ?? 'Settings'
-  const accent = THEME_SWATCH[current.theme]
-
+/**
+ * Settings — a full overlay over the board, after the reference chat's frame:
+ * a header with the one way out (Done), the categories down the side, and one
+ * category at a time. It replaced a three-column arrangement whose middle was
+ * a portrait preview — a screen and a half of scrolling to find one control.
+ *
+ * Every value still comes from one of three places and nowhere else:
+ *
+ *   - `snapshot.provider` — the host's masked provider view, including *why* a
+ *     credential is in the state it is in;
+ *   - `snapshot.core` — what Core reports about itself: lifecycle, journal
+ *     integrity, stop latch, recorded faults;
+ *   - the preferences store — the appearance settings App Mode actually reads.
+ *
+ * Where the backend cannot supply a value, the row says so. There is no third
+ * option, and no default that looks like a fact.
+ *
+ * The provider form reuses the proven `?ui=v2` semantics rather than a second
+ * set: a key is sent only when typed, an empty field leaves the stored key
+ * alone, and forgetting one is its own explicit action.
+ */
+export function SettingsOverlay({ snapshot, preferences, category, onCategory, onDone }: SettingsProps & { readonly onDone: () => void }) {
   return (
-    <div className="st-centre" aria-label="Settings preview">
-      <div className="st-preview" style={{ borderColor: accent }}>
-        <div className="st-preview-rail">
-          <span className="st-preview-brand">F</span>
-          <i data-active />
-          <i />
-          <i />
-          <i />
-        </div>
-        <div className="st-preview-stage">
-          <header><small>LIVE PREVIEW</small><b>{label}</b></header>
-          <div className="st-preview-card">
-            <span className="st-preview-orb" style={{ boxShadow: `0 0 24px ${accent}66`, borderColor: accent }} />
-            <div><b>{current.theme}</b><small>{Math.round(current.textScale * 100)}% text · {current.reducedEffects ? 'reduced effects' : 'system effects'}</small></div>
-          </div>
-          <div className="st-preview-lines"><i /><i /><i /></div>
-          <div className="st-preview-dock"><span /><b style={{ background: accent }} /></div>
-        </div>
-      </div>
-      <div className="st-centre-caption">
-        <small>SETTINGS · {label.toUpperCase()}</small>
-        <span>Changes on the right are reflected here without turning Settings into another Freya portrait screen.</span>
-      </div>
-    </div>
-  )
-}
-
-export function Settings({ snapshot, preferences, category, onCategory }: SettingsProps): ScreenSlots {
-  return {
-    presence: 'none',
-    centre: <SettingsCentre preferences={preferences} category={category} />,
-    left: (
-      <Card title="Settings" icon="settings">
-        <nav className="st-nav">
-          {CATEGORIES.map(([id, label, icon]) => (
-            <button key={id} type="button" className="st-cat" data-active={category === id}
+    <div className="st-overlay" role="dialog" aria-label="Settings">
+      <header className="st-top">
+        <h2>Settings</h2>
+        <button type="button" className="st-done" onClick={onDone}>Done</button>
+      </header>
+      <div className="st-layout">
+        <nav className="st-nav" aria-label="Settings categories">
+          {CATEGORIES.map(([id, label]) => (
+            <button key={id} type="button" className="st-tab" data-active={category === id}
               aria-current={category === id ? 'true' : undefined} onClick={() => onCategory(id)}>
-              <Glyph name={icon as Parameters<typeof Glyph>[0]['name']} size={16} /><span>{label}</span>
+              {label}
             </button>
           ))}
         </nav>
-      </Card>
-    ),
-    right: (
-      <>
-        {category === 'appearance' && <AppearanceCard preferences={preferences} />}
-        {category === 'provider' && <ProviderCard snapshot={snapshot} />}
-        {category === 'privacy' && <PrivacyCard />}
-        {category === 'security' && <SecurityCard snapshot={snapshot} />}
-        {category === 'about' && <AboutCard snapshot={snapshot} />}
-      </>
-    ),
-    bottom: null,
-  }
+        <div className="st-content">
+          <section className="st-pane" hidden={category !== 'appearance'}><AppearanceCard preferences={preferences} /></section>
+          <section className="st-pane" hidden={category !== 'provider'}><ProviderCard snapshot={snapshot} /></section>
+          <section className="st-pane" hidden={category !== 'privacy'}><PrivacyCard /></section>
+          <section className="st-pane" hidden={category !== 'security'}><SecurityCard snapshot={snapshot} /></section>
+          <section className="st-pane" hidden={category !== 'about'}><AboutCard snapshot={snapshot} /></section>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function AppearanceCard({ preferences }: { preferences: PreferencesStore }) {

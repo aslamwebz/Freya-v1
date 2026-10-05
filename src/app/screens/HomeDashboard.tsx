@@ -1,4 +1,4 @@
-import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { UiSnapshot } from '../../ui-v2/state/contract'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { Clock } from '../../ui-v2/primitives/Clock'
@@ -9,10 +9,13 @@ import { Chats } from '../chat/Chats'
 import type { ComposerMode, WorkspaceResearchView } from '../chat/modes'
 import type { VoiceView } from '../voice/useVoiceDock'
 import { brainState, type BrainState } from '../presence/state'
+import { ChatHistory } from '../chat/ChatHistory'
+import { SettingsOverlay, type SettingsCategory } from './Settings'
 import { GlobalComposer } from './GlobalComposer'
 import { hostBridge } from '../../platform/host'
 import type { DressingStore, DressingState } from '../dressing/store'
 import { PersistentWorkspaceLayers } from './PersistentWorkspaceLayers'
+import type { PreferencesStore } from '../../ui-v2/theme/preferences'
 import './home-dashboard.css'
 
 interface Props {
@@ -22,8 +25,11 @@ interface Props {
   generating: boolean
   notice: string
   dressing: DressingStore
+  preferences: PreferencesStore
   voice: VoiceView
   voiceTranscript: { id: number; text: string } | null
+  settingsCategory: SettingsCategory
+  onSettingsCategory: (category: SettingsCategory) => void
   onOpenDressing: () => void
   onSend: (text: string, mode: ComposerMode) => Promise<boolean>
   onStopResponse: () => void
@@ -111,7 +117,7 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, voice, voiceTranscript, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserToggle, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
+export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserToggle, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   const [collapsed, setCollapsed] = useState(false)
@@ -132,28 +138,147 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
   })
   const open = (screen: string) => () => onNavigate(screen)
 
+  /*
+   * The chrome, after the reference shell's frame: one bar across the top that
+   * answers "what is happening", and a left rail that answers "where can I go".
+   * The bar holds the state pill (only when it is not the obvious one), the
+   * working count, the two panels — the team and what is running — the clock
+   * and the window controls. The rail holds the places, the conversations
+   * under Chats, and the account at the foot.
+   *
+   * Both panels and the account menu close the way the reference's do: any
+   * pointerdown outside them, or Escape.
+   */
+  const [pop, setPop] = useState<'agents' | 'activity' | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const popRef = useRef<HTMLDivElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (pop === null && !menuOpen) return
+    const onDown = (event: PointerEvent): void => {
+      const insidePop = popRef.current?.contains(event.target as Node) ?? false
+      const insideMenu = menuRef.current?.contains(event.target as Node) ?? false
+      if (!insidePop) setPop(null)
+      if (!insideMenu) setMenuOpen(false)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') { setPop(null); setMenuOpen(false) }
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [pop, menuOpen])
+
+  const workingCount = workers?.working ?? 0
+  // A fault is recorded trouble, so the activity panel wears the warn badge
+  // while Core reports any; it is the one "needs you" sign this screen can
+  // read without inventing one.
+  const warnCount = core?.faultCount ?? 0
+  const pill = cognition === 'uncertainty'
+    ? { kind: 'needs', word: 'NEEDS YOU' }
+    : cognition === 'calm' ? null : { kind: 'working', word: 'WORKING' }
+  const agoLabel = (at: number): string => {
+    const seconds = Math.max(0, Math.round((Date.now() - at) / 1000))
+    if (seconds < 60) return 'just now'
+    const minutes = Math.round(seconds / 60)
+    if (minutes < 60) return `${minutes}m ago`
+    const hours = Math.round(minutes / 60)
+    if (hours < 24) return `${hours}h ago`
+    return `${Math.round(hours / 24)}d ago`
+  }
+
   return <div className="freya-v2 hd-viewport" data-theme="abyss" ref={viewport}>
     <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-background={design.background}>
-      <header className="hd-header">
-        <div className="hd-clock">
-          <Clock />
-          <button aria-label="Open appearance settings" onClick={open('settings')}><Glyph name="settings" size={26} /></button>
-          <div className="hd-win" role="group" aria-label="Window">
-            <button aria-label="Minimize" onClick={() => void hostBridge()?.windowMinimize()}><Glyph name="win-min" size={16} /></button>
-            <button aria-label="Maximize" onClick={() => void hostBridge()?.windowMaximize()}><Glyph name="win-max" size={16} /></button>
-            <button className="hd-win-close" aria-label="Close" onClick={() => void hostBridge()?.windowClose()}><Glyph name="win-close" size={16} /></button>
-          </div>
+      <header className="hd-top">
+        <div className="hd-brand"><b>FREYA</b></div>
+        {pill ? <div className={`hd-pill ${pill.kind}`}>{pill.word}</div> : null}
+        <span className="hd-gap" />
+        <div className="hd-counts">
+          {workingCount > 0 ? <span className="hd-count on">{workingCount} working</span> : null}
         </div>
+        <button
+          type="button" className={`hd-toolbtn${pop === 'agents' ? ' on' : ''}`}
+          aria-label="Agents — the team, and what each is doing"
+          aria-expanded={pop === 'agents'}
+          title="Agents — the team, and what each is doing"
+          onClick={() => setPop((value) => (value === 'agents' ? null : 'agents'))}
+        >
+          <Glyph name="workforce" size={18} />
+          {workingCount > 0 ? <span className="hd-badge live">{workingCount}</span> : null}
+        </button>
+        <button
+          type="button" className={`hd-toolbtn${pop === 'activity' ? ' on' : ''}${warnCount > 0 ? ' warn' : ''}`}
+          aria-label="Activity — what is running, and what has been happening"
+          aria-expanded={pop === 'activity'}
+          title="Activity — what is running, and what has been happening"
+          onClick={() => setPop((value) => (value === 'activity' ? null : 'activity'))}
+        >
+          <Glyph name="activity" size={18} />
+          {warnCount > 0 ? <span className="hd-badge warn">{warnCount}</span> : null}
+        </button>
+        <div className="hd-clock"><Clock /></div>
+        <div className="hd-win" role="group" aria-label="Window">
+          <button aria-label="Minimize" onClick={() => void hostBridge()?.windowMinimize()}><Glyph name="win-min" size={16} /></button>
+          <button aria-label="Maximize" onClick={() => void hostBridge()?.windowMaximize()}><Glyph name="win-max" size={16} /></button>
+          <button className="hd-win-close" aria-label="Close" onClick={() => void hostBridge()?.windowClose()}><Glyph name="win-close" size={16} /></button>
+        </div>
+        {pop ? (
+          <div className="hd-pop" ref={popRef} role="dialog" aria-label={pop === 'agents' ? 'Agents' : 'Activity'}>
+            {pop === 'agents' ? (
+              <>
+                <header className="hd-pop-head">Agents <span className="hd-pop-count">{workingCount > 0 ? `${workingCount} working` : 'idle'}</span></header>
+                {(workers?.rows ?? []).length === 0
+                  ? <p className="hd-pop-empty">{preview ? 'The sample team is off in this preview.' : 'No agents are on the team yet.'}</p>
+                  : (workers?.rows ?? []).slice(0, 8).map((worker) => (
+                    <button key={worker.id} type="button" className="hd-pop-row" onClick={open('workforce')}>
+                      <span className="hd-pop-dot" data-state={worker.state} />
+                      <span className="hd-pop-words"><b>{worker.specialization ?? worker.id}</b><small>{worker.state}</small></span>
+                    </button>
+                  ))}
+              </>
+            ) : (
+              <>
+                <header className="hd-pop-head">Activity</header>
+                {(activity ?? []).length === 0
+                  ? <p className="hd-pop-empty">{preview ? 'Sample activity is off in this preview.' : 'Nothing has been recorded yet.'}</p>
+                  : (activity ?? []).slice(0, 9).map((row) => (
+                    <button key={row.id} type="button" className="hd-pop-row" onClick={open('memory')}>
+                      <span className="hd-pop-words"><b>{row.text}</b><small>{agoLabel(row.at)}</small></span>
+                    </button>
+                  ))}
+              </>
+            )}
+          </div>
+        ) : null}
       </header>
       <aside className="hd-rail" data-collapsed={collapsed || undefined}>
-        <div className="hd-rail-top">
-          <div className="hd-brand"><b>FREYA</b></div>
-          <button className="hd-rail-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={() => setCollapsed(value => !value)}><Glyph name="arrow" size={16} /></button>
+        <div className="hd-railhead">
+          <button className="hd-rail-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={() => setCollapsed(value => !value)}><Glyph name="panel" size={16} /></button>
         </div>
-        <nav aria-label="Freya">{NAV.map(([id, label, icon]) => <button key={id} aria-label={label} aria-current={id === screen ? 'page' : undefined} onClick={open(id)}><Glyph name={icon} size={23} /><span>{label}</span></button>)}</nav>
+        <div className="hd-rail-list">
+          <button className="hd-place" aria-label="Home" aria-current={screen === 'home' ? 'page' : undefined} onClick={open('home')}><Glyph name="home" size={20} /><span>Home</span></button>
+          <ChatHistory onOpen={open('chat')} />
+          {NAV.filter(([id]) => id !== 'home' && id !== 'chat').map(([id, label, icon]) => (
+            <button key={id} className="hd-place" aria-label={label} aria-current={id === screen ? 'page' : undefined} onClick={open(id)}><Glyph name={icon} size={20} /><span>{label}</span></button>
+          ))}
+        </div>
         <div className="hd-rail-foot">
           <div className="hd-online" title={preview ? 'Design preview · Sample data' : undefined}><span className="hd-status-dot" /><span>{online ? 'Freya Online' : 'Freya Offline'}</span><small>Phase 19<br />Build 19.0.1</small></div>
-          <button className="hd-user" aria-label="Open your profile" onClick={open('settings')}><span className="hd-user-avatar">A</span><span className="hd-user-name">Aslam</span><Glyph name="settings" size={15} /></button>
+          <div className="hd-profile" ref={menuRef}>
+            <button className="hd-user" aria-label="Open your account menu" aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => setMenuOpen((value) => !value)}>
+              <span className="hd-user-avatar">A</span><span className="hd-user-name">Aslam</span><Glyph name="chevron" size={14} />
+            </button>
+            {menuOpen ? (
+              <div className="hd-menu-pop" role="menu" aria-label="Account">
+                <button role="menuitem" onClick={() => { setMenuOpen(false); onSettingsCategory('appearance'); open('settings')() }}>Settings</button>
+                <button role="menuitem" onClick={() => { setMenuOpen(false); onSettingsCategory('about'); open('settings')() }}>About Freya</button>
+              </div>
+            ) : null}
+          </div>
         </div>
       </aside>
       <main className="hd-main" aria-label={preview ? 'Freya dashboard · Sample data' : 'Freya dashboard'}>
@@ -216,6 +341,14 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
             onBrowserOpenUrl={onBrowserOpenUrl}
             onBrowserRequestedUrlHandled={onBrowserRequestedUrlHandled}
             onBrowserClose={onBrowserClose}
+          />
+        ) : workspaceId === 'settings' ? (
+          <SettingsOverlay
+            snapshot={snapshot}
+            preferences={preferences}
+            category={settingsCategory}
+            onCategory={onSettingsCategory}
+            onDone={open('home')}
           />
         ) : <TabBody slots={slotsByScreen[workspaceId]} design={design} cognition={cognition} />}
         />

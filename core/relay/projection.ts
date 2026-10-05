@@ -28,7 +28,7 @@ export function projectRelay(sequence: number, state: RelayState, statusOf: (con
     reason: null,
     schemaVersion: RELAY_SCHEMA_VERSION,
     sequence,
-    connectors: (['email', 'calendar', 'github', 'external'] as const).map((connector) => ({
+    connectors: (['email', 'calendar', 'github', 'drive', 'telegram', 'external'] as const).map((connector) => ({
       connector,
       status: statusOf(connector),
       label: connectorLabel(connector),
@@ -58,6 +58,10 @@ function connectorLabel(connector: RelayConnectorId): string {
       return 'Calendar'
     case 'github':
       return 'GitHub'
+    case 'drive':
+      return 'Google Drive'
+    case 'telegram':
+      return 'Telegram'
     case 'external':
       return 'External connectors'
   }
@@ -71,6 +75,10 @@ function connectorActions(connector: RelayConnectorId): readonly string[] {
       return ['calendar.read', 'calendar.create', 'calendar.update', 'calendar.cancel']
     case 'github':
       return ['github.read', 'github.issue.create', 'github.pr.create']
+    case 'drive':
+      return ['drive.read', 'drive.file.create']
+    case 'telegram':
+      return ['telegram.read', 'telegram.send']
     case 'external':
       return ['external.invoke']
   }

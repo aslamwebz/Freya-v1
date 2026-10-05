@@ -74,6 +74,7 @@ export function App({
   const [activeResearchMode, setActiveResearchMode] = useState<Exclude<ComposerMode, 'chat'> | null>(null)
   const [activeEyeSessionId, setActiveEyeSessionId] = useState<string | null>(null)
   const [researchView, setResearchView] = useState<WorkspaceResearchView | null>(null)
+  const [voiceTranscriptDraft, setVoiceTranscriptDraft] = useState<{ id: number; text: string } | null>(null)
 
   const mirror = conversationMirror()
   const research = researchMirror()
@@ -217,12 +218,14 @@ export function App({
   const onVoiceTranscript = useCallback(
     (text: string, turnId: string | null) => {
       if (turnId !== null) {
-        setDraft('')
         setChatOpen(true)
         setNotice('')
         return
       }
-      setDraft((current) => (current.trim().length === 0 ? text : `${current} ${text}`))
+      setVoiceTranscriptDraft((current) => ({
+        id: (current?.id ?? 0) + 1,
+        text,
+      }))
     },
     [],
   )
@@ -238,6 +241,7 @@ export function App({
       notice={notice}
       dressing={dressing}
       voice={voice.view}
+      voiceTranscript={voiceTranscriptDraft}
       onOpenDressing={() => setDressingOpen(true)}
       onSend={send}
       onStopResponse={stopResponse}

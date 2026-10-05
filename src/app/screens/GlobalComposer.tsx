@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { ModelSelector } from './ModelSelector'
 import { ThinkingSelector } from './ThinkingSelector'
 import { ModeSelector } from './ModeSelector'
 import type { ComposerMode } from '../chat/modes'
 import type { VoiceView } from '../voice/useVoiceDock'
+import { attachmentLabel, attachmentTray, pickAttachments } from '../chat/attachments'
 
 function VoiceDockButton({ voice, onPress, onRelease }: {
   voice: VoiceView
@@ -68,6 +69,58 @@ function VoiceDockButton({ voice, onPress, onRelease }: {
 }
 
 /**
+ * Pending files, above the field.
+ *
+ * Each one is named, labelled with its type and size, and removable on its own —
+ * because a person who attached the wrong screenshot has to be able to say so
+ * before the turn goes, not after. The removal button carries the file name in
+ * its accessible name, so two chips are never two identically-labelled buttons.
+ *
+ * The tray is read from a store rather than from props: `HomeDashboard` fixes this
+ * component's prop list, and the send path in `App.tsx` reads the same store. The
+ * bytes never pass through this component — it holds names, sizes and types.
+ */
+function AttachmentTray() {
+  const drafts = useSyncExternalStore(
+    attachmentTray.subscribe,
+    attachmentTray.getSnapshot,
+    attachmentTray.getSnapshot,
+  )
+  if (drafts.length === 0) return null
+
+  return <ul
+    aria-label="Pending attachments"
+    style={{
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: '100%',
+      margin: '0 0 8px',
+      padding: 0,
+      listStyle: 'none',
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6,
+    }}
+  >
+    {drafts.map((draft) => <li key={draft.id}>
+      <span className="hd-tool" style={{ gap: 6 }} title={draft.detail ?? draft.name}>
+        <Glyph name="attach" size={12} />
+        <span>{draft.name}</span>
+        <small style={{ opacity: 0.7 }}>{attachmentLabel(draft)}</small>
+        <button
+          type="button"
+          aria-label={`Remove ${draft.name}`}
+          onClick={() => attachmentTray.remove(draft.id)}
+        >
+          <Glyph name="win-close" size={11} />
+        </button>
+      </span>
+    </li>)}
+  </ul>
+}
+
+/**
  * The global dock composer, self-contained.
  *
  * The draft, the listening toggle and the local voice notice live here, so a
@@ -75,6 +128,11 @@ function VoiceDockButton({ voice, onPress, onRelease }: {
  * never the dashboard, its panels or the centre. The draft is handed up only on
  * submit, which keeps the real conversation send contract (App still owns the
  * bridge call) while removing per-keystroke board reconciliation.
+ *
+ * The attach button asks the host for files through the real bridge function and
+ * puts whatever comes back into the attachment tray. It is the renderer end of a
+ * read that happens entirely in the main process: this window never sees a path it
+ * could ask to read, only a bounded result it can label.
  */
 export function GlobalComposer({
   generating,
@@ -106,6 +164,7 @@ export function GlobalComposer({
   const [text, setText] = useState('')
   const [voiceNotice, setVoiceNotice] = useState('')
   const [sending, setSending] = useState(false)
+  const [attaching, setAttaching] = useState(false)
   const [mode, setMode] = useState<ComposerMode>('chat')
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -146,7 +205,40 @@ export function GlobalComposer({
     }
   }
 
+  /**
+   * Ask the host for files.
+   *
+   * The tray is *not* cleared here. A refusal keeps what the owner picked, and
+   * even a successful pick is cleared by `App.tsx` when the turn that carries it
+   * is accepted — otherwise a turn Core refused would silently consume the
+   * attachments the owner still wanted.
+   */
+  const attach = async () => {
+    if (attaching) return
+    setVoiceNotice('')
+    setAttaching(true)
+    try {
+      const picked = await pickAttachments()
+      if (!picked.ok) {
+        setVoiceNotice(picked.reason)
+        return
+      }
+      if (picked.attachments.length === 0) return
+
+      const { notices } = attachmentTray.add(picked.attachments)
+      // A file the host refused to read is reported here, in the same sentence the
+      // host wrote, rather than appearing in the tray as a name that leads nowhere.
+      const refused = picked.attachments
+        .filter((file) => file.detail !== null && file.kind === 'unsupported')
+        .map((file) => file.detail as string)
+      setVoiceNotice([...refused, ...notices].join(' ') || '')
+    } finally {
+      setAttaching(false)
+    }
+  }
+
   return <footer className="hd-dock" data-state={voice.capturing ? 'listening' : generating ? 'responding' : 'idle'}>
+    <AttachmentTray />
     <form aria-label="Freya composer" onSubmit={event => { event.preventDefault(); void submit() }}>
       <VoiceDockButton voice={voice} onPress={onVoicePress} onRelease={onVoiceRelease} />
       <label className="hd-input">
@@ -167,7 +259,13 @@ export function GlobalComposer({
         {nearLimit ? <small className="hd-input-count" aria-live="polite">{text.length} / {maxMessageCharacters}</small> : null}
       </label>
       <div className="hd-tools">
-        <button type="button" className="hd-tool" aria-label="Attach a file" onClick={() => setVoiceNotice('Attachments are not connected yet.')}><Glyph name="attach" size={18} /></button>
+        <button
+          type="button"
+          className="hd-tool"
+          aria-label="Attach a file"
+          disabled={attaching}
+          onClick={() => { void attach() }}
+        ><Glyph name="attach" size={18} /></button>
         <ModeSelector mode={mode} onChange={setMode} />
         <button
           type="button"

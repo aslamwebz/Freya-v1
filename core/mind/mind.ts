@@ -29,6 +29,8 @@ import {
   type ExpressionTurnResult,
 } from './expression'
 import type { CueKind, CueUsageLedger, InteractionFact, RelationshipItem } from '../personality/types'
+import { runToolLoop, type ToolIteration } from './loop'
+import { MIND_TOOL_LIMITS, renderToolFooter, type MindToolRegistry } from './tools'
 
 /**
  * The Mind.
@@ -67,12 +69,38 @@ import type { CueKind, CueUsageLedger, InteractionFact, RelationshipItem } from 
  *
  * ## The one-call rule
  *
- * A turn performs **at most one** provider request. There is no retry, no
- * summarisation call, no critic, no planner, no tool loop and no follow-up. A
- * failure is a failure and is reported as one. This is Phase 3's deliberate bound
- * and it is enforced structurally: the method below contains exactly one call
- * into the cognition service, so "did we accidentally add a second call" is a
- * question about one function rather than about a system.
+ * A turn performs **at most one** provider request *unless a tool registry is
+ * wired*, in which case it performs at most
+ * `MIND_TOOL_LIMITS.maxProviderCalls`. There is no retry, no summarisation call,
+ * no critic and no planner in either case. A failure is a failure and is reported
+ * as one.
+ *
+ * The default is enforced structurally, which is the part worth being precise
+ * about. With no registry there is no branch in `think` that can reach a provider
+ * twice: the tool-loop path is behind `if (!this.toolLoopEnabled)`, and an empty
+ * registry counts as no registry. So "did we accidentally add a second call to
+ * ordinary chat" is answered by the shape of one `if`, not by a test that hopes a
+ * model behaves.
+ *
+ * ## The tool loop
+ *
+ * When a registry *is* wired, the turn may call a bounded set of Guard-gated
+ * tools between provider requests, and then answer. Three properties hold and are
+ * each enforced somewhere specific rather than hoped for:
+ *
+ *  - **A tool is not authority.** Every execution goes through
+ *    `MindToolRegistry.invoke`, which asks Guard about that tool's single
+ *    capability immediately before the body runs. A denied capability means the
+ *    body never executes.
+ *  - **The spend is unchanged.** The turn still creates one grant with the same
+ *    `maxOutputTokens`, and the loop divides it across iterations rather than
+ *    multiplying it. A fourth iteration is refused by the Governor on arithmetic.
+ *  - **Stop still works between iterations.** The turn holds its own
+ *    `AbortController` and the loop checks it at every boundary, because a
+ *    gateway cancel cannot reach a moment when no request is in flight.
+ *
+ * See `core/mind/loop.ts` for the iteration boundary and `core/mind/tools.ts` for
+ * why a tool result is data and never authority.
  */
 
 /** How a turn finished, from the Mind's point of view. */
@@ -150,10 +178,27 @@ export interface TurnExperience {
  * - a short expiry — an unanswered turn cannot leave a live allowance lying
  *   around, and a stale grant cannot be spent later.
  * - `actor: 'owner'` — the person pressing Send is the principal.
+ *
+ * ## The ceiling under a tool loop
+ *
+ * `maxCalls` becomes the loop's iteration ceiling **only when a tool registry is
+ * wired**, and `maxOutputTokens` stays `maxOutputTokensPerTurn` either way. That
+ * combination is the point: the grant still bounds the *whole turn* to the number
+ * one turn could always spend, and the loop divides it across iterations
+ * (`budgetFor`) rather than multiplying it. A fourth iteration is refused by the
+ * Governor on arithmetic, before a provider is chosen.
+ *
+ * A Mind with no registry keeps `maxCalls: 1` exactly, because a Mind with no
+ * registry makes one call.
  */
 const TURN_GRANT_TTL_MS = 120_000
 
-function foregroundGrantSpec(turnId: string, now: Date, maxOutputTokens: number): CognitionGrantSpec {
+function foregroundGrantSpec(
+  turnId: string,
+  now: Date,
+  maxOutputTokens: number,
+  maxCalls: number,
+): CognitionGrantSpec {
   return {
     // Turn-scoped and deterministic, so the grant this turn spends is the grant
     // this turn created. The pattern is a legal event id (`:` is allowed).
@@ -162,7 +207,7 @@ function foregroundGrantSpec(turnId: string, now: Date, maxOutputTokens: number)
     allowedOrigins: ['user'],
     allowedCauses: ['user_message'],
     backgroundAllowed: false,
-    maxCalls: 1,
+    maxCalls,
     maxOutputTokens,
     actor: 'owner',
     goalId: null,
@@ -318,7 +363,44 @@ export interface MindServiceOptions {
    * note is much smaller than failing a turn that already has a stored answer.
    */
   onOwnerMessage?: (message: OwnerMessageEvent) => void
+  /**
+   * The tools a turn may call mid-answer, or null for none.
+   *
+   * **Absent means one provider call, and that is the whole default.** A Mind with
+   * no registry does not run a loop, does not parse a tool envelope, and issues a
+   * `maxCalls: 1` grant — so the ordinary chat path is unchanged rather than
+   * merely usually short-circuited. This is the "normal chat stays normal"
+   * guarantee, and it is structural: there is no code path in which an unwired
+   * Mind makes a second call.
+   *
+   * Supplied by the Core, which owns Guard and the Research seam, exactly as it
+   * supplies `ExpressionMemory` and `recall`. The Mind holds no tool body, no
+   * Searcher, no browser, no provider and no credential; it holds a closed list of
+   * names and the one method that runs one of them under Guard.
+   */
+  tools?: MindToolRegistry | null
 }
+
+/**
+ * One turn's cognition, as the Mind's own bookkeeping needs it.
+ *
+ * A closed union on `kind`, so no caller can read an answer out of a denial.
+ * `providerContacted` appears on every terminal branch that could have reached a
+ * provider, and is never inferred from how far the turn got: it is the gateway's
+ * own account, or the fact that a text answer exists.
+ */
+type Cognition =
+  | {
+      kind: 'answer'
+      text: string
+      providerId: string
+      model: string
+      providerContacted: true
+      steps: readonly ToolIteration[]
+    }
+  | { kind: 'denied'; reason: string }
+  | { kind: 'cancelled'; reason: string; providerContacted: boolean }
+  | { kind: 'failed'; reason: string; providerContacted: boolean }
 
 /**
  * One owner turn, as the relationship domain may hear about it.
@@ -358,6 +440,25 @@ export class MindService {
   private readonly relationshipItems: () => readonly RelationshipItem[]
   private readonly preferenceTokens: () => readonly string[]
   private readonly onOwnerMessage: ((message: OwnerMessageEvent) => void) | null
+  private readonly tools: MindToolRegistry | null
+
+  /**
+   * Per-turn cancellation, for turns that may make more than one call.
+   *
+   * `cancelTurn` reaches the Model Gateway, which owns the AbortController for a
+   * request that is *in flight*. A loop can also be sitting between iterations —
+   * waiting on a tool, or between the observation arriving and the next call —
+   * and there is no gateway request at that moment for a scoped cancel to find.
+   *
+   * So the Mind holds one controller per running turn, and the loop checks it at
+   * every iteration boundary. A turn with no registry does not use it, so nothing
+   * about the single-call path changes.
+   *
+   * Keyed by turn, never held in a singleton, for the same reason
+   * `experienceByTurn` is: two conversations may overlap and one must not
+   * overwrite the other's signal.
+   */
+  private readonly turnControllers = new Map<string, AbortController>()
 
   /**
    * Experience measurements are keyed by turn, not stored in singleton fields.
@@ -405,6 +506,16 @@ export class MindService {
     this.relationshipItems = options.relationshipItems ?? (() => [])
     this.preferenceTokens = options.preferenceTokens ?? (() => [])
     this.onOwnerMessage = options.onOwnerMessage ?? null
+    const tools = options.tools ?? null
+    // An empty registry is treated as no registry. A Core that wired the seam and
+    // found no search provider configured must get the single-call path, not a
+    // loop whose every tool request is guaranteed to be refused.
+    this.tools = tools !== null && !tools.isEmpty() ? tools : null
+  }
+
+  /** Whether this Mind may call a tool mid-turn. Off unless a registry is wired. */
+  private get toolLoopEnabled(): boolean {
+    return this.tools !== null
   }
 
   /**
@@ -658,7 +769,18 @@ export class MindService {
       )
 
       // --- 3. one bounded grant, from the owner's own authority -------------
-      const grant = foregroundGrantSpec(turnId, this.now(), maxOutputTokens)
+      //
+      // One grant per turn whatever the loop does. `maxCalls` is 1 unless a tool
+      // registry is wired, in which case it is the iteration ceiling — and
+      // `maxOutputTokens` is `maxOutputTokensPerTurn` in both cases, so the turn's
+      // total is what it always was and the loop divides it rather than
+      // multiplying it.
+      const grant = foregroundGrantSpec(
+        turnId,
+        this.now(),
+        maxOutputTokens,
+        this.toolLoopEnabled ? MIND_TOOL_LIMITS.maxProviderCalls : 1,
+      )
       try {
         await this.authority.createGrant(grant)
       } catch (error) {
@@ -720,52 +842,40 @@ export class MindService {
         requestLength: text.length,
       })
 
-      // --- 5. exactly one authorised cognition ------------------------------
-      const outcome = await this.authority.request({
-        kind: 'user_turn',
-        prompt: messages.map((m) => m.content).join('\n\n'),
-        messages,
-        maxOutputTokens,
+// --- 5. authorised cognition: one call, or a bounded tool loop ---------
+      const cognition = await this.think({
+        turnId,
         grantId: grant.grantId,
-        correlationId: turnId,
-        cognitionRequestId: turnId,
-        // The owner's selection, when there is one. It is a *request*, not a
-        // decision: the Governor still authors, the Gateway still refuses any
-        // model it cannot serve, and a null here is the ordinary default.
-        requestedModel: this.selectedModel(),
-        goalId: null,
+        messages,
+        perTurnAllowance: maxOutputTokens,
       })
 
       // Record cue use only when a provider was actually reached. A Governor
       // denial never dispatches, and a cancellation that arrived before contact
       // never dispatched either — no cue was spent, and recording one would
-      // suppress a gesture the owner never saw. `allowed` means the provider
-      // answered; `failed` and `cancelled` carry the gateway's own account of
-      // whether a provider was contacted.
-      const dispatched =
-        outcome.status === 'allowed' ||
-        ((outcome.status === 'failed' || outcome.status === 'cancelled') && outcome.providerContacted)
-      if (expression !== null && dispatched) {
+      // suppress a gesture the owner never saw. The loop reports contact the same
+      // way the gateway reports it, never inferred from how far the turn got.
+      if (expression !== null && cognition.kind !== 'denied' && cognition.providerContacted) {
         for (const cue of expression.offeredCueIds) {
           this.recordCueUse(cue.cueId, cue.kind, startedAt)
         }
       }
 
-      if (outcome.status === 'denied') {
+      if (cognition.kind === 'denied') {
         // The Governor refused. Nobody was asked, and the turn says so.
-        return await this.finishTurn(input, turn, 'denied', { reason: outcome.reason, ownerText: text })
+        return await this.finishTurn(input, turn, 'denied', { reason: cognition.reason, ownerText: text })
       }
-      if (outcome.status === 'cancelled') {
+      if (cognition.kind === 'cancelled') {
         return await this.finishTurn(input, turn, 'cancelled', {
-          reason: outcome.reason,
-          providerContacted: outcome.providerContacted,
+          reason: cognition.reason,
+          providerContacted: cognition.providerContacted,
           ownerText: text,
         })
       }
-      if (outcome.status === 'failed') {
+      if (cognition.kind === 'failed') {
         return await this.finishTurn(input, turn, 'failed', {
-          reason: outcome.reason,
-          providerContacted: outcome.providerContacted,
+          reason: cognition.reason,
+          providerContacted: cognition.providerContacted,
           ownerText: text,
         })
       }
@@ -776,7 +886,11 @@ export class MindService {
         messageId: this.newId(),
         conversationId: input.conversationId,
         role: 'assistant',
-        content: outcome.text,
+        // The model's own words, plus the tool footer the model cannot remove. A
+        // turn that looked something up says so in the transcript, and a turn
+        // whose lookup was refused or failed says that too — the "no silent
+        // downgrade" rule enforced by code rather than by an instruction.
+        content: cognition.text,
         createdAt: endedAt,
         turnId,
       }
@@ -784,12 +898,12 @@ export class MindService {
         await this.store.appendMessage(assistantMessage)
       } catch (error) {
         // The answer exists in memory and cannot be kept. Reporting the turn as
-        // completed would put text in the transcript that is not durable, which
-        // is the one state this ordering exists to prevent.
+        // completed would put text in the transcript that is not durable, which is
+        // the one state this ordering exists to prevent.
         return await this.finishTurn(input, turn, 'failed', {
           reason: `the answer could not be stored: ${conversationFault(error)}`,
-          providerId: outcome.providerId,
-          model: outcome.model,
+          providerId: cognition.providerId,
+          model: cognition.model,
           ownerText: text,
         })
       }
@@ -801,8 +915,8 @@ export class MindService {
         {
           endedAt,
           assistantMessageId: assistantMessage.messageId,
-          providerId: outcome.providerId,
-          model: outcome.model,
+          providerId: cognition.providerId,
+          model: cognition.model,
           ownerText: text,
         },
         assistantMessage,
@@ -820,6 +934,9 @@ export class MindService {
       // Cleared after the terminal event so this turn can never leak measurements
       // into a later one.
       this.experienceByTurn.delete(turnId)
+      // And so a cancel that arrives after the turn has settled cannot abort a
+      // controller that no longer belongs to it.
+      this.turnControllers.delete(turnId)
     }
   }
 
@@ -833,9 +950,120 @@ export class MindService {
    *
    * The turn's own terminal bookkeeping happens in `runTurn`, which is still
    * awaiting the provider and will settle normally. This method only signals.
+   *
+   * A tool-loop turn is signalled **twice**, on purpose. `gateway.cancelRequest`
+   * reaches a request that is in flight *right now*; the turn's own controller
+   * reaches the moments the gateway cannot see — between iterations, or while a
+   * tool is running. Both fire, both are idempotent, and neither touches anything
+   * outside this turn. The returned count is the gateway's, unchanged, so a caller
+   * reporting "stopped" means exactly what it meant before the loop existed.
    */
   cancelTurn(turnId: string, reason = 'the owner stopped this response'): number {
-    return this.gateway.cancelRequest(turnId, reason)
+    const aborted = this.gateway.cancelRequest(turnId, reason)
+    const controller = this.turnControllers.get(turnId)
+    if (controller !== undefined && !controller.signal.aborted) {
+      controller.abort(new Error(reason))
+    }
+    return aborted
+  }
+
+  /* ------------------------------------------------------------- cognition */
+
+  /**
+   * One turn's cognition: exactly one call, or a bounded tool loop.
+   *
+   * The branch is on the *seam*, not on the question. A Mind with no tool registry
+   * takes the first path, which is the code that existed before this loop did —
+   * one `authority.request`, `cognitionRequestId: turnId`, the full
+   * `maxOutputTokens`, no envelope parsing and no second call. That is what makes
+   * "normal chat stays normal" structural rather than probabilistic: there is no
+   * branch in which an unwired Mind can reach a provider twice.
+   *
+   * A Mind with a registry takes the loop. The first iteration still uses
+   * `cognitionRequestId: turnId` so that a scoped cancel and the turn's own
+   * journal line mean the same thing they always did; continuations are suffixed
+   * so that each is separately accounted and separately cancellable.
+   */
+  private async think(input: {
+    turnId: string
+    grantId: string
+    messages: readonly ModelMessage[]
+    perTurnAllowance: number
+  }): Promise<Cognition> {
+    if (!this.toolLoopEnabled) {
+      const outcome = await this.authority.request({
+        kind: 'user_turn',
+        prompt: input.messages.map((m) => m.content).join('\n\n'),
+        messages: input.messages,
+        maxOutputTokens: input.perTurnAllowance,
+        grantId: input.grantId,
+        correlationId: input.turnId,
+        cognitionRequestId: input.turnId,
+        // The owner's selection, when there is one. It is a *request*, not a
+        // decision: the Governor still authors, the Gateway still refuses any
+        // model it cannot serve, and a null here is the ordinary default.
+        requestedModel: this.selectedModel(),
+        goalId: null,
+      })
+      if (outcome.status === 'denied') return { kind: 'denied', reason: outcome.reason }
+      if (outcome.status === 'cancelled') {
+        return { kind: 'cancelled', reason: outcome.reason, providerContacted: outcome.providerContacted }
+      }
+      if (outcome.status === 'failed') {
+        return { kind: 'failed', reason: outcome.reason, providerContacted: outcome.providerContacted }
+      }
+      return {
+        kind: 'answer',
+        text: outcome.text,
+        providerId: outcome.providerId,
+        model: outcome.model,
+        providerContacted: true,
+        steps: [],
+      }
+    }
+
+    const tools = this.tools as MindToolRegistry
+    const controller = new AbortController()
+    this.turnControllers.set(input.turnId, controller)
+    try {
+      const outcome = await runToolLoop(
+        {
+          authority: this.authority,
+          tools,
+          grantId: input.grantId,
+          turnId: input.turnId,
+          selectedModel: this.selectedModel,
+          perTurnAllowance: input.perTurnAllowance,
+          signal: controller.signal,
+        },
+        [...input.messages, tools.instructions()],
+      )
+      if (outcome.kind === 'denied') return { kind: 'denied', reason: outcome.reason }
+      if (outcome.kind === 'cancelled') {
+        return { kind: 'cancelled', reason: outcome.reason, providerContacted: outcome.providerContacted }
+      }
+      if (outcome.kind === 'failed') {
+        return { kind: 'failed', reason: outcome.reason, providerContacted: outcome.providerContacted }
+      }
+      // The footer is appended here, in code, from the loop's own record of what
+      // it did. The model's text is stored exactly as it answered; the truth about
+      // the tools is added beside it and cannot be edited away by anything the
+      // model said.
+      const footer = renderToolFooter(
+        outcome.iterations.map((iteration) => iteration.step),
+        outcome.iterations.map((iteration) => iteration.observation),
+      )
+      return {
+        kind: 'answer',
+        text: footer === '' ? outcome.text : `${outcome.text}\n${footer}`,
+        providerId: outcome.providerId,
+        model: outcome.model,
+        providerContacted: true,
+        steps: outcome.iterations,
+      }
+    } finally {
+      this.turnControllers.delete(input.turnId)
+    }
   }
 
   /* ---------------------------------------------------------------- private */

@@ -28,9 +28,15 @@ await build({
   external: ['electron'],
 })
 
+// `pdfjs-dist` must stay external here. It resolves its worker relative to
+// `import.meta.url`, and bundling rewrites that into the CommonJS output, so the
+// first attachment read fails with `Cannot find module '.../pdf.worker.mjs'`.
+// Bundling works in `vite dev` and fails only in the packaged app, which is the
+// worst possible place to find out — so the dependency is resolved at runtime
+// from node_modules instead.
 await build({
   ...shared,
   entryPoints: ['electron/main.ts'],
   outfile: 'dist-electron/main.cjs',
-  external: ['electron', 'better-sqlite3'],
+  external: ['electron', 'better-sqlite3', 'pdfjs-dist'],
 })

@@ -77,6 +77,17 @@ const api = {
   saveWorkspace: (payload: unknown): Promise<boolean> =>
     ipcRenderer.invoke('freya:workspace:save', payload),
 
+  /**
+   * Ask the host to open a file picker and read what came back.
+   *
+   * The renderer names nothing. It sends no path and receives none — the host
+   * opens the dialog on the asking window, performs a bounded read behind it, and
+   * returns a typed outcome. That asymmetry is the point: a channel taking a path
+   * from a renderer would be an arbitrary filesystem read, so there deliberately
+   * is no companion function that does that.
+   */
+  attachmentPick: (): Promise<unknown> => ipcRenderer.invoke('freya:attachment:pick'),
+
   // Frameless-window controls. Each acts on the window that asked.
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('freya:window:minimize'),
   windowMaximize: (): Promise<void> => ipcRenderer.invoke('freya:window:maximize'),

@@ -112,6 +112,16 @@ export interface FreyaHostBridge {
   /** The host asks for the current layout as the window is closing. */
   onCollect(handler: () => unknown): void
 
+  /**
+   * Ask the host to open a file picker and read what it chose.
+   *
+   * No path crosses in either direction. The host parents the dialog to the
+   * calling window, does a bounded read, and returns a typed outcome; there is no
+   * companion function that takes a path from the renderer, because that would be
+   * an arbitrary filesystem read.
+   */
+  attachmentPick(): Promise<unknown>
+
   /** Frameless-window controls. Each acts on the window that calls. */
   windowMinimize(): Promise<void>
   windowMaximize(): Promise<void>

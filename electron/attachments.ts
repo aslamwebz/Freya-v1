@@ -1,5 +1,8 @@
 import { readFile, stat } from 'node:fs/promises'
 import { basename, extname } from 'node:path'
+import type { FileMimeType, ImageMimeType, ModelAttachment } from '../core/model/provider'
+import { validateModelAttachments } from '../core/model/provider'
+import type * as PdfjsModule from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 /**
  * Reading a file somebody picked, for the composer.
@@ -14,34 +17,114 @@ import { basename, extname } from 'node:path'
  * file, so it is also the one place the host has to be careful about what it does
  * with the answer.
  *
- * ## Three outcomes, because three things are true
+ * ## Four outcomes, because four things are true
  *
  *  - **text** — the bytes decoded as UTF-8 and handed back, capped. This is the
- *    only outcome whose content leaves this process, and it is bounded twice: once
- *    here, once again by the turn's own character ceiling in Core.
- *  - **image** — the shape is real and the *pixels are not sent*. A vision model
- *    is not something this build has, so handing Freya a JPEG's bytes would cost
- *    real tokens to say nothing. The name, type and size cross; the content does
- *    not, and the renderer says so rather than implying Freya can see it.
- *  - **unsupported** — anything else is named as unsupported. There is no
- *    best-effort decode of a PDF into "probably text", because a wrong guess here
- *    becomes a turn full of replacement characters the owner did not write.
+ *    only outcome whose content leaves this process as *text*, and it is bounded
+ *    twice: once here, once again by the turn's own character ceiling in Core.
+ *  - **pdf** — signature-checked, then really decoded with pdf.js and handed back
+ *    as text *and*, separately, as a validated `ModelFilePart` for the model
+ *    contract. A PDF is the one format that contributes both, which is why it is
+ *    its own outcome rather than a flavour of "text".
+ *  - **image** — magic-byte checked and carried as base64. The bytes are meant to
+ *    reach `ModelMessage.attachments` as an OpenAI `image_url` part; they are
+ *    never flattened into the turn's text, because base64 inlined into a prompt
+ *    is noise that costs the same as sending the picture properly. Whether they
+ *    actually *arrive* at a model is a different seam and is written down at the
+ *    bottom of this file rather than implied here.
+ *  - **unsupported** — anything else is named as unsupported, in words. Every
+ *    refusal below is a sentence a person can act on, never an empty string that
+ *    reads like "the document was blank".
  *
  * The binary check is a real one, not an extension guess: a `.txt` full of NUL
  * bytes is binary, and a `.bin` of ASCII is text. Extensions pick the *default*;
- * the bytes decide.
+ * the bytes decide. For images the bytes do not merely suggest a type, they are
+ * the type: the magic number has to agree with the extension or the file is
+ * refused, because a JPEG renamed to `.png` is a file whose declared type is a
+ * lie and the model contract would forward that lie to the endpoint.
+ *
+ * ## The PDF library, and why
+ *
+ * `pdfjs-dist`'s legacy build. It is the one PDF text extractor that runs in a
+ * plain Node process with no native module, no canvas and no worker thread to
+ * babysit — which is exactly Electron's main process, and exactly what a test
+ * runner is. The alternatives were rejected for concrete reasons: `pdf-parse`
+ * forks a child process and offers no page-level API to bound; `pdfreader` builds
+ * a DOM it expects a browser to provide; `mupdf`/`pdfium` bindings are native and
+ * would need a rebuild against Electron's ABI. pdf.js is loaded lazily so a
+ * window that never opens a file never parses it, and it is configured with
+ * `isEvalSupported: false` so a document cannot reach `Function` on its way to
+ * being read.
+ *
+ * ### One thing whoever wires the bridge must know
+ *
+ * `pdfjs-dist` has to be listed as **external** in `scripts/build-electron.mjs`,
+ * beside `electron` and `better-sqlite3`. Bundling it was tried and does not work:
+ * pdf.js resolves its worker module relative to `import.meta.url`, esbuild rewrites
+ * that inside a CommonJS bundle, and the first attachment then fails with
+ * `Cannot find module '…/pdf.worker.mjs' imported from dist-electron/main.cjs`.
+ * With it external, the same extraction was verified from an esbuild-built bundle.
+ *
+ * ## The ceilings, and why they are here rather than in Core
+ *
+ * A file is read only if it is at most {@link ATTACHMENT_MAX_BYTES}, a pick
+ * carries at most {@link ATTACHMENT_MAX_FILES} files, a PDF is decoded for at
+ * most {@link PDF_MAX_PAGES} pages, and extracted text is cut at
+ * {@link ATTACHMENT_MAX_TEXT_CHARS}. The read ceiling is deliberately *below*
+ * `MAX_ATTACHMENT_BYTES` in Core's provider contract (4 MiB), which means no read
+ * this module performs can produce a payload Core would later refuse: the host
+ * refuses less than the protocol allows, so the bound is never a surprise at the
+ * far end. Every cut is marked in the result rather than being silent.
  */
 
 /** The largest file this will read at all. */
 export const ATTACHMENT_MAX_BYTES = 1_000_000
 
-/** How much of a text file crosses into the renderer. */
+/** How much of a text file — or of one PDF's extracted text — crosses into the renderer. */
 export const ATTACHMENT_MAX_TEXT_CHARS = 20_000
 
 /** How many files one pick may return. */
 export const ATTACHMENT_MAX_FILES = 5
 
-export type AttachmentKind = 'text' | 'image' | 'unsupported'
+/**
+ * How many pages of a PDF this will decode.
+ *
+ * An attachment is a reference, not an upload, and the failure mode of a higher
+ * number is a turn that spends its whole character budget on page one's tables.
+ * Twenty pages is enough for the questions people actually attach a PDF to ask
+ * ("what does this contract say", "summarise this"), and a longer document is
+ * reported as partly unread rather than silently cut.
+ */
+export const PDF_MAX_PAGES = 20
+
+/**
+ * How far into a file the `%PDF-` header may sit and still count as a PDF.
+ *
+ * ISO 32000 puts the header at the very start and also tells readers to tolerate
+ * up to 1024 bytes of leading junk (a BOM, a mail gateway's banner). 1024 is that
+ * tolerance, and it is deliberately *not* the whole file: finding the marker
+ * somewhere in a megabyte of anything is not validation, it is a coincidence.
+ */
+export const PDF_SIGNATURE_SEARCH_BYTES = 1024
+
+export type AttachmentKind = 'text' | 'image' | 'pdf' | 'unsupported'
+
+/** What a PDF turned out to be. Null for every other kind. */
+export interface PdfReading {
+  /** Pages in the document, which is not the number read. */
+  readonly pages: number
+  /** Pages actually decoded, at most {@link PDF_MAX_PAGES}. */
+  readonly pagesRead: number
+  /**
+   * False when the document has no extractable text layer at all.
+   *
+   * This is the honest reading of a scan: the page is full of pixels and no
+   * glyphs, so there is nothing to extract and nothing was written. Reported as
+   * its own fact rather than as an empty string, which would read like a blank
+   * page rather than a picture of a page.
+   */
+  readonly textLayer: boolean
+}
 
 export interface AttachmentResult {
   readonly name: string
@@ -49,22 +132,64 @@ export interface AttachmentResult {
   readonly kind: AttachmentKind
   readonly contentType: string
   readonly sizeBytes: number
-  /** Decoded text, truncated with an explicit marker. Text attachments only. */
+  /** Decoded text, truncated with an explicit marker. Null when there is none. */
   readonly text: string | null
   /** True when `text` was cut at the ceiling. Never silently false. */
   readonly truncated: boolean
-  /** Why an unsupported file is unsupported, in words. */
+  /** Why a file was refused, or what it did not carry, in words. */
   readonly detail: string | null
+  /**
+   * Bytes for `ModelMessage.attachments`, already through
+   * {@link validateModelAttachments}.
+   *
+   * Null when nothing travels: a text file contributes text, not a content part.
+   * Never a filesystem path and never a URL — bare base64 only, which is the only
+   * form Core's contract admits.
+   */
+  readonly modelAttachment: ModelAttachment | null
+  /** Present only when `kind` is `pdf`. */
+  readonly pdf: PdfReading | null
 }
 
-const IMAGE_TYPES: Readonly<Record<string, string>> = {
+/** One pick, or the sentence explaining why there is not one. */
+export type AttachmentPickOutcome =
+  | { readonly ok: true; readonly attachments: readonly AttachmentResult[] }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Image types this will carry as a model content part.
+ *
+ * Exactly the set in Core's provider contract, and for the same reason it is a
+ * list there: those are the types verified to survive the endpoint's content-parts
+ * parser. A GIF is a real image and would be validated as one, but forwarding it
+ * would trade a local typed refusal for an opaque HTTP 400.
+ */
+const CARRIED_IMAGE_TYPES: Readonly<Record<string, ImageMimeType>> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
   '.webp': 'image/webp',
-  '.bmp': 'image/bmp',
-  '.svg': 'image/svg+xml',
+}
+
+/**
+ * Image types recognised but not carried, each mapped to the reason.
+ *
+ * "Unsupported" on its own tells a person nothing about which of their files to
+ * change, so the refusal names the cause instead.
+ */
+const UNCARRIED_IMAGE_TYPES: Readonly<Record<string, { contentType: string; reason: string }>> = {
+  '.gif': {
+    contentType: 'image/gif',
+    reason: 'That is a GIF. Freya can see JPEG, PNG and WebP; a GIF is not one of them.',
+  },
+  '.bmp': {
+    contentType: 'image/bmp',
+    reason: 'That is a BMP. Freya can see JPEG, PNG and WebP; a BMP is not one of them.',
+  },
+  '.svg': {
+    contentType: 'image/svg+xml',
+    reason: 'That is an SVG, which is an XML document that can carry script. Freya does not send one.',
+  },
 }
 
 const TEXT_TYPES: Readonly<Record<string, string>> = {
@@ -126,13 +251,230 @@ export function looksTextual(sample: Uint8Array): boolean {
   return limit === 0 || control / limit < 0.05
 }
 
+const ASCII = (text: string): Uint8Array => {
+  const bytes = new Uint8Array(text.length)
+  for (let index = 0; index < text.length; index += 1) bytes[index] = text.charCodeAt(index)
+  return bytes
+}
+
+function startsWith(bytes: Uint8Array, signature: Uint8Array, offset = 0): boolean {
+  if (bytes.length < offset + signature.length) return false
+  for (let index = 0; index < signature.length; index += 1) {
+    if (bytes[offset + index] !== signature[index]) return false
+  }
+  return true
+}
+
+/**
+ * Does this file carry a PDF header?
+ *
+ * Exported because "an HTML error page saved as `.pdf`" is a specific, testable
+ * failure and deserves a name rather than being an inline comparison inside a
+ * function no test can reach.
+ */
+export function hasPdfSignature(bytes: Uint8Array): boolean {
+  const needle = ASCII('%PDF-')
+  const limit = Math.min(bytes.length, PDF_SIGNATURE_SEARCH_BYTES)
+  for (let start = 0; start + needle.length <= limit; start += 1) {
+    if (startsWith(bytes, needle, start)) return true
+  }
+  return false
+}
+
+/**
+ * The image type the bytes actually are, or null.
+ *
+ * Magic numbers, not extensions. Every entry is the format's own signature as its
+ * specification defines it, which is what makes "is this really a PNG" a question
+ * with an answer. WebP additionally checks the `WEBP` form type at offset 8,
+ * because a bare `RIFF` is an AVI or a WAV wearing the same first four bytes.
+ */
+export function sniffImageType(bytes: Uint8Array): string | null {
+  if (startsWith(bytes, new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png'
+  if (startsWith(bytes, new Uint8Array([0xff, 0xd8, 0xff]))) return 'image/jpeg'
+  if (startsWith(bytes, ASCII('GIF87a')) || startsWith(bytes, ASCII('GIF89a'))) return 'image/gif'
+  if (startsWith(bytes, ASCII('RIFF')) && startsWith(bytes, ASCII('WEBP'), 8)) return 'image/webp'
+  if (startsWith(bytes, ASCII('BM'))) return 'image/bmp'
+  return null
+}
+
 function contentTypeFor(path: string): { kind: AttachmentKind; contentType: string } {
   const extension = extname(path).toLowerCase()
-  const image = IMAGE_TYPES[extension]
-  if (image !== undefined) return { kind: 'image', contentType: image }
+  if (extension === '.pdf') return { kind: 'pdf', contentType: 'application/pdf' }
+  const carried = CARRIED_IMAGE_TYPES[extension]
+  if (carried !== undefined) return { kind: 'image', contentType: carried }
+  const uncarried = UNCARRIED_IMAGE_TYPES[extension]
+  if (uncarried !== undefined) return { kind: 'unsupported', contentType: uncarried.contentType }
   const text = TEXT_TYPES[extension]
   if (text !== undefined) return { kind: 'text', contentType: text }
   return { kind: 'unsupported', contentType: 'application/octet-stream' }
+}
+
+/**
+ * pdf.js, loaded once and lazily.
+ *
+ * A dynamic import rather than a top-level one for two reasons: a window that
+ * never opens a file should never parse a megabyte of PDF machinery at startup,
+ * and a failure to load has to become a sentence inside a result rather than a
+ * rejection during module evaluation, which would take the whole host down.
+ */
+type PdfModule = typeof PdfjsModule
+type PdfDocument = Awaited<ReturnType<PdfModule['getDocument']>['promise']>
+
+let pdfModule: Promise<PdfModule> | null = null
+
+function loadPdfModule(): Promise<PdfModule> {
+  pdfModule ??= import('pdfjs-dist/legacy/build/pdf.mjs')
+  return pdfModule
+}
+
+interface PdfTextRun {
+  readonly str?: string
+  readonly hasEOL?: boolean
+}
+
+/**
+ * One page's text runs, in reading order, as prose.
+ *
+ * pdf.js returns positioned runs rather than lines, and dropping the `hasEOL`
+ * markers runs every paragraph into the next one — which is how extracted PDF
+ * text becomes one unreadable line. Whitespace before a break and runs of blank
+ * lines are collapsed, so a page does not spend the character budget on its own
+ * layout.
+ */
+function joinTextRuns(items: readonly unknown[]): string {
+  let text = ''
+  for (const item of items) {
+    const run = item as PdfTextRun
+    if (typeof run.str !== 'string') continue
+    text += run.str
+    if (run.hasEOL === true) text += '\n'
+  }
+  return text.replace(/[^\S\n]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+type PdfExtraction =
+  | {
+      readonly ok: true
+      readonly text: string
+      readonly pages: number
+      readonly pagesRead: number
+      readonly textLayer: boolean
+      readonly truncated: boolean
+    }
+  | { readonly ok: false; readonly reason: string }
+
+function reasonFrom(error: unknown): string {
+  return error instanceof Error && error.message.length > 0 ? error.message : 'the reader gave no reason'
+}
+
+/**
+ * Really decode a PDF's text layer, or say honestly that there isn't one.
+ *
+ * Never throws. A malformed document is a refusal with a sentence in it, because
+ * this runs behind a bridge where an escaping rejection reaches the window as an
+ * opaque "Error invoking remote method" that names neither the file nor the fault.
+ */
+export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtraction> {
+  let pdfjs: PdfModule
+  try {
+    pdfjs = await loadPdfModule()
+  } catch (error) {
+    return { ok: false, reason: `Freya could not load its PDF reader — ${reasonFrom(error)}.` }
+  }
+
+  let document: PdfDocument
+  try {
+    document = await pdfjs.getDocument({
+      // A copy: pdf.js takes ownership of the buffer it is handed, and these same
+      // bytes are still needed for the base64 file part below.
+      data: new Uint8Array(bytes),
+      isEvalSupported: false,
+      disableFontFace: true,
+      verbosity: 0,
+    }).promise
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `That file has a PDF header but is not a readable PDF — ${reasonFrom(error)}.`,
+    }
+  }
+
+  const pages = document.numPages
+  const pagesRead = Math.min(pages, PDF_MAX_PAGES)
+  try {
+    const chunks: string[] = []
+    let characters = 0
+    let truncated = false
+
+    for (let pageNumber = 1; pageNumber <= pagesRead; pageNumber += 1) {
+      const page = await document.getPage(pageNumber)
+      let pageText: string
+      try {
+        const content = await page.getTextContent()
+        pageText = joinTextRuns(content.items as readonly unknown[])
+      } finally {
+        page.cleanup()
+      }
+      if (pageText.length === 0) continue
+
+      const remaining = ATTACHMENT_MAX_TEXT_CHARS - characters
+      if (remaining <= 0) {
+        truncated = true
+        break
+      }
+      if (pageText.length > remaining) {
+        truncated = true
+        pageText = pageText.slice(0, remaining)
+      }
+      chunks.push(pageText)
+      characters += pageText.length
+      if (truncated) break
+    }
+
+    const text = chunks.join('\n\n')
+    return { ok: true, text, pages, pagesRead, textLayer: text.length > 0, truncated }
+  } catch (error) {
+    return { ok: false, reason: `Freya could not read the text in that PDF — ${reasonFrom(error)}.` }
+  } finally {
+    await document.destroy().catch(() => undefined)
+  }
+}
+
+/**
+ * Build the base64 content part for these bytes, or null.
+ *
+ * Checked with Core's own validator before it leaves this process, so a payload
+ * that reaches the window is one the protocol has already agreed to accept — the
+ * main process is the last place where a mistake is still cheap and local.
+ */
+function carriedPart(candidate: ModelAttachment): ModelAttachment | null {
+  try {
+    return validateModelAttachments([candidate])[0] ?? null
+  } catch {
+    return null
+  }
+}
+
+function refusal(
+  name: string,
+  path: string,
+  contentType: string,
+  sizeBytes: number,
+  detail: string,
+): AttachmentResult {
+  return {
+    name,
+    path,
+    kind: 'unsupported',
+    contentType,
+    sizeBytes,
+    text: null,
+    truncated: false,
+    detail,
+    modelAttachment: null,
+    pdf: null,
+  }
 }
 
 /**
@@ -150,54 +492,41 @@ export async function readAttachment(path: string): Promise<AttachmentResult> {
   try {
     const info = await stat(path)
     if (!info.isFile()) {
-      return {
-        name, path, kind: 'unsupported', contentType: identified.contentType, sizeBytes: 0,
-        text: null, truncated: false,
-        detail: 'That is not a file, so there is nothing to attach.',
-      }
+      return refusal(name, path, identified.contentType, 0, 'That is not a file, so there is nothing to attach.')
     }
     size = info.size
   } catch (error) {
-    return {
-      name, path, kind: 'unsupported', contentType: identified.contentType, sizeBytes: 0,
-      text: null, truncated: false,
-      detail: `Freya could not read that file — ${error instanceof Error ? error.message : 'the reason was not reported'}.`,
-    }
+    return refusal(name, path, identified.contentType, 0, `Freya could not read that file — ${reasonFrom(error)}.`)
   }
 
   if (size > ATTACHMENT_MAX_BYTES) {
-    return {
-      name, path, kind: 'unsupported', contentType: identified.contentType, sizeBytes: size,
-      text: null, truncated: false,
-      detail: `That file is ${Math.round(size / 1000)} KB. Freya reads files up to ${Math.round(ATTACHMENT_MAX_BYTES / 1000)} KB.`,
-    }
+    return refusal(
+      name,
+      path,
+      identified.contentType,
+      size,
+      `That file is ${Math.round(size / 1000)} KB. Freya reads files up to ${Math.round(ATTACHMENT_MAX_BYTES / 1000)} KB.`,
+    )
   }
 
   let bytes: Uint8Array
   try {
     bytes = await readFile(path)
   } catch (error) {
-    return {
-      name, path, kind: 'unsupported', contentType: identified.contentType, sizeBytes: size,
-      text: null, truncated: false,
-      detail: `Freya could not open that file — ${error instanceof Error ? error.message : 'the reason was not reported'}.`,
-    }
+    return refusal(name, path, identified.contentType, size, `Freya could not open that file — ${reasonFrom(error)}.`)
   }
 
-  if (identified.kind === 'image') {
-    return {
-      name, path, kind: 'image', contentType: identified.contentType, sizeBytes: size,
-      text: null, truncated: false,
-      detail: 'Freya can see that an image is attached, but this build cannot read image content.',
-    }
+  if (identified.kind === 'pdf') return readPdf(name, path, bytes, size)
+
+  if (identified.kind === 'image') return readImage(name, path, bytes, size, identified.contentType)
+
+  if (identified.kind === 'unsupported') {
+    const uncarried = UNCARRIED_IMAGE_TYPES[extname(path).toLowerCase()]
+    return refusal(name, path, identified.contentType, size, uncarried?.reason ?? 'Freya cannot read that file type.')
   }
 
   if (!looksTextual(bytes)) {
-    return {
-      name, path, kind: 'unsupported', contentType: identified.contentType, sizeBytes: size,
-      text: null, truncated: false,
-      detail: 'That file is binary, so Freya cannot read it as text.',
-    }
+    return refusal(name, path, identified.contentType, size, 'That file is binary, so Freya cannot read it as text.')
   }
 
   const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
@@ -215,11 +544,227 @@ export async function readAttachment(path: string): Promise<AttachmentResult> {
     text: truncated ? `${body}\n\n[truncated at ${ATTACHMENT_MAX_TEXT_CHARS} characters]` : body,
     truncated,
     detail: null,
+    modelAttachment: null,
+    pdf: null,
   }
 }
 
-/** Read a pick, capped at {@link ATTACHMENT_MAX_FILES} files. */
-export async function readAttachments(paths: readonly string[]): Promise<AttachmentResult[]> {
-  const chosen = paths.slice(0, ATTACHMENT_MAX_FILES)
-  return Promise.all(chosen.map((path) => readAttachment(path)))
+function readImage(
+  name: string,
+  path: string,
+  bytes: Uint8Array,
+  size: number,
+  declared: string,
+): AttachmentResult {
+  const sniffed = sniffImageType(bytes)
+  if (sniffed === null) {
+    return refusal(
+      name,
+      path,
+      declared,
+      size,
+      'Those bytes are not a picture, so the name on that file is not true of it.',
+    )
+  }
+  if (sniffed !== declared) {
+    return refusal(
+      name,
+      path,
+      declared,
+      size,
+      `That file is really a ${sniffed.replace('image/', '').toUpperCase()}, not a ${declared.replace('image/', '').toUpperCase()}. Rename it to match the bytes.`,
+    )
+  }
+
+  const modelAttachment = carriedPart({
+    type: 'image',
+    mimeType: declared as ImageMimeType,
+    data: Buffer.from(bytes).toString('base64'),
+    filename: name,
+  })
+  if (modelAttachment === null) {
+    return refusal(name, path, declared, size, 'Freya could not prepare that picture for the model, so it is not being attached.')
+  }
+
+  return {
+    name,
+    path,
+    kind: 'image',
+    contentType: declared,
+    sizeBytes: size,
+    text: null,
+    truncated: false,
+    detail: null,
+    modelAttachment,
+    pdf: null,
+  }
 }
+
+async function readPdf(name: string, path: string, bytes: Uint8Array, size: number): Promise<AttachmentResult> {
+  if (!hasPdfSignature(bytes)) {
+    return refusal(
+      name,
+      path,
+      'application/pdf',
+      size,
+      'That file does not start with the %PDF- header, so it is not a PDF — usually a web page saved with a .pdf name.',
+    )
+  }
+
+  // The whole document travels as the file part whether or not its pages have
+  // text: a scan is still a PDF a model can be given, and refusing it here would
+  // discard something the endpoint has been verified to read.
+  const modelAttachment = carriedPart({
+    type: 'file',
+    mimeType: 'application/pdf' satisfies FileMimeType,
+    data: Buffer.from(bytes).toString('base64'),
+    filename: name,
+  })
+
+  const extraction = await extractPdfText(bytes)
+  if (!extraction.ok) return refusal(name, path, 'application/pdf', size, extraction.reason)
+
+  const notes: string[] = []
+  if (!extraction.textLayer) {
+    notes.push('That PDF has no text layer — its pages are pictures of pages, so Freya extracted no words from it.')
+  }
+  if (extraction.pages > extraction.pagesRead) {
+    notes.push(
+      `Freya read the first ${extraction.pagesRead} of ${extraction.pages} pages; the rest was not decoded.`,
+    )
+  }
+  if (extraction.truncated) {
+    notes.push(`The text was cut at ${ATTACHMENT_MAX_TEXT_CHARS} characters.`)
+  }
+
+  return {
+    name,
+    path,
+    kind: 'pdf',
+    contentType: 'application/pdf',
+    sizeBytes: size,
+    text: extraction.textLayer
+      ? extraction.truncated
+        ? `${extraction.text}\n\n[truncated at ${ATTACHMENT_MAX_TEXT_CHARS} characters]`
+        : extraction.text
+      : null,
+    truncated: extraction.truncated,
+    detail: notes.length === 0 ? null : notes.join(' '),
+    modelAttachment,
+    pdf: { pages: extraction.pages, pagesRead: extraction.pagesRead, textLayer: extraction.textLayer },
+  }
+}
+
+/**
+ * Read a pick.
+ *
+ * Over the file count is a refusal rather than a silent truncation: a person who
+ * picked nine files and sees three of them attached has been misled by omission,
+ * and the count is the one fact they can act on.
+ */
+export async function readAttachments(paths: readonly string[]): Promise<AttachmentPickOutcome> {
+  if (paths.length > ATTACHMENT_MAX_FILES) {
+    return {
+      ok: false,
+      reason: `Freya attaches at most ${ATTACHMENT_MAX_FILES} files at a time; ${paths.length} were picked.`,
+    }
+  }
+  return { ok: true, attachments: await Promise.all(paths.map((path) => readAttachment(path))) }
+}
+
+/**
+ * What a file picker hands this module.
+ *
+ * Injected rather than imported so this file never pulls in `electron`: the
+ * reader stays runnable — and testable — in a plain Node process, and the dialog
+ * stays a parameter with no privileged default.
+ */
+/**
+ * What a picker asks for, described without importing Electron.
+ *
+ * The property and filter shapes mirror `OpenDialogOptions` exactly so the host
+ * can forward them straight into `dialog.showOpenDialog` without inventing a
+ * translation, and `properties` is the closed union rather than `string[]` so an
+ * unsupported value is a type error here instead of being silently dropped by the
+ * dialog at runtime.
+ */
+export type AttachmentDialogProperty =
+  | 'openFile'
+  | 'openDirectory'
+  | 'multiSelections'
+  | 'showHiddenFiles'
+  | 'createDirectory'
+  | 'promptToCreate'
+  | 'noResolveAliases'
+  | 'treatPackageAsDirectory'
+  | 'dontAddToRecent'
+
+export interface AttachmentDialogFilter {
+  readonly name: string
+  readonly extensions: readonly string[]
+}
+
+export interface AttachmentDialogRequest {
+  readonly title: string
+  readonly properties: readonly AttachmentDialogProperty[]
+  readonly filters: readonly AttachmentDialogFilter[]
+}
+
+export interface AttachmentDialogOutcome {
+  readonly canceled: boolean
+  readonly filePaths: readonly string[]
+}
+
+export interface AttachmentPickerOptions {
+  /** Electron's `dialog.showOpenDialog`, bound to the window that asked. */
+  readonly showOpenDialog: (request: AttachmentDialogRequest) => Promise<AttachmentDialogOutcome>
+  readonly title?: string
+}
+
+/**
+ * Open the picker and read what came back.
+ *
+ * The whole privileged act of "attach a file": a dialog in the main process, a
+ * bounded read behind it, and a typed outcome in front of it. The renderer never
+ * learns a path it could ask to have read — it receives the bounded result and a
+ * sentence.
+ */
+export async function pickAttachments(options: AttachmentPickerOptions): Promise<AttachmentPickOutcome> {
+  let outcome: AttachmentDialogOutcome
+  try {
+    outcome = await options.showOpenDialog({
+      title: options.title ?? 'Attach to Freya',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Documents Freya can read', extensions: ['txt', 'md', 'json', 'csv', 'log', 'yaml', 'yml', 'pdf'] },
+        { name: 'Pictures Freya can see', extensions: ['png', 'jpg', 'jpeg', 'webp'] },
+        { name: 'Everything', extensions: ['*'] },
+      ],
+    })
+  } catch (error) {
+    return { ok: false, reason: `The file picker could not be opened — ${reasonFrom(error)}.` }
+  }
+
+  if (outcome.canceled) return { ok: true, attachments: [] }
+  return readAttachments(outcome.filePaths)
+}
+
+/**
+ * ## Where the bytes stop, and where they have to start again
+ *
+ * A `modelAttachment` on a result above is exactly the shape
+ * `ModelMessage.attachments` takes in `core/model/provider.ts`, and the renderer
+ * re-validates these results at the bridge before turning them into that array.
+ * What is **not** wired yet is the last hop: `conversation.turn.submit` accepts
+ * text and nothing else, its payload is rebuilt in `electron/preload.ts` as
+ * `{ conversationId, text }`, and `src/platform/conversationClient.ts` offers
+ * `submitTurn(conversationId, text)`. So today the bytes are composed, validated
+ * and held, and no turn carries them.
+ *
+ * Closing that is a protocol change in files this module does not own: the
+ * `conversation.turn.submit` payload contract in preload and Core, the Core turn
+ * that would hold the parts, and the Context Compiler placing them on the user
+ * `ModelMessage`. The text path above stays correct either way — a content part
+ * must never be inlined into a turn's text, which is why the composed turn
+ * carries a *sentence* about the picture rather than its base64.
+ */

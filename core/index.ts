@@ -13,6 +13,7 @@ import type { ModelProvider } from './model/provider'
 import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
 import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
 import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
+import { createWebSearchTool, MindToolRegistry } from './mind/tools'
 import type { ReferenceKnowledge } from './mind/context-compiler'
 import { Brain, buildIdentityRoot, buildSelfDefinition, type BrainProjection } from './brain/brain'
 import { ResearchIntegration } from './research/coreIntegration'
@@ -1888,6 +1889,34 @@ class FreyaCore implements Core {
       // The owner's own words, handed over once and forgotten. Core decides what
       // they mean; the Mind never does.
       onOwnerMessage: (message) => this.observeOwnerMessage(message),
+      /**
+       * The one tool a turn can reach, wired here because this is the only place
+       * that constructs the Mind.
+       *
+       * Null when research is not configured, and a null registry is treated as
+       * "unwired" — the turn takes the original single-request path with no code
+       * that can reach a provider twice. So an install without search is not
+       * merely refused if a turn asks for it; it never even offers the model the
+       * option.
+       *
+       * The adapter calls `researchIntegration.searchWeb`, which is already
+       * Guard-gated on `search.web` inside that module. The registry evaluates
+       * the same capability again before invoking it: two checks of one fact is
+       * deliberate, and the alternative is a tool body that is the only caller in
+       * the codebase reaching the network without asking.
+       */
+      tools: this.researchIntegration
+        ? new MindToolRegistry({
+          tools: [
+            createWebSearchTool({
+              searchWeb: (query, signal) => this.researchIntegration!.searchWeb(query, signal),
+            }),
+          ],
+          guard: this.guard,
+          principal: this.owner,
+          stopped: () => this.state.stopAll.active || !this.gateway.gateStatus().open,
+        })
+        : null,
     })
     this.conversations = new ConversationService({
       fabric: this.fabric,

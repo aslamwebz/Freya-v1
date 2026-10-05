@@ -8,6 +8,12 @@ import { sendMessage } from '../ui-v2/chat/sendMessage'
 import { researchMirror } from '../platform/researchClient'
 import { routeEyePrompt, type ComposerMode, type WorkspaceResearchView } from './chat/modes'
 import { routePromptIntent } from './chat/intent'
+import {
+  attachmentTray,
+  collectModelAttachments,
+  composeWithAttachments,
+  modelAttachmentHandoff,
+} from './chat/attachments'
 import type { ScreenSlots } from './screens/Home'
 import { HomeDashboard } from './screens/HomeDashboard'
 import { Mind } from './screens/Mind'
@@ -117,6 +123,35 @@ export function App({
       return false
     }
 
+    /**
+     * Attachments become part of the turn's text, and only part of it.
+     *
+     * `composeWithAttachments` is what puts a file's words into the turn: it fences
+     * them as untrusted data, caps each file, stops at Core's 8,000-character
+     * ceiling, and says which files it could not read. That is the whole of what
+     * the text path can carry.
+     *
+     * The bytes are handled separately and deliberately. `collectModelAttachments`
+     * validates them against `core/model/provider.ts` and stages them for
+     * `ModelMessage.attachments` — a **separate field from the text**, because the
+     * provider contract is explicit that an image's or a PDF's bytes are carried as
+     * content parts and never flattened into the prompt. Inline base64 is not a
+     * degraded attachment; it is a request body full of noise that costs the same
+     * as the picture would have and describes nothing.
+     *
+     * What is staged is not yet sent. `conversation.turn.submit` accepts text only
+     * (`src/platform/conversationClient.ts` `submitTurn(conversationId, text)`, and
+     * the payload rebuilt in `electron/preload.ts`), so no turn can carry a content
+     * part yet. The seam is named in both files; closing it is a protocol change in
+     * files this one does not own. The turn text is honest about what happened in
+     * the meantime: it says a file was attached and that the bytes are not in the
+     * text, rather than implying Freya can see something it was not sent.
+     */
+    const drafts = attachmentTray.getSnapshot()
+    const composed = composeWithAttachments(text, drafts)
+    const payload = collectModelAttachments(drafts)
+    modelAttachmentHandoff.stage(payload.attachments)
+
     setNotice('')
     setScreen('chat')
 
@@ -124,6 +159,17 @@ export function App({
     // understands. Explicit composer modes always win. In ordinary Chat, only
     // high-confidence discovery/deep-research shapes are promoted automatically;
     // everything else stays a normal conversation instead of spawning questions.
+    /**
+     * Routing deliberately ignores the tray.
+     *
+     * `routePromptIntent` will promote "an image is attached" into an Eye
+     * media-discovery session — which is right when an attachment is only a
+     * filename and the question is really "find me more like it", and wrong now
+     * that the picture itself is on the turn. Sending it down the search lane
+     * would take the attachment away from the only path that can carry it and
+     * answer about the web instead of about the file. So an attachment keeps the
+     * turn in Chat unless the owner explicitly asked for a search.
+     */
     const inferred = mode === 'chat'
       ? routePromptIntent(text, { activeEyeSession: activeEyeSessionId !== null })
       : null
@@ -137,9 +183,26 @@ export function App({
 
     if (effectiveMode === 'chat') {
       setResearchView(null)
-      const result = await sendMessage(mirror, conversation?.activeConversationId ?? null, text)
-      setNotice(result.ok ? '' : result.notice)
+      const result = await sendMessage(mirror, conversation?.activeConversationId ?? null, composed.text)
+      // The payload and the tray are cleared only once Core has accepted the turn,
+      // so a refusal leaves the owner's files where they can be retried.
+      if (result.ok) {
+        modelAttachmentHandoff.clear()
+        attachmentTray.clear()
+      }
+      setNotice([result.notice, payload.notice, composed.notice].filter(Boolean).join(' '))
       return result.ok
+    }
+
+    /**
+     * A search lane cannot carry a file, and pretending otherwise would be worse
+     * than saying so. `search.web` and Deep Research take a question; the
+     * attachment text and payload stay in the tray, and the owner is told they did
+     * not go — rather than a search being run against a document that silently
+     * never arrived.
+     */
+    if (drafts.length > 0) {
+      setNotice(`${drafts.length === 1 ? 'The attached file was' : 'The attached files were'} not sent with this search. Switch to Chat to send ${drafts.length === 1 ? 'it' : 'them'} to Freya.`)
     }
 
     setResearchBusy(true)

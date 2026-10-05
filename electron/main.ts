@@ -15,6 +15,7 @@ import { loadLocalEnv } from './localEnv'
 import { createConnectorRuntime } from './connectors/runtime'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
+import { pickAttachments } from './attachments'
 import { PresenceHost } from './presence/host'
 import { createBrowserExtensionHost, type BrowserExtensionHost } from './browserext'
 import { HostVoiceOutput, registerVoiceOutputIpc } from './voiceHost'
@@ -1090,6 +1091,34 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('freya:workspace:load', () => requireWorkspace().load())
+  // The whole privileged act of "attach a file": a dialog in this process, a
+  // bounded read behind it, and a typed outcome in front of it.
+  //
+  // The window is resolved from the *asking* webContents, so a renderer can only
+  // ever open a dialog parented to itself. There is deliberately no companion
+  // channel that accepts a path from the renderer — that would be an arbitrary
+  // filesystem read dressed as an attachment.
+  ipcMain.handle('freya:attachment:pick', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    if (owner === null) {
+      return { ok: false, reason: 'The file picker needs a window, and there was none.' }
+    }
+    const { dialog } = await import('electron')
+    return pickAttachments({
+      showOpenDialog: (request) => dialog.showOpenDialog(owner, {
+        title: request.title,
+        // Copied into the mutable arrays Electron's types declare. The request is
+        // `readonly` so the picker contract cannot be mutated by a caller; the
+        // dialog needs its own arrays, and this is the boundary where that
+        // immutability is spent.
+        properties: [...request.properties],
+        filters: request.filters.map((filter) => ({
+          name: filter.name,
+          extensions: [...filter.extensions],
+        })),
+      }),
+    })
+  })
   // The window is frameless, so the renderer drives these. Each acts on the
   // window that asked, never another: a window can name no other window.
   ipcMain.handle('freya:window:minimize', (event) => {

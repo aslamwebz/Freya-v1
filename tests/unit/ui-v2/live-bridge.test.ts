@@ -150,6 +150,9 @@ function installFakeBridge() {
     getRuntimeInfo: async () => ({ version: '0.1.0', electron: '44.5.0', platform: 'win32', arch: 'x64', userData: '', workspaceFile: '', dev: false }),
     loadWorkspace: async () => null,
     saveWorkspace: async () => true,
+    // The picker is a host dialog; a fake bridge refuses rather than pretending a
+    // file was chosen, which is the behaviour the renderer has to survive.
+    attachmentPick: async () => ({ ok: false, reason: 'no host in this test' }),
     onCollect: () => {},
     windowMinimize: async () => {},
     windowMaximize: async () => {},

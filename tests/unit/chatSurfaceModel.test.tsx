@@ -160,6 +160,13 @@ beforeEach(() => {
       }
     }) as never,
     coreVoice: (async () => null) as never,
+    // Phase 45 moved voice onto its own push channels. A surface that attaches
+    // without them must degrade to "voice is not connected" rather than throwing
+    // inside a passive effect, and these stubs let that path be exercised.
+    onCoreVoice: (() => () => {}) as never,
+    onCoreVoiceTranscript: (() => () => {}) as never,
+    onVoiceOutput: (() => () => {}) as never,
+    reportVoiceCapabilities: (() => {}) as never,
   } as never
 })
 

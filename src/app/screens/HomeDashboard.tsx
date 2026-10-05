@@ -30,6 +30,7 @@ interface Props {
   onNavigate: (screen: string) => void
   onVoicePress: () => void
   onVoiceRelease: (cancelled?: boolean) => void
+  maxMessageCharacters: number | null
 }
 
 const NAV = [['home', 'Home', 'home'], ['chat', 'Chats', 'chat'], ['mind', 'Mind', 'mind'], ['focus', 'Focus', 'focus'],
@@ -101,7 +102,7 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slots, snapshot, generating, notice, dressing, voice, voiceTranscript, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease }: Props) {
+export function HomeDashboard({ screen, slots, snapshot, generating, notice, dressing, voice, voiceTranscript, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   const [collapsed, setCollapsed] = useState(false)
@@ -206,6 +207,7 @@ export function HomeDashboard({ screen, slots, snapshot, generating, notice, dre
         onStopResponse={onStopResponse}
         onVoicePress={onVoicePress}
         onVoiceRelease={onVoiceRelease}
+        maxMessageCharacters={maxMessageCharacters}
       />
     </div></div>
 

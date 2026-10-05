@@ -7,6 +7,7 @@ import {
 } from '../../platform/conversationClient'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import type { WorkspaceResearchView } from './modes'
+import { RichMessage } from './RichMessage'
 import './chat.css'
 
 function timeLabel(value: string): string {
@@ -233,7 +234,11 @@ export function Chats({ researchView, busy = false }: { researchView: WorkspaceR
               </span>
               <div className="chats-turn-content">
                 <header><b>{message.role === 'user' ? 'You' : 'Freya'}</b><time>{timeLabel(message.createdAt)}</time></header>
-                <div className="chats-bubble">{message.content}</div>
+                <div className="chats-bubble">
+                  {message.role === 'assistant'
+                    ? <RichMessage content={message.content} />
+                    : <p className="chats-user-text">{message.content}</p>}
+                </div>
               </div>
             </article>
           ))}

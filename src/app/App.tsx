@@ -248,6 +248,7 @@ export function App({
       onNavigate={setScreen}
       onVoicePress={voice.press}
       onVoiceRelease={voice.release}
+      maxMessageCharacters={conversation?.maxMessageCharacters ?? null}
     />
     <div className="freya-v2" data-theme={settings.theme} data-app-shell="app" data-ui-mode={uiMode(snapshot)}>
       <DressingTable store={dressing} open={dressingOpen} onOpenChange={setDressingOpen} />

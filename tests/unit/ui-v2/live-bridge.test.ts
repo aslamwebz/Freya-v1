@@ -7,7 +7,8 @@ import { resetAttentionMirror } from '../../../src/platform/attentionClient'
 import type { FreyaHostBridge } from '../../../src/platform/host'
 import type { CoreStatus } from '../../../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../../../core/protocol/activity'
-import type { MissionProjection } from '../../../core/missions/types'
+import type { MissionProjection, MissionSummaryView } from '../../../core/missions/types'
+import { MISSION_STATUSES } from '../../../core/missions/types'
 import type { WorkforceProjection } from '../../../core/protocol/workforce'
 import type { AttentionProjection } from '../../../core/protocol/attention'
 
@@ -38,17 +39,81 @@ const activity: CoreActivityEvent[] = [
   { id: 'evt-2', kind: 'core.ready', type: 'core.ready', sequence: 41, at: 1790953200000, text: 'Core ready.', tone: 'neutral' },
 ]
 
+/**
+ * The Phase 47 board fields, empty.
+ *
+ * A Mission that has never been planned has no plan, no steps, no evidence and no wake,
+ * and all of that is genuinely empty rather than unknown — so this is the honest fixture
+ * for a Mission that exists but has not started working.
+ */
+function boardFields(over: Partial<MissionSummaryView> = {}): Pick<
+  MissionSummaryView,
+  | 'priority'
+  | 'planRevision'
+  | 'progress'
+  | 'currentStep'
+  | 'nextAction'
+  | 'blockers'
+  | 'pendingApproval'
+  | 'evidence'
+  | 'nextWake'
+  | 'lastUpdatedAt'
+  | 'awaitingOwner'
+  | 'budgetRemaining'
+> {
+  return {
+    priority: 'routine',
+    planRevision: null,
+    progress: {
+      steps: { total: 0, pending: 0, blocked: 0, delegated: 0, running: 0, verified: 0, failed: 0, cancelled: 0, skipped: 0 },
+      planSteps: 0,
+      observed: 0,
+      reported: 0,
+      requestedQuantity: null,
+      quantitySatisfied: null,
+    },
+    currentStep: null,
+    nextAction: null,
+    blockers: [],
+    pendingApproval: null,
+    evidence: { total: 0, observed: 0, reported: 0, expired: 0, uncertain: 0 },
+    nextWake: null,
+    lastUpdatedAt: '2026-10-01',
+    awaitingOwner: false,
+    budgetRemaining: {
+      modelCalls: 32,
+      actions: 128,
+      externalRequests: 32,
+      retries: 8,
+      delegations: 64,
+      planRevisions: 8,
+      concurrentDelegations: 4,
+    },
+    ...over,
+  }
+}
+
 const missionProjection: MissionProjection = {
   persistence: { mode: 'encrypted', reason: null, durable: true },
   missions: [
     { missionId: 'mission-real-1', status: 'active', createdAt: '2026-10-01', deadlineAt: '2026-11-01', settledAt: null, reason: null,
       counts: { total: 8, queued: 0, running: 0, waiting: 0, awaitingApproval: 0, paused: 0, completed: 5, failed: 1, cancelled: 0, verified: 5 },
-      needsAttention: true, availableActions: ['pause', 'requestCompletion', 'cancel', 'fail'], verification: null },
+      needsAttention: true, availableActions: ['requestCompletion', 'stop', 'correct', 'cancel', 'fail'], verification: null,
+      ...boardFields() },
     { missionId: 'mission-real-2', status: 'draft', createdAt: '2026-10-02', deadlineAt: '2026-11-02', settledAt: null, reason: null,
       counts: { total: 3, queued: 0, running: 0, waiting: 0, awaitingApproval: 0, paused: 0, completed: 1, failed: 0, cancelled: 0, verified: 1 },
-      needsAttention: false, availableActions: ['activate', 'cancel'], verification: null },
+      needsAttention: false, availableActions: ['activate', 'stop', 'correct', 'cancel'], verification: null,
+      ...boardFields({ lastUpdatedAt: '2026-10-02' }) },
   ],
-  counts: { total: 2, draft: 1, active: 1, paused: 0, completed: 0, failed: 0, cancelled: 0, needsAttention: 1 },
+  // Every status has a counter, derived from the domain's vocabulary rather than written
+  // out — the same reason the projection builds it that way.
+  counts: {
+    total: 2,
+    ...Object.fromEntries(MISSION_STATUSES.map((status) => [status, 0])),
+    draft: 1,
+    active: 1,
+    needsAttention: 1,
+  } as MissionProjection['counts'],
   limits: { maxChildRuns: 64, maxConcurrentChildRuns: 8, lifetimeMs: 2592000000, verificationDeadlineMs: 30000, maxRetainedMissions: 100, maxTitleChars: 160, maxIntentChars: 4000, maxSuccessCriteria: 20, maxCriterionChars: 500 },
   missionsRetained: 2, missionsTotal: 2, missionsHidden: 0, sequence: 10,
 }

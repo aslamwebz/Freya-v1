@@ -263,12 +263,38 @@ describe('attack 1: an action succeeding never means verification succeeded', ()
     const verifier = new WorkVerifiedMissionVerifier()
     const signal = new AbortController().signal
 
+    // Phase 47 widened the context a verifier sees. Every new field is a **count**, and
+    // all are zero here, which is what makes this the sharpest version of the attack: the
+    // only thing establishing the outcome is the child Run's step statuses.
+    //
+    // That matters because the added checks are evidence-based and could have masked the
+    // Run-based one. With zero observed results and zero plan steps, the verifier has
+    // nothing to establish the outcome *except* those step statuses — so a `pass` below
+    // really is the Run's steps vouching for it, and nothing else is leaking in.
     const contextWith = (verified: number, total: number, other: number): MissionVerificationContext => ({
       missionId: 'id-mission',
       status: 'active',
       requiredRunIds: ['run-1'],
       runStatuses: { 'run-1': 'completed' },
       runStepStatuses: { 'run-1': { verified, total, failed: 0, other } },
+      stepCounts: {
+        total: 0,
+        pending: 0,
+        blocked: 0,
+        delegated: 0,
+        running: 0,
+        verified: 0,
+        failed: 0,
+        cancelled: 0,
+        skipped: 0,
+      },
+      observedResults: 0,
+      expiredObservedResults: 0,
+      reportedResults: 0,
+      requestedQuantity: null,
+      blocked: false,
+      approvalPending: false,
+      uncertainEffects: 0,
     })
 
     // "The Run completed" is exactly the action-success claim. The verifier must
@@ -348,9 +374,13 @@ describe('attack 2: forged verifier results are refused', () => {
     expect(Object.keys((completed[0] as AnyCoreEvent).payload).sort()).toEqual(
       ['from', 'missionId', 'reason', 'to', 'verifierId'].sort(),
     )
+    // `from: 'verifying'`, not `'active'`. Phase 47 made the checking state a real status
+    // and the only edge into `completed`, so the transition a verifier authorises is
+    // recorded from the state that says "we are checking" — and a journal claiming
+    // `active → completed` is refused by the reducer.
     expect(completed[0]?.payload).toEqual({
       missionId,
-      from: 'active',
+      from: 'verifying',
       to: 'completed',
       reason: MISSION_REASONS.verification_passed,
       verifierId: MISSION_WORK_VERIFIER_ID,

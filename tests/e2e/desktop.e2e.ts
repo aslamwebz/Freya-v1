@@ -2782,29 +2782,42 @@ async function main(): Promise<void> {
       await mission.locator('.mission-row button[data-action="activate"]').click()
       await mission.waitForSelector('.mission-row[data-status="active"]', { timeout: 15_000 })
       check('a Mission activates', (await mission.locator('.mission-row[data-status="active"]').count()) === 1)
+      // Phase 47 renamed the button `pause` to `stop`, and the status `paused` to `stopped`.
+      // The rename is the point: STOP ALL latches, and `paused` implied anybody holding
+      // `mission.manage` could undo it. `stopped` says the gate is shut.
       check(
-        'an active Mission offers pause and no longer offers activation',
-        (await mission.locator('.mission-row button[data-action="pause"]').count()) === 1 &&
+        'an active Mission offers stop and no longer offers activation',
+        (await mission.locator('.mission-row button[data-action="stop"]').count()) === 1 &&
           (await mission.locator('.mission-row button[data-action="activate"]').count()) === 0,
       )
 
-      await mission.locator('.mission-row button[data-action="pause"]').click()
-      await mission.waitForSelector('.mission-row[data-status="paused"]', { timeout: 15_000 })
+      await mission.locator('.mission-row button[data-action="stop"]').click()
+      await mission.waitForSelector('.mission-row[data-status="stopped"]', { timeout: 15_000 })
+      // And only the owner's resume reopens a stopped Mission. It goes back to `active`
+      // rather than to `ready`, because "carry on" that leaves a Mission waiting for
+      // somebody else to start it is not carrying on.
       await mission.locator('.mission-row button[data-action="resume"]').click()
       await mission.waitForSelector('.mission-row[data-status="active"]', { timeout: 15_000 })
       check(
-        'a Mission pauses and resumes',
+        'a Mission stops and resumes',
         (await mission.locator('.mission-row[data-status="active"]').count()) === 1,
       )
 
       // Asking to complete with nothing established must not complete it. This is the
       // claim the whole subsystem rests on.
+      //
+      // Phase 47 moved the refusal from the engine's door to the **verifier**, and the
+      // reason it names changed with it. Before, an empty child-Run list was refused up
+      // front ("no Work has been attached"), which meant a Mission driven by observed
+      // evidence rather than by Runs could never complete — "find 100 cat videos" is
+      // established by 100 observations whether or not a Run exists. So the honest refusal
+      // is about what is missing: `no_evidence`.
       await mission.locator('.mission-row button[data-action="requestCompletion"]').click()
       await mission.waitForSelector('.mission-notice', { timeout: 15_000 })
       const completionNotice = (await mission.locator('.mission-notice').innerText()) ?? ''
       check(
         'asking to complete a Mission that established nothing says so',
-        /no Work has been attached|not established/i.test(completionNotice),
+        /no_evidence|not established|no evidence/i.test(completionNotice),
         completionNotice,
       )
       check(

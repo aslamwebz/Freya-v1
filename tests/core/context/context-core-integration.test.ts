@@ -537,14 +537,14 @@ describe('the current-Mission adapter is narrow', () => {
   it('re-points when the status changes, because the sentence changes', () => {
     const integration = missionReady()
     integration.syncMissionContext({ missionId: 'm-1', status: 'active' })
-    const paused = integration.syncMissionContext({ missionId: 'm-1', status: 'paused' })
+    const stopped = integration.syncMissionContext({ missionId: 'm-1', status: 'stopped' })
 
-    expect(paused.operation).toBe('admitted')
-    expect(paused.revokedCount).toBe(1)
+    expect(stopped.operation).toBe('admitted')
+    expect(stopped.revokedCount).toBe(1)
 
     const resolved = integration.resolve({ term: 'here', kind: 'current_mission' })
     if (!resolved.ok) throw new Error('expected a resolution')
-    expect(resolved.item.content).toContain('paused')
+    expect(resolved.item.content).toContain('stopped')
   })
 
   it('points at nothing when there is no current Mission', () => {

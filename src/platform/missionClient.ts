@@ -46,6 +46,20 @@ export interface MissionMirror {
   resume(missionId: string): Promise<MissionCommandOutcome>
   cancel(missionId: string): Promise<MissionCommandOutcome>
   fail(missionId: string): Promise<MissionCommandOutcome>
+  /**
+   * Phase 47's two owner actions that need a surface of their own.
+   *
+   * Declared absent rather than stubbed. `correct` needs a correction composer and
+   * `decideApproval` needs an approval prompt, and inventing either here would be the UI
+   * redesign this phase does not authorise. The Mission surface filters these out rather
+   * than rendering a button that cannot work.
+   */
+  readonly correct?: (missionId: string) => Promise<MissionCommandOutcome>
+  readonly decideApproval?: (
+    missionId: string,
+    approvalId: string,
+    decision: 'approved' | 'denied',
+  ) => Promise<MissionCommandOutcome>
   /** Asks a verifier whether the outcome was established. Never sets a status. */
   requestCompletion(missionId: string): Promise<MissionCommandOutcome>
 

@@ -38,11 +38,20 @@ function key(seed: string): Uint8Array {
 
 const SECRET = 'FREYA_RED_TEAM_SECRET_7A91 handle my house move'
 
+/**
+ * A Mission's private content, as the store holds it.
+ *
+ * `intentShape` is Phase 47's structured half of the goal and it lives here, encrypted,
+ * for the same reason the free text does — every one of its fields is a word. It is
+ * defaulted rather than required so a fixture that does not care about it stays short, and
+ * so that a test *about* it has to set it deliberately.
+ */
 function content(overrides: Partial<MissionContent> = {}): MissionContent {
   return {
     missionId: 'm1',
     title: 'Handle my house move',
     intent: SECRET,
+    intentShape: null,
     successCriteria: ['All documents filed', 'Appointment attended'],
     createdAt: '2026-10-01T09:00:00.000Z',
     ...overrides,
@@ -198,6 +207,7 @@ describe('a damaged store is read-only, and says so', () => {
         missionId: id,
         title: `title ${id}`,
         intent: `intent ${id}`,
+        intentShape: null,
         successCriteria: [],
         createdAt: '2026-10-01T09:00:00.000Z',
       })
@@ -241,6 +251,7 @@ describe('a damaged store is read-only, and says so', () => {
         missionId: 'm4',
         title: 'title m4',
         intent: 'intent m4',
+        intentShape: null,
         successCriteria: [],
         createdAt: '2026-10-01T09:00:00.000Z',
       }),
@@ -266,6 +277,7 @@ describe('a damaged store is read-only, and says so', () => {
         missionId: 'm4',
         title: 't',
         intent: 'i',
+        intentShape: null,
         successCriteria: [],
         createdAt: '2026-10-01T09:00:00.000Z',
       })

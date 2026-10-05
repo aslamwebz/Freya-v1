@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_MISSION_BUDGET } from '../../core/missions/autonomy/types'
 import {
   MISSION_STATUSES,
   MISSION_TERMINAL_STATUSES,
@@ -7,9 +8,13 @@ import {
   MISSION_REASONS,
   DEFAULT_MISSION_LIMITS,
   canTransitionMission,
+  isLiveMissionStatus,
+  isParkedMissionStatus,
   isTerminalMissionStatus,
   missionLimits,
+  normaliseIntentShape,
   normaliseMissionContent,
+  readMissionStatus,
   type MissionStatus,
 } from '../../core/missions/types'
 import { reduceMissionState, initialMissionState } from '../../core/missions/state'
@@ -29,11 +34,19 @@ import type { AnyCoreEvent } from '../../core/events/envelope'
  */
 
 describe('the lifecycle', () => {
-  it('has exactly the six documented statuses', () => {
+  it('has exactly the twelve documented statuses', () => {
+    // Written out rather than derived, so a change to the vocabulary has to be a
+    // deliberate edit to this file and not just an edit to the domain.
     expect([...MISSION_STATUSES]).toEqual([
       'draft',
+      'ready',
+      'planning',
       'active',
-      'paused',
+      'waiting',
+      'blocked',
+      'approval-required',
+      'verifying',
+      'stopped',
       'completed',
       'failed',
       'cancelled',
@@ -50,12 +63,52 @@ describe('the lifecycle', () => {
   it('permits exactly the documented transitions', () => {
     // Written out longhand rather than derived, so the table is the specification
     // and a change to it has to be a deliberate edit.
-    expect(MISSION_TRANSITIONS.draft).toEqual(['active', 'cancelled'])
-    expect(MISSION_TRANSITIONS.active).toEqual(['paused', 'completed', 'failed', 'cancelled'])
-    expect(MISSION_TRANSITIONS.paused).toEqual(['active', 'failed', 'cancelled'])
+    expect(MISSION_TRANSITIONS.draft).toEqual(['ready', 'active', 'cancelled'])
     expect(MISSION_TRANSITIONS.completed).toEqual([])
     expect(MISSION_TRANSITIONS.failed).toEqual([])
     expect(MISSION_TRANSITIONS.cancelled).toEqual([])
+  })
+
+  it('names exactly three live statuses, and the parked ones are not among them', () => {
+    // Live means "may attach Work and act". Everything else is parked, and a parked
+    // Mission that could still act would make `waiting` and `blocked` decorative.
+    const live = MISSION_STATUSES.filter((status) => isLiveMissionStatus(status))
+    expect(live).toEqual(['ready', 'planning', 'active'])
+    for (const status of MISSION_STATUSES) {
+      const parked = isParkedMissionStatus(status)
+      expect(parked).toBe(['waiting', 'blocked', 'approval-required'].includes(status))
+    }
+  })
+
+  it('reaches completed only through verifying', () => {
+    // The whole point of the extra state. If `active → completed` were legal there
+    // would be a window in which a Mission's status claimed it was done while nothing
+    // had been established — which is where a fabricated outcome would live.
+    for (const from of MISSION_STATUSES) {
+      if (from === 'verifying') continue
+      expect(canTransitionMission(from, 'completed')).toBe(false)
+    }
+    expect(canTransitionMission('verifying', 'completed')).toBe(true)
+  })
+
+  it('leaves approval-required only to a parked or live status, never to consent', () => {
+    // A gate cannot be closed by the thing that opened it, and expiry lands in `blocked`
+    // rather than anywhere it could be mistaken for approval.
+    for (const to of MISSION_STATUSES) {
+      if (['active', 'waiting', 'blocked', 'stopped', 'cancelled', 'failed'].includes(to)) continue
+      expect(canTransitionMission('approval-required', to)).toBe(false)
+    }
+  })
+
+  it('leaves stopped only through the owner resuming it', () => {
+    // STOP ALL is a latch, not a settlement. Four edges out, and every one of them is the
+    // owner acting or the owner deciding it is finished — no timer, no capability, and
+    // nothing a Mission could reach for itself.
+    //
+    // `ready` is the autonomous resume ("the gate is open again") and `active` is the
+    // owner's ("carry on"). Naming them apart is what stops a Mission being reported as
+    // running when it is only reopened.
+    expect(MISSION_TRANSITIONS.stopped).toEqual(['ready', 'active', 'cancelled', 'failed'])
   })
 
   it('has no way out of a terminal status — no resurrection', () => {
@@ -71,15 +124,24 @@ describe('the lifecycle', () => {
 
   it('refuses every undocumented shortcut', () => {
     const illegal: readonly [MissionStatus, MissionStatus][] = [
-      ['draft', 'paused'],
+      ['draft', 'stopped'],
       ['draft', 'completed'],
       ['draft', 'failed'],
+      ['draft', 'verifying'],
       ['active', 'draft'],
-      ['paused', 'draft'],
-      ['paused', 'completed'],
       ['active', 'active'],
-      ['paused', 'paused'],
+      ['stopped', 'draft'],
+      ['stopped', 'verifying'],
+      ['ready', 'completed'],
+      ['planning', 'completed'],
+      ['waiting', 'completed'],
+      ['blocked', 'completed'],
+      ['approval-required', 'completed'],
+      ['verifying', 'draft'],
+      ['verifying', 'ready'],
       ['draft', 'draft'],
+      ['blocked', 'blocked'],
+      ['waiting', 'waiting'],
     ]
     for (const [from, to] of illegal) {
       expect(canTransitionMission(from, to)).toBe(false)
@@ -88,19 +150,41 @@ describe('the lifecycle', () => {
 
   it('permits exactly the legal moves', () => {
     const legal: readonly [MissionStatus, MissionStatus][] = [
+      ['draft', 'ready'],
       ['draft', 'active'],
       ['draft', 'cancelled'],
-      ['active', 'paused'],
-      ['active', 'completed'],
+      ['ready', 'planning'],
+      ['ready', 'active'],
+      ['planning', 'active'],
+      ['active', 'waiting'],
+      ['active', 'blocked'],
+      ['active', 'approval-required'],
+      ['active', 'verifying'],
+      ['active', 'planning'],
+      ['active', 'stopped'],
       ['active', 'failed'],
       ['active', 'cancelled'],
-      ['paused', 'active'],
-      ['paused', 'failed'],
-      ['paused', 'cancelled'],
+      ['waiting', 'active'],
+      ['blocked', 'active'],
+      ['approval-required', 'active'],
+      ['verifying', 'completed'],
+      ['stopped', 'ready'],
     ]
     for (const [from, to] of legal) {
       expect(canTransitionMission(from, to)).toBe(true)
     }
+  })
+
+  it('reads the pre-Phase-47 paused alias as stopped', () => {
+    // `paused` meant "resumable by anyone holding mission.manage"; `stopped` means the
+    // gate is latched and only the owner reopens it. A journal written before the
+    // rename must keep replaying — and keep meaning what it meant.
+    expect(readMissionStatus('paused')).toBe('stopped')
+    expect(readMissionStatus('stopped')).toBe('stopped')
+    expect(readMissionStatus('active')).toBe('active')
+    // Anything the domain does not have is refused, not guessed at.
+    expect(readMissionStatus('running')).toBeNull()
+    expect(readMissionStatus(7)).toBeNull()
   })
 
   it('has closed reason codes rather than free text for durable records', () => {
@@ -116,6 +200,35 @@ describe('the lifecycle', () => {
     expect(MISSION_REASONS.deadline_expired).toBeTruthy()
     expect(MISSION_REASONS.child_run_limit).toBeTruthy()
     expect(MISSION_REASONS.concurrent_run_limit).toBeTruthy()
+  })
+
+  it('names a closed code for every way autonomy can stop', () => {
+    // The four reasons a Mission parks rather than failing, plus the ones that only
+    // autonomy can produce. Written as a list so adding a state without adding a reason
+    // fails here.
+    for (const reason of [
+      'stopped',
+      'resumed',
+      'intent_ambiguous',
+      'approval_pending',
+      'approval_denied',
+      'approval_expired',
+      'budget_exhausted',
+      'retry_ceiling',
+      'concurrency_ceiling',
+      'unknown_capability',
+      'no_capable_worker',
+      'verification_expired',
+      'quantity_not_reached',
+      'no_evidence',
+      'interrupted',
+      'wake_missed',
+      'replan_ceiling',
+      'plan_revised',
+      'intent_corrected',
+    ] as const) {
+      expect(MISSION_REASONS[reason]).toBe(reason)
+    }
   })
 })
 
@@ -228,7 +341,80 @@ describe('private content normalisation', () => {
     if (!content.ok) return
     // C3/C8: a caller cannot name a principal, and Mission content has no slot
     // for one even if it tried.
-    expect(Object.keys(content.value).sort()).toEqual(['intent', 'successCriteria', 'title'])
+    //
+    // `intentShape` is new in Phase 47 and is the only addition. It is the
+    // machine-patchable half of the goal — a subject, a quantity and three constraint
+    // lists — and it is here rather than in the journal because every one of its fields
+    // is a word.
+    expect(Object.keys(content.value).sort()).toEqual(['intent', 'intentShape', 'successCriteria', 'title'])
+  })
+})
+
+/* ------------------------------------------------------- structured intent */
+
+describe('the structured intent', () => {
+  it('accepts a countable goal and keeps every constraint separate', () => {
+    const shape = normaliseIntentShape({
+      subject: 'cat videos',
+      quantity: 100,
+      media: ['video'],
+      context: ['in the barn'],
+      exclusions: ['no horror'],
+    })
+    expect(shape.ok).toBe(true)
+    if (!shape.ok) return
+    // The acceptance case, as data. `context` is a named field, which is what lets
+    // "in the barn" patch one constraint without touching the subject, the quantity
+    // or the media type.
+    expect(shape.value.subject).toBe('cat videos')
+    expect(shape.value.requestedQuantity).toBe(100)
+    expect(shape.value.mediaConstraints).toEqual(['video'])
+    expect(shape.value.contextConstraints).toEqual(['in the barn'])
+    expect(shape.value.exclusions).toEqual(['no horror'])
+    expect(shape.value.paused).toBe(false)
+  })
+
+  it('treats an absent quantity as absent, not as zero', () => {
+    // "Find some cat videos" and "find zero cat videos" are different requests, and
+    // reporting the second as the first would be a lie about the goal.
+    const shape = normaliseIntentShape({ subject: 'cat videos' })
+    expect(shape.ok).toBe(true)
+    if (!shape.ok) return
+    expect(shape.value.requestedQuantity).toBeNull()
+  })
+
+  it('refuses a quantity that is not a positive whole number', () => {
+    // Refused rather than clamped: silently turning "about a thousand" into 1000 would
+    // be the owner being told they asked for something they did not.
+    for (const quantity of [0, -1, 1.5, Number.NaN]) {
+      expect(normaliseIntentShape({ subject: 'x', quantity }).ok).toBe(false)
+    }
+    expect(normaliseIntentShape({ subject: 'x', quantity: 100_001 }).ok).toBe(false)
+  })
+
+  it('de-duplicates a constraint rather than counting it twice', () => {
+    // "in the barn, in the barn" is one constraint stated twice, and keeping both
+    // would make a constraint count disagree with the number of things it names.
+    const shape = normaliseIntentShape({ subject: 'x', context: ['in the barn', 'in the barn'] })
+    expect(shape.ok).toBe(true)
+    if (!shape.ok) return
+    expect(shape.value.contextConstraints).toEqual(['in the barn'])
+  })
+
+  it('refuses a constraint list that is not a list, or is unbounded', () => {
+    expect(normaliseIntentShape({ subject: 'x', context: 'in the barn' as never }).ok).toBe(false)
+    expect(normaliseIntentShape({ subject: 'x', context: Array.from({ length: 9 }, () => 'x') }).ok).toBe(false)
+  })
+
+  it('is optional, and absent means no structured goal at all', () => {
+    // A Mission with no countable goal is a legitimate Mission — "help with my
+    // house move" — so the shape being null is a supported case rather than a
+    // half-filled one.
+    expect(normaliseMissionContent({ title: 'T', intent: 'I' }).ok).toBe(true)
+    const content = normaliseMissionContent({ title: 'T', intent: 'I' })
+    if (!content.ok) return
+    expect(content.value.intentShape).toBeNull()
+    expect(normaliseMissionContent({ title: 'T', intent: 'I', intentShape: null }).ok).toBe(true)
   })
 })
 
@@ -249,10 +435,36 @@ function event(type: AnyCoreEvent['type'], payload: Record<string, unknown>, seq
   } as unknown as AnyCoreEvent
 }
 
-const CREATED = event('mission.created', { missionId: 'm1', status: 'draft', limits: DEFAULT_MISSION_LIMITS }, 1)
+const CREATED = event(
+  'mission.created',
+  { missionId: 'm1', status: 'draft', limits: DEFAULT_MISSION_LIMITS, budget: DEFAULT_MISSION_BUDGET },
+  1,
+)
 const ACTIVATED = event('mission.activated', { missionId: 'm1', from: 'draft', to: 'active' }, 2)
-const PAUSED = event('mission.paused', { missionId: 'm1', from: 'active', to: 'paused', reason: 'owner' }, 3)
-const RESUMED = event('mission.resumed', { missionId: 'm1', from: 'paused', to: 'active' }, 4)
+const PAUSED = event('mission.paused', { missionId: 'm1', from: 'active', to: 'stopped', reason: 'owner' }, 3)
+const RESUMED_ACTIVE = event('mission.resumed', { missionId: 'm1', from: 'stopped', to: 'active', reason: 'resumed' }, 4)
+
+/**
+ * The autonomous resume: `stopped -> ready`.
+ *
+ * A second, distinct fact. An owner pressing Resume wants the Mission to *run*; autonomy,
+ * after a wake, only knows that the gate is open again and that planning is the next thing
+ * that has to happen. Naming them apart is what keeps "carried on" from meaning two things.
+ */
+const RESUMED_READY = event('mission.resumed', { missionId: 'm1', from: 'stopped', to: 'ready', reason: 'resumed' }, 4)
+
+/**
+ * Into `verifying`, which is now the only edge into `completed`.
+ *
+ * The Phase 47 state exists so that "we are checking" and "it is done" are two facts.
+ * Without this line in the happy path, the completion below would be an illegal
+ * transition — and the test would be asserting a fabrication.
+ */
+const VERIFYING = event(
+  'mission.transitioned',
+  { missionId: 'm1', from: 'active', to: 'verifying', reason: 'verification_requested', verifierId: null },
+  5,
+)
 
 /**
  * The two verification events that must precede a completion.
@@ -265,18 +477,18 @@ const RESUMED = event('mission.resumed', { missionId: 'm1', from: 'paused', to: 
 const VERIFICATION_REQUESTED = event(
   'mission.verification.requested',
   { missionId: 'm1', verifierId: 'mission.work.verified', runIds: [] },
-  5,
+  6,
 )
 const VERIFICATION_PASSED = event(
   'mission.verification.completed',
   { missionId: 'm1', verifierId: 'mission.work.verified', outcome: 'passed', reason: 'verification_passed' },
-  6,
+  7,
 )
 
 const COMPLETED = event(
   'mission.completed',
-  { missionId: 'm1', from: 'active', to: 'completed', verifierId: 'mission.work.verified' },
-  5,
+  { missionId: 'm1', from: 'verifying', to: 'completed', verifierId: 'mission.work.verified' },
+  8,
 )
 const CANCELLED = event('mission.cancelled', { missionId: 'm1', from: 'active', to: 'cancelled', reason: 'owner' }, 5)
 
@@ -287,10 +499,12 @@ describe('the fold', () => {
     state = reduceMissionState(state, ACTIVATED)
     expect(state.missions.get('m1')?.status).toBe('active')
     state = reduceMissionState(state, PAUSED)
-    expect(state.missions.get('m1')?.status).toBe('paused')
-    state = reduceMissionState(state, RESUMED)
+    expect(state.missions.get('m1')?.status).toBe('stopped')
+    state = reduceMissionState(state, RESUMED_ACTIVE)
     expect(state.missions.get('m1')?.status).toBe('active')
-    // Asked, answered, and only then concluded.
+    // Checking, then asked, then answered, and only then concluded.
+    state = reduceMissionState(state, VERIFYING)
+    expect(state.missions.get('m1')?.status).toBe('verifying')
     state = reduceMissionState(state, VERIFICATION_REQUESTED)
     state = reduceMissionState(state, VERIFICATION_PASSED)
     state = reduceMissionState(state, COMPLETED)
@@ -298,12 +512,29 @@ describe('the fold', () => {
     expect(state.missions.get('m1')?.verification?.state).toBe('passed')
   })
 
+  it('replays the autonomous resume as ready, not running', () => {
+    // The other half of the pair. Same origin, same event name, different destination — and
+    // a journal that cannot tell them apart could not answer "did it ever start working
+    // again, or was it only reopened?".
+    let state = reduceMissionState(initialMissionState(), CREATED)
+    state = reduceMissionState(state, ACTIVATED)
+    state = reduceMissionState(state, PAUSED)
+    state = reduceMissionState(state, RESUMED_READY)
+    expect(state.missions.get('m1')?.status).toBe('ready')
+    // And from `ready` it cannot reach `completed` without running and verifying first.
+    state = reduceMissionState(state, event('mission.completed', { missionId: 'm1', from: 'ready', to: 'completed', verifierId: 'v' }, 5))
+    expect(state.missions.get('m1')?.status).toBe('ready')
+  })
+
   it('refuses a completed claim with no verification behind it', () => {
-    // The sharpest forgery available, because `active → completed` is a *legal* edge
-    // and the transition table cannot catch it. Three hand-written lines — created,
-    // activated, completed — would otherwise fold into a Mission that reports itself
-    // achieved with nothing having established anything, which is the fabricated
-    // outcome the Red Team gauntlet calls zero-tolerance.
+    // The sharpest forgery available. Three hand-written lines — created, activated,
+    // completed — would otherwise fold into a Mission that reports itself achieved with
+    // nothing having established anything, which is the fabricated outcome the Red Team
+    // gauntlet calls zero-tolerance.
+    //
+    // Phase 47 adds a second, independent guard: `verifying → completed` is the only
+    // edge, so the journal must also claim verification *began*. The verification-record
+    // check below is still the load-bearing one, because it names a verifier.
     let state = reduceMissionState(initialMissionState(), CREATED)
     state = reduceMissionState(state, ACTIVATED)
     state = reduceMissionState(state, COMPLETED)
@@ -311,20 +542,35 @@ describe('the fold', () => {
     expect(state.missions.get('m1')?.verification).toBeNull()
   })
 
+  it('refuses a completed claim that skipped the verifying state', () => {
+    // Same forgery, with the new state *acknowledged* — a journal that claims checking
+    // happened but never wrote the `verifying` transition. The transition table is what
+    // catches this one, which is why `verifying` is the only edge.
+    let state = reduceMissionState(initialMissionState(), CREATED)
+    state = reduceMissionState(state, ACTIVATED)
+    state = reduceMissionState(state, VERIFICATION_REQUESTED)
+    state = reduceMissionState(state, VERIFICATION_PASSED)
+    state = reduceMissionState(state, COMPLETED)
+    expect(state.missions.get('m1')?.status).toBe('active')
+  })
+
   it('refuses a completed claim naming a verifier that never passed', () => {
     // The verifier id has to be the one that actually answered, or a journal could
     // borrow a passing verifier's name from another Mission's history.
     let state = reduceMissionState(initialMissionState(), CREATED)
     state = reduceMissionState(state, ACTIVATED)
+    state = reduceMissionState(state, VERIFYING)
     state = reduceMissionState(state, VERIFICATION_REQUESTED)
     state = reduceMissionState(state, VERIFICATION_PASSED)
     const borrowed = event(
       'mission.completed',
-      { missionId: 'm1', from: 'active', to: 'completed', verifierId: 'mission.something.else' },
+      { missionId: 'm1', from: 'verifying', to: 'completed', verifierId: 'mission.something.else' },
       7,
     )
     state = reduceMissionState(state, borrowed)
-    expect(state.missions.get('m1')?.status).toBe('active')
+    // Stays verifying: the Mission is still checking, and a completion naming a
+    // verifier that never passed does not end that.
+    expect(state.missions.get('m1')?.status).toBe('verifying')
   })
 
   it('refuses a completed claim whose verification did not pass', () => {
@@ -332,6 +578,7 @@ describe('the fold', () => {
     // however confident the surrounding text is.
     let state = reduceMissionState(initialMissionState(), CREATED)
     state = reduceMissionState(state, ACTIVATED)
+    state = reduceMissionState(state, VERIFYING)
     state = reduceMissionState(state, VERIFICATION_REQUESTED)
     const notEstablished = event(
       'mission.verification.completed',
@@ -340,21 +587,25 @@ describe('the fold', () => {
     )
     state = reduceMissionState(state, notEstablished)
     state = reduceMissionState(state, COMPLETED)
-    expect(state.missions.get('m1')?.status).toBe('active')
+    expect(state.missions.get('m1')?.status).toBe('verifying')
   })
 
   it('refuses a completed claim with no verifier named at all', () => {
+    // A completion with no verifier named cannot be corroborated against the
+    // verification record, so it is refused � and the Mission stays verifying because
+    // the question is still open.
     let state = reduceMissionState(initialMissionState(), CREATED)
     state = reduceMissionState(state, ACTIVATED)
+    state = reduceMissionState(state, VERIFYING)
     state = reduceMissionState(state, VERIFICATION_REQUESTED)
     state = reduceMissionState(state, VERIFICATION_PASSED)
     const anonymous = event(
       'mission.completed',
-      { missionId: 'm1', from: 'active', to: 'completed', verifierId: null },
+      { missionId: 'm1', from: 'verifying', to: 'completed', verifierId: null },
       7,
     )
     state = reduceMissionState(state, anonymous)
-    expect(state.missions.get('m1')?.status).toBe('active')
+    expect(state.missions.get('m1')?.status).toBe('verifying')
   })
 
   it('refuses an impossible transition in a hand-written journal', () => {
@@ -374,6 +625,7 @@ describe('the fold', () => {
     let state = reduceMissionState(initialMissionState(), CREATED)
     state = reduceMissionState(state, ACTIVATED)
     state = reduceMissionState(state, VERIFICATION_REQUESTED)
+    state = reduceMissionState(state, VERIFYING)
     state = reduceMissionState(state, VERIFICATION_PASSED)
     state = reduceMissionState(state, COMPLETED)
     state = reduceMissionState(state, CANCELLED)

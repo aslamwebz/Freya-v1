@@ -84,7 +84,7 @@ describe('the admission is bounded metadata', () => {
 
 describe('isReportableMissionStatus', () => {
   it('accepts every status in the closed table', () => {
-    for (const status of ['draft', 'active', 'paused', 'completed', 'failed', 'cancelled'] as const) {
+    for (const status of ['draft', 'active', 'stopped', 'completed', 'failed', 'cancelled'] as const) {
       expect(isReportableMissionStatus(status)).toBe(true)
     }
   })
@@ -129,14 +129,14 @@ describe('lifecycle transitions', () => {
     const first = adapter.sync(report('m-1', 'active'), store, T0)
     expect(first.operation).toBe('admitted')
 
-    const second = adapter.sync(report('m-1', 'paused'), store, T0)
+    const second = adapter.sync(report('m-1', 'stopped'), store, T0)
     expect(second.operation).toBe('repointed')
     if (second.operation !== 'repointed') throw new Error('expected repointed')
 
     const items = store.list(T0)
     expect(items).toHaveLength(1)
     expect(items[0]?.contextId).toBe(second.contextId)
-    expect(items[0]?.label).toBe('paused')
+    expect(items[0]?.label).toBe('stopped')
 
     const tombstones = store.tombstones(T0)
     expect(tombstones).toHaveLength(1)
@@ -177,9 +177,9 @@ describe('lifecycle transitions', () => {
     adapter.sync(report('m-1', 'active'), store, T0)
     expect(store.list(T0)).toHaveLength(1)
 
-    adapter.sync(report('m-1', 'paused'), store, T0)
+    adapter.sync(report('m-1', 'stopped'), store, T0)
     expect(store.list(T0)).toHaveLength(1)
-    expect(store.list(T0)[0]?.label).toBe('paused')
+    expect(store.list(T0)[0]?.label).toBe('stopped')
 
     adapter.sync(report('m-1', 'active'), store, T0)
     expect(store.list(T0)).toHaveLength(1)
@@ -301,7 +301,7 @@ describe('determinism', () => {
       const adapter = new MissionContextAdapter()
       return [
         adapter.sync(report('m-1', 'active'), store, T0),
-        adapter.sync(report('m-1', 'paused'), store, T0),
+        adapter.sync(report('m-1', 'stopped'), store, T0),
         adapter.sync(report('m-2', 'active'), store, T0),
         adapter.sync(null, store, T0),
       ].map((r) => r.operation)
@@ -316,7 +316,7 @@ describe('determinism', () => {
       missionContextContent(report('m-1', 'active')),
     )
     expect(missionContextContent(report('m-1', 'active'))).not.toBe(
-      missionContextContent(report('m-1', 'paused')),
+      missionContextContent(report('m-1', 'stopped')),
     )
   })
 })

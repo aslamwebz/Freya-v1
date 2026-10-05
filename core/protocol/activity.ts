@@ -82,6 +82,28 @@ export type ActivityKind =
   | 'mission.verification.requested'
   | 'mission.verification.completed'
   | 'mission.limit.exceeded'
+  // Mission autonomy (Phase 47). Half of the sixteen new events earn a row, for the
+  // same reason the eleven above do: each is a fact a person would want to read as news —
+  // a Mission is stuck, a step is waiting on a person, a correction was applied or could
+  // not be, a restart left something unknown — and each would otherwise render as its bare
+  // event type, which is exactly the flattening these rows exist to prevent.
+  //
+  // The other nine deliberately earn none: a lifecycle edge, a step changing status,
+  // evidence accruing, a wake being armed or firing, a budget being charged, a
+  // continuation being chosen and a plan being committed are bookkeeping at a granularity
+  // that would bury the feed. The Mission board carries all of them, in place, on the
+  // Mission they belong to.
+  //
+  // Note what is **not** here: no "a Mission approval was granted/denied/expired" row.
+  // Those decisions belong to Work and are already on this feed, from
+  // `work.approval.approved` and friends. A Mission row for them would be the same fact
+  // twice — and the second copy is the one nothing enforces.
+  | 'mission.blocked'
+  | 'mission.approval.requested'
+  | 'mission.intent.corrected'
+  | 'mission.intent.ambiguous'
+  | 'mission.step.interrupted'
+  | 'mission.budget.exceeded'
   // Workforce. Only the facts a person would want to read as news are named: a claim
   // that was refused and an agent that had to be reconciled are events; the sixteen that
   // describe a team gaining a member are not.
@@ -687,6 +709,142 @@ export function describeActivity(event: {
         text: `Mission ceiling reached: ${text(event.payload.limit, 'unknown')}.`,
         tone: 'warn',
       }
+
+    /* ------------------------------------------ mission autonomy (Phase 47) */
+
+    // Eight of the sixteen new events earn a row and eight deliberately do not, and the
+    // split is drawn by the question the eleven rows above were written for: would a
+    // person want to read this as news?
+    //
+    // Yes, and named: a Mission is stuck and a person is being asked, a person answered,
+    // an owner corrected what was being looked for (or said something too vague to
+    // correct), a restart left an external effect unknown, a ceiling was hit.
+    //
+    // No, and silent: `mission.transitioned`, `mission.plan.committed`,
+    // `mission.step.transitioned`, `mission.evidence.recorded`,
+    // `mission.wake.scheduled`, `mission.wake.fired`, `mission.continuation.decided`
+    // and `mission.budget.spent`. These are the loop keeping its own books: a plan being
+    // committed, a step moving to running, evidence arriving, a wake being armed, a
+    // continuation being chosen. All of it is on the Mission board, on the Mission it
+    // belongs to, and a feed that repeated it would be a second copy of the board
+    // competing with the first — which is why returning `null` is spelled here rather
+    // than left to the `default` arm, whose bare `event.type` is the one thing the
+    // Mission rows must never become.
+    //
+    // Every field read below is an id, a count, a closed status or a closed code. There
+    // is no Mission text on any of these payloads to leak, and none is added here: what
+    // the Mission is looking for stays in the encrypted intent store.
+
+    case 'mission.blocker.changed':
+      // Raised and cleared read differently, because they mean different things. A
+      // Mission that is blocked is asking for something; a Mission that just stopped
+      // being blocked has been let go, and saying "blocker raised" for both would make a
+      // recovery read as a fresh failure.
+      return event.payload.raised === true
+        ? {
+            ...base,
+            kind: 'mission.blocked',
+            text: `Mission blocked: ${text(event.payload.code, 'unknown')}. It will not proceed until that clears.`,
+            tone: 'warn',
+          }
+        : {
+            ...base,
+            kind: 'mission.blocked',
+            text: `Mission blocker cleared: ${text(event.payload.code, 'unknown')}.`,
+            tone: 'good',
+          }
+
+    case 'mission.approval.requested':
+      // One row, and it says the thing that is true: a step is waiting on a person, and
+      // nothing has run.
+      //
+      // It does **not** name a capability or a risk. It could not: this event is a pointer
+      // to a Work gate and deliberately carries no facts about it, so there is nothing to
+      // print. Work's own `work.approval.requested` row is the one that says what would
+      // happen — which is correct, because that is the surface the person answers on, and a
+      // second copy here would be a second question.
+      //
+      // `source` is kept because it changes what the row means. `observed` means Guard
+      // demanded a gate the plan did not anticipate, which is a fact about the capability
+      // rather than about the goal — and a person watching a Mission should be able to
+      // tell those apart.
+      return {
+        ...base,
+        kind: 'mission.approval.requested',
+        text:
+          event.payload.source === 'observed'
+            ? 'A Mission step is waiting on an approval Work asked for. Nothing has run yet.'
+            : 'A Mission step is waiting on an approval it asked for. Nothing has run yet.',
+        tone: 'warn',
+      }
+
+    case 'mission.intent.corrected':
+      // The correction the phase is built around, and the row says as much as it can:
+      // which *field names* changed, how much was settled, how much evidence survived. It
+      // cannot say the new value, because the new value is private.
+      return {
+        ...base,
+        kind: 'mission.intent.corrected',
+        text: `A Mission was corrected (${(Array.isArray(event.payload.changedFields) ? event.payload.changedFields.length : 0)} field(s) changed, ${number(event.payload.settledSteps, 0)} step(s) settled, ${number(event.payload.preservedEvidence, 0)} evidence item(s) kept).`,
+        tone: 'neutral',
+      }
+
+    case 'mission.correction.ambiguous':
+      // `ambiguity` is Core's own closed code, which is the only honest thing this row
+      // can carry: what the owner said is private, so the feed can report that it was
+      // not clear enough to apply and nothing changed as a result.
+      return {
+        ...base,
+        kind: 'mission.intent.ambiguous',
+        text: `A Mission correction was too unclear to apply (${text(event.payload.ambiguity, 'unknown')}). Nothing was changed.`,
+        tone: 'warn',
+      }
+
+    case 'mission.step.interrupted':
+      // Stated rather than hidden, for the same reason `work.run.recovered` is: a step
+      // that was mid-effect when the process died is the one thing someone would
+      // otherwise assume finished on its own. `consequential` is what separates "it did
+      // not happen" from "nobody knows".
+      return event.payload.consequential === true
+        ? {
+            ...base,
+            kind: 'mission.step.interrupted',
+            text: 'A Mission step was interrupted by a restart and may have had an effect that is unknown. It was not retried.',
+            tone: 'warn',
+          }
+        : {
+            ...base,
+            kind: 'mission.step.interrupted',
+            text: 'A Mission step was interrupted by a restart. It had no external effect and was not retried.',
+            tone: 'neutral',
+          }
+
+    case 'mission.budget.exceeded':
+      // A *Mission* budget rather than a Work ceiling, and the wording keeps the two
+      // apart: this Mission is out of room, whatever else is still running.
+      return {
+        ...base,
+        kind: 'mission.budget.exceeded',
+        text: `Mission budget reached: ${text(event.payload.budget, 'unknown')}. It will not spend further.`,
+        tone: 'warn',
+      }
+
+    // The eight that earn no row, spelled out here rather than left to the `default`
+    // arm. That arm is the failure mode this file is built against: it prints
+    // `event.type`, so an unhandled Mission event reaches the feed as the bare string
+    // "mission.transitioned" — a row with no sentence, which is precisely the
+    // flattening the eleven rows above were written to stop. `return null` is how
+    // "not worth an activity row" is stated; an absent case means "nobody has decided
+    // yet", which is a different and worse thing.
+    case 'mission.transitioned':
+    case 'mission.plan.committed':
+    case 'mission.step.transitioned':
+    case 'mission.evidence.recorded':
+    case 'mission.wake.scheduled':
+    case 'mission.wake.fired':
+    case 'mission.continuation.decided':
+    case 'mission.budget.spent':
+      return null
 
     /* ------------------------------------------------------------- workforce */
 

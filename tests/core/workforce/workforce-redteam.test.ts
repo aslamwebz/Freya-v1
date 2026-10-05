@@ -503,13 +503,25 @@ describe('attack 4: cross-worker context leakage', () => {
 
     const mission = payloadOf(events, 'mission.created')
     expect(mission).not.toBeNull()
+    // Phase 47 added three fields to `mission.created`, and none of them is a word:
+    // `budget` is nine integer ceilings, `priority` is a closed enum, and
+    // `requestedQuantity` is a count. Progress has to be computable, and a percentage
+    // invented from a denominator Freya chose would be worse than a count.
+    //
+    // Still no title, no intent, no success criterion. The private text is in the
+    // encrypted store and nowhere else.
     expect(Object.keys(mission ?? {}).sort()).toEqual([
+      'budget',
       'createdAt',
       'deadlineAt',
       'limits',
       'missionId',
+      'priority',
+      'requestedQuantity',
       'status',
     ])
+    expect(JSON.stringify(mission)).not.toMatch(/find me another job/i)
+    expect(JSON.stringify(mission)).not.toMatch(/2,000 MRR/i)
   })
 })
 

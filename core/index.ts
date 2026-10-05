@@ -2223,8 +2223,10 @@ class FreyaCore implements Core {
         // that was activated must not be left recorded as active after the Core
         // that activated it has gone.
         await this.activation?.shutdown(`core stopping: ${reason}`)
-        // A microphone must not outlive the Core that opened it.
-        await this.voiceService?.abandon('the application is shutting down')
+        // A microphone must not outlive the Core that opened it, and neither must
+        // a queued utterance: the device is released, any transcription is
+        // aborted and playback is cut before shutdown records anything.
+        await this.voiceService?.onStopAll(`core stopping: ${reason}`)
         this.gateway?.cancelAll(`core stopping: ${reason}`)
         await this.gateway?.drain(SHUTDOWN_DRAIN_MS)
         await this.fabric.append('core.stopping', { reason }, { actor: 'system' })
@@ -5461,6 +5463,9 @@ class FreyaCore implements Core {
           // the ones that can honestly run again do.
           await this.activation?.resume(this.runtimeFacts())
           this.publishRuntime()
+          // Voice resumes its state machine without reopening the microphone.
+          // STOP ALL clears hands-free arming; clearing the latch must not restore it.
+          this.voiceService?.onResume()
           // As above: a resume has to reach the surfaces that report it, or Chat
           // stays visibly locked after Core has reopened.
           this.conversations?.publish()

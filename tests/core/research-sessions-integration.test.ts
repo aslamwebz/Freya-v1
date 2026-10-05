@@ -75,9 +75,14 @@ class PagedProvider implements SearchProvider {
   }
 }
 
+type ResearchTestOutcome = NonNullable<CoreCommandResult['research']> & {
+  session: NonNullable<NonNullable<CoreCommandResult['research']>['session']>
+  sessions: NonNullable<NonNullable<CoreCommandResult['research']>['sessions']>
+}
+
 function command(name: string, payload?: unknown, requestId = name) {
   return core!.handleCommand({ command: name, requestId, payload } as never) as Promise<
-    CoreCommandResult & { research: NonNullable<CoreCommandResult['research']> }
+    CoreCommandResult & { research: ResearchTestOutcome }
   >
 }
 

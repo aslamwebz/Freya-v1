@@ -1,5 +1,5 @@
 import type { RunRecord, RunStatus, StepRecord, StepStatus } from '../work/types'
-import { countPlanSteps, evidenceCounts } from './engine'
+import { countPlanSteps, evidenceCounts } from './metrics'
 import { isTerminalMissionStepStatus } from './autonomy/types'
 import type {
   MissionBudgetRemaining,

@@ -7,12 +7,11 @@ import { chargeBudget } from './autonomy/authority'
 import type {
   MissionBudget,
   MissionDecision,
-  MissionEvidenceCounts,
-  MissionEvidenceRecord,
   MissionIntentShape,
   MissionPriority,
   MissionStepRecord,
 } from './autonomy/types'
+import { countPlanSteps, evidenceCounts } from './metrics'
 import { countChildren, liveChildCount, missionProjection, summarise, type WorkTruthPort } from './projection'
 import { reduceMissionState, initialMissionState } from './state'
 import type { MissionStore } from './store'
@@ -39,7 +38,6 @@ import {
   type MissionVerificationContext,
   type MissionVerifier,
 } from './types'
-import type { MissionStepCounts } from './autonomy/types'
 
 /**
  * THE MISSION ENGINE.
@@ -1816,104 +1814,6 @@ function describeIntent(shape: MissionIntentShape): string {
 }
 
 /* ----------------------------------------------------------------- derived */
-
-/**
- * Split a Mission's evidence three ways, as of `now`.
- *
- * Three, not two, and the split is the requirement rather than a detail:
- *
- * - `observed` — fresh, independently observed results. The **only** kind that counts
- *   toward progress or toward completion.
- * - `reported` — what a capability *said* it found. Displayed, stored, and worth
- *   nothing as evidence.
- * - `expired` — observed results whose `expiresAt` has passed. Counted in neither of the
- *   other two, so a Mission whose evidence has gone stale reports no progress rather
- *   than stale progress.
- *
- * `uncertain` counts blocked steps, because a step interrupted mid-action may or may
- * not have taken effect and the honest position is that nobody knows.
- *
- * Pure, and `now` is a parameter rather than a read, so a projection is a function of
- * (state, clock) and a test can put an item's expiry anywhere it likes.
- */
-export function evidenceCounts(
-  evidence: readonly MissionEvidenceRecord[],
-  now: Date,
-): MissionEvidenceCounts & { uncertain: number } {
-  const at = now.getTime()
-  let observed = 0
-  let reported = 0
-  let expired = 0
-  let total = 0
-  for (const item of evidence) {
-    total += 1
-    const stale = item.expiresAt !== null && Date.parse(item.expiresAt) <= at
-    if (item.origin === 'reported') {
-      reported += 1
-      continue
-    }
-    if (item.kind !== 'result') continue
-    if (stale) expired += 1
-    else observed += 1
-  }
-  return { total, observed, reported, expired, uncertain: 0 }
-}
-
-/**
- * Count a plan's steps by status.
- *
- * Nine counters, summing to `total`, and **no percentage** — the same refusal as the
- * Mission board's: a plan can be revised and decomposed again, so a fraction of a plan
- * is arithmetic about a denominator Freya chose.
- *
- * Unrecognised statuses are counted in `total` and nowhere else, so a step from a
- * newer build still adds up rather than making the counts disagree with the plan.
- */
-export function countPlanSteps(steps: readonly MissionStepRecord[]): MissionStepCounts {
-  // Built as a mutable tally and frozen at the end rather than annotated as a
-  // `MissionStepCounts`, because the annotation would make every `+= 1` a write to a
-  // `readonly` field. The freeze restores the guarantee at the boundary.
-  const counts = {
-    total: steps.length,
-    pending: 0,
-    blocked: 0,
-    delegated: 0,
-    running: 0,
-    verified: 0,
-    failed: 0,
-    cancelled: 0,
-    skipped: 0,
-  }
-  for (const step of steps) {
-    switch (step.status) {
-      case 'pending':
-        counts.pending += 1
-        break
-      case 'blocked':
-        counts.blocked += 1
-        break
-      case 'delegated':
-        counts.delegated += 1
-        break
-      case 'running':
-        counts.running += 1
-        break
-      case 'verified':
-        counts.verified += 1
-        break
-      case 'failed':
-        counts.failed += 1
-        break
-      case 'cancelled':
-        counts.cancelled += 1
-        break
-      case 'skipped':
-        counts.skipped += 1
-        break
-    }
-  }
-  return Object.freeze(counts)
-}
 
 /** Re-exported so Core can name the limits it forwards without reaching into types. */
 export { DEFAULT_MISSION_LIMITS }

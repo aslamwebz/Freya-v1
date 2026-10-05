@@ -10,6 +10,7 @@ import type { AttentionProjection } from '../../core/protocol/attention'
 import type { WorkProjection } from '../../core/work/projection'
 import type { PersonalityProjection } from '../../core/protocol/personality'
 import type { VoiceProjection } from '../../core/protocol/conversation'
+import { absentVoiceProjection } from './voice/fixture'
 
 function coreStatus(overrides: Partial<CoreStatus> = {}): CoreStatus {
   return {
@@ -124,16 +125,7 @@ function personalityProjection(overrides: Partial<PersonalityProjection> = {}): 
 }
 
 function voiceProjection(overrides: Partial<VoiceProjection> = {}): VoiceProjection {
-  return {
-    transcription: { available: false, engine: null, detail: 'no engine' },
-    synthesis: { available: false, engine: null, detail: 'no engine' },
-    capturing: false,
-    sessionId: null,
-    limits: { maxDurationMs: 30_000, maxAudioBytes: 4_194_304, format: 'pcm-s16le' },
-    localOnly: true,
-    faults: [],
-    ...overrides,
-  }
+  return { ...absentVoiceProjection(), ...overrides }
 }
 
 function input(overrides: Partial<PresenceInput> = {}): PresenceInput {

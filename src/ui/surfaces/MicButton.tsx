@@ -1,36 +1,32 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Icon } from '../icons'
-import { shellStore } from '../store'
-import { conversationMirror } from '../../platform/conversationClient'
-import { micLevel, subscribeMicLevel } from '../../presence/micLevel'
 import { voiceEnvelope } from '../../presence/voiceEnvelope'
-import { MicrophoneError, openMicrophone, type MicCapture } from './microphone'
+import { micLevel, subscribeMicLevel } from '../../presence/micLevel'
 import type { VoiceProjection } from '../../../core/protocol/conversation'
+import { voiceMirror } from '../../platform/voiceClient'
+import { VoiceRuntime } from '../../voice/runtime'
 
 /**
  * The microphone control.
  *
- * Press to record, release to stop — and that is the whole interaction. There is
- * no always-on mode, no wake word, and no background capture: the device is
- * opened by this press and released by the next one, on every path including
- * errors and unmount.
+ * Press to record, release to stop — and that is the whole interaction. There is no
+ * always-on mode, no wake word, and no background capture: the device is opened by
+ * this press and released by the next one, on every path including errors and
+ * unmount.
+ *
+ * ## What it does not do any more
+ *
+ * Phase 3 had this component drive the device itself and ask Core only afterwards.
+ * Phase 45 inverts that: the runtime asks Core *first* and opens the microphone
+ * second. The host's permission gate reads Core's projection, so a capture the
+ * trusted half has not agreed to cannot obtain a device even if this file asked
+ * for one. Nothing about the interaction changed; the order of two calls did.
  *
  * ## What a recording becomes
  *
- * Text in the composer. **Not** a turn, and not a model call.
- *
- * That separation is the important design decision in the whole voice section. A
- * transcript is inserted where the user can read it, and they press Send like
- * they would for anything they typed — because it *is* something they typed, and
- * speech recognition and thinking are different systems with different costs and
- * different privacy. An automatic send would make a microphone press a purchase.
- *
- * ## When there is no engine
- *
- * On most machines there is no local speech engine, and the button says so before
- * it is pressed. The honest outcome is "recording discarded", never a fallback to
- * a cloud service — there is no cloud service, and there is no code path that
- * could reach one.
+ * Text in the composer. **Not** a turn, unless the owner turned auto-submit on
+ * before speaking — and then it goes through the same canonical conversation path
+ * typed text uses, with one model call rather than two.
  */
 export function MicButton({
   voice,
@@ -42,88 +38,59 @@ export function MicButton({
   const [capturing, setCapturing] = useState(false)
   const [detail, setDetail] = useState<string | null>(null)
   const [level, setLevel] = useState(0)
-  const capture = useRef<MicCapture | null>(null)
-  const session = useRef<string | null>(null)
-  const mirror = conversationMirror()
-
-  // Core's own bounds, so the UI cannot offer a capture the Core would refuse.
-  // The sample rate is the one the capture format is defined at; it is not a
-  // user-facing setting, so it is not part of the projection.
-  const limits = {
-    maxDurationMs: voice?.limits.maxDurationMs ?? 30_000,
-    maxBytes: voice?.limits.maxAudioBytes ?? 4 * 1024 * 1024,
-    sampleRate: 16_000,
-  }
-
+  const mirror = useMemo(() => voiceMirror(), [])
+  const runtime = useMemo(
+    () =>
+      new VoiceRuntime(mirror, {
+        onTranscript: (text, turnId) => {
+          // A transcript Core already submitted is not offered to the composer
+          // again; showing it there would invite a second send of the same sentence.
+          if (turnId !== null) return
+          onTranscript(text)
+        },
+        onNotice: (message) => setDetail(message.endsWith('.') ? message : `${message}.`),
+      }),
+    [mirror, onTranscript],
+  )
   // Presence reads the level through the envelope, not through React. This
   // subscription is only so the button can show a meter, and it is throttled by
   // the envelope's own smoothing rather than by a re-render per audio frame.
   useEffect(() => subscribeMicLevel(setLevel), [])
 
-  const release = useCallback(async (cancelled: boolean) => {
-    const active = capture.current
-    const sessionId = session.current
-    capture.current = null
-    session.current = null
-    setCapturing(false)
-    voiceEnvelope.setRealLevel(null)
-    shellStore.dispatch({ type: 'voice.toggle', listening: false })
+  // `capturing` follows Core, not the press. A window that set it from its own
+  // pointer events would show a live microphone for the frame between the press
+  // and Core's refusal.
+  useEffect(() => mirror.subscribe((projection) => setCapturing(projection?.capturing === true)), [mirror])
 
-    if (!active || !sessionId) return
-    const { audio, durationMs } = await active.stop(cancelled)
-    const outcome = await mirror.voiceCaptureEnd({ sessionId, audio, durationMs, cancelled })
-    // The status line has to reflect the session that actually ended, not the one
-    // the window assumed. Core is asked rather than guessed at.
-    void mirror.refreshVoice()
-    if (outcome.text) {
-      onTranscript(outcome.text)
-      setDetail(null)
-    } else {
-      setDetail(outcome.detail ?? outcome.reason ?? 'The recording was discarded.')
-    }
-  }, [mirror, onTranscript])
-
-  // An unmount mid-press must not leave the device open. The commonest way a
-  // microphone leaks is a window that goes away while a finger is still down.
   useEffect(() => {
+    let disposed = false
+    void mirror.attach().then((dispose) => {
+      if (disposed) dispose()
+    })
     return () => {
-      void capture.current?.abandon()
-      capture.current = null
-      session.current = null
-      voiceEnvelope.setRealLevel(null)
+      disposed = true
+      // An unmount mid-press must not leave the device open. The commonest way a
+      // microphone leaks is a window that goes away while a finger is still down.
+      void runtime.dispose()
     }
-  }, [])
+  }, [mirror, runtime])
 
   const begin = useCallback(async () => {
     if (capturing) return
     setDetail(null)
-    try {
-      // Core first: the host only relaxes the microphone permission once the
-      // trusted half has agreed a capture is running.
-      const started = await mirror.voiceCaptureStart()
-      if (!started.ok || started.sessionId === null) {
-        setDetail(started.reason ?? 'The microphone could not be opened.')
-        return
-      }
-      session.current = started.sessionId
-      void mirror.refreshVoice()
-      capture.current = await openMicrophone(limits)
-      setCapturing(true)
-      voiceEnvelope.setRealLevel(0)
-      shellStore.dispatch({ type: 'voice.toggle', listening: true })
-    } catch (error) {
-      const reason =
-        error instanceof MicrophoneError ? error.message : 'the microphone could not be opened'
-      setDetail(`${reason}.`)
-      // Whatever went wrong, the device is not ours to keep.
-      if (session.current !== null) {
-        await mirror.voiceCaptureCancel()
-        session.current = null
-      }
+    await runtime.press()
+    setCapturing(runtime.listening)
+    if (runtime.listening) voiceEnvelope.setRealLevel(0)
+  }, [capturing, runtime])
+
+  const end = useCallback(
+    async (cancelled: boolean) => {
       setCapturing(false)
       voiceEnvelope.setRealLevel(null)
-    }
-  }, [capturing, limits, mirror])
+      await runtime.release(cancelled)
+    },
+    [runtime],
+  )
 
   const engineMissing = voice !== null && !voice.transcription.available
 
@@ -138,9 +105,9 @@ export function MicButton({
           event.preventDefault()
           void begin()
         }}
-        onPointerUp={() => void release(false)}
+        onPointerUp={() => void end(false)}
         onPointerLeave={() => {
-          if (capturing) void release(false)
+          if (capturing) void end(false)
         }}
         onKeyDown={(event) => {
           if (event.key === ' ' || event.key === 'Enter') {
@@ -149,17 +116,18 @@ export function MicButton({
           }
         }}
         onKeyUp={(event) => {
-          if (event.key === ' ' || event.key === 'Enter') void release(false)
+          if (event.key === ' ' || event.key === 'Enter') void end(false)
         }}
         onContextMenu={(event) => event.preventDefault()}
         aria-pressed={capturing}
         aria-label={capturing ? 'Release to stop recording' : 'Hold to record'}
         title={
           engineMissing
-            ? 'No local speech engine is configured — recording is discarded, never uploaded'
-            : 'Hold to record. Local only. You review the transcript, then send it.'
+            ? `${voice.transcription.detail} Nothing is uploaded.`
+            : 'Hold to record. Audio never leaves this machine.'
         }
         data-capturing={capturing || undefined}
+        data-voice-state={voice?.state}
         data-level={capturing ? Math.round(micLevel() * 100) / 100 : undefined}
         data-level-state={capturing ? String(Math.round(level * 4)) : undefined}
       >

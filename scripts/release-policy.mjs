@@ -27,18 +27,21 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // CI measures the reconciled main.cjs at 2,237,259 bytes. Keep only narrow,
   // explicit headroom over that measured artifact rather than absorbing future growth.
   mainBytes: 2_250_000,
-  // Phase 44 adds connector projection/commands to the preload bridge; the
-  // completed branch measured ~129KB, so retain narrow explained headroom.
-  preloadBytes: 132_000,
+  // Phase 44 adds connector projection/commands to the preload bridge, and
+  // Phase 45 adds the bounded Voice command/capability/playback channel. The
+  // completed Voice branch measured the combined preload near this ceiling.
+  preloadBytes: 135_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,
   // Phase 19 added the ui-v2 shell: a finished design with ~1.9MB of webp imagery and
   // the three.js presence stage. The old 1.5MB ceiling predated that surface, so the
   // budget tracks the shipped design with headroom for its next iteration rather than
   // forcing the concept art out to satisfy a number that never accounted for it.
-  // The App Mode / persistent-board merge pushed the measured total to ~3.57MB, so the
-  // bound is raised to keep headroom over the shipped design rather than trimming it.
-  rendererTotalBytes: 3_650_000,
+  // The App Mode / persistent-board merge pushed the measured total to ~3.57MB.
+  // Phase 45 adds the voice runtime, platform speech adapter, recognition feature
+  // detection and settings surface across both renderer entry paths; its completed
+  // branch measured the resulting ceiling at ~3.70MB.
+  rendererTotalBytes: 3_700_000,
 })
 
 export function inspectLockfile(pkg, lock) {

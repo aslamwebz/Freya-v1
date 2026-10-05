@@ -5,6 +5,8 @@ import type {
 } from '../../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../../core/protocol/activity'
 import type { ConversationProjection, VoiceProjection } from '../../core/protocol/conversation'
+import type { VoiceTranscriptFragment } from '../../core/voice/types'
+import type { VoiceOutputInstruction } from '../../electron/voiceHost'
 import type { BrainProjection } from '../../core/brain/brain'
 import type { WorkProjection } from '../../core/work/projection'
 import type { MissionProjection } from '../../core/missions/types'
@@ -142,6 +144,37 @@ export interface FreyaHostBridge {
   coreConversation(): Promise<ConversationProjection | null>
   onCoreConversation(handler: (projection: ConversationProjection) => void): () => void
   coreVoice(): Promise<VoiceProjection | null>
+  onCoreVoice(handler: (projection: VoiceProjection) => void): () => void
+
+  /**
+   * Transcript fragments, interim and final.
+   *
+   * Their own channel from the projection because the two have opposite trust. An
+   * interim fragment is a guess an engine is still revising, and there is no
+   * command on this bridge that would submit one — the conversation path takes
+   * text a person confirmed.
+   */
+  onCoreVoiceTranscript(handler: (fragment: VoiceTranscriptFragment) => void): () => void
+
+  /**
+   * Playback instructions, and the capability report that goes the other way.
+   *
+   * `onVoiceOutput` is how the host's speech adapter reaches the window: Core
+   * decided which stored answer may be spoken, the host read the words out of
+   * Core's own answer, and the window plays them. There is deliberately no
+   * function here that sends *text* to be spoken — a window cannot put a sentence
+   * in Freya's mouth.
+   *
+   * `reportVoiceCapabilities` is the only other direction, and it is a report of
+   * what the platform's speech engine turned out to be. "I have none" is as
+   * welcome as "I do"; both produce an honest projection.
+   */
+  onVoiceOutput(handler: (instruction: VoiceOutputInstruction) => void): () => void
+  reportVoiceCapabilities(report: {
+    available: boolean
+    voices: readonly { voiceId: string; label: string; language: string | null; isDefault: boolean | null }[]
+    detail: string
+  }): void
 
   /**
    * The Brain projection.

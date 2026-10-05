@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
-import { Glyph } from '../../ui-v2/primitives/Glyph'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { BrainState } from './state'
 import { LiveOrb } from './LiveOrb'
 import './stargate-hub.css'
@@ -16,22 +15,20 @@ interface ComponentCard {
   readonly label: string
   readonly description: string
   readonly icon: string
-  readonly edge: 'left' | 'right' | 'top' | 'bottom'
+  readonly angle: number
 }
 
 const COMPONENTS: readonly ComponentCard[] = [
-  { id: 'home', nav: 'home', label: 'Home', description: 'Central overview', icon: 'home', edge: 'bottom' },
-  { id: 'chat', nav: 'chat', label: 'Chat', description: 'Talk with Freya', icon: 'chat', edge: 'right' },
-  { id: 'mind', nav: 'mind', label: 'Mind', description: 'Cognition & reasoning', icon: 'mind', edge: 'left' },
-  { id: 'mission', nav: 'focus', label: 'Mission', description: 'Goals & direction', icon: 'mission', edge: 'right' },
-  { id: 'focus', nav: 'focus', label: 'Focus', description: 'Attention & deep work', icon: 'focus', edge: 'left' },
-  { id: 'relay', nav: 'relay', label: 'Relay', description: 'Connections & signals', icon: 'relay', edge: 'right' },
-  { id: 'people', nav: 'people', label: 'People', description: 'Relationships & context', icon: 'people', edge: 'left' },
-  { id: 'foundry', nav: 'create', label: 'Foundry', description: 'Build & create', icon: 'forge', edge: 'right' },
-  { id: 'workforce', nav: 'workforce', label: 'Workforce', description: 'Agents & automation', icon: 'workforce', edge: 'left' },
-  { id: 'life', nav: 'life', label: 'Life', description: 'Growth & balance', icon: 'life', edge: 'top' },
-  { id: 'world', nav: 'world', label: 'World', description: 'Real-time context', icon: 'world', edge: 'top' },
-  { id: 'memory', nav: 'memory', label: 'Memory', description: 'Durable knowledge', icon: 'memory', edge: 'top' },
+  { id: 'mind', nav: 'mind', label: 'Mind', description: 'Cognition & reasoning', icon: 'mind', angle: 0 },
+  { id: 'focus', nav: 'focus', label: 'Focus', description: 'Attention & deep work', icon: 'focus', angle: 36 },
+  { id: 'people', nav: 'people', label: 'People', description: 'Relationships & context', icon: 'people', angle: 72 },
+  { id: 'workforce', nav: 'workforce', label: 'Workforce', description: 'Agents & automation', icon: 'workforce', angle: 108 },
+  { id: 'world', nav: 'world', label: 'World', description: 'Real-time context', icon: 'world', angle: 144 },
+  { id: 'memory', nav: 'memory', label: 'Memory', description: 'Durable knowledge', icon: 'memory', angle: 180 },
+  { id: 'life', nav: 'life', label: 'Life', description: 'Growth & balance', icon: 'life', angle: 216 },
+  { id: 'foundry', nav: 'create', label: 'Foundry', description: 'Build & create', icon: 'forge', angle: 252 },
+  { id: 'relay', nav: 'relay', label: 'Relay', description: 'Connections & signals', icon: 'relay', angle: 288 },
+  { id: 'mission', nav: 'focus', label: 'Mission', description: 'Goals & direction', icon: 'mission', angle: 324 },
 ]
 
 const HOT_BY_STATE: Record<BrainState, readonly string[]> = {
@@ -40,32 +37,19 @@ const HOT_BY_STATE: Record<BrainState, readonly string[]> = {
   researching: ['mind', 'world', 'memory'],
   delegating: ['workforce', 'relay', 'mission'],
   load: COMPONENTS.map((card) => card.id),
-  success: ['home', 'mission', 'life'],
-  uncertainty: ['home', 'focus', 'relay'],
+  success: ['mission', 'life'],
+  uncertainty: ['focus', 'relay'],
 }
 
-const STRANDS: Readonly<Record<string, string>> = {
-  home: 'M500 174 C500 139 500 120 500 105',
-  chat: 'M362 238 C327 194 302 151 290 121',
-  mind: 'M638 238 C673 194 698 151 710 121',
-  mission: 'M318 318 C280 296 246 282 226 273',
-  focus: 'M682 318 C720 296 754 282 774 273',
-  relay: 'M302 399 C257 405 220 419 197 431',
-  people: 'M698 399 C743 405 780 419 803 431',
-  foundry: 'M338 493 C301 528 273 555 249 579',
-  workforce: 'M662 493 C699 528 727 555 751 579',
-  life: 'M425 552 C405 597 384 622 358 644',
-  world: 'M575 552 C595 597 616 622 642 644',
-  memory: 'M500 568 C500 610 500 638 500 660',
+// Every port lies on a physical fragment, including the lower/upper pairs.
+const PORT_ANGLES: Readonly<Record<string, number>> = {
+  mind: 0, focus: 40, people: 72, workforce: 112, world: 144,
+  memory: 180, life: 205, foundry: 252, relay: 290, mission: 322,
 }
 
 const GATE_SEGMENTS: readonly [number, number][] = [
-  [-84, -36],
-  [-18, 27],
-  [46, 91],
-  [111, 160],
-  [184, 229],
-  [249, 296],
+  [-24, 24], [35, 87], [105, 153],
+  [167, 209], [223, 271], [284, 328],
 ]
 
 const COMPONENT_EVENT = 'freya:component-fire'
@@ -87,8 +71,35 @@ function arcPath(cx: number, cy: number, radius: number, start: number, end: num
   return `M ${first.x.toFixed(2)} ${first.y.toFixed(2)} A ${radius} ${radius} 0 ${span > 180 ? 1 : 0} 0 ${last.x.toFixed(2)} ${last.y.toFixed(2)}`
 }
 
+function sectorPath(cx: number, cy: number, inner: number, outer: number, start: number, end: number): string {
+  const a = polar(cx, cy, outer, start)
+  const b = polar(cx, cy, outer, end)
+  const c = polar(cx, cy, inner, end)
+  const d = polar(cx, cy, inner, start)
+  return `M${a.x} ${a.y} A${outer} ${outer} 0 0 1 ${b.x} ${b.y} L${c.x} ${c.y} A${inner} ${inner} 0 0 0 ${d.x} ${d.y} Z`
+}
+
 export function StargateHub({ state, energy, onNavigate }: Props) {
+  const hubRef = useRef<HTMLElement>(null)
+  const [frame, setFrame] = useState({ width: 1000, height: 760, gate: 470 })
   const [fired, setFired] = useState<readonly string[]>([])
+
+  useLayoutEffect(() => {
+    const hub = hubRef.current
+    if (!hub) return
+    const measure = (): void => {
+      const field = hub.getBoundingClientRect()
+      const gate = hub.querySelector('.sg-gate')?.getBoundingClientRect()
+      if (!gate) return
+      setFrame({ width: field.width, height: field.height, gate: gate.width })
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(hub)
+    hub.querySelectorAll('.sg-gate').forEach((element) => observer.observe(element))
+    window.addEventListener('resize', measure)
+    measure()
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure) }
+  }, [])
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -111,21 +122,36 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
   const hot = useMemo(() => new Set([...HOT_BY_STATE[state], ...fired]), [state, fired])
   const clampedEnergy = Math.max(0, Math.min(1, energy))
 
+  const cx = frame.width / 2
+  const cy = frame.height / 2
+  const outer = Math.max(100, Math.min(cy - 18, cx - 64))
+  const thickness = Math.min(82, Math.max(58, outer * .23))
+  const inner = outer - thickness
+  const strands = Object.fromEntries(COMPONENTS.map((card) => {
+    const portAngle = PORT_ANGLES[card.id] ?? card.angle
+    const start = polar(cx, cy, frame.gate * 224 / 500, portAngle)
+    const control = polar(cx, cy, frame.gate * 224 / 500 + 18, portAngle)
+    const end = polar(cx, cy, inner, card.angle)
+    const approach = polar(cx, cy, inner - 18, card.angle)
+    return [card.id, `M${start.x} ${start.y} C${control.x} ${control.y} ${approach.x} ${approach.y} ${end.x} ${end.y}`]
+ }))
+
   return (
     <section
+      ref={hubRef}
       className="sg-hub"
       data-state={state}
       data-busy={clampedEnergy > .08 || undefined}
       style={{ '--sg-energy': clampedEnergy } as CSSProperties}
       aria-label="Freya containment field"
     >
-      <svg className="sg-strands" viewBox="0 0 1000 760" preserveAspectRatio="none" aria-hidden="true">
+      <svg className="sg-strands" aria-hidden="true">
         <defs>
           <filter id="sg-strand-glow" x="-40%" y="-40%" width="180%" height="180%">
             <feGaussianBlur stdDeviation="5" result="blur" />
             <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
-          <linearGradient id="sg-strand-violet" x1="0" y1="0" x2="1" y2="1">
+          <linearGradient id="sg-strand-signal" x1="0" y1="0" x2="1" y2="1">
             <stop offset="0" stopColor="#9cb8b3" />
             <stop offset=".52" stopColor="#d8ece7" />
             <stop offset="1" stopColor="#8fd8d0" />
@@ -133,9 +159,9 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
         </defs>
         {COMPONENTS.map((card, index) => (
           <g key={card.id} className="sg-strand-group" data-hot={hot.has(card.id) || undefined} style={{ '--sg-delay': `${index * -0.19}s` } as CSSProperties}>
-            <path className="sg-strand-aura" d={STRANDS[card.id]} />
-            <path className="sg-strand-core" d={STRANDS[card.id]} />
-            <path className="sg-strand-pulse" d={STRANDS[card.id]} pathLength="100" />
+            <path className="sg-strand-aura" d={strands[card.id]} />
+            <path className="sg-strand-core" d={strands[card.id]} />
+            <path className="sg-strand-pulse" d={strands[card.id]} pathLength="100" />
           </g>
         ))}
       </svg>
@@ -150,10 +176,10 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
             <stop offset="1" stopColor="#07090a" />
           </linearGradient>
           <linearGradient id="sg-metal-face" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#444744" />
-            <stop offset=".18" stopColor="#252928" />
-            <stop offset=".62" stopColor="#141718" />
-            <stop offset="1" stopColor="#2f302b" />
+            <stop offset="0" stopColor="#a9bfbe" stopOpacity=".36" />
+            <stop offset=".18" stopColor="#63858a" stopOpacity=".25" />
+            <stop offset=".62" stopColor="#1b3440" stopOpacity=".2" />
+            <stop offset="1" stopColor="#94aaa0" stopOpacity=".3" />
           </linearGradient>
           <linearGradient id="sg-edge" x1="0" y1="0" x2="1" y2="1">
             <stop offset="0" stopColor="#8a806d" />
@@ -176,6 +202,18 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
               <path className="sg-gate-body" d={arcPath(250, 250, 201, start + 1.5, end - 1.5)} />
               <path className="sg-gate-rim sg-gate-rim-outer" d={arcPath(250, 250, 224, start + 2, end - 2)} />
               <path className="sg-gate-rim sg-gate-rim-inner" d={arcPath(250, 250, 178, start + 2, end - 2)} />
+              <path className="sg-gate-track" d={arcPath(250, 250, 211, start + 4, end - 4)} />
+              {[start + 6, start + 13, end - 13, end - 6].map((angle) => {
+                const point = polar(250, 250, 197, angle)
+                return <g key={angle} transform={`translate(${point.x} ${point.y}) rotate(${angle})`}>
+                  <path className="sg-gate-engraving" d="M-3 -8H3V-2H-3V5H3 M0 8V12" />
+                  <circle className="sg-gate-bolt" cy="20" r="1.8" />
+                </g>
+              })}
+              {[start + 1, end - 1].map((angle) => {
+                const point = polar(250, 250, 201, angle)
+                return <path key={angle} className="sg-gate-fracture" transform={`translate(${point.x} ${point.y}) rotate(${angle})`} d="M0 -23 3 -15 -2 -7 2 2 -3 13 0 23" />
+              })}
               <g transform={`translate(${marker.x} ${marker.y}) rotate(${mid})`}>
                 <path className="sg-gate-chevron" d="M0 -10 9 7 0 3 -9 7Z" />
                 <circle className="sg-gate-node" cx="0" cy="0" r="3.2" />
@@ -183,32 +221,67 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
             </g>
           )
         })}
+        {COMPONENTS.map((card) => {
+          const port = polar(250, 250, 224, PORT_ANGLES[card.id] ?? card.angle)
+          return <g key={card.id} className="sg-gate-socket" data-hot={hot.has(card.id) || undefined} transform={`translate(${port.x} ${port.y}) rotate(${PORT_ANGLES[card.id]})`}>
+            <path d="M-7 5V-4L-4 -7H4L7 -4V5Z" />
+            <path className="sg-gate-socket-light" d="M-3 -3H3" />
+          </g>
+        })}
       </svg>
 
       <div className="sg-core" aria-label="Freya live core">
         <LiveOrb state={state} energy={energy} />
       </div>
 
-      <div className="sg-card-layer">
-        {COMPONENTS.map((card) => (
-          <button
-            key={card.id}
-            type="button"
-            className={`sg-card sg-card-${card.id}`}
-            data-edge={card.edge}
-            data-hot={hot.has(card.id) || undefined}
+      <svg className="sg-card-layer" aria-label="Component gate" viewBox={`0 0 ${frame.width} ${frame.height}`}>
+        <defs>
+          <linearGradient id="sg-card-glass" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#9ebdbb" stopOpacity=".24" />
+            <stop offset=".45" stopColor="#28424a" stopOpacity=".3" />
+            <stop offset="1" stopColor="#a6bdb0" stopOpacity=".12" />
+          </linearGradient>
+        </defs>
+        {COMPONENTS.map((card, index) => {
+          const start = card.angle - 15
+          const end = card.angle + 15
+          const lower = card.angle > 90 && card.angle < 270
+          const labelRadius = outer - thickness * (lower ? .63 : .43)
+          const labelStart = polar(cx, cy, labelRadius, lower ? end : start)
+          const labelEnd = polar(cx, cy, labelRadius, lower ? start : end)
+          const socket = polar(cx, cy, inner, card.angle)
+          const marker = polar(cx, cy, outer - 9, card.angle)
+          const labelId = `sg-label-${card.id}`
+          return <g key={card.id} className="sg-card" role="button" tabIndex={0}
+            data-hot={hot.has(card.id) || undefined} aria-label={`Open ${card.label}`}
             onClick={() => onNavigate(card.nav)}
-            aria-label={`Open ${card.label}`}
-          >
-            <span className="sg-card-runes" aria-hidden="true">⋮ ⋄ ∴</span>
-            <span className="sg-card-icon"><Glyph name={card.icon} size={21} /></span>
-            <span className="sg-card-copy"><b>{card.label}</b><small>{card.description}</small></span>
-            <span className="sg-card-meter" aria-hidden="true"><i /><i /><i /></span>
-            <span className="sg-card-coupler" aria-hidden="true" />
-            <span className="sg-card-port" aria-hidden="true" />
-          </button>
-        ))}
-      </div>
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onNavigate(card.nav) }
+            }}>
+            <title>{card.description}</title>
+            <path className="sg-card-face" d={sectorPath(cx, cy, inner, outer, start, end)} />
+            <path className="sg-card-outer-rim" d={arcPath(cx, cy, outer - 4, start + 1, end - 1)} />
+            <path className="sg-card-inner-rim" d={arcPath(cx, cy, inner + 5, start + 1, end - 1)} />
+            <path className="sg-card-track" d={arcPath(cx, cy, outer - 11, start + 2, end - 2)} />
+            <path id={labelId} className="sg-label-guide" d={`M${labelStart.x} ${labelStart.y} A${labelRadius} ${labelRadius} 0 0 ${lower ? 0 : 1} ${labelEnd.x} ${labelEnd.y}`} />
+            <text className="sg-card-label" style={{ fontSize: Math.max(10, Math.min(14, outer * .047)) }}>
+              <textPath href={`#${labelId}`} startOffset="50%" textAnchor="middle">{card.label.toUpperCase()}</textPath>
+            </text>
+            <g className="sg-card-chevron" transform={`translate(${marker.x} ${marker.y}) rotate(${card.angle})`}>
+              <path d="M-7 -3 0 4 7 -3M-4 -4 0 0 4 -4" />
+            </g>
+            <g className="sg-card-socket" transform={`translate(${socket.x} ${socket.y}) rotate(${card.angle})`}>
+              <path d="M-7 -5V4H7V-5" /><path className="sg-card-contact" d="M-3 0H3" />
+            </g>
+            {[start + 3, end - 3].map((angle) => {
+              const rune = polar(cx, cy, outer - thickness / 2, angle)
+              return <g key={angle} className="sg-card-rune" transform={`translate(${rune.x} ${rune.y}) rotate(${angle})`}>
+                <path d={index % 2 ? 'M-2 -8H2V-2H-2V4H2V8' : 'M0 -8V-3L3 0 0 3V8M-3 -5H3M-3 5H3'} />
+              </g>
+            })}
+          </g>
+        })}
+      </svg>
     </section>
   )
 }

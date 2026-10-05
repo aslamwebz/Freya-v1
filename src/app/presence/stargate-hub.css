@@ -1,13 +1,6 @@
 .sg-hub {
   --sg-energy: 0;
-  --sg-metal-0: #090b0c;
-  --sg-metal-1: #171b1c;
-  --sg-metal-2: #2b302f;
-  --sg-metal-3: #4a4c47;
-  --sg-brass: #9a8e73;
-  --sg-brass-hi: #c7b995;
-  --sg-paper: #d9ded9;
-  --sg-muted: #8d9591;
+  --sg-paper: #e6e9df;
   --sg-signal: #a8ddd6;
   --sg-signal-hi: #e7fff9;
   position: absolute;
@@ -16,436 +9,90 @@
   overflow: visible;
   pointer-events: none;
 }
-
 .sg-hub::before {
   content: '';
   position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 43%;
-  aspect-ratio: 1;
+  left: 50%; top: 50%; width: 43%; aspect-ratio: 1;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  background:
-    radial-gradient(circle, #ffffff08 0 20%, #8eb8ad07 34%, transparent 64%);
+  background: radial-gradient(circle, #ffffff08 0 20%, #8eb8ad07 34%, transparent 64%);
   filter: blur(26px);
   opacity: calc(.42 + var(--sg-energy) * .16);
 }
-
+/* The existing orb's position, scale and renderer are preserved. */
 .sg-core {
-  position: absolute;
-  z-index: 4;
-  left: 50%;
-  top: 50%;
-  width: min(39%, 430px);
-  aspect-ratio: 1;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
+  position: absolute; z-index: 4; left: 50%; top: 50%;
+  width: min(39%, 430px); aspect-ratio: 1;
+  transform: translate(-50%, -50%); pointer-events: none;
 }
-
-/* ---------- reactive energy: gate -> cards only ---------- */
-
 .sg-strands {
-  position: absolute;
-  z-index: 2;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-  pointer-events: none;
+  position: absolute; z-index: 2; inset: 0; width: 100%; height: 100%;
+  overflow: visible; pointer-events: none;
 }
-
 .sg-strand-group { --sg-delay: 0s; }
-
-.sg-strand-aura,
-.sg-strand-core,
+.sg-strand-aura, .sg-strand-core, .sg-strand-pulse { fill: none; vector-effect: non-scaling-stroke; }
+.sg-strand-aura { stroke: #83c8bf; stroke-width: 5; opacity: .05; filter: url(#sg-strand-glow); }
+.sg-strand-core { stroke: url(#sg-strand-signal); stroke-width: 1; opacity: .32; }
 .sg-strand-pulse {
-  fill: none;
-  vector-effect: non-scaling-stroke;
-}
-
-.sg-strand-aura {
-  stroke: #83c8bf;
-  stroke-width: 7;
-  opacity: .035;
-  filter: url(#sg-strand-glow);
-}
-
-.sg-strand-core {
-  stroke: url(#sg-strand-violet);
-  stroke-width: 1.05;
-  opacity: .18;
-}
-
-.sg-strand-pulse {
-  stroke: #e1f6f1;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-dasharray: 1.5 98.5;
-  stroke-dashoffset: 0;
-  opacity: .2;
+  stroke: #e1f6f1; stroke-width: 1.8; stroke-linecap: round;
+  stroke-dasharray: 1.5 98.5; opacity: .3;
   filter: url(#sg-strand-glow);
   animation: sg-strand-travel 6.6s linear infinite;
   animation-delay: var(--sg-delay);
 }
+.sg-strand-group[data-hot='true'] .sg-strand-aura { opacity: .18; stroke-width: 8; }
+.sg-strand-group[data-hot='true'] .sg-strand-core { opacity: .85; stroke-width: 1.4; }
+.sg-strand-group[data-hot='true'] .sg-strand-pulse { opacity: 1; stroke: var(--sg-signal-hi); stroke-dasharray: 5 95; animation-duration: 1.35s; }
+@keyframes sg-strand-travel { to { stroke-dashoffset: -100; } }
 
-.sg-strand-group[data-hot='true'] .sg-strand-aura {
-  opacity: .16;
-  stroke-width: 10;
-}
-
-.sg-strand-group[data-hot='true'] .sg-strand-core {
-  opacity: .82;
-  stroke-width: 1.5;
-}
-
-.sg-strand-group[data-hot='true'] .sg-strand-pulse {
-  opacity: 1;
-  stroke: var(--sg-signal-hi);
-  stroke-width: 2.7;
-  stroke-dasharray: 5 95;
-  animation-duration: 1.35s;
-}
-
-@keyframes sg-strand-travel {
-  to { stroke-dashoffset: -100; }
-}
-
-/* ---------- segmented containment hardware ---------- */
-
+/* Six separate machined fragments with exposed ends and dedicated sockets. */
 .sg-gate {
-  position: absolute;
-  z-index: 5;
-  left: 50%;
-  top: 50%;
-  width: min(47%, 520px);
-  aspect-ratio: 1;
-  transform: translate(-50%, -50%);
-  overflow: visible;
-  pointer-events: none;
-  filter: drop-shadow(0 10px 16px #000a);
+  position: absolute; z-index: 5; left: 50%; top: 50%;
+  width: min(47%, 520px); aspect-ratio: 1;
+  transform: translate(-50%, -50%); overflow: visible;
+  pointer-events: none; filter: drop-shadow(0 7px 10px #000a);
 }
+.sg-gate-guide { fill: none; stroke: #c3b89525; stroke-width: .65; stroke-dasharray: 1 18; }
+.sg-gate-back { fill: none; stroke: #0b202850; stroke-width: 48; stroke-linecap: butt; }
+.sg-gate-body { fill: none; stroke: url(#sg-metal-face); stroke-width: 40; stroke-linecap: butt; }
+.sg-gate-rim { fill: none; stroke: url(#sg-edge); stroke-linecap: square; }
+.sg-gate-rim-outer { stroke-width: 2.6; }
+.sg-gate-rim-inner { stroke-width: 1.6; opacity: .7; }
+.sg-gate-track { fill: none; stroke: #b6d2d03b; stroke-width: 5; }
+.sg-gate-engraving { fill: none; stroke: #c7d9cf; stroke-width: 1.2; opacity: .8; }
+.sg-gate-bolt { fill: #10191b; stroke: #a6a791; stroke-width: .8; }
+.sg-gate-fracture { fill: none; stroke: #bfac85; stroke-width: 2; }
+.sg-gate-chevron { fill: #172629; stroke: #cbbb95; stroke-width: 1.5; }
+.sg-gate-node { fill: #d1c5a5; opacity: .65; }
+.sg-gate-socket { fill: #19292b; stroke: #a69875; stroke-width: 1.4; }
+.sg-gate-socket-light { fill: none; stroke: #bdb28e; stroke-width: 2; }
+.sg-gate-socket[data-hot='true'] .sg-gate-socket-light { stroke: #dcfff2; filter: drop-shadow(0 0 4px #9bffdf); }
+.sg-hub[data-busy='true'] .sg-gate-node { fill: #dffbf6; filter: drop-shadow(0 0 6px #b8fff5); animation: sg-gate-fire 1.8s ease-in-out infinite; }
+@keyframes sg-gate-fire { 0%, 100% { opacity: .5; } 45% { opacity: 1; } }
 
-.sg-gate-guide {
-  fill: none;
-  stroke: #c3b89514;
-  stroke-width: .65;
-  stroke-dasharray: 1 18;
-}
-
-.sg-gate-back {
-  fill: none;
-  stroke: #050708;
-  stroke-width: 48;
-  stroke-linecap: butt;
-  filter: drop-shadow(0 6px 8px #000d);
-}
-
-.sg-gate-body {
-  fill: none;
-  stroke: url(#sg-metal-face);
-  stroke-width: 38;
-  stroke-linecap: butt;
-}
-
-.sg-gate-rim {
-  fill: none;
-  stroke: url(#sg-edge);
-  stroke-linecap: square;
-  opacity: .68;
-}
-
-.sg-gate-rim-outer {
-  stroke-width: 2.1;
-  opacity: .72;
-}
-
-.sg-gate-rim-inner {
-  stroke-width: 1.4;
-  opacity: .48;
-}
-
-.sg-gate-chevron {
-  fill: #111516;
-  stroke: #b7aa88;
-  stroke-width: 1.15;
-  opacity: .88;
-  filter: drop-shadow(0 0 3px #d0c0972b);
-}
-
-.sg-gate-node {
-  fill: #d1c5a5;
-  opacity: .62;
-  filter: drop-shadow(0 0 4px #d8ca9e4d);
-}
-
-.sg-gate-segment:nth-of-type(2n) { opacity: .9; }
-.sg-gate-segment:nth-of-type(3n) .sg-gate-back { stroke-width: 44; }
-.sg-gate-segment:nth-of-type(3n) .sg-gate-body { stroke-width: 34; }
-
-.sg-hub[data-busy='true'] .sg-gate-node {
-  fill: #dffbf6;
-  filter: drop-shadow(0 0 8px #b8fff5);
-  animation: sg-gate-fire 1.8s ease-in-out infinite;
-}
-
-.sg-hub[data-busy='true'] .sg-gate-chevron {
-  stroke: #b8d8d2;
-}
-
-@keyframes sg-gate-fire {
-  0%, 100% { opacity: .5; }
-  45% { opacity: 1; }
-}
-
-/* ---------- flat instrument cards ---------- */
-
-.sg-card-layer {
-  position: absolute;
-  z-index: 8;
-  inset: 0;
-  pointer-events: none;
-}
-
-.sg-card {
-  position: absolute;
-  width: clamp(152px, 16.4%, 202px);
-  height: clamp(61px, 9.8%, 74px);
-  transform: translate(-50%, -50%);
-  display: grid;
-  grid-template-columns: 29px minmax(0, 1fr);
-  grid-template-rows: 1fr auto;
-  align-items: center;
-  column-gap: 10px;
-  padding: 10px 13px 9px;
-  border: 1px solid #555b58;
-  border-radius: 3px;
-  background:
-    linear-gradient(135deg, transparent 0 7px, #343936 7px 8px, transparent 8px) top left / 13px 13px no-repeat,
-    linear-gradient(225deg, transparent 0 7px, #343936 7px 8px, transparent 8px) top right / 13px 13px no-repeat,
-    linear-gradient(45deg, transparent 0 7px, #1b1f1e 7px 8px, transparent 8px) bottom left / 13px 13px no-repeat,
-    linear-gradient(315deg, transparent 0 7px, #1b1f1e 7px 8px, transparent 8px) bottom right / 13px 13px no-repeat,
-    linear-gradient(180deg, #242928ee 0%, #15191aef 43%, #0c0f10f4 100%);
-  color: var(--sg-paper);
-  box-shadow:
-    inset 0 1px 0 #ffffff0d,
-    inset 0 -1px 0 #000b,
-    0 9px 20px #0008;
-  pointer-events: auto;
-  -webkit-app-region: no-drag;
-  overflow: visible;
-  text-align: left;
-  transition:
-    border-color 160ms ease,
-    box-shadow 160ms ease,
-    background 160ms ease,
-    transform 160ms ease;
-}
-
-.sg-card::before {
-  content: '';
-  position: absolute;
-  inset: 4px;
-  border: 1px solid #9c91762c;
-  pointer-events: none;
-}
-
-.sg-card:hover,
-.sg-card[data-hot='true'] {
-  border-color: #7f918c;
-  background: linear-gradient(180deg, #29302eee 0%, #171d1cef 43%, #0c1111f4 100%);
-  box-shadow:
-    inset 0 1px 0 #ffffff16,
-    0 10px 22px #0009,
-    0 0 13px #9edfd523;
-}
-
-.sg-card:hover {
-  transform: translate(-50%, -50%) translateY(-1px);
-}
-
-.sg-card-icon {
-  grid-row: 1 / -1;
-  display: grid;
-  place-items: center;
-  color: #bdb18f;
-  filter: drop-shadow(0 0 3px #c4b78d22);
-}
-
-.sg-card[data-hot='true'] .sg-card-icon {
-  color: #cfe9e3;
-  filter: drop-shadow(0 0 5px #a6ddd4a8);
-}
-
-.sg-card-copy {
-  display: grid;
-  align-self: center;
-  min-width: 0;
-}
-
-.sg-card-copy b {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: .72px;
-  text-transform: uppercase;
-  color: #dde1dd;
-}
-
-.sg-card-copy small {
-  margin-top: 2px;
-  color: #858d89;
-  font-size: 8.5px;
-  letter-spacing: .2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sg-card-meter {
-  grid-column: 2;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  opacity: .65;
-}
-
-.sg-card-meter i {
-  display: block;
-  height: 1px;
-  background: #8f856d;
-}
-
-.sg-card-meter i:nth-child(1) { width: 30px; }
-.sg-card-meter i:nth-child(2) { width: 17px; opacity: .62; }
-.sg-card-meter i:nth-child(3) { width: 8px; opacity: .4; }
-
-.sg-card[data-hot='true'] .sg-card-meter i {
-  background: #9edbd3;
-  box-shadow: 0 0 4px #9fe9de55;
-}
-
-.sg-card-runes {
-  position: absolute;
-  top: 5px;
-  right: 7px;
-  color: #8d836b;
-  font: 6px/1 monospace;
-  letter-spacing: 1.7px;
-  opacity: .48;
-}
-
-/*
- * The card remains a flat panel. The only curved geometry is this small
- * ring-facing coupler, which visually bends toward the containment circle.
- */
-.sg-card-coupler {
-  position: absolute;
-  width: 36px;
-  height: 36px;
-  pointer-events: none;
-  border: 3px solid #343936;
-  border-top-color: #8d826c;
-  border-right-color: #676153;
-  border-radius: 50%;
-  background: #111516;
-  box-shadow:
-    inset 0 0 0 1px #0008,
-    0 0 0 1px #0a0c0c,
-    0 4px 8px #0008;
-}
-
-.sg-card-coupler::before {
-  content: '';
-  position: absolute;
-  inset: 7px;
-  border: 1px solid #988d74;
-  border-radius: 50%;
-  opacity: .55;
-}
-
-.sg-card[data-edge='right'] .sg-card-coupler {
-  right: -24px;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.sg-card[data-edge='left'] .sg-card-coupler {
-  left: -24px;
-  top: 50%;
-  transform: translateY(-50%) rotate(180deg);
-}
-
-.sg-card[data-edge='bottom'] .sg-card-coupler {
-  bottom: -24px;
-  left: 50%;
-  transform: translateX(-50%) rotate(90deg);
-}
-
-.sg-card[data-edge='top'] .sg-card-coupler {
-  top: -24px;
-  left: 50%;
-  transform: translateX(-50%) rotate(-90deg);
-}
-
-.sg-card-port {
-  position: absolute;
-  width: 3px;
-  height: 15px;
-  border-radius: 2px;
-  background: #aaa084;
-  box-shadow: 0 0 3px #c1b89544;
-  opacity: .55;
-  z-index: 2;
-}
-
-.sg-card[data-hot='true'] .sg-card-port {
-  background: var(--sg-signal-hi);
-  box-shadow: 0 0 8px #b4fff4, 0 0 15px #89d8cc73;
-  opacity: 1;
-}
-
-.sg-card[data-edge='right'] .sg-card-port { right: -2px; top: 50%; transform: translateY(-50%); }
-.sg-card[data-edge='left'] .sg-card-port { left: -2px; top: 50%; transform: translateY(-50%); }
-.sg-card[data-edge='bottom'] .sg-card-port { bottom: -2px; left: 50%; width: 15px; height: 3px; transform: translateX(-50%); }
-.sg-card[data-edge='top'] .sg-card-port { top: -2px; left: 50%; width: 15px; height: 3px; transform: translateX(-50%); }
-
-/* The panels stay flat; their positions describe an orb around the core. */
-.sg-card-home { left: 50%; top: 6%; }
-.sg-card-chat { left: 27%; top: 11%; }
-.sg-card-mind { left: 73%; top: 11%; }
-.sg-card-mission { left: 13.5%; top: 30%; }
-.sg-card-focus { left: 86.5%; top: 30%; }
-.sg-card-relay { left: 11.5%; top: 52%; }
-.sg-card-people { left: 88.5%; top: 52%; }
-.sg-card-foundry { left: 17.5%; top: 74%; }
-.sg-card-workforce { left: 82.5%; top: 74%; }
-.sg-card-life { left: 35.5%; top: 90%; }
-.sg-card-world { left: 64.5%; top: 90%; }
-.sg-card-memory { left: 50%; top: 94%; }
-
+/* The ten cards are sectors of one concentric outer gate. */
+.sg-card-layer { position: absolute; z-index: 8; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.sg-card { cursor: pointer; pointer-events: auto; outline: none; -webkit-app-region: no-drag; }
+.sg-card-face { fill: url(#sg-card-glass); stroke: #aec8c377; stroke-width: 1; transition: fill 180ms, stroke 180ms; }
+.sg-card-outer-rim { fill: none; stroke: #c4d3c58c; stroke-width: 1; }
+.sg-card-inner-rim { fill: none; stroke: #b2d4d091; stroke-width: 1.2; }
+.sg-card-track { fill: none; stroke: #8ca8a44a; stroke-width: 3; stroke-dasharray: 1 4; }
+.sg-label-guide { fill: none; stroke: none; pointer-events: none; }
+.sg-card-label { fill: #e6f0eb; font-family: 'Segoe UI', sans-serif; font-weight: 500; letter-spacing: 1.8px; pointer-events: none; }
+.sg-card-chevron { fill: none; stroke: #dbd0ad; stroke-width: 1.1; pointer-events: none; }
+.sg-card-rune { fill: none; stroke: #b9cec4; stroke-width: .8; opacity: .62; pointer-events: none; }
+.sg-card-socket { fill: #152d3499; stroke: #9bbaaf; stroke-width: 1; }
+.sg-card-contact { fill: none; stroke: #c5d7c5; stroke-width: 2; }
+.sg-card[data-hot='true'] .sg-card-contact { stroke: #e5fff5; filter: drop-shadow(0 0 5px #b6ffe0); }
+.sg-card[data-hot='true'] .sg-card-inner-rim { stroke: #d1f7e7; filter: drop-shadow(0 0 3px #c1f9e055); }
+.sg-card:hover .sg-card-face, .sg-card:focus-visible .sg-card-face { fill: #8ebbb32c; stroke: #ebead0; stroke-width: 2; }
+.sg-card:hover .sg-card-label, .sg-card:focus-visible .sg-card-label { fill: #fff; }
+.sg-card:focus-visible .sg-card-outer-rim { stroke: #fff1bf; stroke-width: 2; }
 @media (max-width: 1050px), (max-height: 760px) {
   .sg-core { width: min(36%, 360px); }
   .sg-gate { width: min(44%, 450px); }
-
-  .sg-card {
-    width: clamp(132px, 15.8%, 174px);
-    height: 56px;
-    padding: 8px 10px;
-  }
-
-  .sg-card-copy small { display: none; }
-  .sg-card-icon svg { width: 17px; height: 17px; }
-  .sg-card-coupler { width: 31px; height: 31px; }
-
-  .sg-card-life,
-  .sg-card-world { top: 88%; }
-
-  .sg-card-memory { top: 93%; }
 }
-
 @media (prefers-reduced-motion: reduce) {
-  .sg-strand-pulse,
-  .sg-hub[data-busy='true'] .sg-gate-node {
-    animation: none;
-  }
+  .sg-strand-pulse, .sg-hub[data-busy='true'] .sg-gate-node { animation: none; }
+  .sg-card-face { transition: none; }
 }

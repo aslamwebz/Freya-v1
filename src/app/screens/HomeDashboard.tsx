@@ -6,6 +6,7 @@ import { ready } from '../state/view'
 import type { ScreenSlots } from './Home'
 import { FreyaCentre } from '../presence/FreyaCentre'
 import { StargateHub } from '../presence/StargateHub'
+import { HomeWidgets } from './HomeWidgets'
 import { Chats } from '../chat/Chats'
 import type { ComposerMode, WorkspaceResearchView } from '../chat/modes'
 import type { VoiceView } from '../voice/useVoiceDock'
@@ -274,6 +275,7 @@ export function HomeDashboard({ screen, slots, snapshot, generating, notice, dre
       </aside>
       <main className="hd-main" aria-label={preview ? 'Freya dashboard · Sample data' : 'Freya dashboard'}>
         {screen === 'home' ? (<>
+        <HomeWidgets snapshot={snapshot} onNavigate={onNavigate} />
         <Panel name="focus" title="Current focus" icon="focus" onOpen={open('focus')}>
           <h3>{focus?.title ?? 'No focus reported'}</h3>
           <p className="hd-description">{preview ? 'Finalizing system architecture, workspace designs, and go-to-market plan.' : focus?.detail}</p>

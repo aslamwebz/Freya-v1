@@ -46,7 +46,7 @@ const STATE: Record<BrainState, VisualState> = {
     turbulence: 0.18,
   },
   thinking: {
-    shape: 'vortex',
+    shape: 'sphere',
     primary: '#63c9ff',
     secondary: '#a85bff',
     accent: '#ff67d4',
@@ -54,7 +54,7 @@ const STATE: Record<BrainState, VisualState> = {
     turbulence: 0.42,
   },
   researching: {
-    shape: 'torus',
+    shape: 'sphere',
     primary: '#76e7ff',
     secondary: '#7569ff',
     accent: '#cf76ff',
@@ -62,7 +62,7 @@ const STATE: Record<BrainState, VisualState> = {
     turbulence: 0.28,
   },
   delegating: {
-    shape: 'bloom',
+    shape: 'sphere',
     primary: '#72d8ff',
     secondary: '#b465ff',
     accent: '#ff74d8',
@@ -70,7 +70,7 @@ const STATE: Record<BrainState, VisualState> = {
     turbulence: 0.34,
   },
   load: {
-    shape: 'vortex',
+    shape: 'sphere',
     primary: '#5fc9ff',
     secondary: '#c052ff',
     accent: '#ff5fcf',
@@ -78,7 +78,7 @@ const STATE: Record<BrainState, VisualState> = {
     turbulence: 0.62,
   },
   success: {
-    shape: 'bloom',
+    shape: 'sphere',
     primary: '#a6efff',
     secondary: '#9273ff',
     accent: '#ff9be7',
@@ -316,7 +316,7 @@ function shapeWeights(shape: OrbShape): THREE.Vector4 {
  *
  * Runtime systems may also signal it without coupling to React:
  * window.dispatchEvent(new CustomEvent('freya:orb', {
- *   detail: { shape: 'vortex', pulse: 1 }
+ *   detail: { shape: 'sphere', pulse: 1 }
  * }))
  */
 export const LiveOrb = memo(function LiveOrb({ state, energy = 0 }: Props) {
@@ -450,7 +450,7 @@ export const LiveOrb = memo(function LiveOrb({ state, energy = 0 }: Props) {
       const detail = (event as CustomEvent<FreyaOrbSignal>).detail
       if (!detail) return
       const base = STATE[stateRef.current]
-      const shape = detail.shape ?? base.shape
+      const shape = base.shape
       targetWeights.copy(shapeWeights(shape))
       if (detail.primary) targetPrimary.set(detail.primary)
       if (detail.secondary) targetSecondary.set(detail.secondary)

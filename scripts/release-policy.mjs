@@ -47,7 +47,10 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // Phase 45 adds the voice runtime, platform speech adapter, recognition feature
   // detection and settings surface across both renderer entry paths; its completed
   // branch measured the resulting ceiling at ~3.70MB.
-  rendererTotalBytes: 3_700_000,
+  // The live-orb containment dashboard is an intentional renderer-only expansion;
+  // CI measures the combined dashboard build at 3,717,135 bytes. Keep narrow,
+  // explicit headroom over that measured artifact rather than weakening the gate.
+  rendererTotalBytes: 3_740_000,
 })
 
 export function inspectLockfile(pkg, lock) {

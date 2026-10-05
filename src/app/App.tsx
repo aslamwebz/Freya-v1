@@ -23,7 +23,6 @@ import { setAppLayout, type AppLayout } from './state/workspace'
 import { placeholder } from './screens/Placeholder'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
-import { ChatPanel } from './chat/ChatPanel'
 import { useVoiceDock } from './voice/useVoiceDock'
 import { VoiceSettings } from './voice/VoiceSettings'
 
@@ -213,12 +212,12 @@ export function App({
    * auto-submit on *before* speaking and Core therefore entered the canonical
    * conversation path itself. In that case the words are already in the transcript
    * and putting them in the composer would send them twice — so the composer is
-   * left alone and the chat opens instead.
+   * left alone and the current Chats workspace is selected instead.
    */
   const onVoiceTranscript = useCallback(
     (text: string, turnId: string | null) => {
       if (turnId !== null) {
-        setChatOpen(true)
+        setScreen('chat')
         setNotice('')
         return
       }

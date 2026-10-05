@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCore, type Core } from '../../core'
+import type { CoreCommandResult } from '../../core/protocol/core-protocol'
 import { FakeModelProvider } from '../../core/model/fake-provider'
 import type { SearchProvider, SearchResult } from '../../core/research/types'
 import type { BrowserTarget, BrowserTargetFactory, ReadableDocument } from '../../core/research/browser'
@@ -75,7 +76,9 @@ class PagedProvider implements SearchProvider {
 }
 
 function command(name: string, payload?: unknown, requestId = name) {
-  return core!.handleCommand({ command: name, requestId, payload } as never) as Promise<any>
+  return core!.handleCommand({ command: name, requestId, payload } as never) as Promise<
+    CoreCommandResult & { research: NonNullable<CoreCommandResult['research']> }
+  >
 }
 
 async function start(

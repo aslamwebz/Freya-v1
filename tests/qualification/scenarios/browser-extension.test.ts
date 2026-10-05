@@ -355,9 +355,10 @@ describe('browser extension bridge, pairing and boundary', () => {
       'host-adapter:device-hands',
     ])
 
-    // And it is declared fail-closed, which is why the release scope reports it rather than
-    // claiming it as a running domain.
-    expect(descriptor!.activation).toBe('fail-closed')
+    // Phase 43 made the bridge activatable once Phase 42 Device Hands existed.
+    // It still fails closed in practice because the same adapter/grant requirements
+    // must be satisfied before the controller can start it.
+    expect(descriptor!.activation).toBe('activatable')
     expect(descriptor!.note).toMatch(/grant/i)
   })
 })

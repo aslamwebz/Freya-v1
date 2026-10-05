@@ -278,9 +278,10 @@ describe('Device Hands across the Core runtime and the host adapters', () => {
     expect(kinds).toContain('host-adapter')
     expect(kinds).toContain('capability-grant')
     expect(descriptor!.requirements.every((requirement) => requirement.required)).toBe(true)
-    // And it is declared blocked, which is why the release scope does not claim it as a
-    // running domain even though the host seam is genuinely wired.
-    expect(descriptor!.activation).toBe('blocked')
+    // Phase 42 made Device Hands activatable. The required adapter and grant above
+    // are what keep it blocked when authority is absent; the descriptor itself is
+    // no longer unconditionally blocked.
+    expect(descriptor!.activation).toBe('activatable')
     expect(PRINCIPAL).not.toBe('')
     expect(SCOPE).not.toBe('')
   })

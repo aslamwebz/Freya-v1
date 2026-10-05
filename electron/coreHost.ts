@@ -548,6 +548,15 @@ export interface CoreHostOptions {
    */
   conversationKey?: Uint8Array | null
   /**
+   * Explicit host-side conversation store override.
+   *
+   * Used by tests/embedding and by the Linux Electron E2E harness when the
+   * repository's Windows-only SQLCipher native binding is unavailable. Never
+   * exposed to a renderer. Production Windows leaves this undefined and Core
+   * selects the canonical Vault-backed conversation store.
+   */
+  conversationStore?: CoreOptions['conversationStore']
+  /**
    * The Brain's own key, from the keyring.
    *
    * A **separate secret**, not a derivation of the conversation key: compromising
@@ -1041,6 +1050,9 @@ export class ElectronCoreHost implements CoreHost {
         // or put it in a projection, so there is nothing for it to leak through.
         ...(this.options.conversationKey
           ? { conversationKey: this.options.conversationKey }
+          : {}),
+        ...(this.options.conversationStore
+          ? { conversationStore: this.options.conversationStore }
           : {}),
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
         ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),

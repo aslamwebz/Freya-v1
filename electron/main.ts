@@ -31,6 +31,7 @@ import type { ModelProvider } from '../core/model/provider'
 import type { GrantFact } from '../core/devicehands'
 import type { BrowserResult } from '../core/browser'
 import { normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
+import { EncryptedConversationStore } from '../core/conversation/encrypted-store'
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
@@ -1254,7 +1255,7 @@ app.whenReady().then(async () => {
         vault: { key: testKeys.vault, reason: null as string | null },
       })
     : loadKeyring(dataPath)
-  void keyResult.then((result) => {
+  void keyResult.then(async (result) => {
     // Reported per domain, because the two failures are genuinely independent: a
     // machine can open an existing conversation key and be unable to create a Brain
     // one. A single warning would hide which half is missing.
@@ -1295,16 +1296,21 @@ app.whenReady().then(async () => {
       : undefined
 
     // CI runs Electron on Linux, while the repository intentionally ships a
-    // SQLCipher native binding only for the supported Windows desktop build.
-    // Passing a Vault config without a binding makes Core correctly fail closed
-    // to ephemeral conversation memory, which cannot survive the E2E process
-    // relaunch. In the explicit E2E harness only, omit that unavailable Vault so
-    // Core exercises its existing encrypted conversation compatibility store
-    // using the deterministic E2E conversation key. This is not a production
-    // fallback: packaged/local Windows still receives the canonical SQLCipher
-    // Vault, and a non-E2E unsupported platform still reports the Vault failure.
+    // SQLCipher native binding only for the supported Windows desktop build. Keep
+    // the Vault configuration present so every other domain reports the same
+    // honest platform posture it has in production. For conversation bodies only,
+    // the explicit E2E harness injects Core's existing encrypted compatibility
+    // store so the process-relaunch test can exercise real encrypted persistence
+    // rather than ephemeral memory. Production Windows never takes this branch.
     const e2eEncryptedConversationCompatibility =
       process.env.FREYA_E2E === '1' && vaultBinding === undefined
+    const e2eConversationStore =
+      e2eEncryptedConversationCompatibility && result.conversation.key !== null
+        ? await EncryptedConversationStore.open({
+            path: `${dataPath}.conversations`,
+            key: result.conversation.key,
+          })
+        : undefined
 
     const deviceHandsSeam = buildDeviceHandsSeam()
     coreHost = new ElectronCoreHost(
@@ -1327,21 +1333,18 @@ app.whenReady().then(async () => {
       },
       {
         conversationKey: result.conversation.key,
+        ...(e2eConversationStore ? { conversationStore: e2eConversationStore } : {}),
         brainKey: result.brain.key,
         missionKey: result.mission.key,
         contextKey: result.context.key,
         personalityKey: result.personality.key,
         skillKey: result.skill.key,
         forgeKey: result.forge.key,
-        ...(e2eEncryptedConversationCompatibility
-          ? {}
-          : {
-              vault: {
-                path: vaultPath,
-                keyProvider: { load: async () => ({ key: result.vault.key, reason: result.vault.reason }) },
-                ...(vaultBinding ? { binding: vaultBinding } : {}),
-              },
-            }),
+        vault: {
+          path: vaultPath,
+          keyProvider: { load: async () => ({ key: result.vault.key, reason: result.vault.reason }) },
+          ...(vaultBinding ? { binding: vaultBinding } : {}),
+        },
         // Explicit host setting; own-app sees only Freya. System is honestly unsupported.
         ...(['own-app', 'system'].includes(process.env.FREYA_CONTEXT_WINDOW_OBSERVATION ?? '') ? {
           windowObservation: {

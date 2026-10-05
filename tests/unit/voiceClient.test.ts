@@ -62,7 +62,7 @@ describe('a push-to-talk press', () => {
 
   it('reports the session Core actually issued, not one it invented', async () => {
     const mirror = createVoiceMirror()
-    ;(window.freyaHost.coreSubmit as ReturnType<typeof vi.fn>) = vi.fn(async () => ({
+    ;(window.freyaHost!.coreSubmit as ReturnType<typeof vi.fn>) = vi.fn(async () => ({
       requestId: 'r',
       ok: true,
       voice: { operation: 'capture-started', sessionId: 'core-said-so', startedAt: 'now' },
@@ -74,7 +74,7 @@ describe('a push-to-talk press', () => {
 
   it('surfaces a refusal as a sentence', async () => {
     const mirror = createVoiceMirror()
-    ;(window.freyaHost.coreSubmit as ReturnType<typeof vi.fn>) = vi.fn(async () => ({
+    ;(window.freyaHost!.coreSubmit as ReturnType<typeof vi.fn>) = vi.fn(async () => ({
       requestId: 'r',
       ok: false,
       voice: { operation: 'refused', reason: 'the microphone is off; turn it on first' },
@@ -119,7 +119,7 @@ describe('transcripts', () => {
 
   it('separates turnId from text so a surface cannot confuse them', async () => {
     const mirror = createVoiceMirror()
-    ;(window.freyaHost.coreSubmit as ReturnType<typeof vi.fn>) = vi.fn(async () => ({
+    ;(window.freyaHost!.coreSubmit as ReturnType<typeof vi.fn>) = vi.fn(async () => ({
       requestId: 'r',
       ok: true,
       voice: {
@@ -190,7 +190,7 @@ describe('speak', () => {
 describe('wake and permission', () => {
   it('reports an arm refusal instead of pretending to be armed', async () => {
     const mirror = createVoiceMirror()
-    ;(window.freyaHost.coreSubmit as ReturnType<typeof vi.fn>) = vi.fn(async () => ({
+    ;(window.freyaHost!.coreSubmit as ReturnType<typeof vi.fn>) = vi.fn(async () => ({
       requestId: 'r',
       ok: false,
       voice: { operation: 'refused', reason: 'this build has no speech-activity gate' },

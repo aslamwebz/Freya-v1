@@ -35,8 +35,12 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // composition and latest main shell/attachment integration now measure main.cjs
   // at 2,635,967 bytes. Phase 47 Mission Autonomy adds the bounded autonomy runtime,
   // recovery/correction machinery and mission event validation; CI measures the
-  // reconciled current-main artifact at 2,824,924 bytes. Keep narrow explicit headroom.
-  mainBytes: 2_850_000,
+  // reconciled current-main artifact at 2,824,924 bytes. The subsequent Chat
+  // acceptance/tooling pass adds the bounded turn tool loop, native-browser turn
+  // tool, metasearch/vision provider contracts and expanded attachment pipeline;
+  // CI measures that intentional host growth at 2,912,805 bytes. Keep the same
+  // narrow ~1% headroom rather than allowing silent accumulation.
+  mainBytes: 2_940_000,
   // Phase 44 adds connector projection/commands to the preload bridge, and
   // Phase 45 adds the bounded Voice command/capability/playback channel. After the
   // bounded browser renderer bridge and latest main attachment surface are composed,

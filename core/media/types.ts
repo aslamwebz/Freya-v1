@@ -23,7 +23,12 @@ export interface MediaItem {
   readonly kind: MediaKind
   /** The media itself. Fetched by the main process, never by the window. */
   readonly url: string
-  /** The page it was found on, for provenance and for "open the source". */
+  /**
+   * A still image that represents the item, when the search provider supplied one.
+   * Video cards use this instead of pretending a watch-page URL is an image.
+   */
+  readonly thumbnailUrl?: string | null
+  /** The page it was found on, kept only as provenance. */
   readonly page: string
   readonly title: string
   readonly host: string
@@ -54,6 +59,8 @@ export const MEDIA_LIMITS = Object.freeze({
   thumbnailBytes: 4 * 1024 * 1024,
   /** Bytes for a document handed to the PDF renderer. */
   documentBytes: 16 * 1024 * 1024,
+  /** Bytes for an explicitly opened direct video preview. Never fetched in the transcript. */
+  videoBytes: 48 * 1024 * 1024,
   /** Cards shown for one answer, across every search it made. */
   cardsPerAnswer: 12,
 })

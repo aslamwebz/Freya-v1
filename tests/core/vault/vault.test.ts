@@ -248,6 +248,7 @@ describe.skipIf(!bindingAvailable)('Vault encrypted backup and restore', () => {
       binding: await loadTestBinding(),
     })
     try {
+      expect(restored.schemaVersion()).toBe(VAULT_SCHEMA_VERSION)
       const result = await new VaultMissionStore(restored).read('m-backup')
       expect(result.ok).toBe(true)
     } finally {

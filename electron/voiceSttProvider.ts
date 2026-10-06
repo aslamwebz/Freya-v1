@@ -29,6 +29,54 @@ export interface VoiceSttRuntimeConfig {
 }
 
 /**
+ * Stable adapter object for the lifetime of Electron.
+ *
+ * VoiceService keeps the adapter reference it was constructed with. Settings can
+ * therefore change provider/model without swapping a privileged object out from
+ * under Core: the host updates this delegate, and Core keeps talking to the same
+ * narrow port.
+ */
+export class ConfigurableVoiceSttAdapter implements VoiceSttAdapter {
+  private delegate: VoiceSttAdapter
+
+  constructor(
+    private readonly env: NodeJS.ProcessEnv,
+    config: VoiceSttRuntimeConfig = {
+      provider: 'off',
+      model: DEFAULT_REMOTE_STT_MODEL,
+      remoteEnabled: false,
+    },
+    private readonly transport: FetchLike = fetch,
+  ) {
+    this.delegate = createVoiceStt(config, env, transport)
+  }
+
+  configure(config: VoiceSttRuntimeConfig): void {
+    this.delegate = createVoiceStt(config, this.env, this.transport)
+  }
+
+  get id(): string { return this.delegate.id }
+  get kind(): VoiceSttAdapter['kind'] { return this.delegate.kind }
+  get availability(): VoiceSttAdapter['availability'] { return this.delegate.availability }
+  get detail(): string { return this.delegate.detail }
+  get streaming(): boolean { return this.delegate.streaming }
+
+  transcribe(request: SttRequest): Promise<SttResult> {
+    return this.delegate.transcribe(request)
+  }
+
+  stream(
+    request: SttRequest,
+    onFragment: (fragment: { kind: 'interim' | 'final'; text: string }) => void,
+  ): Promise<SttResult> {
+    if (!this.delegate.streaming || typeof this.delegate.stream !== 'function') {
+      return this.delegate.transcribe(request)
+    }
+    return this.delegate.stream(request, onFragment)
+  }
+}
+
+/**
  * Build the speech-input adapter from trusted host configuration.
  *
  * Voice has a separate spend/privacy switch from Chat. Merely configuring NanoGPT

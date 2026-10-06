@@ -128,7 +128,11 @@ export function VoiceSettings({ voice }: { voice: VoiceDock }) {
                   : 'Off. Freya still answers in Chat, but does not automatically read the answer.'
               }
               on={config?.autoSpeak ?? false}
-              disabled={view.configBusy || config?.ttsProvider !== 'platform'}
+              disabled={
+                view.configBusy ||
+                config?.ttsProvider !== 'platform' ||
+                !projection.synthesis.available
+              }
               onChange={() => voice.saveConfig({ autoSpeak: !(config?.autoSpeak ?? false) })}
             />
 

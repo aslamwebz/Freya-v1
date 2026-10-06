@@ -26,6 +26,8 @@ function voice(): VoiceView {
       recognition: { available: false, local: false, detail: 'not available in this test' },
     },
     voices: [],
+    config: null,
+    configBusy: false,
   }
 }
 

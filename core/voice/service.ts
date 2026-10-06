@@ -1222,6 +1222,10 @@ export class VoiceService {
     { fired: boolean; reason?: string }
   > {
     if (this.wakeArmedAt === null) return { fired: false, reason: 'hands-free is not armed' }
+    if (this.wakeExpired(this.now())) {
+      await this.disarmWake('hands-free safety window expired')
+      return { fired: false, reason: 'hands-free returned to standby after its safety window expired' }
+    }
     if (!Number.isFinite(sustainedMs) || sustainedMs < this.wakeGate.sustainMs) return { fired: false }
     if (!crossesWakeThreshold(typeof level === 'number' ? level : 0, this.wakeGate)) return { fired: false }
     await this.record(

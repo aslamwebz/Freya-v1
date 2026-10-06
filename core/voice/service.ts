@@ -671,25 +671,11 @@ export class VoiceService {
     }
 
     const bounded = clipText(text, VOICE_LIMITS.maxTranscriptCharacters)
-
-    // Hands-free audio is not a user message merely because it was transcribed.
-    // Core decides whether it addressed Freya before the words reach a composer,
-    // Conversation, Mind, memory, or the transcript channel.
-    if (session.activation === 'wake') {
-      return await this.handleWakeTranscript(
-        session.sessionId,
-        bounded,
-        audio.bytes.byteLength,
-        audio.durationMs,
-      )
-    }
-
-    const finalAt = this.now().toISOString()
     this.abort = null
-    this.lastFinal = bounded
-    this.lastFinalAt = finalAt
-    this.pushTranscript({ sessionId: session.sessionId, kind: 'final', text: bounded, at: finalAt })
 
+    // A wake capture is still a completed capture. Record only bounded metadata
+    // before deciding whether the words addressed Freya; neither raw audio nor
+    // transcript text ever enters the journal.
     await this.record(
       'voice.transcribe.completed',
       {
@@ -713,6 +699,23 @@ export class VoiceService {
       },
       session.sessionId,
     )
+
+    // Hands-free audio is not a user message merely because it was transcribed.
+    // Core decides whether it addressed Freya before the words reach a composer,
+    // Conversation, Mind, memory, or the transcript channel.
+    if (session.activation === 'wake') {
+      return await this.handleWakeTranscript(
+        session.sessionId,
+        bounded,
+        audio.bytes.byteLength,
+        audio.durationMs,
+      )
+    }
+
+    const finalAt = this.now().toISOString()
+    this.lastFinal = bounded
+    this.lastFinalAt = finalAt
+    this.pushTranscript({ sessionId: session.sessionId, kind: 'final', text: bounded, at: finalAt })
 
     if (bounded.length === 0) {
       this.move(this.baseState())

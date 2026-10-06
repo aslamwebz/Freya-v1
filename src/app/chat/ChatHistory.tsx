@@ -74,13 +74,16 @@ export function ChatHistory({ onOpen, collapsed = false, current = false }: {
   return (
     <div className="chats-history" data-collapsed={!open || undefined}>
       <header className="chats-history-head">
-        {/* The title is the one control: it shows and hides the conversations.
-            New chat stays beside it. Collapsed, there is no room to disclose into,
-            so the same button becomes an ordinary place row that opens Chats. */}
+        {/* Entering Chats from another workspace is a New Chat action. History
+            reuse only happens on a conversation row below. Once already in Chat,
+            the heading goes back to being the disclosure control for that history. */}
         <button type="button" className="chats-history-title" aria-expanded={collapsed ? undefined : open}
           aria-current={current ? 'page' : undefined}
-          aria-label={collapsed ? 'Open Chats' : (open ? 'Hide the conversation list' : 'Show the conversation list')}
-          onClick={() => { if (collapsed) { void startNew(); return } setOpen((value) => !value) }}>
+          aria-label={!current ? 'Start a new chat' : collapsed ? 'Start a new chat' : (open ? 'Hide the conversation list' : 'Show the conversation list')}
+          onClick={() => {
+            if (!current || collapsed) { void startNew(); return }
+            setOpen((value) => !value)
+          }}>
           <Glyph name="chat" size={20} style={open && !collapsed ? undefined : { opacity: 0.75 }} />
           <span>Chats</span>
         </button>

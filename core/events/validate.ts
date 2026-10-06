@@ -914,6 +914,11 @@ const PAYLOAD_RULES: {
     isNonNegativeInt(p.trustedPrefixEvents) &&
     isNonNegativeInt(p.trustedPrefixBytes) &&
     isNonNegativeInt(p.damagedBytes),
+  'core.integrity_repaired': (p) =>
+    p.code === 'legacy-tool-loop-request-id' &&
+    isPositiveInt(p.repairedEvents) &&
+    isNonEmptyString(p.sourceQuarantinePath) &&
+    (p.archivedDegradedPath === null || isNonEmptyString(p.archivedDegradedPath)),
   'core.stopping': (p) => isNonEmptyString(p.reason),
   'core.stopped': (p) => isNonNegativeInt(p.durationMs),
 

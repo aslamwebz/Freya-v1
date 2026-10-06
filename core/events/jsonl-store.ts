@@ -10,6 +10,7 @@ import {
   parseDurableEvent,
   type RecoveryReport,
 } from './validate'
+import { repairKnownLegacyJournal } from './legacy-repair'
 
 /**
  * An append-only JSONL event store.
@@ -54,17 +55,30 @@ import {
  * Refusing to start at all would be safer still, and is what a deployment that
  * cannot tolerate truncation should do; see `lastTruncation`.
  */
+export interface KnownJournalRepairReport {
+  readonly code: 'legacy-tool-loop-request-id'
+  readonly repairedEvents: number
+  readonly sourceQuarantinePath: string
+  readonly archivedDegradedPath: string | null
+}
+
 export class JsonlEventStore implements EventStore {
   private handle: FileHandle | null = null
   private lastSeen = 0
   private recoveredBytes = 0
   private recovery: RecoveryReport = HEALTHY_RECOVERY
+  private knownRepair: KnownJournalRepairReport | null = null
 
   private constructor(private readonly file: string) {}
 
   static async open(file: string): Promise<JsonlEventStore> {
     const store = new JsonlEventStore(file)
     await mkdir(dirname(file), { recursive: true })
+    // A previous version may already have quarantined the one known self-authored
+    // continuation-id defect and then persisted an integrity fault into the trusted
+    // prefix. Restore the full original only when the quarantine validates end to
+    // end after that exact repair; unknown corruption remains failed closed.
+    await store.restoreKnownLegacyQuarantine()
     await store.recover()
     store.handle = await open(file, 'a')
     return store
@@ -91,6 +105,19 @@ export class JsonlEventStore implements EventStore {
         return
       }
       throw error
+    }
+
+    const known = repairKnownLegacyJournal(raw.toString('utf8'))
+    if (known !== null) {
+      const sourceQuarantinePath = await this.preserveKnownRepairSource()
+      await writeFile(this.file, known.content, 'utf8')
+      raw = Buffer.from(known.content, 'utf8')
+      this.knownRepair = {
+        code: known.code,
+        repairedEvents: known.repairedEvents,
+        sourceQuarantinePath,
+        archivedDegradedPath: null,
+      }
     }
 
     let goodBytes = 0
@@ -195,6 +222,116 @@ export class JsonlEventStore implements EventStore {
     return target
   }
 
+
+  /**
+   * Restore a journal that an older Freya already quarantined because of the
+   * historical continuation-id separator bug.
+   *
+   * The current degraded journal must itself validate, its latest unresolved fault
+   * must name a cognition.requested shape failure, the quarantine must become fully
+   * valid after only the known repair, and the trusted prefix must exactly match.
+   * The degraded journal is archived before replacement, so no evidence is erased.
+   */
+  private async restoreKnownLegacyQuarantine(): Promise<void> {
+    let currentRaw: Buffer
+    try {
+      currentRaw = await readFile(this.file)
+    } catch (error) {
+      if (isMissing(error)) return
+      throw error
+    }
+
+    const currentEvents = parseCompleteJournal(currentRaw.toString('utf8'))
+    if (currentEvents === null || currentEvents.length === 0) return
+
+    let fault: Extract<AnyCoreEvent, { type: 'core.integrity_fault' }> | null = null
+    let repairedAfterFault = false
+    for (const event of currentEvents) {
+      if (event.type === 'core.integrity_fault') {
+        fault = event
+        repairedAfterFault = false
+      } else if (event.type === 'core.integrity_repaired' && fault !== null) {
+        repairedAfterFault = true
+      }
+    }
+    if (fault === null || repairedAfterFault) return
+    if (!fault.payload.reason.includes('cognition.requested')) return
+
+    let quarantined: string
+    try {
+      quarantined = await readFile(fault.payload.quarantinePath, 'utf8')
+    } catch {
+      return
+    }
+
+    const repaired = repairKnownLegacyJournal(quarantined)
+    if (repaired === null) return
+
+    const prefixCount = fault.payload.trustedPrefixEvents
+    if (repaired.events.length < prefixCount || currentEvents.length < prefixCount) return
+    for (let index = 0; index < prefixCount; index += 1) {
+      if (JSON.stringify(repaired.events[index]) !== JSON.stringify(currentEvents[index])) return
+    }
+
+    const archivedDegradedPath = await this.archiveCurrentDegradedJournal()
+    await writeFile(this.file, repaired.content, 'utf8')
+    this.knownRepair = {
+      code: repaired.code,
+      repairedEvents: repaired.repairedEvents,
+      sourceQuarantinePath: fault.payload.quarantinePath,
+      archivedDegradedPath,
+    }
+  }
+
+  /** Preserve the original malformed file before an in-place known repair. */
+  private async preserveKnownRepairSource(): Promise<string> {
+    const target = this.availableSiblingPath(`${this.file}.quarantine-known-repair`)
+    await copyFile(this.file, target)
+    await writeFile(
+      `${target}.txt`,
+      [
+        'Freya Core event log, preserved before a code-owned compatibility repair.',
+        `Original: ${this.file}`,
+        'The only accepted repair is the historical cognition continuation request-id',
+        'separator (# -> :) and the entire resulting journal must validate.',
+        '',
+      ].join(EOL),
+      'utf8',
+    )
+    return target
+  }
+
+  /** Preserve the already-degraded replacement before restoring its verified quarantine. */
+  private async archiveCurrentDegradedJournal(): Promise<string> {
+    const target = this.availableSiblingPath(`${this.file}.pre-known-repair`)
+    await copyFile(this.file, target)
+    await writeFile(
+      `${target}.txt`,
+      [
+        'Freya Core degraded journal archived before restoring a fully validated',
+        'quarantine affected only by the historical continuation-id separator bug.',
+        `Original active path: ${this.file}`,
+        '',
+      ].join(EOL),
+      'utf8',
+    )
+    return target
+  }
+
+  private availableSiblingPath(base: string): string {
+    let target = base
+    for (let n = 2; n <= 8; n += 1) {
+      if (!existsSync(target)) return target
+      target = `${base}.${n}`
+    }
+    return target
+  }
+
+  /** A known compatibility repair performed during this open, if any. */
+  knownRepairReport(): KnownJournalRepairReport | null {
+    return this.knownRepair === null ? null : { ...this.knownRepair }
+  }
+
   async append(event: AnyCoreEvent): Promise<void> {
     if (!this.handle) throw new Error('event store is closed')
     if (event.sequence <= this.lastSeen) {
@@ -276,6 +413,21 @@ export class JsonlEventStore implements EventStore {
     this.handle = null
     await handle?.close()
   }
+}
+
+function parseCompleteJournal(raw: string): AnyCoreEvent[] | null {
+  if (raw.length === 0) return []
+  if (!raw.endsWith('\n')) return null
+
+  const events: AnyCoreEvent[] = []
+  let previous = 0
+  for (const line of raw.slice(0, -1).split('\n')) {
+    const parsed = parseDurableEvent(line, previous)
+    if (!parsed.ok) return null
+    events.push(parsed.event)
+    previous = parsed.event.sequence
+  }
+  return events
 }
 
 function isMissing(error: unknown): boolean {

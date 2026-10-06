@@ -1594,6 +1594,7 @@ class FreyaCore implements Core {
     // log still replays — the prefix is real — but it is not the whole truth,
     // and the Core below refuses to present it as though it were.
     this.integrity = describeRecovery(store)
+    const knownJournalRepair = store instanceof JsonlEventStore ? store.knownRepairReport() : null
 
     this.fabric = await EventFabric.open({ store, now: this.options.now, newId: this.options.newId })
 
@@ -1747,6 +1748,32 @@ class FreyaCore implements Core {
       if (event.type.startsWith('forge.')) this.publishForge()
       this.notify()
     })
+
+    if (knownJournalRepair !== null) {
+      try {
+        await this.fabric.append(
+          'core.integrity_repaired',
+          {
+            code: knownJournalRepair.code,
+            repairedEvents: knownJournalRepair.repairedEvents,
+            sourceQuarantinePath: knownJournalRepair.sourceQuarantinePath,
+            archivedDegradedPath: knownJournalRepair.archivedDegradedPath,
+          },
+          { actor: 'system' },
+        )
+      } catch (error) {
+        // A repair that cannot itself be recorded is not a trustworthy repair.
+        // Keep the reconstructed bytes preserved, but fail closed rather than
+        // starting a Core whose audit trail cannot state what happened.
+        this.integrity = {
+          integrity: 'corrupt',
+          reason: `the known journal repair could not be recorded: ${describe(error)}`,
+          line: null,
+          eventsRead: this.fabric.lastSequence,
+          bytesDiscarded: 0,
+        }
+      }
+    }
 
     // Foundry is journal-first like the rest of Core. Its engine submits a draft
     // event, EventFabric assigns the durable identity/sequence and persists it,
@@ -6121,6 +6148,18 @@ state: {
 
   async handleCommand(envelope: CoreCommandEnvelope): Promise<CoreCommandResult> {
     if (this.lifecycle === 'degraded' || this.fabric === undefined) {
+      // Degraded must still be inspectable. These reads cannot mutate security
+      // state or contact a provider, and without them the UI can only say
+      // "degraded" while hiding the integrity reason needed to recover safely.
+      if (
+        typeof envelope === 'object' &&
+        envelope !== null &&
+        typeof envelope.requestId === 'string' &&
+        envelope.requestId.length > 0 &&
+        (envelope.command === 'core.status.read' || envelope.command === 'security.status.read')
+      ) {
+        return { requestId: envelope.requestId, ok: true, status: this.status() }
+      }
       return reject(envelope, 'core is degraded and cannot serve commands')
     }
     // Everything crossing this boundary is untrusted, whatever it claims.

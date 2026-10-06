@@ -26,32 +26,12 @@ import { Focus } from './screens/Focus'
 import { People } from './screens/People'
 import { Memory } from './screens/Memory'
 import type { SettingsCategory } from './screens/Settings'
-import { setAppLayout, type AppLayout } from './state/workspace'
+import { setAppLayout, startupAppLayout, type AppLayout } from './state/workspace'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
 import { useVoiceDock } from './voice/useVoiceDock'
 import { VoiceSettings } from './voice/VoiceSettings'
 import { BootScreen } from './boot/BootScreen'
-
-interface RailItem {
-  readonly id: string
-  readonly label: string
-  readonly symbol: string
-}
-
-const RAIL: readonly RailItem[] = [
-  { id: 'home', label: 'Home', symbol: 'home' },
-  { id: 'chat', label: 'Chats', symbol: 'chat' },
-  { id: 'mind', label: 'Mind', symbol: 'mind' },
-  { id: 'focus', label: 'Focus', symbol: 'focus' },
-  { id: 'people', label: 'People', symbol: 'people' },
-  { id: 'workforce', label: 'Workforce', symbol: 'workforce' },
-  { id: 'world', label: 'World', symbol: 'world' },
-  { id: 'memory', label: 'Memory', symbol: 'memory' },
-  { id: 'life', label: 'Life', symbol: 'life' },
-  { id: 'create', label: 'Foundry', symbol: 'forge' },
-  { id: 'relay', label: 'Relay', symbol: 'relay' },
-]
 
 export function App({
   preferences,
@@ -67,12 +47,10 @@ export function App({
   const settings = useSyncExternalStore(preferences.subscribe, preferences.getSnapshot, preferences.getSnapshot)
   const snapshot = useUiState(adapter)
 
-  // Restore the last workspace before first paint, but keep Home as the safe
-  // default when the persisted route is missing or invalid.
-  const restoredNav = initialLayout?.nav && (initialLayout.nav === 'settings' || RAIL.some((item) => item.id === initialLayout.nav))
-    ? initialLayout.nav
-    : 'home'
-  const [screen, setScreen] = useState(restoredNav)
+  // Every cold start lands on the Dashboard. Workspace persistence still keeps
+  // conversation/window state for when the owner deliberately opens those surfaces,
+  // but it must not turn yesterday's Chat route into today's launch screen.
+  const [screen, setScreen] = useState(() => startupAppLayout(initialLayout).nav)
   const [dressingOpen, setDressingOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('appearance')

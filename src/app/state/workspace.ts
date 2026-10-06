@@ -25,6 +25,21 @@ export interface AppLayout {
   readonly conversationId: string | null
 }
 
+/**
+ * Cold launch policy.
+ *
+ * Persisted workspace data is still useful for restoring a conversation or other
+ * layout details after the owner navigates there, but startup itself always opens
+ * the Dashboard. A stale `nav: chat` must never turn a relaunch into an old thread.
+ */
+export function startupAppLayout(saved: AppLayout | null | undefined): AppLayout {
+  return {
+    nav: 'home',
+    navCollapsed: saved?.navCollapsed ?? false,
+    conversationId: saved?.conversationId ?? null,
+  }
+}
+
 let layout: AppLayout = { nav: 'home', navCollapsed: false, conversationId: null }
 let armed = false
 /**

@@ -68,6 +68,7 @@ export const CORE_EVENT_TYPES = [
   'core.ready',
   'core.degraded',
   'core.integrity_fault',
+  'core.integrity_repaired',
   'core.stopping',
   'core.stopped',
 
@@ -800,6 +801,16 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
     trustedPrefixBytes: number
     /** Bytes set aside as damaged. */
     damagedBytes: number
+  }
+  /**
+   * A code-owned repair of one fully recognised historical journal defect.
+   * The original and the degraded replacement are both preserved on disk.
+   */
+  'core.integrity_repaired': {
+    code: 'legacy-tool-loop-request-id'
+    repairedEvents: number
+    sourceQuarantinePath: string
+    archivedDegradedPath: string | null
   }
   'core.stopping': { reason: string }
   'core.stopped': { durationMs: number }

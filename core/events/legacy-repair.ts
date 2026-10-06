@@ -42,7 +42,7 @@ export function repairKnownLegacyJournal(raw: string): KnownJournalRepair | null
       continue
     }
 
-    const repaired = legacyRequestId === null
+    const repaired: RepairedLegacyLine | null = legacyRequestId === null
       ? repairLegacyCognitionRequest(line, previousSequence)
       : repairLegacyToolLoopContinuation(
           line,

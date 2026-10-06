@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, screen, shell, safeStorage } from 'electro
 import { join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
-import { fetchDocumentBytes, fetchThumbnail } from './media'
+import { fetchDocumentBytes, fetchThumbnail, fetchVideoPreview } from './media'
 import { ElectronCoreHost, type HostEnv, type DeviceHandsHostOptions } from './coreHost'
 import {
   createElectronDeviceHandsEffects,
@@ -1160,6 +1160,13 @@ function registerIpc(): void {
   ipcMain.handle('freya:media:document', async (_event, url: unknown) => {
     if (typeof url !== 'string') return { ok: false, reason: 'that is not an address' }
     return fetchDocumentBytes(url)
+  })
+
+  ipcMain.handle('freya:media:video', async (_event, url: unknown) => {
+    if (typeof url !== 'string') {
+      return { ok: false, dataUrl: null, bytes: 0, format: null, claimedType: null, reason: 'that is not an address' }
+    }
+    return fetchVideoPreview(url)
   })
 
   ipcMain.handle('freya:attachment:pick', async (event) => {

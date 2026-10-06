@@ -101,7 +101,7 @@ describe('hosted voice STT', () => {
 
     expect(result).toEqual({
       text: 'hello Freya',
-      engine: 'openai/Whisper-Large-V3',
+      engine: 'nanogpt/Whisper-Large-V3',
     })
   })
 

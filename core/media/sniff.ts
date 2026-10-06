@@ -12,6 +12,8 @@
 
 /** The image formats a card can actually draw. */
 export type ImageFormat = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+/** Direct video containers Chromium can preview without a plugin. */
+export type VideoFormat = 'video/mp4' | 'video/webm' | 'video/ogg'
 
 function startsWith(bytes: Uint8Array, signature: readonly number[], offset = 0): boolean {
   if (bytes.length < offset + signature.length) return false
@@ -43,6 +45,20 @@ export function sniffImageFormat(bytes: Uint8Array): ImageFormat | null {
 }
 
 /**
+ * The video container these bytes use, or null.
+ *
+ * This is intentionally conservative: a hosted watch page is not a video, and a
+ * file extension is not evidence. MP4-family files advertise an ftyp box, WebM
+ * starts with the EBML header, and Ogg video uses the Ogg container signature.
+ */
+export function sniffVideoFormat(bytes: Uint8Array): VideoFormat | null {
+  if (bytes.length >= 12 && asciiPrefix(bytes, 'ftyp', 4)) return 'video/mp4'
+  if (startsWith(bytes, [0x1a, 0x45, 0xdf, 0xa3])) return 'video/webm'
+  if (asciiPrefix(bytes, 'OggS')) return 'video/ogg'
+  return null
+}
+
+/**
  * Whether these bytes are a PDF.
  *
  * `%PDF-` only. The specification's own header, checked at the start, which is where a
@@ -59,8 +75,10 @@ export function isPdf(bytes: Uint8Array): boolean {
  * in that case, which is the honest outcome: a card is a claim about the world, and a
  * body that contradicts it should take the card with it rather than be drawn.
  */
-export function sniffMediaKind(bytes: Uint8Array): ImageFormat | 'application/pdf' | null {
+export function sniffMediaKind(bytes: Uint8Array): ImageFormat | VideoFormat | 'application/pdf' | null {
   const image = sniffImageFormat(bytes)
   if (image !== null) return image
+  const video = sniffVideoFormat(bytes)
+  if (video !== null) return video
   return isPdf(bytes) ? 'application/pdf' : null
 }

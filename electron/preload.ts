@@ -40,6 +40,7 @@ import type { LifeLoopProjection } from '../core/protocol/lifeloop'
 import { SKILL_NO_PAYLOAD } from '../core/protocol/skills'
 import { SKILL_LIMITS } from '../core/skills/types'
 import type { ProviderConfig, ProviderConfigInput } from './providerConfig'
+import type { VoiceConfig, VoiceConfigPatch } from './voiceConfig'
 import { checkProviderBaseUrl } from '../core/model/provider-endpoint'
 import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
 import { normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
@@ -127,6 +128,13 @@ const api = {
     const bounded = rendererProviderPayload(input)
     if (!bounded.ok) return Promise.reject(new Error(bounded.reason))
     return ipcRenderer.invoke('freya:provider:write', bounded.payload)
+  },
+
+  voiceConfig: (): Promise<VoiceConfig> => ipcRenderer.invoke('freya:voice-config:read'),
+  saveVoiceConfig: (input: unknown): Promise<VoiceConfig> => {
+    const bounded = rendererVoiceConfigPayload(input)
+    if (!bounded.ok) return Promise.reject(new Error(bounded.reason))
+    return ipcRenderer.invoke('freya:voice-config:write', bounded.payload)
   },
 
   /**
@@ -1078,6 +1086,68 @@ const MAX_PROVIDER_KEY_CHARS = 4_096
  * settings save. `apiKey` may be an explicit empty string — that is how a stored
  * credential is cleared — but it is never part of what comes back.
  */
+function rendererVoiceConfigPayload(
+  raw: unknown,
+): { ok: true; payload: VoiceConfigPatch } | { ok: false; reason: string } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, reason: 'voice configuration is invalid' }
+  }
+  const record = raw as Record<string, unknown>
+  const payload: VoiceConfigPatch = {}
+
+  if (record.sttProvider !== undefined) {
+    if (record.sttProvider !== 'off' && record.sttProvider !== 'nanogpt') {
+      return { ok: false, reason: 'voice STT provider is invalid' }
+    }
+    payload.sttProvider = record.sttProvider
+  }
+  if (record.sttModel !== undefined) {
+    if (
+      typeof record.sttModel !== 'string' ||
+      record.sttModel.length === 0 ||
+      record.sttModel.length > 160 ||
+      !/^[A-Za-z0-9._:/-]+$/.test(record.sttModel)
+    ) {
+      return { ok: false, reason: 'voice STT model is invalid' }
+    }
+    payload.sttModel = record.sttModel
+  }
+  if (record.remoteSttEnabled !== undefined) {
+    if (typeof record.remoteSttEnabled !== 'boolean') {
+      return { ok: false, reason: 'remote voice consent is invalid' }
+    }
+    payload.remoteSttEnabled = record.remoteSttEnabled
+  }
+  if (record.ttsProvider !== undefined) {
+    if (record.ttsProvider !== 'off' && record.ttsProvider !== 'platform') {
+      return { ok: false, reason: 'voice TTS provider is invalid' }
+    }
+    payload.ttsProvider = record.ttsProvider
+  }
+  if (record.ttsVoiceId !== undefined) {
+    if (
+      record.ttsVoiceId !== null &&
+      (typeof record.ttsVoiceId !== 'string' || record.ttsVoiceId.length === 0 || record.ttsVoiceId.length > 200)
+    ) {
+      return { ok: false, reason: 'voice id is invalid' }
+    }
+    payload.ttsVoiceId = record.ttsVoiceId
+  }
+  if (record.wakeProvider !== undefined) {
+    if (record.wakeProvider !== 'off' && record.wakeProvider !== 'selected-stt') {
+      return { ok: false, reason: 'wake provider is invalid' }
+    }
+    payload.wakeProvider = record.wakeProvider
+  }
+  if (record.autoSpeak !== undefined) {
+    if (typeof record.autoSpeak !== 'boolean') {
+      return { ok: false, reason: 'auto-speak setting is invalid' }
+    }
+    payload.autoSpeak = record.autoSpeak
+  }
+  return { ok: true, payload }
+}
+
 function rendererProviderPayload(
   raw: unknown,
 ): { ok: true; payload: ProviderConfigInput } | { ok: false; reason: string } {

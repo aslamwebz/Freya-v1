@@ -7428,6 +7428,17 @@ state: {
           return { requestId, ok: true, status: this.status(), voice: { operation: 'auto-submit', enabled } }
         }
 
+        case 'voice.auto-speak.set': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const enabled = readRaw(envelope.payload, 'enabled')
+          if (typeof enabled !== 'boolean') {
+            return { requestId, ok: false, refusal: { reason: 'auto-speak is a true or false setting' } }
+          }
+          await this.voiceService.setAutoSpeak(enabled)
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'auto-speak', enabled } }
+        }
+
         case 'voice.tts.speak': {
           const guarded = await this.guardVoice(requestId)
           if (guarded !== null) return guarded

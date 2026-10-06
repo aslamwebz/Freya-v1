@@ -754,6 +754,7 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'voice.capture.end',
   'voice.capture.cancel',
   'voice.submit.set',
+  'voice.auto-speak.set',
   'voice.tts.speak',
   'voice.tts.stop',
   'voice.tts.cancel',
@@ -1406,10 +1407,14 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     }
 
     case 'voice.submit.set':
+    case 'voice.auto-speak.set':
     case 'voice.mute.set': {
       // Booleans only. A truthy string here would be a window that believes it
       // turned auto-submit on while Core read something else.
-      const key = command === 'voice.submit.set' ? 'enabled' : 'muted'
+      const key =
+        command === 'voice.mute.set'
+          ? 'muted'
+          : 'enabled'
       const value = record?.[key]
       if (typeof value !== 'boolean') {
         return { ok: false, reason: `${key} is a true or false setting` }

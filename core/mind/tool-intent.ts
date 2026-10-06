@@ -22,7 +22,7 @@ const EXPLANATION_FRAME =
 const EXPLICIT_BROWSER =
   /\b(?:use|open|launch|start|drive|pilot|operate|control)\b[^.!?]{0,36}\b(?:your|freya'?s|the)\s+(?:own\s+)?browser\b|\byour\s+own\s+browser\b|\bin\s+(?:your|freya'?s)\s+(?:own\s+)?browser\b|\bbrowse\s+to\b/
 
-const HTTP_URL = /https?:\/\/[^\s<>()\[\]{}"']+/iu
+const HTTP_URL = /https?:\/\/[^\s<>(){}"']+/iu
 
 function cleanUrl(raw: string): string {
   return raw.replace(/[.,!?;:]+$/u, '')

@@ -1658,10 +1658,11 @@ app.on('before-quit', (event) => {
  *   - the browser raised it as a direct result of the user pressing the
  *     microphone control, which is the only code path that calls `getUserMedia`.
  *
- * That is what explicit push-to-talk means at this layer: no ambient recording,
- * no always-on stream, and no way for a window to hold a microphone open between
- * captures. A request at any other time, or for anything other than audio, is
- * refused.
+ * Push-to-talk remains capture-scoped. Hands-free is the one explicit ambient
+ * exception: while the owner has armed it, a local Web Audio meter may keep an
+ * audio stream open for bounded wake detection. No audio leaves that stream until
+ * local speech activity produces one bounded wake clip for Core to transcribe.
+ * A request at any other time, or for anything other than audio, is refused.
  *
  * ## Why there are two handlers
  *
@@ -1703,15 +1704,17 @@ app.on('web-contents-created', (_event, contents) => {
  *
  * Set from **Core's answer**, never from a renderer claim. The renderer opens and
  * closes the device itself — that is where the Web Audio API is — but the host
- * only relaxes the permission gate once the trusted half has agreed a capture is
- * running *and* that the owner turned the microphone on, so a compromised window
- * cannot open a stream by asking nicely and cannot hold one open by asking again.
+ * only relaxes the permission gate once the trusted half has agreed either a
+ * bounded capture is running or the owner explicitly armed hands-free, and the
+ * microphone is enabled. Disarming hands-free or STOP ALL closes that ambient
+ * permission again immediately.
  */
 let voiceCaptureOpen = false
 let voiceMicEnabled = false
+let voiceWakeArmed = false
 
 function microphoneExpected(): boolean {
-  return voiceCaptureOpen && voiceMicEnabled
+  return voiceMicEnabled && (voiceCaptureOpen || voiceWakeArmed)
 }
 
 /**
@@ -1745,5 +1748,6 @@ function trackVoiceCapture(envelope: CoreCommandEnvelope, _result: { ok: boolean
   // is no capture for a window to be asking about.
   voiceMicEnabled = voice?.micEnabled === true
   voiceCaptureOpen = voice?.capturing === true
+  voiceWakeArmed = voice?.wake.armed === true
   presenceHost?.updateVoice(voice)
 }

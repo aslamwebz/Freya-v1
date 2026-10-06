@@ -1491,11 +1491,12 @@ app.whenReady().then(async () => {
          * a machine without a device gets `unsupported` from the renderer instead
          * of a button that cannot work.
          */
-        ...(voiceConfig.ttsProvider === 'platform' ? { voiceTts: voiceOutput } : {}),
+        voiceTts: voiceOutput,
         voiceStt: voiceInput,
         voiceWake: buildLocalWakeGate(),
         voiceAutoSpeak: voiceConfig.autoSpeak,
         voiceProactiveAlerts: voiceConfig.proactiveAlerts,
+        voiceMuted: voiceConfig.ttsProvider === 'off',
       },
     )
     registerIpc()

@@ -81,7 +81,8 @@ describe('collecting cards from what a search returned', () => {
           vertical: 'videos',
         }),
         source({
-          mediaUrl: 'https://www.youtube.com/watch?v=abc',
+          url: 'https://www.youtube.com/watch?v=abc',
+          mediaUrl: 'https://www.youtube.com/embed/abc',
           thumbnailUrl: 'https://i.ytimg.com/vi/abc/hqdefault.jpg',
           vertical: 'videos',
           rank: 2,
@@ -98,7 +99,8 @@ describe('collecting cards from what a search returned', () => {
   it('keeps a video poster separate from the video address', () => {
     const items = mediaFromObservations([ok([
       source({
-        mediaUrl: 'https://www.youtube.com/watch?v=abc',
+        url: 'https://www.youtube.com/watch?v=abc',
+        mediaUrl: 'https://www.youtube.com/embed/abc',
         thumbnailUrl: 'https://i.ytimg.com/vi/abc/hqdefault.jpg',
         vertical: 'videos',
       }),
@@ -108,8 +110,24 @@ describe('collecting cards from what a search returned', () => {
       kind: 'video',
       url: 'https://www.youtube.com/watch?v=abc',
       thumbnailUrl: 'https://i.ytimg.com/vi/abc/hqdefault.jpg',
+      embedUrl: 'https://www.youtube.com/embed/abc',
       playable: false,
     })
+  })
+
+  it('refuses arbitrary iframe hosts from becoming in-Chat players', () => {
+    const items = mediaFromObservations([ok([
+      source({
+        url: 'https://example.org/watch/abc',
+        mediaUrl: 'https://evil.example/embed/abc',
+        thumbnailUrl: 'https://cdn.example/poster.jpg',
+        vertical: 'videos',
+      }),
+    ])])
+
+    expect(items[0]?.kind).toBe('video')
+    expect(items[0]?.embedUrl).toBeUndefined()
+    expect(items[0]?.url).toBe('https://example.org/watch/abc')
   })
 
   it('never invents a duration, a page count or a size', () => {

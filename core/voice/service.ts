@@ -7,6 +7,7 @@ import { boundUtterance, clampSpeakingTuning, isTtsUnavailable } from './tts'
 import { LOCAL_ENERGY_WAKE_GATE, crossesWakeThreshold } from './wake'
 import { DEFAULT_FOLLOW_UP_WINDOW_MS, DEFAULT_WAKE_PHRASE, VoiceAttentionSession, interpretVoiceAddress } from './attention'
 import type { VoiceProjection } from '../protocol/conversation'
+import type { AttentionEventKind, AttentionOutcome } from '../attention/types'
 import {
   VOICE_FORMAT,
   VOICE_LIMITS,
@@ -116,6 +117,8 @@ export interface VoiceServiceOptions {
   autoSpeak?: boolean
   /** The bounded conversational follow-up window after "Freya" is heard. */
   followUpWindowMs?: number
+  /** Allow Attention's deterministic speak/interrupt decisions to reach TTS. */
+  proactiveAlerts?: boolean
 
   now?: () => Date
   newId?: () => string
@@ -173,6 +176,7 @@ export class VoiceService {
   private readonly timeoutMs: number
   private readonly now: () => Date
   private readonly newId: () => string
+  private readonly proactiveAlerts: boolean
 
   private state: VoiceState
   private session: VoiceCaptureSession | null = null
@@ -196,7 +200,10 @@ export class VoiceService {
   private selectedVoiceId: string | null = null
   private wakeArmedAt: string | null = null
   private readonly voiceAttention: VoiceAttentionSession
-  private cueSpeaking: { utteranceId: string; cue: 'wake-ack' | 'standby-ack' } | null = null
+  private cueSpeaking: {
+    utteranceId: string
+    purpose: 'wake-ack' | 'standby-ack' | 'attention'
+  } | null = null
 
   private queue: QueuedUtterance[] = []
   private speaking: QueuedUtterance | null = null
@@ -222,6 +229,7 @@ export class VoiceService {
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => randomUUID())
     this.autoSpeak = options.autoSpeak ?? false
+    this.proactiveAlerts = options.proactiveAlerts ?? false
     this.voiceAttention = new VoiceAttentionSession(
       Math.max(5_000, Math.min(options.followUpWindowMs ?? DEFAULT_FOLLOW_UP_WINDOW_MS, 5 * 60_000)),
       this.now,
@@ -822,11 +830,37 @@ export class VoiceService {
    * ephemeral interaction chrome, not a conversation turn.
    */
   private async speakCue(cue: 'wake-ack' | 'standby-ack'): Promise<void> {
+    await this.speakCorePhrase(cue === 'wake-ack' ? 'Yes?' : 'Okay.', cue)
+  }
+
+  /**
+   * Let Freya proactively speak only after Attention chose `speak` or
+   * `interrupt`. Raw event text is intentionally absent here.
+   */
+  async announceAttention(
+    kind: AttentionEventKind,
+    outcome: Extract<AttentionOutcome, 'speak' | 'interrupt'>,
+  ): Promise<void> {
+    if (!this.proactiveAlerts || this.muted || this.stopAllLatch()) return
+    if (this.tts === undefined || this.tts.availability !== 'available') return
+
+    if (outcome === 'interrupt') {
+      await this.cancelSpeaking('Attention required an interruption.')
+    } else if (this.isSpeaking) {
+      return
+    }
+
+    await this.speakCorePhrase(attentionPhrase(kind), 'attention')
+  }
+
+  private async speakCorePhrase(
+    text: string,
+    purpose: 'wake-ack' | 'standby-ack' | 'attention',
+  ): Promise<void> {
     if (this.muted || this.stopAllLatch()) return
     if (this.tts === undefined || this.tts.availability !== 'available') return
-    const text = cue === 'wake-ack' ? 'Yes?' : 'Okay.'
     const utteranceId = this.newId()
-    this.cueSpeaking = { utteranceId, cue }
+    this.cueSpeaking = { utteranceId, purpose }
     this.move('speaking')
     this.publish()
     const controller = new AbortController()
@@ -841,7 +875,7 @@ export class VoiceService {
         signal: controller.signal,
       })
     } catch {
-      // A cue is best-effort. The visible attentive/standby state remains true.
+      // Attention already retained the decision, so failed playback loses no fact.
     } finally {
       if (this.cueSpeaking?.utteranceId === utteranceId) this.cueSpeaking = null
       if (this.speakAbort === controller) this.speakAbort = null
@@ -1540,6 +1574,33 @@ function readNumber(input: unknown, key: string): number | undefined {
   if (typeof input !== 'object' || input === null) return undefined
   const value = (input as Record<string, unknown>)[key]
   return typeof value === 'number' ? value : undefined
+}
+
+function attentionPhrase(kind: AttentionEventKind): string {
+  switch (kind) {
+    case 'deadline':
+      return 'A deadline needs your attention.'
+    case 'work-failed':
+      return 'A run failed.'
+    case 'mission-failed':
+      return 'A mission needs your attention.'
+    case 'system-health':
+      return 'There is a system health alert.'
+    case 'work-finished':
+      return 'A run finished.'
+    case 'mission-finished':
+      return 'A mission was completed.'
+    case 'research-finished':
+      return 'Research finished.'
+    case 'message':
+      return 'You have a new message.'
+    case 'calendar':
+      return 'You have an upcoming calendar event.'
+    case 'reminder':
+      return 'You have a reminder.'
+    case 'context-change':
+      return 'Your active context changed.'
+  }
 }
 
 function describe(error: unknown): string {

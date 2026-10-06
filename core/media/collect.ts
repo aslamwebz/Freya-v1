@@ -76,31 +76,54 @@ function cardSafeUrl(value: unknown): string | null {
 
 /** A source is only worth a card if it names media that exists. */
 function toItem(source: ToolSource): MediaItem | null {
-  // A document is usually the page itself rather than a separate media address: a search
-  // for a report returns links to the PDF, and there is no "media URL" behind them.
-  // Reading `mediaUrl` first and falling back to the source's own address is what lets a
-  // document become a card at all — otherwise the documents vertical produces a
-  // transcript of links and no cards, which is precisely the case the card exists for.
-  const candidate = cardSafeUrl(source.mediaUrl) ?? (source.vertical === 'documents' ? cardSafeUrl(source.url) : null)
-  if (candidate === null) return null
+  const page = cardSafeUrl(source.url)
+  if (page === null) return null
 
-  const kind = kindFor(source.vertical, candidate)
-  if (kind === null) return null
-  const mediaUrl = candidate
+  const media = cardSafeUrl(source.mediaUrl)
+  const thumbnail = cardSafeUrl(source.thumbnailUrl)
+  const vertical = source.vertical
+
+  let kind: MediaItem['kind'] | null = null
+  let mediaUrl: string | null = null
+  let thumbnailUrl: string | null = null
+
+  if (vertical === 'images') {
+    kind = 'image'
+    mediaUrl = media ?? thumbnail
+    thumbnailUrl = thumbnail ?? mediaUrl
+  } else if (vertical === 'videos') {
+    kind = 'video'
+    // A search result may give a direct playable file, a hosted watch page, or only
+    // a poster. The card still belongs in Chat when a poster exists; "playable" is
+    // reserved for a direct media address that Chromium can actually play.
+    mediaUrl = media ?? page
+    thumbnailUrl = thumbnail
+  } else if (vertical === 'documents') {
+    kind = 'document'
+    // Document indexes commonly return the PDF as the result URL itself.
+    mediaUrl = media ?? page
+  } else if (media !== null) {
+    kind = kindFor(undefined, media)
+    mediaUrl = media
+    thumbnailUrl = kind === 'image' ? (thumbnail ?? media) : thumbnail
+  }
+
+  if (kind === null || mediaUrl === null) return null
+  // Images and videos must have something drawable in the transcript. Documents
+  // deliberately use a labelled card and fetch their bytes only after a click.
+  if ((kind === 'image' || kind === 'video') && thumbnailUrl === null) return null
 
   return {
     kind,
     url: mediaUrl,
-    page: source.url,
+    ...(thumbnailUrl === null ? {} : { thumbnailUrl }),
+    page,
     title: source.title === '' ? mediaUrl : source.title,
-    host: source.sourceDomain === '' ? hostOf(mediaUrl) : source.sourceDomain,
+    host: source.sourceDomain === '' ? hostOf(page) : source.sourceDomain,
     duration: typeof source.duration === 'string' && source.duration !== '' ? source.duration : null,
     bytes: null,
     pages: null,
-    // Only an address that is itself plausibly playable is called playable. The
-    // alternative — assuming — produces a card with a play badge that does nothing
-    // when pressed, which is the exact failure this whole exercise is about.
-    playable: kind === 'video' && looksPlayable(mediaUrl),
+    playable: kind === 'video' && media !== null && looksPlayable(media),
   }
 }
 

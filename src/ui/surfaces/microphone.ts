@@ -171,18 +171,17 @@ export async function openMicrophone(limits: CaptureLimits): Promise<MicCapture>
     // look like a whisper and a shout look like a shout.
     publishMicLevel(Math.min(1, Math.max(0, (rms - 0.01) * 6)))
 
-    const pcm = new Int16Array(input.length)
-    for (let i = 0; i < input.length; i += 1) {
-      const sample = Math.max(-1, Math.min(1, input[i] ?? 0))
-      pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
-    }
+    // The device may ignore the requested sample rate. Convert what it actually
+    // produced to the wire rate before counting frames or handing anything to
+    // Core, so a 48 kHz microphone is not mislabeled as 16 kHz PCM.
+    const pcm = resampleFloat32ToInt16(input, sampleRate, limits.sampleRate)
     chunks.push(pcm)
     bytes += pcm.byteLength
-    frames += input.length
+    frames += pcm.length
 
     // Stop at the bound rather than growing until something else notices. A
     // microphone left open for an afternoon is a bug, not a long recording.
-    if (bytes >= limits.maxBytes || (frames / sampleRate) * 1000 >= limits.maxDurationMs) {
+    if (bytes >= limits.maxBytes || (frames / limits.sampleRate) * 1000 >= limits.maxDurationMs) {
       void finish(false)
     }
   }
@@ -201,6 +200,32 @@ export async function openMicrophone(limits: CaptureLimits): Promise<MicCapture>
       await finish(true)
     },
   }
+}
+
+export function resampleFloat32ToInt16(
+  input: Float32Array,
+  sourceRate: number,
+  targetRate: number,
+): Int16Array {
+  if (input.length === 0) return new Int16Array(0)
+  if (!Number.isFinite(sourceRate) || !Number.isFinite(targetRate) || sourceRate <= 0 || targetRate <= 0) {
+    throw new MicrophoneError('capture-failed', 'the microphone reported an invalid sample rate')
+  }
+
+  const outputLength = Math.max(1, Math.round(input.length * targetRate / sourceRate))
+  const output = new Int16Array(outputLength)
+  const ratio = sourceRate / targetRate
+
+  for (let index = 0; index < outputLength; index += 1) {
+    const position = index * ratio
+    const left = Math.min(input.length - 1, Math.floor(position))
+    const right = Math.min(input.length - 1, left + 1)
+    const fraction = position - left
+    const sample = (input[left] ?? 0) * (1 - fraction) + (input[right] ?? 0) * fraction
+    const bounded = Math.max(-1, Math.min(1, sample))
+    output[index] = bounded < 0 ? Math.round(bounded * 0x8000) : Math.round(bounded * 0x7fff)
+  }
+  return output
 }
 
 function releaseStream(stream: MediaStream): void {

@@ -139,6 +139,9 @@ export interface FreyaHostBridge {
   /** A document's bytes, as base64. Never a path, so the window gets no file handle. */
   mediaDocument(url: string): Promise<unknown>
 
+  /** A direct video's validated bytes as a data URL, only for an opened preview. */
+  mediaVideo(url: string): Promise<unknown>
+
   /** Frameless-window controls. Each acts on the window that calls. */
   windowMinimize(): Promise<void>
   windowMaximize(): Promise<void>

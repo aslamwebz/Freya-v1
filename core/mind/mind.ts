@@ -31,6 +31,7 @@ import {
 } from './expression'
 import type { CueKind, CueUsageLedger, InteractionFact, RelationshipItem } from '../personality/types'
 import { runToolLoop, type ToolIteration } from './loop'
+import { initialToolRequestForOwnerText } from './tool-intent'
 import { MIND_TOOL_LIMITS, renderToolFooter, type MindToolRegistry, type ToolObservation } from './tools'
 import { mediaFromObservations } from '../media/collect'
 import type { MediaItem } from '../media/types'
@@ -922,6 +923,7 @@ export class MindService {
         turnId,
         grantId: grant.grantId,
         messages,
+        ownerText: text,
         perTurnAllowance: maxOutputTokens,
       })
 
@@ -1070,9 +1072,19 @@ export class MindService {
     turnId: string
     grantId: string
     messages: readonly ModelMessage[]
+    ownerText: string
     perTurnAllowance: number
   }): Promise<Cognition> {
+    const initialToolRequest = initialToolRequestForOwnerText(input.ownerText)
+
     if (!this.toolLoopEnabled) {
+      if (initialToolRequest !== null) {
+        return {
+          kind: 'failed',
+          reason: "Freya's own browser is not available for this turn, so it was not opened.",
+          providerContacted: false,
+        }
+      }
       const outcome = await this.authority.request({
         kind: 'user_turn',
         prompt: input.messages.map((m) => m.content).join('\n\n'),
@@ -1138,6 +1150,7 @@ export class MindService {
           selectedModel: this.selectedModel,
           perTurnAllowance: input.perTurnAllowance,
           signal: controller.signal,
+          initialToolRequest,
         },
         [...input.messages, tools.instructions()],
       )

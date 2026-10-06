@@ -1,4 +1,5 @@
 import type { OwnerAuthority } from '../authority'
+import type { InitialToolRequest } from './tool-intent'
 import { isTruncationSignal, type ModelFinishReason, type ModelMessage } from '../model/provider'
 import {
   MIND_TOOL_LIMITS,
@@ -146,6 +147,13 @@ export interface ToolLoopDeps {
   readonly perTurnAllowance: number
   /** This turn's cancellation signal. Checked at every iteration boundary. */
   readonly signal: AbortSignal
+  /**
+   * A Core-owned deterministic first tool request derived from the owner's explicit
+   * instruction. It grants nothing: invocation still goes through this registry's
+   * Guard check. Used only when the owner already chose the tool and supplied its
+   * concrete target, so model preference cannot silently override that choice.
+   */
+  readonly initialToolRequest?: InitialToolRequest | null
 }
 
 /**
@@ -163,6 +171,44 @@ export async function runToolLoop(
   let messages = baseMessages
   let providerContacted = false
   let toolCallsUsed = 0
+
+  // When the owner explicitly chose Freya's own browser and supplied the exact
+  // address, do not ask a stochastic model whether it feels like honouring that
+  // choice. Execute that one bounded request through the same registry/Guard path
+  // every other tool uses, then let the model answer from the resulting evidence.
+  //
+  // This is not a bypass and it is not renderer authority: the directive was
+  // derived in Core from the owner's current text, and invoke() can still deny it.
+  if (deps.initialToolRequest !== undefined && deps.initialToolRequest !== null) {
+    if (deps.signal.aborted) {
+      return { kind: 'cancelled', reason: cancellationReason(deps.signal), providerContacted, iterations }
+    }
+
+    const invocation = await deps.tools.invoke({
+      name: deps.initialToolRequest.name,
+      arguments: deps.initialToolRequest.arguments,
+      signal: deps.signal,
+    })
+    if (invocation.executed) toolCallsUsed += 1
+    const observation = invocation.observation
+    iterations.push({
+      step: {
+        index: 1,
+        tool: observation.tool,
+        capability: observation.capability,
+        outcome: observation.kind,
+        executed: invocation.executed,
+        sourceCount: observation.kind === 'ok' ? observation.sources.length : 0,
+      },
+      observation,
+      report: renderObservation(observation),
+    })
+    messages = [...messages, renderObservation(observation)]
+
+    if (deps.signal.aborted) {
+      return { kind: 'cancelled', reason: cancellationReason(deps.signal), providerContacted, iterations }
+    }
+  }
 
   for (let iteration = 0; iteration < MIND_TOOL_LIMITS.maxProviderCalls; iteration += 1) {
     // Between iterations, before anything is asked. A stop that landed while a

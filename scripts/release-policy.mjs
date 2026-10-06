@@ -35,14 +35,19 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // composition and latest main shell/attachment integration now measure main.cjs
   // at 2,635,967 bytes. Phase 47 Mission Autonomy adds the bounded autonomy runtime,
   // recovery/correction machinery and mission event validation; CI measures the
-  // reconciled current-main artifact at 2,824,924 bytes. Keep narrow explicit headroom.
-  mainBytes: 2_850_000,
+  // reconciled current-main artifact at 2,824,924 bytes. The verified Chat/media
+  // pass then adds the bounded tool loop, native-browser read path, media persistence,
+  // document-card fallback and strict Device Hands configuration. Current main CI
+  // measures the unminified host at 2,933,282 bytes. Keep narrow explicit headroom.
+  mainBytes: 2_970_000,
   // Phase 44 adds connector projection/commands to the preload bridge, and
   // Phase 45 adds the bounded Voice command/capability/playback channel. After the
   // bounded browser renderer bridge and latest main attachment surface are composed,
   // CI measures preload.cjs at 186,235 bytes. Phase 47's mission projection/surface
-  // composition measures the reconciled preload at 192,892 bytes. Retain narrow headroom.
-  preloadBytes: 196_000,
+  // composition measures the reconciled preload at 192,892 bytes. The live-app
+  // chat/media and newly reachable command surfaces measure 200,325 bytes on current
+  // main. Retain narrow headroom over the measured artifact.
+  preloadBytes: 204_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,
   // Phase 19 added the ui-v2 shell: a finished design with ~1.9MB of webp imagery and
@@ -55,9 +60,10 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // branch measured the resulting ceiling at ~3.70MB.
   // The live-orb containment dashboard is an intentional renderer-only expansion;
   // CI measures the dashboard-only build at 3,717,135 bytes. Composing the verified
-  // persistent Chat/browser workspace on top measures 3,741,650 bytes. Keep narrow,
-  // explicit headroom over the combined artifact rather than weakening the gate.
-  rendererTotalBytes: 3_760_000,
+  // persistent Chat/browser workspace on top measures 3,741,650 bytes. The verified
+  // media-card/preview persistence pass measures 3,766,747 bytes on current main.
+  // Keep narrow, explicit headroom over the combined artifact.
+  rendererTotalBytes: 3_800_000,
 })
 
 export function inspectLockfile(pkg, lock) {

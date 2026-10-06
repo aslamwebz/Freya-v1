@@ -376,7 +376,7 @@ export function createBrowserTaskTool(options: BrowserTaskToolOptions): MindTool
           (title === '' ? '' : ` ("${boundText(title, MIND_TOOL_LIMITS.maxTitleChars)}")`) +
           `, performed ${String(navigatedTimes)} real navigation(s) and read the page as it rendered. ` +
           `Nothing was clicked, typed, submitted or logged into, and none of those is claimed. ` +
-          `This turn has one provider call left after this, which is enough to answer.`
+          `Freya can now answer from the page it actually observed without pretending another lookup happened.`
 
         const provenance: ToolProvenance = {
           actor: actor ?? BROWSER_PORT_NAMES.public,

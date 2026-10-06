@@ -307,6 +307,99 @@ describe('a corrupt journal does not come up healthy', () => {
   })
 })
 
+
+describe('known Freya-authored journal compatibility repair', () => {
+  const brokenCognitionRequest = (sequence: number, requestId: string): string =>
+    line(sequence, 'cognition.requested', {
+      requestId,
+      origin: 'user',
+      cause: 'user_message',
+      maxOutputTokens: 128,
+      requestedModel: null,
+      parentRunId: null,
+      goalId: null,
+    })
+
+  it('repairs the legacy # continuation id in place and preserves a later STOP ALL', async () => {
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(
+      file,
+      line(1, 'core.started', { version: '0.1.0', storeKind: 'jsonl', recoveredSequence: 0 }) +
+        line(2, 'core.ready', {}) +
+        brokenCognitionRequest(3, 'turn-legacy#1') +
+        line(4, 'security.stop_all.activated', { by: 'owner', reason: 'keep this latch' }),
+    )
+
+    const status = (await start()).status()
+    expect(status.lifecycle).toBe('ready')
+    expect(status.integrity.integrity).toBe('ok')
+    expect(status.stopAll.active).toBe(true)
+
+    const raw = await readFile(file, 'utf8')
+    expect(raw).toContain('"requestId":"turn-legacy:1"')
+    expect(raw).not.toContain('"requestId":"turn-legacy#1"')
+    expect(raw).toContain('core.integrity_repaired')
+    expect(raw).toContain('security.stop_all.activated')
+  })
+
+  it('restores an already-degraded profile from its verified legacy quarantine', async () => {
+    await mkdir(dirname(file), { recursive: true })
+    const quarantine = join(dir, 'core-events.jsonl.quarantine')
+    const prefix =
+      line(1, 'core.started', { version: '0.1.0', storeKind: 'jsonl', recoveredSequence: 0 }) +
+      line(2, 'core.ready', {})
+
+    await writeFile(
+      quarantine,
+      prefix +
+        brokenCognitionRequest(3, 'turn-old-profile#1') +
+        line(4, 'security.stop_all.activated', { by: 'owner', reason: 'must survive repair' }),
+    )
+
+    await writeFile(
+      file,
+      prefix +
+        line(3, 'core.started', { version: '0.1.0', storeKind: 'jsonl', recoveredSequence: 2 }) +
+        line(4, 'core.integrity_fault', {
+          reason:
+            'The event log is corrupt: line 3 is a complete event that does not validate (payload does not match the shape of cognition.requested).',
+          line: 3,
+          quarantinePath: quarantine,
+          trustedPrefixEvents: 2,
+          trustedPrefixBytes: 0,
+          damagedBytes: 100,
+        }) +
+        line(5, 'core.degraded', {
+          reason: 'the event journal was found corrupt; see the preceding integrity fault',
+        }),
+    )
+
+    const status = (await start()).status()
+    expect(status.lifecycle).toBe('ready')
+    expect(status.integrity.integrity).toBe('ok')
+    expect(status.stopAll.active).toBe(true)
+
+    const raw = await readFile(file, 'utf8')
+    expect(raw).toContain('"requestId":"turn-old-profile:1"')
+    expect(raw).toContain('core.integrity_repaired')
+    expect(raw).not.toContain('core.integrity_fault')
+    expect(raw).not.toContain('core.degraded')
+  })
+
+  it('still exposes status reads when unknown corruption keeps Core degraded', async () => {
+    await seedHealthyLogWithStopAfterwards()
+    const c = await start()
+
+    const result = await c.handleCommand({
+      command: 'core.status.read',
+      requestId: 'status-degraded-1',
+    })
+    expect(result.ok).toBe(true)
+    expect(result.status?.lifecycle).toBe('degraded')
+    expect(result.status?.integrity.integrity).toBe('corrupt')
+  })
+})
+
 describe('every corruption shape is corruption', () => {
   const cases: { name: string; body: string }[] = [
     { name: 'an invalid complete event', body: '{"eventId":"x","sequence":3}\n' },

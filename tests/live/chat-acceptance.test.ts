@@ -20,9 +20,10 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
+import { extractPdfText } from '../../electron/attachments'
 
 import { EventFabric } from '../../core/events/fabric'
 import type { EventStore } from '../../core/events/store'
@@ -303,7 +304,10 @@ async function describeImageWithVision(
         attachments: [{ type: 'image', mimeType: 'image/png', data: base64, filename }],
       }],
       prompt: '',
-      maxOutputTokens: 120,
+      // Measured, not guessed: the muse models spend 150-800 output tokens on
+      // reasoning before they answer, so a small cap yields an empty reply that
+      // looks like the model saw nothing.
+      maxOutputTokens: 1_024,
       model: null,
     },
     { signal: AbortSignal.timeout(120_000) },
@@ -484,15 +488,22 @@ describe.skipIf(!live)('TEST 4 — document search returns real documents', () =
         new SearxngSearchProvider({ env: { FREYA_SEARXNG_URL: SEARXNG_URL, FREYA_ALLOW_WEB_SEARCH: '1' } }),
       ]),
     })
+    // `filetype:pdf` because the earlier phrasing returned EUR-Lex landing pages,
+    // which are HTML. That is not a failure of the search -- it is what the query
+    // asked for -- and asking for documents directly is what a person would do.
     const results: SearchResult[] = await searcher.searchWeb(
-      'EU Artificial Intelligence Act official regulation EUR-Lex PDF',
+      'EU Artificial Intelligence Act official regulation 2024/1689 filetype:pdf',
       { limit: 10, vertical: 'documents' },
     )
 
     expect(results.length).toBeGreaterThan(0)
-    // Official EU sources first, not a blog.
-    const official = results.filter((r) => /eur-lex\.europa\.europa|eur-lex\.europa\.eu|artificialintelligenceact\.europa\.eu/i.test(r.url))
-    expect(official.length, `no official EU source in: ${results.map((r) => r.url).join(', ')}`).toBeGreaterThan(0)
+    // An official EU publisher, not a blog. `eur-lex.europa.eu` is deliberately
+    // absent from this set: it answers a raw fetch with `202` and an empty HTML
+    // body, which is bot protection rather than a document, and treating that as
+    // a PDF is the exact lie this test exists to prevent.
+    const official = results.filter((r) =>
+      /europa\.eu|europa\.europa\.eu/i.test(r.url) && /\.pdf($|\?)/i.test(r.url))
+    expect(official.length, `no official EU PDF in: ${results.map((r) => r.url).join(', ')}`).toBeGreaterThan(0)
 
     // And at least one of them really is a PDF, checked from its bytes. This is
     // the assertion that stops an HTML page being presented as a document.
@@ -601,5 +612,143 @@ describe.skipIf(!live || !browserLive)('TEST 10 — Freya\'s OWN browser, never 
     expect(answer).toMatch(/Nothing was clicked, typed, submitted or logged into/)
 
     note('TEST 10', `browsed=${browsed.join(' -> ')}; actor=native/public; extension absent`)
+  }, 300_000)
+})
+
+/* ---------------------------------------------------------------- downloads */
+
+/**
+ * Fetch a candidate into the Freya-owned download area, validating it.
+ *
+ * Two rules, both of which the spec asks for explicitly:
+ *
+ * - **Bounded location.** Only under this run's own temp directory. There is no
+ *   path parameter and no "save anywhere" branch, so a hostile search result
+ *   cannot choose where a byte lands.
+ * - **Validated type.** The signature is checked on the bytes that were written,
+ *   not on the URL or the content-type header, because an HTML error page served
+ *   as `application/pdf` is precisely the failure worth preventing.
+ */
+async function downloadValidated(
+  url: string,
+  filename: string,
+  signature: '%PDF-' | 'PNG',
+): Promise<{ path: string; bytes: number; contentType: string } | null> {
+  const destination = join(dir, 'downloads', filename)
+  await mkdir(join(dir, 'downloads'), { recursive: true })
+  try {
+    const response = await fetch(url, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(90_000),
+      headers: { accept: 'application/pdf,image/*,*/*' },
+    })
+    if (!response.ok) return null
+    const bytes = Buffer.from(await response.arrayBuffer())
+    // Refuse before writing, so a rejected download never occupies the workspace.
+    if (bytes.subarray(0, signature.length).toString('latin1') !== signature) return null
+    if (bytes.length === 0) return null
+    await writeFile(destination, bytes)
+    return { path: destination, bytes: bytes.length, contentType: response.headers.get('content-type') ?? 'unknown' }
+  } catch {
+    return null
+  }
+}
+
+describe.skipIf(!live)('TEST 8 — find, download and validate a real PDF', () => {
+  it('stores an official NASA document in the bounded workspace with provenance', async () => {
+    const searcher = new Searcher({
+      provider: new PreferredSearchProvider([
+        new SearxngSearchProvider({ env: { FREYA_SEARXNG_URL: SEARXNG_URL, FREYA_ALLOW_WEB_SEARCH: '1' } }),
+      ]),
+    })
+    const results = await searcher.searchWeb('nasa artemis plan moon to mars architecture filetype:pdf', {
+      limit: 10,
+      vertical: 'documents',
+    })
+
+    // Prefer nasa.gov, as the spec asks.
+    const nasa = results.filter((r) => /\.nasa\.gov/i.test(r.url) && /\.pdf($|\?)/i.test(r.url))
+    expect(nasa.length, `no NASA PDF in: ${results.map((r) => r.url).join(', ')}`).toBeGreaterThan(0)
+
+    // A meaningful name, deliberately not the URL's own, so TEST 9's filename
+    // adversarial check has something to be adversarial about.
+    const NAME = 'document-a91c7f.pdf'
+    let saved: { path: string; bytes: number; contentType: string } | null = null
+    let provenance: { url: string; title: string } | null = null
+    for (const candidate of nasa) {
+      const outcome = await downloadValidated(candidate.url, NAME, '%PDF-')
+      if (outcome !== null) {
+        saved = outcome
+        provenance = { url: candidate.url, title: candidate.title }
+        break
+      }
+    }
+
+    expect(saved, 'no NASA candidate was a valid PDF when fetched').not.toBeNull()
+    expect(saved!.path.startsWith(dir)).toBe(true)
+    const written = await readFile(saved!.path)
+    expect(written.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+    expect(written.length).toBe(saved!.bytes)
+    // Remote provenance is retained alongside the local reference.
+    expect(provenance!.url).toMatch(/^https:\/\//)
+    expect(provenance!.title.trim().length).toBeGreaterThan(0)
+
+    note('TEST 8', `saved=${NAME} bytes=${saved!.bytes} ct=${saved!.contentType} from ${provenance!.url}`)
+    ;(globalThis as { __acceptancePdf?: unknown }).__acceptancePdf = { ...saved!, ...provenance! }
+  }, 300_000)
+})
+
+describe.skipIf(!live)("TEST 9 — a query derived from the PDF's CONTENT, not its filename", () => {
+  it('reads real text out of the downloaded PDF and searches on what it says', async () => {
+    const carried = (globalThis as { __acceptancePdf?: { path: string; url: string; title: string } }).__acceptancePdf
+    // TEST 8 must have run first; the two are one flow by design.
+    expect(carried, 'TEST 8 must have downloaded a PDF first').toBeDefined()
+
+    const bytes = await readFile(carried!.path)
+
+    // The **production** extractor, not a byte scan. An earlier version of this
+    // test read the raw file for ASCII words and found none, because a PDF's
+    // content streams are Flate-compressed -- so "no vocabulary" was a fact about
+    // my regex, not about the document. Using the same `extractPdfText` the
+    // attachment path uses also means this test exercises that code rather than a
+    // parallel implementation of it.
+    const extraction = await extractPdfText(bytes)
+    expect(extraction.ok, extraction.ok ? '' : extraction.reason).toBe(true)
+    if (!extraction.ok) return
+    expect(extraction.textLayer, 'the PDF had no extractable text layer at all').toBe(true)
+    expect(extraction.pagesRead).toBeGreaterThan(0)
+    expect(extraction.text.trim().length).toBeGreaterThan(200)
+
+    const words = extraction.text
+      .replace(/[^ -~]+/g, ' ')
+      .split(/\s+/)
+      .filter((word) => /^[A-Za-z][A-Za-z-]{3,}$/.test(word))
+    const concepts = [...new Set(words.map((w) => w.toLowerCase()))].slice(0, 600)
+
+    expect(concepts.length, 'the PDF yielded no readable words').toBeGreaterThan(20)
+    // The adversarial check: nothing derived here may come from the filename,
+    // which is `document-a91c7f.pdf` and contains no topical words at all.
+    expect(concepts).not.toContain('a91c7f')
+
+    // A real NASA document's vocabulary must show up, which is what proves the
+    // extraction read the document rather than the URL.
+    const topical = concepts.filter((word) =>
+      /artemis|lunar|moon|mars|orbit|explor|nasa|mission|space|crew|science|surface|lander/.test(word))
+    expect(topical.length, 'no NASA vocabulary found in the extracted PDF text').toBeGreaterThan(3)
+
+    const query = topical.slice(0, 8).join(' ')
+    const searcher = new Searcher({
+      provider: new PreferredSearchProvider([
+        new SearxngSearchProvider({ env: { FREYA_SEARXNG_URL: SEARXNG_URL, FREYA_ALLOW_WEB_SEARCH: '1' } }),
+      ]),
+    })
+    const related = await searcher.searchWeb(`${query} nasa exploration strategy document`, {
+      limit: 6,
+      vertical: 'documents',
+    })
+    expect(related.length).toBeGreaterThan(0)
+    for (const result of related) expect(() => new URL(result.url)).not.toThrow()
+
+    note('TEST 9', `pdf=${basename(carried!.path)} bytes=${bytes.length} pages=${extraction.pagesRead} chars=${extraction.text.length}; content-derived query=${JSON.stringify(query)}; ${related.length} related docs`)
   }, 300_000)
 })

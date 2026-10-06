@@ -122,13 +122,20 @@ export const MIND_TOOL_LIMITS = Object.freeze({
   /**
    * Output tokens a *continuation* call may ask for.
    *
-   * Small on purpose: a continuation's only job is to read a short observation
-   * and answer from it. And the turn's whole allowance is a **total**, not a
-   * per-call figure — see `budgetFor` in `loop.ts`, which divides
-   * `CONVERSATION_LIMITS.maxOutputTokensPerTurn` across the three calls so the
-   * sum is exactly the existing per-turn ceiling and not a multiple of it.
+   * A continuation reads a short observation and answers from it, so it does not
+   * need much — but "not much" was previously guessed at 256, and measured
+   * against the live endpoint an answer grounded in search evidence costs ~414
+   * output tokens for `qwen/qwen3.8-27b-uncensored`. At 256 the continuation was
+   * the call that truncated, which is the worst possible place for it: the tool
+   * ran, the evidence was in hand, and the answer was cut off anyway.
+   *
+   * 1024 is comfortably above a measured answer and below the 3072 turn ceiling,
+   * which `budgetFor` splits as `1024 + 1024 + 1024`. The sum is exactly the
+   * per-turn ceiling and not a multiple of it, because
+   * `outputTokenBudgetReserved` is authorisation arithmetic taken before the
+   * call and never released.
    */
-  followUpOutputTokens: 256,
+  followUpOutputTokens: 1_024,
 })
 
 /* ------------------------------------------------------------- observations */

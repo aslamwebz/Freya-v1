@@ -152,8 +152,25 @@ export const CONVERSATION_LIMITS = Object.freeze({
    * Bounded per turn, and matched by the foreground grant's own ceiling, so the
    * Governor is enforcing the same number the Mind asked for rather than a
    * separate policy that could drift from it.
+   *
+   * Raised from 1024 on 2026-10-06. The original 1024 was set when the first
+   * conversation loop landed (54837a7, 2026-09-30) and was never revisited; it
+   * predates any measurement against a real model, and the tool loop is what made
+   * it visibly wrong rather than merely tight.
+   *
+   * Measured output tokens for `qwen/qwen3.8-27b-uncensored` against the live
+   * endpoint: a tool call ~35, an answer from supplied evidence ~414, an ordinary
+   * answer ~550. A turn that decides to look something up spends all three, which
+   * is ~1000 before any margin — so 1024 truncated the *ordinary* case, the one
+   * that is supposed to need no tools at all, and the truncation was correctly
+   * reported as a failed turn. 3072 covers the three-call shape with room for a
+   * longer answer and still bounds the worst case.
+   *
+   * This number is a *ceiling*, not a forecast. Actual spend is bounded by
+   * reported usage against the grant, so a turn that answers briefly costs
+   * briefly; what this stops is a turn being unable to finish.
    */
-  maxOutputTokensPerTurn: 1_024,
+  maxOutputTokensPerTurn: 3_072,
 })
 
 /* ---------------------------------------------------------------- helpers */

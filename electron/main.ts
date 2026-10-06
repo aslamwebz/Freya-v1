@@ -1709,12 +1709,14 @@ app.on('web-contents-created', (_event, contents) => {
  * microphone is enabled. Disarming hands-free or STOP ALL closes that ambient
  * permission again immediately.
  */
-let voiceCaptureOpen = false
-let voiceMicEnabled = false
-let voiceWakeArmed = false
-
 function microphoneExpected(): boolean {
-  return voiceMicEnabled && (voiceCaptureOpen || voiceWakeArmed)
+  const voice = coreHost?.voice()
+  if (voice === null || voice === undefined) return false
+  return voice.micEnabled && (
+    voice.capturing ||
+    voice.wake.armed ||
+    voice.permissionRequestOpen
+  )
 }
 
 /**
@@ -1733,6 +1735,7 @@ function trackVoiceCapture(envelope: CoreCommandEnvelope, _result: { ok: boolean
     case 'voice.capture.cancel':
     case 'voice.mic.enable':
     case 'voice.mic.disable':
+    case 'voice.permission.request':
     case 'voice.permission.report':
     case 'voice.tts.cancel':
     case 'voice.wake.arm':
@@ -1746,8 +1749,5 @@ function trackVoiceCapture(envelope: CoreCommandEnvelope, _result: { ok: boolean
   // replaced when Core actually agrees a session exists. Before Core has built
   // the service at all, both stay false — which is the safe reading, since there
   // is no capture for a window to be asking about.
-  voiceMicEnabled = voice?.micEnabled === true
-  voiceCaptureOpen = voice?.capturing === true
-  voiceWakeArmed = voice?.wake.armed === true
   presenceHost?.updateVoice(voice)
 }

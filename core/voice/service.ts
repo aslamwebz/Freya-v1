@@ -988,9 +988,10 @@ export class VoiceService {
 
   /** End the current utterance cleanly and drop the rest. */
   async stopSpeaking(): Promise<void> {
-    if (this.speaking === null && this.queue.length === 0) return
+    if (this.speaking === null && this.cueSpeaking === null && this.queue.length === 0) return
     const current = this.speaking
     this.queue = []
+    this.speakAbort?.abort(new Error('speech was stopped'))
     await this.tts?.stop()
     if (current !== null) {
       await this.record(
@@ -1000,6 +1001,7 @@ export class VoiceService {
       )
     }
     this.speaking = null
+    this.cueSpeaking = null
     this.move(this.baseState())
     this.publish()
   }
@@ -1025,12 +1027,19 @@ export class VoiceService {
       )
     }
     this.speaking = null
+    this.cueSpeaking = null
     this.move(this.stopAllLatch() ? 'stopped-by-STOP-ALL' : 'interrupted')
     this.publish()
   }
 
   /** The renderer reports that playback actually finished (or failed). */
   async settleSpeech(utteranceId: unknown, outcome: 'completed' | 'failed'): Promise<void> {
+    if (this.cueSpeaking?.utteranceId === utteranceId) {
+      this.cueSpeaking = null
+      this.move(outcome === 'completed' ? this.baseState() : 'failed')
+      this.publish()
+      return
+    }
     const current = this.speaking
     if (current === null || current.utteranceId !== utteranceId) return
     await this.record(
@@ -1047,7 +1056,7 @@ export class VoiceService {
 
   /** Whether the output adapter currently has the floor. */
   get isSpeaking(): boolean {
-    return this.speaking !== null
+    return this.speaking !== null || this.cueSpeaking !== null
   }
 
   async listVoices(): Promise<VoiceOption[]> {

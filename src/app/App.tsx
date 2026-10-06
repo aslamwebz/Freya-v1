@@ -57,7 +57,6 @@ export function App({
   preferences,
   dressing,
   adapter,
-  initialLayout,
 }: {
   preferences: PreferencesStore
   dressing: DressingStore
@@ -67,12 +66,10 @@ export function App({
   const settings = useSyncExternalStore(preferences.subscribe, preferences.getSnapshot, preferences.getSnapshot)
   const snapshot = useUiState(adapter)
 
-  // Restore the last workspace before first paint, but keep Home as the safe
-  // default when the persisted route is missing or invalid.
-  const restoredNav = initialLayout?.nav && (initialLayout.nav === 'settings' || RAIL.some((item) => item.id === initialLayout.nav))
-    ? initialLayout.nav
-    : 'home'
-  const [screen, setScreen] = useState(restoredNav)
+  // Every cold start lands on the Dashboard. Workspace persistence still keeps
+  // conversation/window state for when the owner deliberately opens those surfaces,
+  // but it must not turn yesterday's Chat route into today's launch screen.
+  const [screen, setScreen] = useState('home')
   const [dressingOpen, setDressingOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('appearance')

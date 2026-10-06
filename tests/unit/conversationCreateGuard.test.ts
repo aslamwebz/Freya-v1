@@ -7,20 +7,11 @@ import {
   resetConversationMirror,
 } from '../../src/platform/conversationClient'
 
-/*
- * One empty conversation at a time.
- *
- * Every New-chat button in every window goes through the mirror's `create`, so
- * the guard lives there: when the projection already shows a conversation with
- * no messages, pressing New selects that one instead of minting a twin that
- * would sit on the list indistinguishable forever.
- */
-
 function projection(over: Partial<ConversationProjection> = {}): ConversationProjection {
   return {
     persistence: { mode: 'ephemeral', reason: 'test store' },
     conversations: [
-      { conversationId: 'c1', title: 'Test chat', updatedAt: '2026-10-01T09:00:00.000Z', messageCount: 0, lastTurnOutcome: null },
+      { conversationId: 'c1', title: 'Saved', updatedAt: '2026-10-01T09:00:00.000Z', messageCount: 4, lastTurnOutcome: null },
     ],
     activeConversationId: 'c1',
     messages: [],
@@ -61,30 +52,16 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('the mirror will not duplicate an empty conversation', () => {
-  it('creates a conversation only when nothing on the list is empty', async () => {
-    mount({
-      conversations: [
-        { conversationId: 'c1', title: 'Saved', updatedAt: '2026-10-01T09:00:00.000Z', messageCount: 4, lastTurnOutcome: null },
-      ],
-      activeConversationId: 'c1',
-    })
+describe('new conversation semantics', () => {
+  it('always asks Core to create a new conversation', async () => {
+    mount()
     const mirror = createConversationMirror()
     await mirror.attach()
     await mirror.create()
-    expect(submitted.map((entry) => entry.command)).toEqual(['conversation.create'])
+    expect(submitted).toEqual([{ command: 'conversation.create', payload: undefined }])
   })
 
-  it('presses New nowhere when an empty conversation already exists', async () => {
-    mount({ activeConversationId: 'c1' })
-    const mirror = createConversationMirror()
-    await mirror.attach()
-    const outcome = await mirror.create()
-    expect(outcome.operation).toBe('refused')
-    expect(submitted).toEqual([])
-  })
-
-  it('selects the existing empty conversation when another is active', async () => {
+  it('does not reuse an existing empty conversation automatically', async () => {
     mount({
       conversations: [
         { conversationId: 'c1', title: 'Saved', updatedAt: '2026-10-01T09:00:00.000Z', messageCount: 4, lastTurnOutcome: null },
@@ -95,7 +72,14 @@ describe('the mirror will not duplicate an empty conversation', () => {
     const mirror = createConversationMirror()
     await mirror.attach()
     await mirror.create()
-    expect(submitted.map((entry) => entry.command)).toEqual(['conversation.read'])
-    expect(submitted[0]?.payload).toEqual({ conversationId: 'c2' })
+    expect(submitted).toEqual([{ command: 'conversation.create', payload: undefined }])
+  })
+
+  it('reuses history only through an explicit read', async () => {
+    mount()
+    const mirror = createConversationMirror()
+    await mirror.attach()
+    await mirror.read('c1')
+    expect(submitted).toEqual([{ command: 'conversation.read', payload: { conversationId: 'c1' } }])
   })
 })

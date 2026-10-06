@@ -1,7 +1,6 @@
 # Phase 45 — Voice
 
-**Status:** IMPLEMENTED — push-to-talk and speech output are live; transcription is
-an honest gap on this platform.
+**Status:** IMPLEMENTED — push-to-talk and speech output are live; hosted transcription is available behind an explicit paid-provider opt-in. Hands-free wake remains an honest gap.
 **Branch:** `runtime/phase45-voice`
 **Baseline:** `89d4fa7` (Phases 38 + 39 merge, App Mode/UI merge, provider endpoint
 security, provider reconfiguration correctness)
@@ -119,9 +118,14 @@ platform has no recognition API" and "the platform has one that would send audio
 off this machine" — and enables neither. It never invokes the constructor it finds,
 because a feature detector that calls what it finds is no longer a detector.
 
-**This build therefore cannot transcribe.** The state on a production machine is
-`configuration-required`, the microphone still works, the recording is discarded,
-and the button says so before it is pressed.
+**This build can now transcribe when the owner explicitly enables hosted STT.**
+The production host supplies a main-process-only adapter for OpenAI's transcription
+endpoint. It remains `configuration-required` unless `FREYA_ALLOW_REMOTE_STT=1`
+and `OPENAI_API_KEY` are both present. The endpoint is fixed in code, the key
+never crosses the preload bridge, audio is wrapped as WAV in memory only, and
+nothing is written to disk or to the journal. With the switch off, the original
+Phase 45 behavior is unchanged: the recording is discarded and no network request
+exists.
 
 ### TTS — the platform really does provide this
 
@@ -229,7 +233,7 @@ kept.
 | **TTS — cancel / stop / queue** | **YES** | `cancel` truncates mid-word, `stop` at a boundary; Core holds the queue and the status |
 | **Barge-in — press while she speaks** | **YES** | Playback cancelled, then capture begins |
 | **Barge-in — automatic, via wake** | **NO** | Needs a microphone open during playback. Available only when hands-free is armed, and hands-free is unavailable on this build |
-| **STT — transcription** | **NO** | No engine configured. Reports `configuration-required`, discards the recording, says so |
+| **STT — transcription** | **YES, opt-in** | Paid hosted adapter; requires `FREYA_ALLOW_REMOTE_STT=1` plus `OPENAI_API_KEY`. Otherwise reports `configuration-required` and sends nothing |
 | **STT — interim transcripts** | **NO** | Follows STT. Interim display works the moment an adapter streams |
 | **STT — browser recognition** | **NO** | Feature-detected absent in Electron, and cloud where present. Neither enabled |
 | **Final transcript → conversation** | **YES** | Injected submitter, same function typed text uses. One model call |

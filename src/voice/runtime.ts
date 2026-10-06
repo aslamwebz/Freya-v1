@@ -50,6 +50,13 @@ const WAKE_SUSTAIN_MS = 480
 
 /** Sustained speech energy above this level counts as somebody talking. */
 const WAKE_THRESHOLD = 0.14
+/** Enough local history to retain the beginning of the word "Freya". */
+const WAKE_PRE_ROLL_MS = 1_200
+/** A hands-free utterance is deliberately much shorter than push-to-talk. */
+const WAKE_CLIP_MAX_MS = 8_000
+/** Silence after speech that closes one hands-free utterance. */
+const WAKE_END_SILENCE_MS = 900
+const WAKE_MIN_CLIP_MS = 500
 
 export interface VoiceRuntimeEvents {
   /** A confirmed transcript is ready. `turnId` is set when it became a turn. */
@@ -67,7 +74,10 @@ export class VoiceRuntime {
   private wakeLevel = 0
   private wakeSustainedMs = 0
   private wakeTimer: ReturnType<typeof setInterval> | null = null
-  private wakeMeter: { abandon(): Promise<void> } | null = null
+  private wakeMeter: WakeMeter | null = null
+  private wakeSessionId: string | null = null
+  private wakeClipStartedAt: number | null = null
+  private wakeSilenceMs = 0
   private lastUtterance: string | null = null
   private disposed = false
 
@@ -299,6 +309,30 @@ export class VoiceRuntime {
    * pressed this.
    */
   async armWake(): Promise<void> {
+    const enabled = await this.mirror.micEnable()
+    if (!enabled.ok) {
+      this.notice(enabled.reason ?? 'the microphone could not be enabled')
+      return
+    }
+
+    if (this.mirror.projection?.permission !== 'granted') {
+      const request = await this.mirror.requestPermission()
+      if (!request.ok) {
+        this.notice(request.reason ?? 'microphone permission could not be requested')
+        return
+      }
+      try {
+        await requestMicrophonePermission()
+        await this.mirror.reportPermission('granted')
+      } catch (error) {
+        if (error instanceof MicrophoneError && error.reason === 'permission-denied') {
+          await this.mirror.reportPermission('denied')
+        }
+        this.notice(error instanceof Error ? error.message : 'microphone permission was not granted')
+        return
+      }
+    }
+
     const armed = await this.mirror.armWake()
     if (!armed.ok) {
       this.notice(armed.reason ?? 'hands-free is not available on this build')
@@ -314,29 +348,36 @@ export class VoiceRuntime {
     }
     const capture = this.wakeMeter
     this.wakeMeter = null
+    if (this.wakeSessionId !== null) await this.mirror.cancelCapture()
+    this.wakeSessionId = null
+    this.wakeClipStartedAt = null
+    this.wakeSilenceMs = 0
+    capture?.cancelClip()
     if (capture !== null) await capture.abandon()
     await this.mirror.disarmWake()
   }
 
   /**
-   * Open a low-level meter for the wake gate.
+   * Open the explicitly armed local hands-free meter.
    *
-   * Deliberately not a recording. It holds no samples, sends none, and is
-   * released the moment the gate is disarmed or the window unmounts — which is
-   * what makes "hands-free is bounded" a property rather than a promise.
+   * It retains only a tiny in-memory rolling pre-roll so the wake word itself is
+   * present when speech crosses the local VAD threshold. Nothing is written to
+   * disk and no network request happens until Core has opened one wake capture.
    */
   private async openWakeCapture(): Promise<void> {
     const capabilities = this.capabilities()
-    if (!capabilities.capture) return
-    if (this.wakeMeter !== null) return
+    if (!capabilities.capture || this.wakeMeter !== null) return
     try {
       this.wakeMeter = await openWakeMeter({
         threshold: WAKE_THRESHOLD,
         sampleRate: VOICE_LIMITS.sampleRate,
+        preRollMs: WAKE_PRE_ROLL_MS,
+        maxClipMs: WAKE_CLIP_MAX_MS,
       })
-    } catch {
+    } catch (error) {
       this.wakeMeter = null
-      this.notice('Hands-free could not measure the room, so it is not armed.')
+      await this.mirror.disarmWake()
+      this.notice(error instanceof Error ? error.message : 'Hands-free could not open the microphone.')
       return
     }
     this.wakeTimer = setInterval(() => {
@@ -345,39 +386,70 @@ export class VoiceRuntime {
   }
 
   private async tickWake(): Promise<void> {
-    if (this.wakeMeter === null) return
-    // Already recording because the gate fired: nothing to decide.
-    if (this.capture !== null) return
-    this.wakeSustainedMs = this.wakeLevel >= WAKE_THRESHOLD ? this.wakeSustainedMs + WAKE_POLL_MS : 0
+    const meter = this.wakeMeter
+    if (meter === null || this.capture !== null) return
+    this.wakeLevel = meter.level
+
+    if (this.wakeSessionId !== null) {
+      const elapsed = this.wakeClipStartedAt === null ? 0 : performance.now() - this.wakeClipStartedAt
+      this.wakeSilenceMs =
+        this.wakeLevel < WAKE_THRESHOLD ? this.wakeSilenceMs + WAKE_POLL_MS : 0
+      if (
+        elapsed >= WAKE_CLIP_MAX_MS ||
+        (elapsed >= WAKE_MIN_CLIP_MS && this.wakeSilenceMs >= WAKE_END_SILENCE_MS)
+      ) {
+        await this.finishWakeClip()
+      }
+      return
+    }
+
+    this.wakeSustainedMs =
+      this.wakeLevel >= WAKE_THRESHOLD ? this.wakeSustainedMs + WAKE_POLL_MS : 0
     if (this.wakeSustainedMs < WAKE_SUSTAIN_MS) return
 
-    // Barge-in first, then the normal press path. Reusing `press` is deliberate:
-    // the wake gate gets exactly the capture an owner press would get, and no
-    // separate quieter path exists for it to take.
     if (this.output?.speaking === true) {
       await this.interrupt('the owner started speaking')
     }
+
     const outcome = await this.mirror.reportWakeEnergy(this.wakeLevel, this.wakeSustainedMs)
     this.wakeSustainedMs = 0
     if (!outcome.fired) {
       if (outcome.reason !== null) this.notice(outcome.reason)
       return
     }
-    // Core opened the session on its own authority; the window's job now is to
-    // drive the same capture machinery a press would have.
-    this.sessionId = this.mirror.projection?.sessionId ?? null
-    try {
-      this.capture = await openMicrophone({
-        maxDurationMs: this.mirror.projection?.limits.maxDurationMs ?? VOICE_LIMITS.maxDurationMs,
-        maxBytes: this.mirror.projection?.limits.maxAudioBytes ?? VOICE_LIMITS.maxAudioBytes,
-        sampleRate: VOICE_LIMITS.sampleRate,
-      })
-      voiceEnvelope.setRealLevel(0)
-    } catch (error) {
+
+    const sessionId = this.mirror.projection?.sessionId ?? null
+    if (sessionId === null) {
       await this.mirror.cancelCapture()
-      this.sessionId = null
-      this.notice(error instanceof MicrophoneError ? error.message : 'the microphone could not be opened')
+      return
     }
+
+    this.wakeSessionId = sessionId
+    this.wakeClipStartedAt = performance.now()
+    this.wakeSilenceMs = 0
+    meter.beginClip()
+  }
+
+  private async finishWakeClip(): Promise<void> {
+    const meter = this.wakeMeter
+    const sessionId = this.wakeSessionId
+    if (meter === null || sessionId === null) return
+
+    this.wakeSessionId = null
+    this.wakeClipStartedAt = null
+    this.wakeSilenceMs = 0
+    const clip = meter.finishClip()
+    if (clip === null || clip.audio.byteLength === 0) {
+      await this.mirror.cancelCapture()
+      return
+    }
+
+    const outcome = await this.mirror.endCapture({
+      sessionId,
+      audio: clip.audio,
+      durationMs: clip.durationMs,
+    })
+    if (!outcome.ok && outcome.detail !== null) this.notice(outcome.detail)
   }
 
   /** The voices this platform offers, for a picker. */
@@ -404,7 +476,7 @@ export class VoiceRuntime {
 
   /** Whether this window currently holds an open capture. */
   get listening(): boolean {
-    return this.capture !== null
+    return this.capture !== null || this.wakeSessionId !== null
   }
 
   /** Whether anything is playing right now. */
@@ -428,6 +500,10 @@ export class VoiceRuntime {
     }
     const meter = this.wakeMeter
     this.wakeMeter = null
+    if (this.wakeSessionId !== null) await this.mirror.cancelCapture()
+    this.wakeSessionId = null
+    this.wakeClipStartedAt = null
+    meter?.cancelClip()
     if (meter !== null) await meter.abandon()
     await this.cancel()
     this.output?.cancel()
@@ -436,15 +512,26 @@ export class VoiceRuntime {
   }
 }
 
+interface WakeMeter {
+  readonly level: number
+  beginClip(): void
+  finishClip(): { audio: Uint8Array; durationMs: number } | null
+  cancelClip(): void
+  abandon(): Promise<void>
+}
+
 /**
- * Open a meter that publishes a level and keeps nothing.
+ * Local hands-free meter with a bounded in-memory pre-roll.
  *
- * Separate from `openMicrophone` on purpose. That one accumulates PCM because a
- * recording needs it; this one computes an RMS and throws the samples away, so
- * the code that runs during hands-free cannot be the code that stores audio even
- * by accident.
+ * The rolling buffer is capped to `preRollMs`; a promoted clip is capped to
+ * `maxClipMs`. It is never persisted and has no network capability.
  */
-async function openWakeMeter(options: { threshold: number; sampleRate: number }): Promise<{ abandon(): Promise<void> }> {
+async function openWakeMeter(options: {
+  threshold: number
+  sampleRate: number
+  preRollMs: number
+  maxClipMs: number
+}): Promise<WakeMeter> {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
     throw new MicrophoneError('unsupported', 'this environment has no microphone API')
   }
@@ -462,6 +549,13 @@ async function openWakeMeter(options: { threshold: number; sampleRate: number })
   const context = new AudioContextCtor()
   const source = context.createMediaStreamSource(stream)
   const processor = context.createScriptProcessor(2048, 1, 1)
+  const preRollFrames = Math.round(options.sampleRate * options.preRollMs / 1000)
+  const maxClipFrames = Math.round(options.sampleRate * options.maxClipMs / 1000)
+  const ring: Int16Array[] = []
+  let ringFrames = 0
+  let clip: Int16Array[] | null = null
+  let clipFrames = 0
+  let currentLevel = 0
   let closed = false
 
   const finish = async (): Promise<void> => {
@@ -492,7 +586,21 @@ async function openWakeMeter(options: { threshold: number; sampleRate: number })
       const sample = input[i] ?? 0
       sum += sample * sample
     }
-    publishMicLevel(Math.min(1, Math.max(0, (Math.sqrt(sum / input.length) - 0.01) * 6)))
+    currentLevel = Math.min(1, Math.max(0, (Math.sqrt(sum / input.length) - 0.01) * 6))
+    publishMicLevel(currentLevel)
+
+    const pcm = resampleFloat32ToInt16(input, context.sampleRate, options.sampleRate)
+    ring.push(pcm)
+    ringFrames += pcm.length
+    while (ringFrames > preRollFrames && ring.length > 1) {
+      const removed = ring.shift()
+      ringFrames -= removed?.length ?? 0
+    }
+
+    if (clip !== null && clipFrames < maxClipFrames) {
+      clip.push(pcm)
+      clipFrames += pcm.length
+    }
   }
 
   source.connect(processor)
@@ -501,7 +609,37 @@ async function openWakeMeter(options: { threshold: number; sampleRate: number })
   processor.connect(sink)
   sink.connect(context.destination)
 
-  return { abandon: finish }
+  return {
+    get level() {
+      return currentLevel
+    },
+    beginClip() {
+      clip = ring.map((chunk) => chunk.slice())
+      clipFrames = clip.reduce((total, chunk) => total + chunk.length, 0)
+    },
+    finishClip() {
+      if (clip === null) return null
+      const chunks = clip
+      clip = null
+      const frames = Math.min(maxClipFrames, chunks.reduce((total, chunk) => total + chunk.length, 0))
+      const audio = new Uint8Array(frames * 2)
+      let frameOffset = 0
+      for (const chunk of chunks) {
+        if (frameOffset >= frames) break
+        const take = Math.min(chunk.length, frames - frameOffset)
+        const bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, take * 2)
+        audio.set(bytes, frameOffset * 2)
+        frameOffset += take
+      }
+      clipFrames = 0
+      return { audio, durationMs: frames / options.sampleRate * 1000 }
+    },
+    cancelClip() {
+      clip = null
+      clipFrames = 0
+    },
+    abandon: finish,
+  }
 }
 
 function release(stream: MediaStream): void {

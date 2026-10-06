@@ -1,7 +1,7 @@
 import { VOICE_LIMITS, type VoiceOption } from '../../core/voice/types'
 import { hostBridge } from '../platform/host'
 import { voiceMirror, type VoiceMirror } from '../platform/voiceClient'
-import { openMicrophone, MicrophoneError, type MicCapture } from '../ui/surfaces/microphone'
+import { openMicrophone, requestMicrophonePermission, MicrophoneError, resampleFloat32ToInt16, type MicCapture } from '../ui/surfaces/microphone'
 import { clearMicLevel, publishMicLevel } from '../presence/micLevel'
 import { voiceEnvelope } from '../presence/voiceEnvelope'
 import { WindowSpeechOutput } from './output'
@@ -118,6 +118,24 @@ export class VoiceRuntime {
     if (!enabled.ok) {
       this.notice(enabled.reason ?? 'the microphone could not be turned on')
       return
+    }
+
+    if (this.mirror.projection?.permission !== 'granted') {
+      const request = await this.mirror.requestPermission()
+      if (!request.ok) {
+        this.notice(request.reason ?? 'microphone permission could not be requested')
+        return
+      }
+      try {
+        await requestMicrophonePermission()
+        await this.mirror.reportPermission('granted')
+      } catch (error) {
+        if (error instanceof MicrophoneError && error.reason === 'permission-denied') {
+          await this.mirror.reportPermission('denied')
+        }
+        this.notice(error instanceof Error ? error.message : 'microphone permission was not granted')
+        return
+      }
     }
 
     const started = await this.mirror.startCapture()

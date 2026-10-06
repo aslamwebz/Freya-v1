@@ -223,7 +223,7 @@ export function Chats({
                       message Core stored, never recovered from the prose: a card needs
                       an address, and an address read out of a sentence is a guess. */}
                   {message.role === 'assistant' && message.media !== undefined && message.media.length > 0 ? (
-                    <MediaGrid items={message.media} onOpenPage={onBrowserOpenUrl} />
+                    <MediaGrid items={message.media} />
                   ) : null}
                 </div>
               </div>

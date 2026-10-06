@@ -13,6 +13,7 @@ import type {
   VoiceProjection,
 } from '../../../core/protocol/conversation'
 import { StandInStt, StandInTts, voiceOptions } from './fixture'
+import { buildLocalWakeGate } from '../../../core/voice/wake'
 
 /**
  * Voice, end to end through Core.
@@ -831,6 +832,165 @@ describe('J — hands-free is off', () => {
     // Not armed, so nothing happened at all.
     expect(c.voice().capturing).toBe(false)
     expect(provider.calls).toBe(0)
+  })
+})
+
+
+/* ------------------------------------------- E.V.-style voice attention path */
+
+describe('J2 — Freya wake phrase opens one bounded conversation', () => {
+  async function fireWake(c: Core, requestId: string): Promise<VoiceCommandOutcome> {
+    const fired = await c.handleCommand({
+      command: 'voice.wake.energy',
+      requestId: `${requestId}-energy`,
+      payload: { level: 0.99, sustainedMs: 600 },
+    })
+    expect(fired.ok).toBe(true)
+    const sessionId = c.voice().sessionId
+    expect(sessionId).not.toBeNull()
+    return await endCapture(c, sessionId!, { durationMs: 30 })
+  }
+
+  it('strips "Freya" and sends the request through the ordinary Conversation/Mind path once', async () => {
+    const provider = new FakeModelProvider()
+    const c = await started({
+      providers: [provider],
+      voiceStt: new StandInStt('Freya, check the build'),
+      voiceWake: buildLocalWakeGate(),
+    })
+    await ready(c)
+    const armed = await c.handleCommand({ command: 'voice.wake.arm', requestId: 'wake-arm' })
+    expect(armed.ok).toBe(true)
+
+    const outcome = await fireWake(c, 'wake-one')
+    expect(outcome.turnId).not.toBeNull()
+    expect(provider.calls).toBe(1)
+    expect(c.voice().attention.state).toBe('attentive')
+
+    const conversation = await c.conversation()
+    const owner = conversation.messages.find((message) => message.role === 'user')
+    expect(owner?.content).toBe('check the build')
+    expect(owner?.content).not.toMatch(/^Freya\b/i)
+  })
+
+  it('answers a bare "Freya" with a closed cue and does not spend cognition', async () => {
+    const provider = new FakeModelProvider()
+    const tts = new StandInTts()
+    const c = await started({
+      providers: [provider],
+      voiceStt: new StandInStt('Freya'),
+      voiceTts: tts,
+      voiceWake: buildLocalWakeGate(),
+    })
+    await ready(c)
+    await c.handleCommand({ command: 'voice.wake.arm', requestId: 'wake-arm' })
+
+    const outcome = await fireWake(c, 'wake-only')
+    expect(outcome.turnId).toBeNull()
+    expect(provider.calls).toBe(0)
+    expect(c.voice().attention.state).toBe('attentive')
+    expect(tts.spoken.map((item) => item.text)).toContain('Yes?')
+  })
+
+  it('accepts natural follow-ups inside the attention window and "stand by" closes it', async () => {
+    const provider = new FakeModelProvider()
+    const tts = new StandInTts()
+    const phrases = ['Freya', 'what about the tests?', 'stand by']
+    let index = 0
+    const stt = {
+      id: 'sequence-stt',
+      kind: 'local' as const,
+      availability: 'available' as const,
+      detail: 'sequence STT for voice-attention acceptance',
+      streaming: false,
+      async transcribe() {
+        const text = phrases[index] ?? ''
+        index += 1
+        return { text, engine: 'sequence-stt' }
+      },
+    }
+
+    const c = await started({
+      providers: [provider],
+      voiceStt: stt,
+      voiceTts: tts,
+      voiceWake: buildLocalWakeGate(),
+    })
+    await ready(c)
+    await c.handleCommand({ command: 'voice.wake.arm', requestId: 'wake-arm' })
+
+    await fireWake(c, 'wake-open')
+    expect(c.voice().attention.state).toBe('attentive')
+    expect(provider.calls).toBe(0)
+
+    const followUp = await fireWake(c, 'wake-follow-up')
+    expect(followUp.turnId).not.toBeNull()
+    expect(provider.calls).toBe(1)
+    const conversation = await c.conversation()
+    expect(
+      conversation.messages.some(
+        (message) => message.role === 'user' && message.content === 'what about the tests?',
+      ),
+    ).toBe(true)
+
+    const standby = await fireWake(c, 'wake-standby')
+    expect(standby.turnId).toBeNull()
+    expect(provider.calls).toBe(1)
+    expect(c.voice().attention.state).toBe('standby')
+    expect(tts.spoken.map((item) => item.text)).toEqual(expect.arrayContaining(['Yes?', 'Okay.']))
+  })
+})
+
+describe('J3 — Core Attention, not Voice, decides proactive speech', () => {
+  it('speaks a closed deadline cue only when proactive alert speech is enabled', async () => {
+    const tts = new StandInTts()
+    const c = await started({
+      voiceTts: tts,
+      voiceProactiveAlerts: true,
+    })
+
+    const result = await c.handleCommand({
+      command: 'attention.event.ingest',
+      requestId: 'attention-deadline',
+      payload: {
+        kind: 'deadline',
+        text: 'Untrusted detail that must never be spoken.',
+        severityHint: 'none',
+        dueAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    })
+    expect(result.ok).toBe(true)
+
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(tts.spoken.map((item) => item.text)).toContain('A deadline needs your attention.')
+    expect(tts.spoken.map((item) => item.text).join(' ')).not.toContain(
+      'Untrusted detail that must never be spoken.',
+    )
+  })
+
+  it('stays silent when proactive alerts are off even if Attention chooses an expressive outcome', async () => {
+    const tts = new StandInTts()
+    const c = await started({
+      voiceTts: tts,
+      voiceProactiveAlerts: false,
+    })
+
+    const result = await c.handleCommand({
+      command: 'attention.event.ingest',
+      requestId: 'attention-deadline-off',
+      payload: {
+        kind: 'deadline',
+        text: 'Do not speak me.',
+        severityHint: 'none',
+        dueAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    })
+    expect(result.ok).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(tts.spoken).toHaveLength(0)
   })
 })
 

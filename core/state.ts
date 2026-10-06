@@ -354,6 +354,11 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
       // carries it to callers.
       return { ...state, integrityFault: record }
     }
+    case 'core.integrity_repaired':
+      // The repair event is written only after the store has reconstructed and
+      // revalidated the full journal. Clearing the latch here makes replay and
+      // the live process agree on the repaired trust state.
+      return { ...state, integrityFault: null }
 
     default:
       // Attention owns its own slice and its own reducer. Delegating here keeps

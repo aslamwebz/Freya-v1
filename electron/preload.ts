@@ -1147,6 +1147,12 @@ function rendererVoiceConfigPayload(
     }
     payload.autoSpeak = record.autoSpeak
   }
+  if (record.proactiveAlerts !== undefined) {
+    if (typeof record.proactiveAlerts !== 'boolean') {
+      return { ok: false, reason: 'proactive voice alert setting is invalid' }
+    }
+    payload.proactiveAlerts = record.proactiveAlerts
+  }
   return { ok: true, payload }
 }
 

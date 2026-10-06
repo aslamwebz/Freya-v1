@@ -25,7 +25,7 @@ import type { VoiceDock } from './useVoiceDock'
  *   text uses. Either way it is one model call, never two, and nothing about it
  *   bypasses the Governor.
  */
-export function VoiceSettings({ voice }: { voice: VoiceDock }) {
+export function VoiceSettings({ voice, expanded = false }: { voice: VoiceDock; expanded?: boolean }) {
   const [open, setOpen] = useState(false)
   const { view } = voice
   const projection = view.projection
@@ -41,17 +41,17 @@ export function VoiceSettings({ voice }: { voice: VoiceDock }) {
       <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         Voice
       </button>
-      {open ? (
+      {open || expanded ? (
         <div role="group" aria-label="Voice">
           <p role="status" data-voice-state={view.state}>
-            {describe(view.state)}
+            {!view.micEnabled ? 'Off. Microphone closed.' : view.wakeArmed && !projection.attention?.active ? 'Standby. Say “Freya” to begin.' : projection.attention?.active ? 'Listening. Say “stand by” when finished.' : describe(view.state)}
           </p>
 
           <Switch
             label="Microphone"
             detail={
               view.micEnabled
-                ? 'On. Freya only listens between a press and its release.'
+                ? view.wakeArmed ? 'On. Checks the name locally in standby; listens to speech after you call Freya.' : 'On. Freya only listens between a press and its release.'
                 : 'Off. Freya cannot listen until you turn this on.'
             }
             on={view.micEnabled}

@@ -1,3 +1,4 @@
+import type { ModelAttachment } from '../../../core/model/provider'
 import type { ConversationCommandOutcome } from '../../../core/protocol/conversation'
 
 /**
@@ -16,7 +17,7 @@ import type { ConversationCommandOutcome } from '../../../core/protocol/conversa
 
 export interface ConversationSender {
   create(): Promise<ConversationCommandOutcome>
-  submitTurn(conversationId: string, text: string): Promise<ConversationCommandOutcome>
+  submitTurn(conversationId: string, text: string, attachments?: readonly ModelAttachment[]): Promise<ConversationCommandOutcome>
 }
 
 export interface SendResult {
@@ -30,6 +31,7 @@ export async function sendMessage(
   sender: ConversationSender,
   currentConversationId: string | null,
   rawText: string,
+  attachments?: readonly ModelAttachment[],
 ): Promise<SendResult> {
   const text = rawText.trim()
   // An empty draft is not a message. Nothing is sent and nothing is claimed.
@@ -51,7 +53,7 @@ export async function sendMessage(
     conversationId = created.conversation.conversationId
   }
 
-  const outcome = await sender.submitTurn(conversationId, text)
+  const outcome = await (attachments?.length ? sender.submitTurn(conversationId, text, attachments) : sender.submitTurn(conversationId, text))
   if (outcome.operation === 'turn') {
     return outcome.turn.outcome === 'completed'
       ? { ok: true, conversationId, notice: '' }

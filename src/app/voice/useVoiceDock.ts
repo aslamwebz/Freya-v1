@@ -149,9 +149,7 @@ export function useVoiceDock(
       void runtime.instance.micOff()
       return
     }
-    void runtime.instance.press().then(() => {
-      void runtime.instance.release(false)
-    })
+    void runtime.instance.micOn()
   }, [mirror, runtime])
 
   const toggleMute = useCallback(() => {

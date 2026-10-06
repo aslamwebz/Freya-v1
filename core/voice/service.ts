@@ -3,6 +3,7 @@ import type { EventFabric } from '../events/fabric'
 import type { CoreEventPayloads } from '../events/envelope'
 import { clipText, validateAudio, type AudioValidation } from './audio'
 import { isSttUnavailable, SttTimeout, withTimeout } from './stt'
+import { VoiceAttention } from './attention'
 import { boundUtterance, clampSpeakingTuning, isTtsUnavailable } from './tts'
 import { LOCAL_ENERGY_WAKE_GATE, crossesWakeThreshold } from './wake'
 import type { VoiceProjection } from '../protocol/conversation'
@@ -111,6 +112,8 @@ export interface VoiceServiceOptions {
    * would be an option somebody eventually raises.
    */
   transcriptionTimeoutMs?: number
+  attentionTimeoutMs?: () => number
+  interruptTurn?: () => Promise<void>
 
   now?: () => Date
   newId?: () => string
@@ -157,6 +160,9 @@ interface QueuedUtterance {
 }
 
 export class VoiceService {
+  private readonly attention: VoiceAttention
+  private readonly interruptTurn: (() => Promise<void>) | undefined
+  private submissionEpoch = 0
   private readonly fabric: EventFabric
   private readonly stt: VoiceSttAdapter | undefined
   private readonly tts: VoiceTtsAdapter | undefined
@@ -212,6 +218,8 @@ export class VoiceService {
     this.timeoutMs = Math.max(1, Math.min(options.transcriptionTimeoutMs ?? VOICE_LIMITS.transcriptionTimeoutMs, VOICE_LIMITS.transcriptionTimeoutMs))
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => randomUUID())
+    this.attention = new VoiceAttention(() => this.now().getTime(), options.attentionTimeoutMs)
+    this.interruptTurn = options.interruptTurn
     // Derived, never assigned from outside: a build with no capture path starts
     // in `unsupported` and no command can talk it out of it.
     this.state = this.captureSupported ? 'permission-required' : 'unsupported'
@@ -283,6 +291,7 @@ export class VoiceService {
 
   /** Turn the microphone off. Idempotent, and safe at any point in the machine. */
   async disableMic(reason = 'the owner turned the microphone off'): Promise<void> {
+    this.attention.close()
     this.micEnabled = false
     this.wakeArmedAt = null
     await this.releaseSession(reason)
@@ -349,6 +358,7 @@ export class VoiceService {
       }
     }
     if (this.session !== null) return { ok: false, reason: 'a recording is already in progress' }
+    if (this.abort !== null) return { ok: false, reason: 'the previous recording is still being transcribed' }
 
     const session: VoiceCaptureSession = {
       sessionId: this.newId(),
@@ -624,7 +634,25 @@ export class VoiceService {
       )
     }
 
-    const bounded = clipText(text, VOICE_LIMITS.maxTranscriptCharacters)
+    let bounded = clipText(text, VOICE_LIMITS.maxTranscriptCharacters)
+    if (bounded.length > 0 && this.wakeArmedAt !== null) {
+      const alreadyActive = this.attention.active
+      const decision = this.attention.receive(bounded)
+      if (decision.kind !== 'turn') {
+        this.abort = null
+        this.lastFinal = null
+        if (decision.kind === 'wake' && !alreadyActive) await this.acknowledge()
+        if (decision.kind === 'close' || decision.kind === 'stop') {
+          this.submissionEpoch += 1
+          await this.cancelSpeaking('the owner ended or stopped the voice turn')
+        }
+        this.move(this.speaking ? 'speaking' : this.baseState())
+        this.publish()
+        return { ...this.empty(session.sessionId, 'completed', decision.kind === 'ignore' ? 'Standby.' : decision.kind === 'wake' ? 'Yes?' : 'Standing by.'), transcribed: true }
+      }
+      await this.cancelSpeaking('the owner addressed Freya')
+      bounded = decision.text
+    }
     const finalAt = this.now().toISOString()
     this.abort = null
     this.lastFinal = bounded
@@ -673,7 +701,7 @@ export class VoiceService {
     // Auto-submit is the owner's earlier decision, not this method's. Off means
     // the transcript is text for a composer, and a microphone press has not
     // become a purchase.
-    if (!this.autoSubmit) {
+    if (!this.autoSubmit && this.wakeArmedAt === null) {
       this.move(this.baseState())
       this.publish()
       return {
@@ -733,6 +761,7 @@ export class VoiceService {
 
     this.move('submitting')
     this.publish()
+    const epoch = this.submissionEpoch
 
     let result: VoiceSubmitResult
     try {
@@ -768,7 +797,11 @@ export class VoiceService {
       }
     }
 
-    this.move(this.baseState())
+    if (epoch === this.submissionEpoch && result.outcome === 'completed' && !this.stopAllLatch()) {
+      this.attention.touch()
+      await this.speakTurn({ turnId: result.turnId })
+    }
+    this.move(this.speaking ? 'speaking' : this.baseState())
     this.publish()
     return {
       sessionId,
@@ -875,10 +908,13 @@ export class VoiceService {
    * place that records why.
    */
   async cancelSpeaking(reason: string): Promise<void> {
+    this.submissionEpoch += 1
+    const interruption = this.interruptTurn?.()
     const current = this.speaking
     this.queue = []
     this.speakAbort?.abort(new Error(reason))
     await this.tts?.cancel()
+    await interruption
     if (current !== null) {
       this.lastInterruption = reason
       await this.record(
@@ -984,7 +1020,17 @@ export class VoiceService {
     return { ok: true }
   }
 
+  /** Only the trusted local host detector calls this; no renderer text is accepted. */
+  async detectWake(): Promise<boolean> {
+    if (this.wakeArmedAt === null || this.wakeExpired(this.now()) || this.stopAllLatch() || !this.micEnabled || this.permission !== 'granted' || this.attention.active) return false
+    this.attention.touch()
+    this.publish()
+    await this.acknowledge()
+    return true
+  }
+
   async disarmWake(reason = 'hands-free was turned off'): Promise<void> {
+    this.attention.close()
     if (this.wakeArmedAt === null) return
     this.wakeArmedAt = null
     await this.record('voice.wake.disarmed', { gate: this.wakeGate.id, reason }, this.wakeGate.id)
@@ -1039,6 +1085,8 @@ export class VoiceService {
    * state stays `stopped-by-STOP-ALL` until the latch is lifted.
    */
   async onStopAll(reason: string): Promise<void> {
+    this.attention.close()
+    this.submissionEpoch += 1
     const session = this.session
     const current = this.speaking
     const queuedCount = this.queue.length
@@ -1109,6 +1157,7 @@ export class VoiceService {
     return {
       state: this.state,
       micEnabled: this.micEnabled,
+      attention: { active: this.attention.active },
       permission: this.permission,
       capturing: this.session !== null,
       sessionId: this.session?.sessionId ?? null,
@@ -1147,7 +1196,7 @@ export class VoiceService {
         armed: this.wakeArmedAt !== null,
         available: this.wakeGate.availability === 'available',
         gate: this.wakeGate.id,
-        kind: 'speech-activity' as const,
+        kind: this.wakeGate.id === 'local-freya-keyword' ? 'keyword' as const : 'speech-activity' as const,
         detail: this.wakeGate.detail,
         maxArmedMs: this.wakeGate.maxArmedMs,
       },
@@ -1241,6 +1290,7 @@ export class VoiceService {
 
   /** Play the queue in order, one utterance at a time. */
   private async drain(): Promise<void> {
+    if (this.speaking !== null) return
     while (this.queue.length > 0) {
       const next = this.queue.shift()
       if (next === undefined) return
@@ -1277,7 +1327,7 @@ export class VoiceService {
           )
         }
       }
-      this.move(this.baseState())
+      this.move(this.session ? 'listening' : this.baseState())
       this.publish()
     }
     this.move(this.baseState())
@@ -1286,6 +1336,16 @@ export class VoiceService {
 
   private empty(sessionId: string, reason: VoiceEndReason, detail: string): VoiceEndResult {
     return { sessionId, reason, text: null, detail, byteLength: 0, durationMs: 0, transcribed: false, turnId: null }
+  }
+
+  /** Fixed Core-owned attention acknowledgement. It never reaches cognition. */
+  private async acknowledge(): Promise<void> {
+    if (this.stopAllLatch() || this.muted || this.tts?.availability !== 'available') return
+    await this.cancelSpeaking('the owner called Freya')
+    const utteranceId = this.newId()
+    this.queue.push({ utteranceId, turnId: 'voice-attention', text: 'Yes?', voiceId: this.selectedVoiceId, rate: 1, pitch: 1 })
+    await this.record('voice.speech.started', { utteranceId, turnId: 'voice-attention', characters: 4, voice: 'default', queued: this.queue.length }, 'voice-attention')
+    void this.drain()
   }
 
   /**

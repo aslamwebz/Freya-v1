@@ -1,3 +1,4 @@
+import { validateModelAttachments } from '../core/model/provider'
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   CoreCommandEnvelope,
@@ -40,6 +41,7 @@ import type { LifeLoopProjection } from '../core/protocol/lifeloop'
 import { SKILL_NO_PAYLOAD } from '../core/protocol/skills'
 import { SKILL_LIMITS } from '../core/skills/types'
 import type { ProviderConfig, ProviderConfigInput } from './providerConfig'
+import { voiceSettingsPatch } from '../core/voice/settings'
 import { checkProviderBaseUrl } from '../core/model/provider-endpoint'
 import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
 import { normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
@@ -143,6 +145,10 @@ const api = {
    * ever being able to read it back.
    */
   providerConfig: (): Promise<ProviderConfig> => ipcRenderer.invoke('freya:provider:read'),
+  voiceSettingsRead: () => ipcRenderer.invoke('freya:voice:settings:read'),
+  voiceWakeStatus: () => ipcRenderer.invoke('freya:voice:wake:status'),
+  voiceWakeAudio: (audio: Uint8Array): void => { if (audio instanceof Uint8Array && audio.length > 0 && audio.length <= 8192 && audio.length % 2 === 0) ipcRenderer.send('freya:voice:wake:pcm', audio) },
+  voiceSettingsWrite: (input: unknown) => ipcRenderer.invoke('freya:voice:settings:write', voiceSettingsPatch(input)),
   saveProviderConfig: (input: unknown): Promise<ProviderConfig> => {
     const bounded = rendererProviderPayload(input)
     if (!bounded.ok) return Promise.reject(new Error(bounded.reason))
@@ -1564,7 +1570,10 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       if (text === null || text === undefined) {
         return { ok: false, reason: 'conversation message is too large or invalid' }
       }
-      return { ok: true, payload: { conversationId, text } }
+      try {
+        const attachments = validateModelAttachments(record?.attachments)
+        return { ok: true, payload: { conversationId, text, ...(attachments.length ? { attachments } : {}) } }
+      } catch { return { ok: false, reason: 'Conversation attachments are invalid or too large.' } }
     }
 
     case 'conversation.turn.cancel': {

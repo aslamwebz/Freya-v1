@@ -211,14 +211,7 @@ export class WindowSpeechOutput {
 
   /** Finish at a boundary. */
   stop(): void {
-    if (this.current === null) return
-    try {
-      this.synthesiser?.pause()
-      this.synthesiser?.resume()
-    } catch {
-      /* a platform that will not pause is reported by the watchdog instead */
-    }
-    this.settleCurrent('failed')
+    this.cancel()
   }
 
   /** Cut off mid-word. */

@@ -12,7 +12,6 @@ import {
   attachmentTray,
   collectModelAttachments,
   composeWithAttachments,
-  modelAttachmentHandoff,
 } from './chat/attachments'
 import type { ScreenSlots } from './screens/Home'
 import { HomeDashboard } from './screens/HomeDashboard'
@@ -30,7 +29,7 @@ import { setAppLayout, startupAppLayout, type AppLayout } from './state/workspac
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
 import { useVoiceDock } from './voice/useVoiceDock'
-import { VoiceSettings } from './voice/VoiceSettings'
+
 import { BootScreen } from './boot/BootScreen'
 
 export function App({
@@ -101,34 +100,18 @@ export function App({
       return false
     }
 
-    /**
-     * Attachments become part of the turn's text, and only part of it.
-     *
-     * `composeWithAttachments` is what puts a file's words into the turn: it fences
-     * them as untrusted data, caps each file, stops at Core's 8,000-character
-     * ceiling, and says which files it could not read. That is the whole of what
-     * the text path can carry.
-     *
-     * The bytes are handled separately and deliberately. `collectModelAttachments`
-     * validates them against `core/model/provider.ts` and stages them for
-     * `ModelMessage.attachments` — a **separate field from the text**, because the
-     * provider contract is explicit that an image's or a PDF's bytes are carried as
-     * content parts and never flattened into the prompt. Inline base64 is not a
-     * degraded attachment; it is a request body full of noise that costs the same
-     * as the picture would have and describes nothing.
-     *
-     * What is staged is not yet sent. `conversation.turn.submit` accepts text only
-     * (`src/platform/conversationClient.ts` `submitTurn(conversationId, text)`, and
-     * the payload rebuilt in `electron/preload.ts`), so no turn can carry a content
-     * part yet. The seam is named in both files; closing it is a protocol change in
-     * files this one does not own. The turn text is honest about what happened in
-     * the meantime: it says a file was attached and that the bytes are not in the
-     * text, rather than implying Freya can see something it was not sent.
-     */
+    // File bytes travel as bounded attachment parts through the canonical turn.
+    // Plain text files are included as untrusted reference text; PDF/image bytes
+    // never become pasted contents or base64 in the message.
     const drafts = attachmentTray.getSnapshot()
     const composed = composeWithAttachments(text, drafts)
     const payload = collectModelAttachments(drafts)
-    modelAttachmentHandoff.stage(payload.attachments)
+
+    if (drafts.some(file => (file.kind === 'pdf' || file.kind === 'image') && !file.modelAttachment)
+      || (payload.notice && payload.attachments.length === 0)) {
+      setNotice(composed.notice || payload.notice || 'Freya could not prepare the file bytes. Please attach the file again.')
+      return false
+    }
 
     setNotice('')
     setScreen('chat')
@@ -148,7 +131,7 @@ export function App({
      * answer about the web instead of about the file. So an attachment keeps the
      * turn in Chat unless the owner explicitly asked for a search.
      */
-    const inferred = mode === 'chat'
+    const inferred = mode === 'chat' && drafts.length === 0
       ? routePromptIntent(text, { activeEyeSession: activeEyeSessionId !== null })
       : null
     const effectiveMode: ComposerMode =
@@ -161,11 +144,10 @@ export function App({
 
     if (effectiveMode === 'chat') {
       setResearchView(null)
-      const result = await sendMessage(mirror, conversation?.activeConversationId ?? null, composed.text)
+      const result = await sendMessage(mirror, conversation?.activeConversationId ?? null, composed.text, payload.attachments)
       // The payload and the tray are cleared only once Core has accepted the turn,
       // so a refusal leaves the owner's files where they can be retried.
       if (result.ok) {
-        modelAttachmentHandoff.clear()
         attachmentTray.clear()
       }
       setNotice([result.notice, payload.notice, composed.notice].filter(Boolean).join(' '))
@@ -301,6 +283,7 @@ export function App({
       dressing={dressing}
       preferences={preferences}
       voice={voice.view}
+      voiceControls={voice}
       voiceTranscript={voiceTranscriptDraft}
       settingsCategory={settingsCategory}
       onSettingsCategory={setSettingsCategory}
@@ -321,7 +304,7 @@ export function App({
     />
     <div className="freya-v2" data-theme={settings.theme} data-app-shell="app" data-ui-mode={uiMode(snapshot)}>
       <DressingTable store={dressing} open={dressingOpen} onOpenChange={setDressingOpen} />
-      <VoiceSettings voice={voice} />
+
     </div>
   </>
 }

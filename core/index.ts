@@ -1,3 +1,4 @@
+import { validateModelAttachments } from './model/provider'
 import { randomUUID } from 'node:crypto'
 import { EventFabric } from './events/fabric'
 import type { EventStore } from './events/store'
@@ -616,6 +617,7 @@ export interface CoreOptions {
   voiceCaptureSupported?: boolean
   /** Tightens the transcription deadline. Cannot raise it past the hard limit. */
   voiceTranscriptionTimeoutMs?: number
+  voiceAttentionTimeoutMs?: () => number
   /** Overrides the conversation context budget. For tests. */
   contextBudget?: ContextBudget
   /**
@@ -813,6 +815,7 @@ export interface Core {
   conversation(): Promise<ConversationProjection>
   /** The current voice projection. */
   voice(): VoiceProjection
+  detectVoiceWake(): Promise<boolean>
   /**
    * Subscribe to the voice projection.
    *
@@ -2004,6 +2007,17 @@ class FreyaCore implements Core {
       wake: this.options.voiceWake ?? LOCAL_ENERGY_WAKE_GATE,
       captureSupported: this.options.voiceCaptureSupported ?? true,
       transcriptionTimeoutMs: this.options.voiceTranscriptionTimeoutMs,
+      attentionTimeoutMs: this.options.voiceAttentionTimeoutMs,
+      interruptTurn: async () => {
+        const active = (await this.conversations.projection()).activeTurn
+        if (active) {
+          await this.conversations.cancelTurn(active.turnId)
+          const deadline = Date.now() + 2_000
+          while (Date.now() < deadline && (await this.conversations.projection()).activeTurn?.turnId === active.turnId) {
+            await new Promise(resolve => setTimeout(resolve, 25))
+          }
+        }
+      },
       stopAll: () => this.state.stopAll.active,
       // The canonical door. This is the same function `conversation.turn.submit`
       // reaches, so a spoken sentence is a typed sentence from the Mind down: same
@@ -6595,7 +6609,10 @@ state: {
             }
           }
 
-          const result = await this.conversations.submitTurn({ conversationId, text, requestId })
+          let attachments
+          try { attachments = validateModelAttachments(readRaw(envelope.payload, 'attachments')) }
+          catch { return { requestId, ok: false, refusal: { reason: 'Conversation attachments are invalid or too large.' } } }
+          const result = await this.conversations.submitTurn({ conversationId, text, attachments, requestId })
           if (!result.ok) {
             return { requestId, ok: false, refusal: { reason: result.reason } }
           }
@@ -9739,6 +9756,8 @@ case 'forge.run': {
     if (!this.conversations) return this.emptyConversationProjection()
     return this.conversations.projection()
   }
+
+  async detectVoiceWake(): Promise<boolean> { return this.voiceService ? this.voiceService.detectWake() : false }
 
   voice(): VoiceProjection {
     if (!this.voiceService) {

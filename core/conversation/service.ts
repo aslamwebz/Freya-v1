@@ -1,3 +1,4 @@
+import type { ModelAttachment } from '../model/provider'
 import type { MediaItem } from '../media/types'
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
@@ -280,12 +281,14 @@ export class ConversationService {
   async submitTurn(input: {
     conversationId: string
     text: string
+    attachments?: readonly ModelAttachment[]
     requestId: string
   }): Promise<TurnResult> {
     const result = await this.mind.runTurn({
       conversationId: input.conversationId,
       turnId: this.newId(),
       text: input.text,
+      attachments: input.attachments,
     })
     this.publish()
     return { ok: true, turn: result }

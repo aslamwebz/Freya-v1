@@ -473,7 +473,7 @@ describe('composeWithAttachments', () => {
     expect(composed.notice).toBe('')
   })
 
-  it('carries both a PDF word and its byte part', () => {
+  it('carries a PDF byte part without pasting its extracted text', () => {
     const composed = composeWithAttachments('summarise', [draft({
       name: 'contract.pdf',
       kind: 'pdf',
@@ -482,8 +482,8 @@ describe('composeWithAttachments', () => {
       modelAttachment: { type: 'file', mimeType: 'application/pdf', data: Buffer.from('%PDF-1.4 stub').toString('base64'), filename: 'contract.pdf' },
     })])
 
-    expect(composed.text).toContain('--- begin file ---')
-    expect(composed.text).toContain('The parties agree.')
+    expect(composed.text).not.toContain('--- begin file ---')
+    expect(composed.text).not.toContain('The parties agree.')
     expect(composed.text).toContain('a document part (application/pdf, contract.pdf)')
   })
 })
@@ -600,5 +600,16 @@ describe('the renderer bridge boundary', () => {
     unsubscribe()
     attachmentTray.clear()
     expect(calls).toBe(1)
+  })
+})
+
+describe('PDF byte-only delivery boundaries', () => {
+  it('refuses PDF text when a byte part is unavailable', () => {
+    const result = composeWithAttachments('read this', [{ id: 'lost', name: 'lost.pdf', kind: 'pdf', sizeBytes: 100, text: 'secret extracted words', modelAttachment: null, detail: null }])
+    expect(result.text).not.toContain('secret extracted words')
+    expect(result.notice).toContain('lost.pdf')
+  })
+  it.each(['', 'x'.repeat(256), 'bad\nname.pdf', '../report.pdf'])('refuses an unsafe filename %s', filename => {
+    expect(() => validateModelAttachments([{ type: 'file', mimeType: 'application/pdf', data: 'JVBERi0=', filename }])).toThrow(ModelAttachmentError)
   })
 })

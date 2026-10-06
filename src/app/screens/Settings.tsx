@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Card, Chip, Row } from '../cards/Card'
+import { VoiceSettings } from '../voice/VoiceSettings'
+import { VoicePreferences } from '../voice/VoicePreferences'
+import type { VoiceDock } from '../voice/useVoiceDock'
 import { hostBridge } from '../../platform/host'
 import { coreMirror } from '../../platform/coreClient'
 import { THEMES, type ThemeId } from '../../ui-v2/theme/tokens'
@@ -20,7 +23,7 @@ import { ready, reason } from '../state/view'
  * cannot do is worse than none, because it is believed.
  */
 
-export type SettingsCategory = 'appearance' | 'provider' | 'privacy' | 'security' | 'about'
+export type SettingsCategory = 'appearance' | 'provider' | 'voice' | 'privacy' | 'security' | 'about'
 
 export interface SettingsProps {
   /** The live snapshot, typed by the same contract every other surface reads. */
@@ -28,6 +31,7 @@ export interface SettingsProps {
     readonly provider: Resource<ProviderView>
     readonly core: Resource<CoreView>
   }
+  readonly voiceControls?: VoiceDock
   readonly preferences: PreferencesStore
   /** Owned by the caller, because a screen function cannot hold a hook. */
   readonly category: SettingsCategory
@@ -37,6 +41,7 @@ export interface SettingsProps {
 const CATEGORIES: readonly (readonly [SettingsCategory, string, string])[] = [
   ['appearance', 'Appearance', 'focus'],
   ['provider', 'Provider', 'core'],
+  ['voice', 'Voice', 'mic'],
   ['privacy', 'Privacy', 'settings'],
   ['security', 'Security', 'settings'],
   ['about', 'About', 'world'],
@@ -100,7 +105,7 @@ function errorMessage(error: unknown): string {
  * set: a key is sent only when typed, an empty field leaves the stored key
  * alone, and forgetting one is its own explicit action.
  */
-export function SettingsOverlay({ snapshot, preferences, category, onCategory, onDone }: SettingsProps & { readonly onDone: () => void }) {
+export function SettingsOverlay({ snapshot, preferences, voiceControls, category, onCategory, onDone }: SettingsProps & { readonly onDone: () => void }) {
   return (
     <div className="st-overlay" role="dialog" aria-label="Settings">
       <header className="st-top">
@@ -119,6 +124,7 @@ export function SettingsOverlay({ snapshot, preferences, category, onCategory, o
         <div className="st-content">
           <section className="st-pane" hidden={category !== 'appearance'}><AppearanceCard preferences={preferences} /></section>
           <section className="st-pane" hidden={category !== 'provider'}><ProviderCard snapshot={snapshot} /></section>
+          <section className="st-pane" hidden={category !== 'voice'}><Card title="Voice" icon="core" subtitle="Talk to Freya"><VoicePreferences />{voiceControls ? <VoiceSettings voice={voiceControls} expanded /> : null}</Card></section>
           <section className="st-pane" hidden={category !== 'privacy'}><PrivacyCard /></section>
           <section className="st-pane" hidden={category !== 'security'}><SecurityCard snapshot={snapshot} /></section>
           <section className="st-pane" hidden={category !== 'about'}><AboutCard snapshot={snapshot} /></section>

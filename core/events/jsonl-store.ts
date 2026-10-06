@@ -56,7 +56,7 @@ import { repairKnownLegacyJournal } from './legacy-repair'
  * cannot tolerate truncation should do; see `lastTruncation`.
  */
 export interface KnownJournalRepairReport {
-  readonly code: 'legacy-tool-loop-request-id'
+  readonly code: 'legacy-tool-loop-request-id' | 'voice-wake-threshold-validator'
   readonly repairedEvents: number
   readonly sourceQuarantinePath: string
   readonly archivedDegradedPath: string | null
@@ -255,7 +255,8 @@ export class JsonlEventStore implements EventStore {
       }
     }
     if (fault === null || repairedAfterFault) return
-    if (!fault.payload.reason.includes('cognition.requested')) return
+    const wakeValidatorFault = fault.payload.reason.includes('payload does not match the shape of voice.wake.armed')
+    if (!wakeValidatorFault && !fault.payload.reason.includes('cognition.requested')) return
 
     let quarantined: string
     try {
@@ -264,10 +265,18 @@ export class JsonlEventStore implements EventStore {
       return
     }
 
-    const repaired = repairKnownLegacyJournal(quarantined)
+    const validatedWakeEvents = wakeValidatorFault ? parseCompleteJournal(quarantined) : null
+    const boundary = validatedWakeEvents?.[fault.payload.trustedPrefixEvents]
+    if (wakeValidatorFault && (!validatedWakeEvents || boundary?.type !== 'voice.wake.armed' || boundary.payload.threshold !== 0.14)) return
+    const repaired = wakeValidatorFault && validatedWakeEvents
+      ? { code: 'voice-wake-threshold-validator' as const, content: quarantined, events: validatedWakeEvents, repairedEvents: validatedWakeEvents.filter(e => e.type === 'voice.wake.armed').length }
+      : repairKnownLegacyJournal(quarantined)
     if (repaired === null) return
 
     const prefixCount = fault.payload.trustedPrefixEvents
+    // Never replace newer authority decisions with an older quarantine. Keep the
+    // active journal degraded for deliberate reconciliation in that case.
+    if (currentEvents.slice(prefixCount).some(e => /^(?:security\.|guard\.|cognition\.|model\.|command\.)/.test(e.type))) return
     if (repaired.events.length < prefixCount || currentEvents.length < prefixCount) return
     for (let index = 0; index < prefixCount; index += 1) {
       if (JSON.stringify(repaired.events[index]) !== JSON.stringify(currentEvents[index])) return
@@ -309,7 +318,7 @@ export class JsonlEventStore implements EventStore {
       `${target}.txt`,
       [
         'Freya Core degraded journal archived before restoring a fully validated',
-        'quarantine affected only by the historical continuation-id separator bug.',
+        'quarantine affected by a recognized code-owned validation defect.',
         `Original active path: ${this.file}`,
         '',
       ].join(EOL),
@@ -433,4 +442,3 @@ function parseCompleteJournal(raw: string): AnyCoreEvent[] | null {
 function isMissing(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as { code?: string }).code === 'ENOENT'
 }
-

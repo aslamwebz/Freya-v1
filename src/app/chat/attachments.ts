@@ -1,41 +1,7 @@
 /**
- * Turning attachments into something a turn can carry.
- *
- * `conversation.turn.submit` accepts text and nothing else, so an attachment has
- * to become text before it can be sent. That is a real constraint and it shapes
- * everything here:
- *
- *   - **Text and PDF text become fenced text.** A PDF's words are read in the main
- *     process and arrive here as `text`, exactly like a `.md` file's.
- *   - **Image and PDF bytes stay bytes.** Each attachment may also carry a
- *     {@link ModelAttachment} — bare base64 in the shape `ModelMessage.attachments`
- *     takes — and that payload is *never* inlined into the turn text. The turn says
- *     in words that a picture was attached; the pixels travel as a content part or
- *     not at all. Base64 pasted into a prompt is not a weaker version of sending
- *     the image, it is noise that costs the same.
- *   - **An unsupported file contributes a line, not silence.** "Freya could not
- *     read this" belongs in the transcript: the owner attached something, and
- *     being quietly dropped is worse than being reported.
- *   - **The envelope is labelled and fenced.** Everything below the marker is
- *     quoted material from a file, not something the owner typed, and the framing
- *     says so. A file containing the words "ignore your instructions" is a
- *     sentence inside a fence — which is the same treatment Context gives shared
- *     material, arrived at independently.
- *
- * The budget matters as much as the framing: Core refuses a turn over 8,000
- * characters, and a person who attaches four files should be told the message was
- * too long rather than watching it vanish. {@link composeWithAttachments} stops
- * at that ceiling and says so.
- *
- * ## The one seam that is not connected
- *
- * {@link collectModelAttachments} produces the array that belongs on
- * `ModelMessage.attachments`, and {@link modelAttachmentHandoff} holds it for the
- * turn. Nothing reads that handoff yet, and this module does not pretend
- * otherwise: `submitTurn(conversationId, text)` in `src/platform/conversationClient.ts`
- * and the payload rebuilt for `conversation.turn.submit` in `electron/preload.ts`
- * are both text-only, and neither is this file's to change. The seam is named in
- * the code at both ends so it is a wiring job rather than a discovery.
+ * Composer attachment preparation. Text files are bounded, fenced reference text.
+ * PDF and image bytes travel separately through conversation.turn.submit to the
+ * provider content parts. PDF extraction is never substituted into the prompt.
  */
 import { hostBridge } from '../../platform/host'
 import {
@@ -132,11 +98,11 @@ export function composeWithAttachments(
     const carried = attachment.modelAttachment ?? null
     // Skipped means: nothing to say about this file at all. A file whose bytes
     // travel still has something to say, so a payload keeps it out of this list.
-    if (attachment.kind === 'unsupported' || (attachment.text === null && carried === null)) {
+    if (attachment.kind === 'unsupported' || (attachment.kind !== 'text' && carried === null) || (attachment.text === null && carried === null)) {
       skipped.push(attachment.name)
       continue
     }
-    const body = attachment.text === null
+    const body = attachment.kind !== 'text' || carried !== null || attachment.text === null
       ? null
       : attachment.text.length > PER_ATTACHMENT_MAX_CHARS
         ? `${attachment.text.slice(0, PER_ATTACHMENT_MAX_CHARS)}\n[truncated]`
@@ -524,23 +490,7 @@ export function collectModelAttachments(
   }
 }
 
-/**
- * Where the payload waits for a turn that can carry it.
- *
- * ## This is the open seam, and it is open on purpose
- *
- * `ModelMessage.attachments` exists in `core/model/provider.ts` and is populated
- * by the Context Compiler. Nothing populates it from a composer yet, because
- * `conversation.turn.submit` rebuilds its payload as `{ conversationId, text }`
- * in `electron/preload.ts` and `submitTurn` in `src/platform/conversationClient.ts`
- * has no third argument. Those are not this file's to change.
- *
- * So the parts are staged here, validated and complete, and the one line that has
- * to change to make them travel is `submitTurn`. What is deliberately *not* done
- * as a workaround: base64 is never written into the turn text. A flattened
- * picture is not a weaker attachment — it is a request body full of noise that
- * costs the same as the picture would have and describes nothing.
- */
+/** Legacy compatibility holder. The composer now passes parts directly to submitTurn. */
 export const modelAttachmentHandoff: {
   stage(attachments: readonly ModelAttachment[]): void
   current(): readonly ModelAttachment[]

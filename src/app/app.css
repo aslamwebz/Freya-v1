@@ -2456,3 +2456,11 @@ body { overflow: hidden; }
   .freya-app[data-screen='home'] .home-surface-bl > .c-card { padding-right: 26%; }
   .freya-app[data-screen='home'] .home-surface-br > .c-card { padding-left: 26%; }
 }
+.voice-preferences { display: grid; gap: 12px; padding: 12px 0; max-width: 660px; }
+.voice-preferences label { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.voice-preferences input:not([type='checkbox']), .voice-preferences select { color: inherit; background: #101b24; border: 1px solid #364650; padding: 8px; border-radius: 5px; min-width: 210px; }
+.voice-preferences p { font-size: 13px; line-height: 1.6; color: #a8bbc5; }
+.voice-preferences input[type='checkbox'] { accent-color: #69d6e5; }
+.st-pane [aria-label='Voice'] { display: grid; gap: 16px; max-width: 660px; }
+.st-pane [aria-label='Voice'] > label { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.st-pane [aria-label='Voice'] small { display: block; width: 100%; color: #a8bbc5; }

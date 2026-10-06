@@ -915,7 +915,7 @@ const PAYLOAD_RULES: {
     isNonNegativeInt(p.trustedPrefixBytes) &&
     isNonNegativeInt(p.damagedBytes),
   'core.integrity_repaired': (p) =>
-    p.code === 'legacy-tool-loop-request-id' &&
+    (p.code === 'legacy-tool-loop-request-id' || p.code === 'voice-wake-threshold-validator') &&
     isPositiveInt(p.repairedEvents) &&
     isNonEmptyString(p.sourceQuarantinePath) &&
     (p.archivedDegradedPath === null || isNonEmptyString(p.archivedDegradedPath)),
@@ -1075,7 +1075,7 @@ const PAYLOAD_RULES: {
     p.category === 'microphone' &&
     (p.outcome === 'granted' || p.outcome === 'denied' || p.outcome === 'revoked') &&
     (p.source === 'idle' || p.source === 'capturing'),
-  'voice.wake.armed': (p) => isNonEmptyString(p.gate) && isNonNegativeInt(p.threshold) && isPositiveInt(p.maxArmedMs),
+  'voice.wake.armed': (p) => isNonEmptyString(p.gate) && typeof p.threshold === 'number' && Number.isFinite(p.threshold) && p.threshold >= 0 && p.threshold <= 1 && isPositiveInt(p.maxArmedMs),
   'voice.wake.fired': (p) => isNonEmptyString(p.gate) && isNonNegativeInt(p.sustainedMs),
   'voice.wake.disarmed': (p) => isNonEmptyString(p.gate) && isNonEmptyString(p.reason),
   'voice.stopped': (p) => p.scope === 'all' && isNonEmptyString(p.reason),
@@ -3702,5 +3702,3 @@ function isRunLimits(value: unknown): boolean {
     isPositiveInt(limits.maxAttemptsPerStep)
   )
 }
-
-

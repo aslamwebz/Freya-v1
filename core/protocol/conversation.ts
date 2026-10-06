@@ -155,6 +155,7 @@ export interface ConversationProjection {
  * host-side matter and does not cross.
  */
 export interface VoiceProjection {
+  attention?: { active: boolean }
   /** The machine's actual position. Never inferred by the renderer. */
   state: VoiceStateView
   /** Whether the owner has turned the microphone on. False from construction. */
@@ -214,7 +215,7 @@ export interface VoiceProjection {
      * speech-activity gate and no wake-phrase model, and the type is where that
      * fact is written down.
      */
-    kind: 'speech-activity'
+    kind: 'speech-activity' | 'keyword'
     detail: string
     maxArmedMs: number
   }

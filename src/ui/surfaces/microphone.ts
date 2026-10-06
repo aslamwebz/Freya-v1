@@ -11,7 +11,7 @@ import { clearMicLevel, publishMicLevel } from '../../presence/micLevel'
  * - it holds a bounded buffer and stops itself at the limit;
  * - it never uploads, never stores, and never writes audio anywhere.
  *
- * The samples go to a local engine inside Core and are dropped. There is no code
+ * The samples go through the configured Core recognition adapter and are dropped. There is no direct code
  * path from here to a network, and no code path from here to the conversation
  * store — a recording is not a memory.
  *
@@ -28,9 +28,17 @@ export interface CaptureLimits {
   maxDurationMs: number
   maxBytes: number
   sampleRate: number
+  deviceId?: string
+  signal?: AbortSignal
+  standby?: boolean
+  onPcm?: (audio: Uint8Array) => void
+  silenceMs?: number
+  onSpeechStart?: () => void
+  onComplete?: (result: { audio: Uint8Array; durationMs: number; speechDetected: boolean }) => void
 }
 
 export interface MicCapture {
+  promote?(): void
   /** Release the device and hand back what was captured. */
   stop(cancelled: boolean): Promise<{ audio: Uint8Array; durationMs: number }>
   /** Release the device without keeping anything. */
@@ -54,6 +62,12 @@ export class MicrophoneError extends Error {
   }
 }
 
+/** Owner activation allows the initial device prompt; the probe retains no audio. */
+export async function requestMicrophonePermission(): Promise<void> {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+  releaseStream(stream)
+}
+
 /**
  * Open the microphone and begin capturing.
  *
@@ -70,6 +84,7 @@ export async function openMicrophone(limits: CaptureLimits): Promise<MicCapture>
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: {
+        ...(limits.deviceId ? { deviceId: { exact: limits.deviceId } } : {}),
         channelCount: 1,
         // `ideal`, not `exact`: a device that cannot do 16k still works, and the
         // engine resamples. Demanding exactly 16k would refuse hardware that is
@@ -99,16 +114,27 @@ export async function openMicrophone(limits: CaptureLimits): Promise<MicCapture>
     throw new MicrophoneError('unsupported', 'this environment has no Web Audio support')
   }
 
-  const context = new AudioContextCtor()
+  if (limits.signal?.aborted) { releaseStream(stream); throw new MicrophoneError('capture-failed', 'capture cancelled') }
+  let cleanupContext: AudioContext | null = null
+  try {
+  const context = new AudioContextCtor({ sampleRate: limits.sampleRate })
+  cleanupContext = context
   const source = context.createMediaStreamSource(stream)
   const processor = context.createScriptProcessor(4096, 1, 1)
   const chunks: Int16Array[] = []
+  let standby = limits.standby === true
+  const preRoll: Int16Array[] = []
   let bytes = 0
   let frames = 0
   let closed = false
+  let speechMs = 0
+  let silenceMs = 0
+  let speechDetected = false
+  let result: { audio: Uint8Array; durationMs: number; speechDetected: boolean } | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
 
   const sampleRate = context.sampleRate
-  const startedAt = performance.now()
+  let startedAt = performance.now()
 
   /**
    * Release the device. Safe to call twice, and called on every exit path.
@@ -120,6 +146,8 @@ export async function openMicrophone(limits: CaptureLimits): Promise<MicCapture>
   async function teardown(): Promise<void> {
     if (closed) return
     closed = true
+    if (timer) clearTimeout(timer)
+    limits.signal?.removeEventListener('abort', abort)
     clearMicLevel()
     try {
       processor.onaudioprocess = null
@@ -141,17 +169,21 @@ export async function openMicrophone(limits: CaptureLimits): Promise<MicCapture>
   const finish = async (
     cancelled: boolean,
   ): Promise<{ audio: Uint8Array; durationMs: number }> => {
-    const durationMs = performance.now() - startedAt
-    const collected = new Uint8Array(bytes)
+    if (result) return result
+    const durationMs = Math.min(limits.maxDurationMs, frames / limits.sampleRate * 1000)
+    const collected = new Uint8Array(cancelled ? 0 : bytes)
     let offset = 0
-    for (const chunk of chunks) {
+    for (const chunk of cancelled ? [] : chunks) {
       collected.set(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength), offset)
       offset += chunk.byteLength
     }
+    result = { audio: collected, durationMs, speechDetected }
+    chunks.length = 0
+    preRoll.length = 0
     await teardown()
     // A cancelled capture returns nothing, so a release mid-sentence cannot leave
     // a partial buffer anywhere for a later phase to find.
-    return { audio: cancelled ? new Uint8Array(0) : collected, durationMs }
+    return result
   }
 
   processor.onaudioprocess = (event) => {
@@ -167,23 +199,34 @@ export async function openMicrophone(limits: CaptureLimits): Promise<MicCapture>
       sum += sample * sample
     }
     const rms = Math.sqrt(sum / input.length)
+    const frameMs = input.length / sampleRate * 1000
+    if (rms >= 0.018) { speechMs += frameMs; silenceMs = 0 }
+    else { silenceMs += frameMs; if (!speechDetected) speechMs = 0 }
+    if (!standby && !speechDetected && speechMs >= 120) { speechDetected = true; limits.onSpeechStart?.() }
     // A perceptual curve rather than raw RMS: a linear level makes normal speech
     // look like a whisper and a shout look like a shout.
     publishMicLevel(Math.min(1, Math.max(0, (rms - 0.01) * 6)))
 
-    const pcm = new Int16Array(input.length)
-    for (let i = 0; i < input.length; i += 1) {
-      const sample = Math.max(-1, Math.min(1, input[i] ?? 0))
+    const length = Math.min(Math.floor(input.length * limits.sampleRate / sampleRate), Math.floor((limits.maxBytes - bytes) / 2))
+    const pcm = new Int16Array(length)
+    for (let i = 0; i < length; i += 1) {
+      const sample = Math.max(-1, Math.min(1, input[Math.floor(i * sampleRate / limits.sampleRate)] ?? 0))
       pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
+    }
+    if (standby) {
+      preRoll.push(pcm)
+      while (preRoll.reduce((total, frame) => total + frame.length, 0) > limits.sampleRate * 1.5) preRoll.shift()
+      limits.onPcm?.(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength))
+      return
     }
     chunks.push(pcm)
     bytes += pcm.byteLength
-    frames += input.length
+    frames += length
 
     // Stop at the bound rather than growing until something else notices. A
     // microphone left open for an afternoon is a bug, not a long recording.
-    if (bytes >= limits.maxBytes || (frames / sampleRate) * 1000 >= limits.maxDurationMs) {
-      void finish(false)
+    if (bytes >= limits.maxBytes || (frames / limits.sampleRate) * 1000 >= limits.maxDurationMs || (limits.silenceMs && ((speechDetected && silenceMs >= limits.silenceMs) || (!speechDetected && performance.now() - startedAt >= 6_000)))) {
+      void finish(false).then(value => limits.onComplete?.({ ...value, speechDetected }))
     }
   }
 
@@ -194,12 +237,30 @@ export async function openMicrophone(limits: CaptureLimits): Promise<MicCapture>
   sink.gain.value = 0
   processor.connect(sink)
   sink.connect(context.destination)
+  const abort = (): void => { void finish(true) }
+  limits.signal?.addEventListener('abort', abort, { once: true })
+  timer = setTimeout(() => { void finish(false).then(value => limits.onComplete?.({ ...value, speechDetected })) }, limits.maxDurationMs)
+  if (limits.signal?.aborted) abort()
 
   return {
+    promote: () => {
+      if (closed || !standby) return
+      standby = false
+      for (const frame of preRoll) { chunks.push(frame); bytes += frame.byteLength; frames += frame.length }
+      preRoll.length = 0
+      speechMs = 0; silenceMs = 0; speechDetected = true; startedAt = performance.now()
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => { void finish(false).then(value => limits.onComplete?.({ ...value, speechDetected })) }, Math.min(30_000, limits.maxDurationMs))
+    },
     stop: finish,
     abandon: async () => {
       await finish(true)
     },
+  }
+  } catch (error) {
+    releaseStream(stream)
+    try { await cleanupContext?.close() } catch { /* already closed */ }
+    throw error
   }
 }
 

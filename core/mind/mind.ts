@@ -1,3 +1,4 @@
+import { validateModelAttachments, type ModelAttachment } from '../model/provider'
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
 import type { ConversationTurnEvent } from '../events/envelope'
@@ -133,6 +134,7 @@ export interface MindSubmitInput {
   conversationId: string
   turnId: string
   text: string
+  attachments?: readonly ModelAttachment[]
 }
 
 /**
@@ -752,6 +754,9 @@ export class MindService {
     const startedAt = this.now().toISOString()
     const text = input.text.trim()
     const maxOutputTokens = CONVERSATION_LIMITS.maxOutputTokensPerTurn
+    let attachments: readonly ModelAttachment[]
+    try { attachments = validateModelAttachments(input.attachments) }
+    catch { return this.refuse(input, 'Conversation attachments are invalid or too large.') }
 
     if (text.length === 0) {
       return this.refuse(input, 'the message is empty')
@@ -893,7 +898,8 @@ export class MindService {
       // so the Context Compiler's input stays the closed set of five explicit
       // fields the Phase 9 red-team suite asserts, and this block arrives as a
       // separate `user`-role message the compiler was never asked to trust.
-      const withContext = withTurnContext(compiled.messages, this.sharedContextFor(text, input.conversationId))
+      const carriedMessages = attachments.length ? compiled.messages.map((message, index) => index === compiled.messages.length - 1 ? { ...message, attachments } : message) : compiled.messages
+      const withContext = withTurnContext(carriedMessages, this.sharedContextFor(text, input.conversationId))
 
       // --- 4b. expression planning, into the SAME provider call --------------
       //

@@ -5,6 +5,7 @@ import type {
   VoiceTtsAdapter,
 } from '../core/voice/types'
 import type { TtsRequest } from '../core/voice/types'
+import type { VoiceSettings } from '../core/voice/settings'
 
 /**
  * Speech output, hosted.
@@ -59,6 +60,7 @@ export type VoiceOutputInstruction =
 export class HostVoiceOutput implements VoiceTtsAdapter {
   readonly id = 'desktop-platform-speech'
   readonly kind = 'platform' as const
+  constructor(private readonly options?: { settings: () => VoiceSettings; key: () => string | undefined }) {}
   /**
    * What the window found, in its own words, once it has told us.
    *
@@ -79,6 +81,7 @@ export class HostVoiceOutput implements VoiceTtsAdapter {
    * makes every attempt fail honestly rather than silently queueing into a void.
    */
   get availability(): VoiceAdapterAvailability {
+    if (this.options && this.options.settings().outputProvider !== 'platform') return 'configuration-required'
     return this.reported === true ? 'available' : 'unavailable'
   }
 
@@ -137,22 +140,16 @@ export class HostVoiceOutput implements VoiceTtsAdapter {
   }
 
   async speak(request: TtsRequest): Promise<{ engine: string; completed: boolean }> {
-    if (this.reported !== true) {
+    if (this.availability !== 'available') {
       throw new Error('no window has reported a speech output engine')
     }
-    this.broadcast({
-      kind: 'speak',
-      utteranceId: request.utteranceId,
-      text: request.text,
-      voiceId: request.voiceId,
-      rate: request.rate,
-      pitch: request.pitch,
-    })
+    request.signal.throwIfAborted()
+    const instruction: VoiceOutputInstruction = { kind: 'speak', utteranceId: request.utteranceId, text: request.text, voiceId: request.voiceId, rate: request.rate, pitch: request.pitch }
 
     return new Promise<{ engine: string; completed: boolean }>((resolve, reject) => {
       this.pending.set(request.utteranceId, {
-        resolve: (completed) => resolve({ engine: this.id, completed }),
-        reject,
+        resolve: (completed) => { request.signal.removeEventListener('abort', abort); resolve({ engine: this.id, completed }) },
+        reject: (error) => { request.signal.removeEventListener('abort', abort); reject(error) },
       })
       // An abort is how `stop`, `cancel` and STOP ALL reach an utterance that is
       // already playing, and it is checked as well as signalled because a window
@@ -160,6 +157,7 @@ export class HostVoiceOutput implements VoiceTtsAdapter {
       const abort = (): void => {
         if (!this.pending.has(request.utteranceId)) return
         this.pending.delete(request.utteranceId)
+        this.broadcast({ kind: 'cancel' })
         reject(new Error('the utterance was cancelled'))
       }
       if (request.signal.aborted) {
@@ -167,6 +165,8 @@ export class HostVoiceOutput implements VoiceTtsAdapter {
         return
       }
       request.signal.addEventListener('abort', abort, { once: true })
+      // Register settlement before playback. Even an immediate failure must resolve.
+      this.broadcast(instruction)
     })
   }
 

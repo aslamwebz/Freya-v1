@@ -9,6 +9,7 @@ import type { BrowserBridgeState } from '../../electron/browser/rendererRequest'
 import type { ConversationProjection, VoiceProjection } from '../../core/protocol/conversation'
 import type { VoiceTranscriptFragment } from '../../core/voice/types'
 import type { VoiceOutputInstruction } from '../../electron/voiceHost'
+import type { VoiceSettings } from '../../core/voice/settings'
 import type { BrainProjection } from '../../core/brain/brain'
 import type { WorkProjection } from '../../core/work/projection'
 import type { MissionProjection } from '../../core/missions/types'
@@ -104,6 +105,10 @@ export interface AttachmentResult {
 }
 
 export interface FreyaHostBridge {
+  voiceWakeStatus?(): Promise<{ ready: boolean; frames: number; detections: number; peak: number }>
+  voiceWakeAudio?(audio: Uint8Array): void
+  voiceSettingsRead?(): Promise<VoiceSettings>
+  voiceSettingsWrite?(patch: Partial<VoiceSettings>): Promise<VoiceSettings>
   isDesktop: true
 
   getRuntimeInfo(): Promise<HostRuntimeInfo>

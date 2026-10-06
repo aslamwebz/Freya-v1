@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 import { readModelCatalog, selectModel } from '../../platform/modelClient'
+import { coreMirror, ensureCoreAttached } from '../../platform/coreClient'
+import { hostBridge } from '../../platform/host'
+import type { CoreStatus } from '../../../core/protocol/core-protocol'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 
 /**
@@ -53,6 +56,7 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
   const [open, setOpen] = useState(false)
   const [models, setModels] = useState<readonly ModelEntry[]>([])
   const [selected, setSelected] = useState<string | null>(null)
+  const [reportedDefault, setReportedDefault] = useState(catalogDefault)
   const [query, setQuery] = useState('')
   const [favorites, setFavorites] = useState<readonly string[]>(readFavorites)
   const [note, setNote] = useState('')
@@ -68,14 +72,24 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
    */
   useEffect(() => {
     let live = true
-    void readModelCatalog().then(outcome => {
-      if (!live || outcome.operation !== 'catalog') return
-      setSelected(outcome.selected ?? null)
-      if (outcome.defaultModel) setCatalogDefault(outcome.defaultModel)
-    })
-    return () => { live = false }
+    let requested = false
+    const mirror = coreMirror()
+    const apply = (status: CoreStatus | null) => {
+      if (live && status?.lifecycle === 'ready') setReportedDefault(status.providers.find(provider => provider.status === 'configured')?.model ?? null)
+      if (!live || requested || status?.lifecycle !== 'ready') return
+      requested = true
+      void readModelCatalog().then(outcome => {
+        if (!live || outcome.operation !== 'catalog') return
+        setSelected(outcome.selected ?? null)
+        setCatalogDefault(outcome.defaultModel ?? null)
+        if (outcome.defaultModel) setReportedDefault(outcome.defaultModel)
+      })
+    }
+    const detach = mirror.subscribe(apply)
+    void ensureCoreAttached().then(attached => apply(attached.status))
+    void hostBridge()?.coreStatus().then(apply)
+    return () => { live = false; detach() }
   }, [])
-
   const toggle = () => {
     const next = !open
     setOpen(next)
@@ -87,6 +101,7 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
         if (outcome.models) setModels(outcome.models)
         setSelected(outcome.selected ?? null)
         setCatalogDefault(outcome.defaultModel ?? null)
+        setReportedDefault(outcome.defaultModel ?? null)
       } else {
         setModels([])
         setNote(outcome.reason ?? 'The model catalogue is unavailable.')
@@ -115,7 +130,7 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
   // What a turn would actually run right now: the owner's selection if there is
   // one, otherwise the provider's own default. Only when Core has told us neither
   // is there genuinely nothing to name.
-  const selectedId = selected ?? defaultModel ?? catalogDefault
+  const selectedId = selected ?? defaultModel ?? reportedDefault
   const activeModel = selectedId ? modelName(selectedId) : 'no model reported'
   const search = query.trim().toLowerCase()
   const matches = models.filter(entry => search.length === 0

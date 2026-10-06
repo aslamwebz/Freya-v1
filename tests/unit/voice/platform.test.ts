@@ -202,8 +202,8 @@ describe('speech output in the window', () => {
     output.play({ utteranceId: 'u2', text: 'another', voiceId: null, rate: 1, pitch: 1 })
     output.stop()
     // A polite stop does not use `cancel`: the platform is left to finish cleanly.
-    expect(platform.cancelled).toBe(1)
-    expect(platform.paused).toBe(1)
+    expect(platform.cancelled).toBe(2)
+    expect(platform.paused).toBe(0)
     expect(reports).toContainEqual(['u2', 'failed'])
   })
 

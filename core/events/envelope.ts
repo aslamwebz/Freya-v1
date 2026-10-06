@@ -807,7 +807,7 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
    * The original and the degraded replacement are both preserved on disk.
    */
   'core.integrity_repaired': {
-    code: 'legacy-tool-loop-request-id'
+    code: 'legacy-tool-loop-request-id' | 'voice-wake-threshold-validator'
     repairedEvents: number
     sourceQuarantinePath: string
     archivedDegradedPath: string | null

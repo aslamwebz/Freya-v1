@@ -1,3 +1,4 @@
+import type { ModelAttachment } from '../../core/model/provider'
 import type {
   ConversationCommandOutcome,
   ConversationMessageView,
@@ -37,7 +38,7 @@ export interface ConversationMirror {
   list(): Promise<ConversationCommandOutcome>
   read(conversationId: string): Promise<ConversationCommandOutcome>
   archive(conversationId: string): Promise<ConversationCommandOutcome>
-  submitTurn(conversationId: string, text: string): Promise<ConversationCommandOutcome>
+  submitTurn(conversationId: string, text: string, attachments?: readonly ModelAttachment[]): Promise<ConversationCommandOutcome>
   cancelTurn(turnId: string): Promise<ConversationCommandOutcome>
 
   /**
@@ -153,7 +154,7 @@ export function createConversationMirror(): ConversationMirror {
     read: (conversationId) => submit('conversation.read', { conversationId }),
     archive: (conversationId) => submit('conversation.archive', { conversationId }),
 
-    submitTurn: (conversationId, text) => submit('conversation.turn.submit', { conversationId, text }),
+    submitTurn: (conversationId, text, attachments) => submit('conversation.turn.submit', { conversationId, text, ...(attachments?.length ? { attachments } : {}) }),
 
     cancelTurn: (turnId) => submit('conversation.turn.cancel', { turnId }),
 

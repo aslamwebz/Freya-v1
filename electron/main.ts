@@ -20,6 +20,13 @@ import { pickAttachments } from './attachments'
 import { PresenceHost } from './presence/host'
 import { createBrowserExtensionHost, type BrowserExtensionHost } from './browserext'
 import { HostVoiceOutput, registerVoiceOutputIpc } from './voiceHost'
+import { HostVoiceInput } from './voiceInput'
+import { LocalWhisperHost } from './localWhisper'
+import { LocalWakeHost } from './localWake'
+import { MicrophoneGate } from './microphoneGate'
+import { VoiceConfigStore } from './voiceConfig'
+import { DEFAULT_VOICE_SETTINGS } from '../core/voice/settings'
+import { buildLocalWakeGate } from '../core/voice/wake'
 import {
   createDualBrowserActivation,
   createFreyaBrowserAdapter,
@@ -69,7 +76,14 @@ let coreHost: ElectronCoreHost | null = null
  * which happens every time the provider settings change — does not lose the list
  * of voices the window reported or strand an utterance that was playing.
  */
-const voiceOutput = new HostVoiceOutput()
+let voiceConfig: VoiceConfigStore | null = null
+const voicePreferences = () => voiceConfig?.current ?? DEFAULT_VOICE_SETTINGS
+const voiceOutput = new HostVoiceOutput({ settings: voicePreferences, key: () => process.env.NANOGPT_API_KEY })
+const localWhisper = new LocalWhisperHost(join(ROOT, '.local', 'whisper'))
+const localWake = new LocalWakeHost(ROOT,
+  () => { const p = coreHost?.voice(); if (p?.wake.armed && p.micEnabled && p.permission === 'granted' && p.state !== 'stopped-by-STOP-ALL' && !p.attention?.active) void coreHost?.detectVoiceWake().catch(() => {}) },
+  () => { microphoneGate.standbyReady = false; void coreHost?.submit({ command: 'voice.mic.disable', requestId: 'wake-detector-stopped', payload: { reason: 'The local wake detector stopped. Turn the microphone on to retry.' } }).catch(() => {}) })
+const voiceInput = new HostVoiceInput(voicePreferences, () => process.env.NANOGPT_API_KEY, fetch, () => localWhisper.installed)
 /** The presence host. Owns the presence window and pushes frames to it. */
 let presenceHost: PresenceHost | null = null
 /**
@@ -625,6 +639,8 @@ function collectWorkspaceAndThen(finish: () => void): void {
  * app from quitting — a user who asked to quit gets to quit.
  */
 function shutdownCoreAndThen(finish: () => void): void {
+  localWhisper.stop()
+  localWake.stop()
   if (attentionTimer !== null) {
     clearInterval(attentionTimer)
     attentionTimer = null
@@ -745,7 +761,10 @@ function createWindow(): BrowserWindow {
     },
   })
 
-  window.once('ready-to-show', () => window.show())
+  window.once('ready-to-show', () => {
+    if (process.argv.includes('--freya-no-focus')) window.showInactive()
+    else window.show()
+  })
 
   // Speech output: this window is a candidate speaker. Removing it on close takes
   // every utterance with it, so a window that has gone away cannot leave Core
@@ -958,6 +977,10 @@ function createWindow(): BrowserWindow {
   // fragment marked `interim` is a guess the engine is still revising, and there
   // is no command anywhere that would submit one.
   const detachVoice = coreHost?.onVoice((projection) => {
+    microphoneGate.update(projection)
+    if (!projection?.micEnabled || projection.state === 'stopped-by-STOP-ALL' || !projection.wake.armed) { localWake.stop(); microphoneGate.standbyReady = false }
+    if (!projection?.micEnabled || projection.state === 'stopped-by-STOP-ALL' || (!projection.attention?.active && !projection.capturing && projection.state !== 'transcribing' && projection.state !== 'submitting')) localWhisper.stop()
+
     if (!window.isDestroyed()) window.webContents.send('freya:core:voice', projection)
   })
   const detachVoiceTranscript = coreHost?.onVoiceTranscript((fragment) => {
@@ -1061,6 +1084,11 @@ function registerIpc(): void {
   // that is not a Core command, and it carries no words and no authority — just
   // what the platform's speech engine turned out to be.
   registerVoiceOutputIpc(voiceOutput)
+  ipcMain.handle('freya:voice:wake:status', () => ({ ready: localWake.ready, frames: localWake.frames, detections: localWake.detections, peak: localWake.peak }))
+  ipcMain.on('freya:voice:wake:pcm', (event, audio: unknown) => {
+    const p = coreHost?.voice()
+    if (event.sender === mainWindow?.webContents && p?.wake.armed && p.micEnabled && p.permission === 'granted' && p.state !== 'stopped-by-STOP-ALL' && !p.attention?.active) localWake.push(audio)
+  })
 
   ipcMain.handle('freya:runtime', () => ({
     version: app.getVersion(),
@@ -1078,6 +1106,16 @@ function registerIpc(): void {
   // into Core. The raw key never appears in either direction: it goes into the
   // store and into `process.env`, and nowhere else.
   ipcMain.handle('freya:provider:read', () => requireProviderConfig().read())
+  ipcMain.handle('freya:voice:settings:read', () => ({ ...voicePreferences() }))
+  ipcMain.handle('freya:voice:settings:write', async (_event, input: unknown) => {
+    if (!voiceConfig) throw new Error('Voice settings are not ready.')
+    await requireCore().submit({ command: 'voice.mic.disable', requestId: 'voice-settings-change' })
+    await voiceOutput.cancel()
+    const saved = await voiceConfig.write(input)
+    localWhisper.stop()
+    localWake.stop()
+    return saved
+  })
   ipcMain.handle('freya:provider:write', async (_event, input: ProviderConfigInput) => {
     const saved = await requireProviderConfig().write(input)
     try {
@@ -1160,7 +1198,20 @@ function registerIpc(): void {
   ipcMain.handle('freya:window:close', (event) => {
     BrowserWindow.fromWebContents(event.sender)?.close()
   })
-  ipcMain.handle('freya:core:submit', (_event, envelope: CoreCommandEnvelope) => {
+  ipcMain.handle('freya:core:submit', async (_event, envelope: CoreCommandEnvelope) => {
+    if (envelope.command === 'voice.wake.arm') {
+      const p = requireCore().voice()
+      if (_event.sender !== mainWindow?.webContents || !p?.micEnabled || p.permission !== 'granted' || requireCore().status().stopAll.active) return { requestId: envelope.requestId, ok: false, reason: 'Turn on the microphone first.' }
+      if (!await localWake.start()) return { requestId: envelope.requestId, ok: false, reason: 'Local wake detector could not start.' }
+      microphoneGate.standbyReady = true
+      localWake.reset()
+    }
+    if (envelope.command === 'voice.capture.start' && voicePreferences().inputProvider === 'local-whisper' && requireCore().status()?.stopAll.active !== true) {
+      const p = requireCore().voice()
+      if (_event.sender !== mainWindow?.webContents || !p?.micEnabled || p.permission !== 'granted') return { requestId: envelope.requestId, ok: false, reason: 'Microphone permission is required.' }
+      if (!await localWhisper.start()) return { requestId: envelope.requestId, ok: false, reason: 'Local speech recognition could not start.' }
+      if (requireCore().voice()?.wake.armed) localWake.reset()
+    }
     const result = requireCore().submit(envelope)
     // The microphone gate follows Core's verdict rather than the request, so a
     // refused capture never opens the device and a refusal cannot leave the gate
@@ -1284,6 +1335,8 @@ app.whenReady().then(async () => {
   // launch, so it is applied here — before Core reads `process.env.NANOGPT_*`.
   // A real launch environment still wins; the `.env` file does not.
   await providerStore.applyToEnv(process.env, EXPLICIT_ENV)
+  voiceConfig = new VoiceConfigStore(join(app.getPath('userData'), 'voice.json'))
+  await voiceConfig.load()
   // The keys are fetched before the Core is constructed, and they are the only
   // secrets this process handles. A machine with no OS secure storage gets `null`
   // for both, which makes Core fall back to ephemeral stores that label themselves —
@@ -1443,24 +1496,12 @@ app.whenReady().then(async () => {
         // carries the real adapters, a durable journal and an owner-authored grant
         // file; Core's own STOP ALL is composed on top of it by the host.
         ...(deviceHandsSeam ? { deviceHands: deviceHandsSeam } : {}),
-        /*
-         * Speech output, and nothing for speech input.
-         *
-         * The platform does give the window a speech engine, so `voiceTts` is
-         * wired and Freya can genuinely read a stored answer aloud. It does *not*
-         * give this build a recogniser, so no `voiceStt` is passed — and that is
-         * the whole reason Core reports transcription as `configuration-required`
-         * and discards recordings. The tempting move here is to attach a hosted
-         * recogniser to close the gap; it is refused because audio would then leave
-         * the machine over a path a window cannot see and a credential would sit in
-         * this process, and the honest gap is cheaper than that.
-         *
-         * `voiceCaptureSupported` is not asserted either: main has no microphone to
-         * ask about, so the renderer reports that from `navigator.mediaDevices` and
-         * a machine without a device gets `unsupported` from the renderer instead
-         * of a button that cannot work.
-         */
+        // Input uses the configured adapter and explicit remote-audio consent.
+        // Output uses local system speech; neither credential reaches the window.
         voiceTts: voiceOutput,
+        voiceStt: voiceInput,
+        voiceWake: buildLocalWakeGate(),
+        voiceAttentionTimeoutMs: () => voicePreferences().attentionTimeoutMs,
       },
     )
     registerIpc()
@@ -1659,7 +1700,7 @@ app.on('web-contents-created', (_event, contents) => {
     const mediaTypes = (details as { mediaTypes?: readonly string[] } | undefined)?.mediaTypes
     const audioOnly = Array.isArray(mediaTypes) && mediaTypes.length > 0 &&
       mediaTypes.every((kind) => kind === 'audio')
-    callback(permission === 'media' && microphoneExpected() && audioOnly)
+    callback(permission === 'media' && _wc === mainWindow?.webContents && microphoneExpected() && audioOnly)
   })
   contents.session.setPermissionCheckHandler((_wc, permission) => {
     // Deliberately origin-blind and content-blind: a request is allowed only when
@@ -1668,7 +1709,7 @@ app.on('web-contents-created', (_event, contents) => {
     // Web content cannot activate the microphone at all, because it has no path to
     // `getUserMedia` — the permission gate is the second lock, not the only one.
     if (permission !== 'media') return false
-    return microphoneExpected()
+    return _wc === mainWindow?.webContents && microphoneExpected()
   })
 })
 
@@ -1681,11 +1722,11 @@ app.on('web-contents-created', (_event, contents) => {
  * running *and* that the owner turned the microphone on, so a compromised window
  * cannot open a stream by asking nicely and cannot hold one open by asking again.
  */
-let voiceCaptureOpen = false
-let voiceMicEnabled = false
+
+const microphoneGate = new MicrophoneGate()
 
 function microphoneExpected(): boolean {
-  return voiceCaptureOpen && voiceMicEnabled
+  return microphoneGate.allowed
 }
 
 /**
@@ -1717,7 +1758,8 @@ function trackVoiceCapture(envelope: CoreCommandEnvelope, _result: { ok: boolean
   // replaced when Core actually agrees a session exists. Before Core has built
   // the service at all, both stay false — which is the safe reading, since there
   // is no capture for a window to be asking about.
-  voiceMicEnabled = voice?.micEnabled === true
-  voiceCaptureOpen = voice?.capturing === true
+  microphoneGate.update(voice)
+  if (envelope.command === 'voice.mic.enable' && _result.ok) microphoneGate.beginPermission()
+
   presenceHost?.updateVoice(voice)
 }

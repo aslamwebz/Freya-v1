@@ -9,7 +9,7 @@ import { StargateHub } from '../presence/StargateHub'
 import { HomeWidgets } from './HomeWidgets'
 import { Chats } from '../chat/Chats'
 import type { ComposerMode, WorkspaceResearchView } from '../chat/modes'
-import type { VoiceView } from '../voice/useVoiceDock'
+import type { VoiceDock, VoiceView } from '../voice/useVoiceDock'
 import { brainState, type BrainState } from '../presence/state'
 import { ChatHistory } from '../chat/ChatHistory'
 import { SettingsOverlay, type SettingsCategory } from './Settings'
@@ -29,6 +29,7 @@ interface Props {
   dressing: DressingStore
   preferences: PreferencesStore
   voice: VoiceView
+  voiceControls?: VoiceDock
   voiceTranscript: { id: number; text: string } | null
   settingsCategory: SettingsCategory
   onSettingsCategory: (category: SettingsCategory) => void
@@ -119,7 +120,7 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserToggle, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
+export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserToggle, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   /*
@@ -356,6 +357,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
           <SettingsOverlay
             snapshot={snapshot}
             preferences={preferences}
+            voiceControls={voiceControls}
             category={settingsCategory}
             onCategory={onSettingsCategory}
             onDone={open('home')}

@@ -323,6 +323,7 @@ onConversation(send: (projection: ConversationProjection) => void): () => void
   onVoiceTranscript(send: (fragment: VoiceTranscriptFragment) => void): () => void
   conversation(): Promise<ConversationProjection | null>
   voice(): VoiceProjection | null
+  detectVoiceWake(): Promise<boolean>
   /**
    * Attach to the Brain projection. Returns a disposer.
    *
@@ -651,6 +652,7 @@ export interface CoreHostOptions {
   voiceStt?: VoiceSttAdapter
   /** A local wake gate. Unset in production, so hands-free cannot be armed. */
   voiceWake?: WakeGate
+  voiceAttentionTimeoutMs?: () => number
   /** Whether the platform offers a capture path at all. */
   voiceCaptureSupported?: boolean
   /**
@@ -1188,6 +1190,7 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.voiceTts ? { voiceTts: this.options.voiceTts } : {}),
         ...(this.options.voiceStt ? { voiceStt: this.options.voiceStt } : {}),
         ...(this.options.voiceWake ? { voiceWake: this.options.voiceWake } : {}),
+        voiceAttentionTimeoutMs: this.options.voiceAttentionTimeoutMs,
         ...(this.options.voiceCaptureSupported === undefined
           ? {}
           : { voiceCaptureSupported: this.options.voiceCaptureSupported }),
@@ -1356,6 +1359,8 @@ export class ElectronCoreHost implements CoreHost {
     if (!this.core) return null
     return this.core.conversation()
   }
+
+  async detectVoiceWake(): Promise<boolean> { return this.core?.detectVoiceWake() ?? false }
 
   voice(): VoiceProjection | null {
     return this.core?.voice() ?? null

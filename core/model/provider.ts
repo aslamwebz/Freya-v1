@@ -502,6 +502,9 @@ export function validateModelAttachments(input: unknown): readonly ModelAttachme
         { partIndex: index, mimeType },
       )
     }
+    if (typeof filename === 'string' && (filename.trim().length === 0 || filename.length > 255 || Array.from(filename).some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 || char === '/' || char === '\\'))) {
+      throw new ModelAttachmentError('malformed_part', `attachment ${index} has an invalid filename`, { partIndex: index, mimeType })
+    }
     if (type === 'file' && typeof filename !== 'string') {
       throw new ModelAttachmentError(
         'malformed_part',

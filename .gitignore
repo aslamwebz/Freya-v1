@@ -27,3 +27,6 @@ References/
 artifacts/live-visible/
 artifacts/*.png
 artifacts/acceptance.env
+
+# Installed local speech binaries and models.
+.local/

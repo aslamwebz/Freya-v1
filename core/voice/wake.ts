@@ -58,7 +58,7 @@ export const LOCAL_ENERGY_WAKE_GATE: WakeGate = Object.freeze({
 
 /** The gate a build gets when the host has supplied a working one. */
 export function buildLocalWakeGate(): WakeGate {
-  return { ...LOCAL_ENERGY_WAKE_GATE, availability: 'available' }
+  return { ...LOCAL_ENERGY_WAKE_GATE, id: 'local-freya-keyword', availability: 'available', detail: 'Standby checks only for “Freya” locally. After “Yes?”, speak normally. Say “stand by” to finish. Turns off after fifteen minutes.' }
 }
 
 /**

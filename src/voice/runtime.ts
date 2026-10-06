@@ -1,510 +1,237 @@
 import { VOICE_LIMITS, type VoiceOption } from '../../core/voice/types'
 import { hostBridge } from '../platform/host'
 import { voiceMirror, type VoiceMirror } from '../platform/voiceClient'
-import { openMicrophone, MicrophoneError, type MicCapture } from '../ui/surfaces/microphone'
-import { clearMicLevel, publishMicLevel } from '../presence/micLevel'
+import { openMicrophone, requestMicrophonePermission, MicrophoneError, type MicCapture } from '../ui/surfaces/microphone'
+import { clearMicLevel } from '../presence/micLevel'
 import { voiceEnvelope } from '../presence/voiceEnvelope'
 import { WindowSpeechOutput } from './output'
 import { detectRecognitionSupport, type RecognitionSupport } from './recognition'
 
-/**
- * The voice runtime.
- *
- * One object that owns the *device* side of voice in the window, and asks Core
- * before every privileged step. It is the only place in the renderer that calls
- * `getUserMedia` and the only place that plays audio.
- *
- * ## The order, which is the security property
- *
- * ```
- * press → micEnable? → reportPermission? → Core: capture.start → getUserMedia
- * ```
- *
- * Core agrees before the device opens, and the host's permission gate reads Core's
- * own projection. So there is no path — from a bug, a race, or a compromised
- * window — in which a microphone is open without the trusted half having said yes
- * to this specific capture.
- *
- * ## Barge-in, honestly
- *
- * A barge-in needs to notice somebody starting to speak while Freya is talking.
- * Doing that *properly* means a microphone open during playback, which is exactly
- * the always-on capture this whole design refuses. So there are two real routes
- * and both are stated rather than implied:
- *
- * 1. **Press to talk while she is speaking.** Explicit, always available, and the
- *    usual way anybody interrupts an assistant. Playback is cancelled first, then
- *    capture begins.
- * 2. **Hands-free, when the owner has armed it.** Then the microphone is already
- *    open by their own decision and a sustained-energy reading is a real barge-in.
- *
- * Neither is simulated. On a build with no wake gate configured, route 2 does not
- * exist and the runtime says so rather than pretending to listen.
- */
-
-/** How often the wake gate re-measures, in milliseconds. */
-const WAKE_POLL_MS = 120
-
-/** Energy must stay above the threshold for this long before the gate fires. */
-const WAKE_SUSTAIN_MS = 480
-
-/** Sustained speech energy above this level counts as somebody talking. */
-const WAKE_THRESHOLD = 0.14
-
 export interface VoiceRuntimeEvents {
-  /** A confirmed transcript is ready. `turnId` is set when it became a turn. */
   onTranscript?: (text: string, turnId: string | null) => void
-  /** Something worth saying happened. Never a stack, never audio. */
   onNotice?: (message: string) => void
 }
 
+/** Hardware only. Core owns transcripts, attention, conversation and speech policy. */
 export class VoiceRuntime {
-  private readonly mirror: VoiceMirror
-  private readonly events: VoiceRuntimeEvents
   private capture: MicCapture | null = null
+  private standby = false
   private sessionId: string | null = null
+  private opening = false
+  private completedDuringOpening: boolean | null = null
+  private pendingTranscriptions = new Set<number>()
+  private armedUntil = 0
+  private controller: AbortController | null = null
   private output: WindowSpeechOutput | null = null
-  private wakeLevel = 0
-  private wakeSustainedMs = 0
-  private wakeTimer: ReturnType<typeof setInterval> | null = null
-  private wakeMeter: { abandon(): Promise<void> } | null = null
-  private lastUtterance: string | null = null
+  private handsFree = false
+  private enabling: Promise<boolean> | null = null
+  private timer: ReturnType<typeof setInterval> | null = null
   private disposed = false
+  private lastUtterance: string | null = null
+  private epoch = 0
+  constructor(private readonly mirror: VoiceMirror, private readonly events: VoiceRuntimeEvents = {}) {}
 
-  constructor(mirror: VoiceMirror, events: VoiceRuntimeEvents = {}) {
-    this.mirror = mirror
-    this.events = events
-  }
-
-  /**
-   * What this build can actually do, detected rather than assumed.
-   *
-   * Reported to the owner before they press anything, which is the difference
-   * between a microphone button and a lie.
-   */
   capabilities(): { capture: boolean; recognition: RecognitionSupport } {
-    const capture =
-      typeof navigator !== 'undefined' &&
-      typeof navigator.mediaDevices?.getUserMedia === 'function'
-    return { capture, recognition: detectRecognitionSupport() }
+    return { capture: typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getUserMedia === 'function', recognition: detectRecognitionSupport() }
   }
 
-  /* ---------------------------------------------------------- push to talk */
-
-  /**
-   * Begin a capture from an explicit press.
-   *
-   * Every refusal is reported as a sentence and none of them is silent: no
-   * Core, microphone off, permission not held, permission denied, already
-   * recording, or a platform with no device. A person pressing a button deserves
-   * to know which of those happened.
-   */
-  async press(): Promise<void> {
-    if (this.capture !== null) return
-    const capabilities = this.capabilities()
-    if (!capabilities.capture) {
-      this.notice('This build has no microphone API, so Freya cannot listen.')
-      return
-    }
-
-    // Barge-in first: if Freya is talking, the interruption happens *before* the
-    // microphone opens, so the owner never has to talk over her and be recorded
-    // at the same time.
-    if (this.mirror.projection?.speaking === true) {
-      await this.mirror.interruptSpeaking('the owner started speaking')
-    }
-
+  private enable(): Promise<boolean> {
+    if (this.enabling) return this.enabling
+    this.enabling = this.enableDevice().finally(() => { this.enabling = null })
+    return this.enabling
+  }
+  private async enableDevice(): Promise<boolean> {
+    if (this.disposed) return false
+    if (!this.capabilities().capture) { this.notice('This window has no microphone API.'); return false }
     const enabled = await this.mirror.micEnable()
-    if (!enabled.ok) {
-      this.notice(enabled.reason ?? 'the microphone could not be turned on')
-      return
+    if (!enabled.ok) { this.notice(enabled.reason ?? 'Microphone unavailable.'); return false }
+    await this.mirror.refresh?.()
+    if (this.mirror.projection?.permission !== 'granted') {
+      try { await requestMicrophonePermission(); if (this.disposed || this.mirror.projection?.micEnabled === false) return false; await this.mirror.reportPermission('granted'); await this.mirror.refresh?.() }
+      catch { await this.mirror.reportPermission('denied'); this.notice('Microphone permission was not granted.'); return false }
     }
+    return !this.disposed
+  }
 
-    const started = await this.mirror.startCapture()
-    if (!started.ok || started.sessionId === null) {
-      this.notice(started.reason ?? 'the microphone could not be opened')
-      return
-    }
-    this.sessionId = started.sessionId
-
+  async press(): Promise<void> {
+    if (this.disposed || this.opening) return
+    if (this.standby) await this.release(true)
+    if (this.capture) return
+    const epoch = ++this.epoch
+    this.opening = true
     try {
-      this.capture = await openMicrophone({
-        maxDurationMs: this.mirror.projection?.limits.maxDurationMs ?? VOICE_LIMITS.maxDurationMs,
-        maxBytes: this.mirror.projection?.limits.maxAudioBytes ?? VOICE_LIMITS.maxAudioBytes,
-        sampleRate: VOICE_LIMITS.sampleRate,
+      if (!await this.enable() || epoch !== this.epoch) return
+      await this.interrupt('the owner pressed to speak')
+      if (epoch !== this.epoch) return
+      await this.open(false, epoch)
+    } finally { this.opening = false; this.drainCompletion() }
+  }
+
+  private async open(automatic: boolean, epoch: number): Promise<void> {
+    const standby = automatic && !this.mirror.projection?.attention?.active
+    if (!standby) {
+      const started = await this.mirror.startCapture()
+      if (!started.ok || !started.sessionId) { if (!automatic) this.notice(started.reason ?? 'Capture refused.'); return }
+      if (this.disposed || epoch !== this.epoch) { await this.mirror.cancelCapture(); return }
+      if (automatic && !this.mirror.projection?.attention?.active) { await this.mirror.cancelCapture(); return }
+      this.sessionId = started.sessionId
+    }
+    this.standby = standby
+    const controller = new AbortController()
+    this.controller = controller
+    try {
+      const preferences = await hostBridge()?.voiceSettingsRead?.()
+      if (controller.signal.aborted || epoch !== this.epoch) return
+      const capture = await openMicrophone({
+        maxDurationMs: standby ? VOICE_LIMITS.maxWakeArmedMs : this.mirror.projection?.limits.maxDurationMs ?? VOICE_LIMITS.maxDurationMs,
+        standby, onPcm: audio => { if (this.handsFree && !this.mirror.projection?.attention?.active && epoch === this.epoch) hostBridge()?.voiceWakeAudio?.(audio) },
+        maxBytes: VOICE_LIMITS.maxAudioBytes, sampleRate: VOICE_LIMITS.sampleRate, signal: controller.signal, deviceId: preferences?.inputDeviceId,
+        ...(automatic ? {
+          silenceMs: 750,
+          onSpeechStart: () => { if (epoch === this.epoch && this.mirror.projection?.attention?.active) void this.interrupt('the owner started speaking') },
+          onComplete: (result: { speechDetected: boolean }) => { if (epoch === this.epoch) this.complete(!result.speechDetected) },
+        } : {
+          onComplete: () => { if (epoch === this.epoch) this.complete(false) },
+        }),
       })
+      if (this.disposed || controller.signal.aborted || epoch !== this.epoch) { await capture.abandon(); return }
+      this.capture = capture
+      if (standby && this.mirror.projection?.attention?.active) void this.activateStandby()
       voiceEnvelope.setRealLevel(0)
     } catch (error) {
-      // The device did not open, so Core's session must not be left dangling. The
-      // session is cancelled *and* the permission reported — a refusal is a fact
-      // about the operating system, and a window that hid it would be reporting
-      // "still ready" for a microphone the user has just declined at the OS level.
-      const reason = error instanceof MicrophoneError ? error.message : 'the microphone could not be opened'
-      if (error instanceof MicrophoneError && error.reason === 'permission-denied') {
-        await this.mirror.reportPermission('denied')
-      }
+      if (epoch !== this.epoch) return
       await this.mirror.cancelCapture()
       this.sessionId = null
-      this.notice(`${reason}.`)
+      if (error instanceof MicrophoneError && error.reason === 'permission-denied') await this.mirror.reportPermission('denied')
+      this.notice(error instanceof MicrophoneError ? error.message : 'The microphone could not be opened.')
+      if (automatic) await this.disarmWake()
     }
   }
 
-  /** Finish a capture from the release of the same press. */
+  private async activateStandby(): Promise<void> {
+    if (!this.standby || !this.capture || this.opening || !this.handsFree) return
+    this.opening = true
+    const epoch = this.epoch
+    this.standby = false
+    this.capture.promote?.()
+    try {
+      const started = await this.mirror.startCapture()
+      if (!started.ok || !started.sessionId) { await this.disarmWake(); this.notice(started.reason ?? 'Speech recognition unavailable.'); return }
+      if (this.disposed || epoch !== this.epoch || !this.capture) { await this.mirror.cancelCapture(); return }
+      if (!this.mirror.projection?.attention?.active) { await this.release(true); return }
+      this.sessionId = started.sessionId
+    } finally { this.opening = false; this.drainCompletion() }
+  }
+
+  private complete(cancelled: boolean): void {
+    if (this.opening) this.completedDuringOpening = cancelled
+    else void this.release(cancelled)
+  }
+  private drainCompletion(): void {
+    const completed = this.completedDuringOpening
+    this.completedDuringOpening = null
+    if (completed !== null && this.capture) void this.release(completed)
+  }
+
   async release(cancelled = false): Promise<void> {
+    const epoch = ++this.epoch
+    this.completedDuringOpening = null
+    const controller = this.controller
     const capture = this.capture
     const sessionId = this.sessionId
     this.capture = null
+    this.standby = false
     this.sessionId = null
+    this.controller = null
     voiceEnvelope.setRealLevel(null)
     clearMicLevel()
-
-    if (capture === null || sessionId === null) return
-    const { audio, durationMs } = await capture.stop(cancelled)
-    if (cancelled) {
-      await this.mirror.cancelCapture()
-      return
-    }
-
-    const outcome = await this.mirror.endCapture({ sessionId, audio, durationMs })
-    if (outcome.text !== null && outcome.text.length > 0) {
-      this.events.onTranscript?.(outcome.text, outcome.turnId)
-      if (outcome.turnId !== null) this.notice('Sent.')
-      return
-    }
-    this.notice(outcome.detail ?? outcome.reason ?? 'The recording was discarded.')
+    if (!capture || !sessionId) { await capture?.abandon(); controller?.abort(); if (sessionId || this.pendingTranscriptions.size > 0) await this.mirror.cancelCapture(); return }
+    // stop(false) must collect before aborting the graph; stop is idempotent.
+    const result = await capture.stop(cancelled)
+    controller?.abort()
+    if (cancelled) { await this.mirror.cancelCapture(); return }
+    if (this.disposed || epoch !== this.epoch) { await this.mirror.cancelCapture(); return }
+    this.pendingTranscriptions.add(epoch)
+    const outcome = await this.mirror.endCapture({ sessionId, ...result }).finally(() => { this.pendingTranscriptions.delete(epoch) })
+    if (this.disposed || epoch !== this.epoch) return
+    if (outcome.text) this.events.onTranscript?.(outcome.text, outcome.turnId)
+    else if (!outcome.ok || outcome.reason !== 'completed') this.notice(outcome.detail ?? outcome.reason ?? 'Recording discarded.')
   }
 
-  /** Throw the recording away. Used by a cancel control and by unmount. */
   async cancel(): Promise<void> {
-    const capture = this.capture
-    const sessionId = this.sessionId
-    this.capture = null
-    this.sessionId = null
-    voiceEnvelope.setRealLevel(null)
-    clearMicLevel()
-    if (capture !== null) await capture.abandon()
-    if (sessionId !== null) await this.mirror.cancelCapture()
+    if (this.pendingTranscriptions.size > 0 && this.mirror.projection?.state === 'submitting') await this.interrupt('the owner cancelled the voice response')
+    await this.release(true)
   }
 
-  /* --------------------------------------------------------------- playback */
-
-  /** Attach playback and report what the platform offers. */
   start(): () => void {
-    if (this.disposed) return () => {}
+    this.disposed = false
     const bridge = hostBridge()
-    const output = new WindowSpeechOutput((utteranceId, outcome) => {
-      this.lastUtterance = utteranceId
-      void this.mirror.settle(utteranceId, outcome)
-    })
+    const output = new WindowSpeechOutput((id, outcome) => { this.lastUtterance = id; void this.mirror.settle(id, outcome) })
     this.output = output
-
-    // Presence-checked, for the same reason `voiceClient.attach` is: a bridge from
-    // an older preload must leave playback inert rather than throwing inside a
-    // React effect. A window that cannot hear Freya says so; it does not crash.
-    const disposeOutput =
-      typeof bridge?.onVoiceOutput === 'function'
-        ? bridge.onVoiceOutput((instruction) => {
-            if (instruction.kind === 'speak') {
-              output.play({
-                utteranceId: instruction.utteranceId,
-                text: instruction.text,
-                voiceId: instruction.voiceId,
-                rate: instruction.rate,
-                pitch: instruction.pitch,
-              })
-              return
-            }
-            if (instruction.kind === 'stop') {
-              output.stop()
-              return
-            }
-            output.cancel()
-          })
-        : null
-
-    // The capability report is what makes `synthesis.available` truthful. Reporting
-    // "I have no speech engine" is as welcome as reporting "I do", so there is no
-    // default to be wrong about.
+    const detach = bridge?.onVoiceOutput?.(instruction => {
+      if (instruction.kind === 'speak') output.play(instruction)
+      else output.cancel()
+    })
     const report = (): void => {
-      const capabilities = output.capabilities()
-      if (typeof bridge?.reportVoiceCapabilities === 'function') {
-      bridge.reportVoiceCapabilities({
-        available: capabilities.available,
-        voices: capabilities.voices,
-        detail: capabilities.detail,
-      })
-    }
+      const c = output.capabilities()
+      bridge?.reportVoiceCapabilities?.({ available: c.available, voices: c.voices, detail: c.detail })
     }
     report()
-    const disposeWatch = output.watchVoices(report)
-    // A second report after a tick, because Chromium populates the voice list
-    // asynchronously on first load and an empty list on the first read is normal.
+    const watch = output.watchVoices(report)
     const retry = setTimeout(report, 750)
-
-    return () => {
-      clearTimeout(retry)
-      disposeWatch()
-      disposeOutput?.()
-      output.cancel()
-    }
+    const subscribe = this.mirror.subscribe(p => {
+      if (!p || !p.micEnabled || p.state === 'stopped-by-STOP-ALL' || p.permission === 'revoked' || p.permission === 'denied') {
+        this.handsFree = false
+        void this.cancel()
+        output.cancel()
+      } else if (this.standby && p.attention?.active) void this.activateStandby()
+      else if (this.handsFree && this.capture && !this.standby && !this.opening && !p.attention?.active) void this.cancel()
+      else if (this.capture && !this.standby && !this.opening && !p.capturing) void this.cancel()
+    })
+    this.timer = setInterval(() => { void this.pump() }, 200)
+    return () => { clearTimeout(retry); watch(); detach?.(); subscribe(); output.cancel(); if (this.timer) clearInterval(this.timer); this.timer = null }
   }
 
-  /** Read a stored turn aloud. */
-  async speak(turnId: string): Promise<void> {
-    const outcome = await this.mirror.speak(turnId)
-    if (!outcome.ok) this.notice(outcome.reason ?? 'Freya could not speak that answer.')
+  private async pump(): Promise<void> {
+    if (!this.handsFree || this.disposed) return
+    if (Date.now() >= this.armedUntil) { await this.disarmWake(); this.notice('Hands-free timed out. Turn it on again to continue.'); return }
+    if (this.standby && this.capture && this.mirror.projection?.attention?.active) { await this.activateStandby(); return }
+    if (this.opening || this.capture || this.sessionId) return
+    const p = this.mirror.projection
+    if (!p?.wake.armed || !p.micEnabled || p.state === 'stopped-by-STOP-ALL') { this.handsFree = false; return }
+    if (p.state === 'transcribing') return
+    await this.mirror.refresh()
+    if (this.disposed || !this.handsFree) return
+    const epoch = ++this.epoch
+    this.opening = true
+    try { await this.open(true, epoch) } finally { this.opening = false; this.drainCompletion() }
   }
 
-  async stopSpeaking(): Promise<void> {
-    await this.mirror.stopSpeaking()
-  }
-
-  /** Cut Freya off. Barge-in, a stop control, and STOP ALL's renderer half. */
-  async interrupt(reason = 'the owner interrupted Freya'): Promise<void> {
-    this.output?.cancel()
-    await this.mirror.interruptSpeaking(reason)
-  }
-
-  /* -------------------------------------------------------------- mute/wake */
-
-  async setMuted(muted: boolean): Promise<void> {
-    if (muted) this.output?.cancel()
-    await this.mirror.setMuted(muted)
-  }
-
-  /**
-   * Arm hands-free.
-   *
-   * Core refuses this on every build that has no local gate configured, and the
-   * reason is shown rather than swallowed. Nothing here starts listening on its
-   * own initiative: the interval below is only ever running because a person
-   * pressed this.
-   */
   async armWake(): Promise<void> {
-    const armed = await this.mirror.armWake()
-    if (!armed.ok) {
-      this.notice(armed.reason ?? 'hands-free is not available on this build')
-      return
-    }
-    await this.openWakeCapture()
+    if (this.mirror.projection?.transcription.available !== true) { this.notice(this.mirror.projection?.transcription.detail ?? 'Configure speech recognition first.'); return }
+    if (!await this.enable()) return
+    const result = await this.mirror.armWake()
+    if (!result.ok) { this.notice(result.reason ?? 'Hands-free unavailable.'); return }
+    await this.mirror.refresh()
+    this.armedUntil = Date.now() + (this.mirror.projection?.wake.maxArmedMs ?? VOICE_LIMITS.maxWakeArmedMs)
+    this.handsFree = true
+    await this.pump()
   }
-
-  async disarmWake(): Promise<void> {
-    if (this.wakeTimer !== null) {
-      clearInterval(this.wakeTimer)
-      this.wakeTimer = null
-    }
-    const capture = this.wakeMeter
-    this.wakeMeter = null
-    if (capture !== null) await capture.abandon()
-    await this.mirror.disarmWake()
-  }
-
-  /**
-   * Open a low-level meter for the wake gate.
-   *
-   * Deliberately not a recording. It holds no samples, sends none, and is
-   * released the moment the gate is disarmed or the window unmounts — which is
-   * what makes "hands-free is bounded" a property rather than a promise.
-   */
-  private async openWakeCapture(): Promise<void> {
-    const capabilities = this.capabilities()
-    if (!capabilities.capture) return
-    if (this.wakeMeter !== null) return
-    try {
-      this.wakeMeter = await openWakeMeter({
-        threshold: WAKE_THRESHOLD,
-        sampleRate: VOICE_LIMITS.sampleRate,
-      })
-    } catch {
-      this.wakeMeter = null
-      this.notice('Hands-free could not measure the room, so it is not armed.')
-      return
-    }
-    this.wakeTimer = setInterval(() => {
-      void this.tickWake()
-    }, WAKE_POLL_MS)
-  }
-
-  private async tickWake(): Promise<void> {
-    if (this.wakeMeter === null) return
-    // Already recording because the gate fired: nothing to decide.
-    if (this.capture !== null) return
-    this.wakeSustainedMs = this.wakeLevel >= WAKE_THRESHOLD ? this.wakeSustainedMs + WAKE_POLL_MS : 0
-    if (this.wakeSustainedMs < WAKE_SUSTAIN_MS) return
-
-    // Barge-in first, then the normal press path. Reusing `press` is deliberate:
-    // the wake gate gets exactly the capture an owner press would get, and no
-    // separate quieter path exists for it to take.
-    if (this.output?.speaking === true) {
-      await this.interrupt('the owner started speaking')
-    }
-    const outcome = await this.mirror.reportWakeEnergy(this.wakeLevel, this.wakeSustainedMs)
-    this.wakeSustainedMs = 0
-    if (!outcome.fired) {
-      if (outcome.reason !== null) this.notice(outcome.reason)
-      return
-    }
-    // Core opened the session on its own authority; the window's job now is to
-    // drive the same capture machinery a press would have.
-    this.sessionId = this.mirror.projection?.sessionId ?? null
-    try {
-      this.capture = await openMicrophone({
-        maxDurationMs: this.mirror.projection?.limits.maxDurationMs ?? VOICE_LIMITS.maxDurationMs,
-        maxBytes: this.mirror.projection?.limits.maxAudioBytes ?? VOICE_LIMITS.maxAudioBytes,
-        sampleRate: VOICE_LIMITS.sampleRate,
-      })
-      voiceEnvelope.setRealLevel(0)
-    } catch (error) {
-      await this.mirror.cancelCapture()
-      this.sessionId = null
-      this.notice(error instanceof MicrophoneError ? error.message : 'the microphone could not be opened')
-    }
-  }
-
-  /** The voices this platform offers, for a picker. */
-  async voices(): Promise<VoiceOption[]> {
-    return this.mirror.listVoices()
-  }
-
-  async selectVoice(voiceId: string): Promise<void> {
-    const outcome = await this.mirror.selectVoice(voiceId)
-    if (!outcome.ok) this.notice(outcome.reason ?? 'that voice could not be selected')
-  }
-
-  async setAutoSubmit(enabled: boolean): Promise<void> {
-    await this.mirror.setAutoSubmit(enabled)
-  }
-
-  /** Turn the microphone off entirely: meter, capture and Core's own flag. */
-  async micOff(): Promise<void> {
-    await this.disarmWake()
-    await this.cancel()
-    this.output?.cancel()
-    await this.mirror.micDisable()
-  }
-
-  /** Whether this window currently holds an open capture. */
-  get listening(): boolean {
-    return this.capture !== null
-  }
-
-  /** Whether anything is playing right now. */
-  get playingUtteranceId(): string | null {
-    return this.lastUtterance
-  }
-
-  /** Only the reasons worth surfacing: a capability this build lacks, or a refusal. */
-  private notice(detail: string): void {
-    if (detail.length === 0) return
-    this.events.onNotice?.(detail)
-  }
-
-  /** Release everything. Called from a window teardown; safe twice. */
-  async dispose(): Promise<void> {
-    if (this.disposed) return
-    this.disposed = true
-    if (this.wakeTimer !== null) {
-      clearInterval(this.wakeTimer)
-      this.wakeTimer = null
-    }
-    const meter = this.wakeMeter
-    this.wakeMeter = null
-    if (meter !== null) await meter.abandon()
-    await this.cancel()
-    this.output?.cancel()
-    clearMicLevel()
-    voiceEnvelope.setRealLevel(null)
-  }
+  async disarmWake(): Promise<void> { this.handsFree = false; await this.cancel(); await this.mirror.disarmWake() }
+  async speak(turnId: string): Promise<void> { const result = await this.mirror.speak(turnId); if (!result.ok) this.notice(result.reason ?? 'Speech unavailable.') }
+  async stopSpeaking(): Promise<void> { this.output?.cancel(); await this.mirror.stopSpeaking() }
+  async interrupt(reason = 'the owner interrupted Freya'): Promise<void> { this.output?.cancel(); await this.mirror.interruptSpeaking(reason) }
+  async setMuted(muted: boolean): Promise<void> { if (muted) this.output?.cancel(); await this.mirror.setMuted(muted) }
+  async voices(): Promise<VoiceOption[]> { return this.mirror.listVoices() }
+  async selectVoice(id: string): Promise<void> { const result = await this.mirror.selectVoice(id); if (!result.ok) this.notice(result.reason ?? 'Voice unavailable.') }
+  async setAutoSubmit(enabled: boolean): Promise<void> { await this.mirror.setAutoSubmit(enabled) }
+  async micOn(): Promise<void> { await this.enable() }
+  async micOff(): Promise<void> { await this.disarmWake(); await this.mirror.micDisable() }
+  get listening(): boolean { return this.capture !== null }
+  get playingUtteranceId(): string | null { return this.lastUtterance }
+  private notice(message: string): void { this.events.onNotice?.(message) }
+  async dispose(): Promise<void> { if (this.disposed) return; this.disposed = true; this.handsFree = false; if (this.timer) clearInterval(this.timer); this.timer = null; await this.cancel(); this.output?.cancel() }
 }
-
-/**
- * Open a meter that publishes a level and keeps nothing.
- *
- * Separate from `openMicrophone` on purpose. That one accumulates PCM because a
- * recording needs it; this one computes an RMS and throws the samples away, so
- * the code that runs during hands-free cannot be the code that stores audio even
- * by accident.
- */
-async function openWakeMeter(options: { threshold: number; sampleRate: number }): Promise<{ abandon(): Promise<void> }> {
-  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-    throw new MicrophoneError('unsupported', 'this environment has no microphone API')
-  }
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, sampleRate: { ideal: options.sampleRate }, echoCancellation: true },
-    video: false,
-  })
-  const AudioContextCtor =
-    window.AudioContext ??
-    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-  if (!AudioContextCtor) {
-    release(stream)
-    throw new MicrophoneError('unsupported', 'this environment has no Web Audio support')
-  }
-  const context = new AudioContextCtor()
-  const source = context.createMediaStreamSource(stream)
-  const processor = context.createScriptProcessor(2048, 1, 1)
-  let closed = false
-
-  const finish = async (): Promise<void> => {
-    if (closed) return
-    closed = true
-    try {
-      processor.onaudioprocess = null
-      source.disconnect()
-      processor.disconnect()
-      sink.disconnect()
-    } catch {
-      /* already down */
-    }
-    release(stream)
-    try {
-      await context.close()
-    } catch {
-      /* a context that will not close must not stop us releasing the device */
-    }
-  }
-
-  processor.onaudioprocess = (event) => {
-    if (closed) return
-    const input = event.inputBuffer.getChannelData(0)
-    if (!input || input.length === 0) return
-    let sum = 0
-    for (let i = 0; i < input.length; i += 1) {
-      const sample = input[i] ?? 0
-      sum += sample * sample
-    }
-    publishMicLevel(Math.min(1, Math.max(0, (Math.sqrt(sum / input.length) - 0.01) * 6)))
-  }
-
-  source.connect(processor)
-  const sink = context.createGain()
-  sink.gain.value = 0
-  processor.connect(sink)
-  sink.connect(context.destination)
-
-  return { abandon: finish }
-}
-
-function release(stream: MediaStream): void {
-  for (const track of stream.getTracks()) {
-    try {
-      track.stop()
-    } catch {
-      /* a track that will not stop is not worth failing a release over */
-    }
-  }
-}
-
-/* ---------------------------------------------------------------- singleton */
-
 let shared: VoiceRuntime | null = null
-
-export function voiceRuntime(events: VoiceRuntimeEvents = {}): VoiceRuntime {
-  shared ??= new VoiceRuntime(voiceMirror(), events)
-  return shared
-}
-
-export function resetVoiceRuntime(): void {
-  shared = null
-}
+export function voiceRuntime(events: VoiceRuntimeEvents = {}): VoiceRuntime { shared ??= new VoiceRuntime(voiceMirror(), events); return shared }
+export function resetVoiceRuntime(): void { shared = null }

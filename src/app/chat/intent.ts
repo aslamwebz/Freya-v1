@@ -318,28 +318,18 @@ export function routePromptIntent(
 
   switch (routed.kind) {
     case 'direct_answer':
-      return { kind: 'chat', reason: 'conversation' }
     case 'image_search':
     case 'video_search':
+    case 'document_search':
     case 'attachment_image':
     case 'attachment_document':
-      return { kind: 'eye-new', reason: 'media-discovery' }
     case 'web_search':
-    case 'document_search':
     case 'native_browser_task':
-      // These answer in conversation rather than opening a research session.
-      //
-      // They used to route to Freya's Eye too, which made the chat-and-tools path
-      // unreachable from the shipping window: every search became a multi-iteration
-      // research run, which reported its findings in a research card and produced no
-      // answer in the conversation at all. So a person asking a question that needed
-      // looking up got a panel and no reply, and the citations and the "what Freya
-      // did for this answer" footer — the things that make an answer auditable — were
-      // never written.
-      //
-      // Freya's Eye is for *gathering*, so it keeps what it is good at: media
-      // discovery, and anything the owner asked for explicitly. A question is a
-      // question, and it gets an answer.
+      // Ordinary Chat is the default human interface. Explicit image, video and
+      // document requests stay in the conversation so the Mind can use the typed
+      // search vertical and attach real media cards to Freya's answer. Freya's Eye
+      // remains available only when the owner explicitly selects that mode or is
+      // refining an already-open Eye session.
       return { kind: 'chat', reason: 'conversation' }
   }
 }

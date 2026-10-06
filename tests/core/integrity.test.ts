@@ -342,6 +342,71 @@ describe('known Freya-authored journal compatibility repair', () => {
     expect(raw).toContain('security.stop_all.activated')
   })
 
+  it('repairs the full historical tool-loop request chain used by the real app', async () => {
+    await mkdir(dirname(file), { recursive: true })
+    const base = '1c60bb32-a9f0-4f1d-b74e-0c4787c8f43d'
+    const legacy = base + '#1'
+    const repaired = base + ':1'
+    const grant = 'turn:' + base
+
+    await writeFile(
+      file,
+      line(1, 'core.started', { version: '0.1.0', storeKind: 'jsonl', recoveredSequence: 0 }) +
+        line(2, 'core.ready', {}) +
+        line(3, 'cognition.requested', {
+          requestId: legacy,
+          origin: 'user',
+          cause: 'user_message',
+          maxOutputTokens: 256,
+          requestedModel: null,
+          parentRunId: null,
+          goalId: null,
+        }, { actor: 'owner', correlationId: base }) +
+        line(4, 'cognition.allowed', {
+          requestId: legacy,
+          grantId: grant,
+        }, { actor: 'owner', correlationId: base }) +
+        line(5, 'cognition.grant.reserved', {
+          grantId: grant,
+          requestId: legacy,
+          outputTokenBudgetReserved: 256,
+        }, { correlationId: legacy }) +
+        line(6, 'model.request.started', {
+          requestId: legacy,
+          grantId: grant,
+          providerId: 'nanogpt',
+          model: 'qwen/qwen3.8-27b-uncensored',
+          maxOutputTokens: 256,
+          startedAt: '2026-10-05T23:18:19.180Z',
+        }, { correlationId: legacy }) +
+        line(7, 'model.request.completed', {
+          requestId: legacy,
+          providerId: 'nanogpt',
+          model: 'qwen/qwen3.8-27b-uncensored',
+          inputTokens: 1475,
+          outputTokens: 13,
+        }, { correlationId: legacy }) +
+        line(8, 'cognition.grant.usage_reported', {
+          grantId: grant,
+          requestId: legacy,
+          inputTokens: 1475,
+          outputTokens: 13,
+        }, { correlationId: legacy }) +
+        line(9, 'security.stop_all.activated', { by: 'owner', reason: 'must survive chain repair' }),
+    )
+
+    const status = (await start()).status()
+    expect(status.lifecycle).toBe('ready')
+    expect(status.integrity.integrity).toBe('ok')
+    expect(status.stopAll.active).toBe(true)
+
+    const raw = await readFile(file, 'utf8')
+    expect(raw).not.toContain(legacy)
+    expect(raw).toContain(repaired)
+    expect(raw).toContain('core.integrity_repaired')
+    expect(raw).toContain('security.stop_all.activated')
+  })
+
   it('restores an already-degraded profile from its verified legacy quarantine', async () => {
     await mkdir(dirname(file), { recursive: true })
     const quarantine = join(dir, 'core-events.jsonl.quarantine')

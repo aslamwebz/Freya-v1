@@ -55,6 +55,34 @@ export class MicrophoneError extends Error {
 }
 
 /**
+ * Ask the operating system for microphone access and release the probe
+ * immediately. Core must already have opened its short-lived permission window;
+ * this helper never records or retains a sample.
+ */
+export async function requestMicrophonePermission(): Promise<void> {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    throw new MicrophoneError('unsupported', 'this environment has no microphone API')
+  }
+  let stream: MediaStream
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: false,
+    })
+  } catch (error) {
+    const name = (error as { name?: string } | null)?.name
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      throw new MicrophoneError('permission-denied', 'microphone permission was not granted')
+    }
+    if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+      throw new MicrophoneError('no-device', 'no microphone was found')
+    }
+    throw new MicrophoneError('capture-failed', 'the microphone permission check failed')
+  }
+  releaseStream(stream)
+}
+
+/**
  * Open the microphone and begin capturing.
  *
  * `getUserMedia` is called here and nowhere else, which is what makes the

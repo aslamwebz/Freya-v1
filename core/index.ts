@@ -1982,6 +1982,7 @@ class FreyaCore implements Core {
       transcriptionTimeoutMs: this.options.voiceTranscriptionTimeoutMs,
       autoSpeak: this.options.voiceAutoSpeak,
       proactiveAlerts: this.options.voiceProactiveAlerts,
+      initialMuted: this.options.voiceMuted,
       followUpWindowMs: this.options.voiceFollowUpWindowMs,
       stopAll: () => this.state.stopAll.active,
       // The canonical door. This is the same function `conversation.turn.submit`

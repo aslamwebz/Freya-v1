@@ -176,7 +176,7 @@ export class VoiceService {
   private readonly timeoutMs: number
   private readonly now: () => Date
   private readonly newId: () => string
-  private readonly proactiveAlerts: boolean
+  private proactiveAlerts: boolean
 
   private state: VoiceState
   private session: VoiceCaptureSession | null = null
@@ -1155,6 +1155,12 @@ export class VoiceService {
 
   async setAutoSpeak(enabled: boolean): Promise<VoiceState> {
     this.autoSpeak = enabled
+    this.publish()
+    return this.state
+  }
+
+  async setProactiveAlerts(enabled: boolean): Promise<VoiceState> {
+    this.proactiveAlerts = enabled
     this.publish()
     return this.state
   }

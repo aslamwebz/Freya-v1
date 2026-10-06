@@ -1004,23 +1004,67 @@ describe('the wire protocol is strict', () => {
     // normal reply contains no marker, so it is never a tool request.
     expect(parseToolResponse('It depends. Here is the short answer.', known)).toEqual({ kind: 'answer' })
   })
+  /*
+   * These two cases used to assert refusal. They now assert acceptance, because
+   * live acceptance showed the strict reading was wrong: qwen3.8-27b narrates
+   * before it asks -- "I'll do this with two tools: a web_search ... and a
+   * browser_read ..." -- and then writes a perfectly good envelope. Under the old
+   * rule the whole reply was discarded, and worse, the raw JSON block was stored
+   * as though it were the answer to the owner's question.
+   *
+   * The protection that mattered was moved rather than dropped: prose is bounded,
+   * only one envelope is accepted, and an unreadable envelope is `invalid` so
+   * protocol syntax can never reach a transcript as prose.
+   */
+  it('accepts an envelope wrapped in prose, and discards the prose', () => {
+    expect(parseToolResponse(
+      [
+        "I'll check that for you.",
+        'FREYA_TOOL_CALL',
+        '{"tool":"web_search","query":"q"}',
+        'FREYA_TOOL_CALL_END',
+      ].join('\n'),
+      known,
+    )).toEqual({ kind: 'request', tool: 'web_search', arguments: { query: 'q' } })
+  })
 
-  it('refuses an envelope with prose wrapped around it', () => {
+  it('accepts an envelope with text after it, and discards that too', () => {
+    expect(parseToolResponse(
+      [
+        'FREYA_TOOL_CALL',
+        '{"tool":"web_search","query":"q"}',
+        'FREYA_TOOL_CALL_END',
+        'and here is my plan',
+      ].join('\n'),
+      known,
+    )).toEqual({ kind: 'request', tool: 'web_search', arguments: { query: 'q' } })
+  })
+
+  it('refuses a reply whose prose around the envelope is over-long', () => {
+    const padding = 'x'.repeat(MIND_TOOL_LIMITS.maxToolCallProseChars + 1)
+    expect(parseToolResponse(
+      [padding, 'FREYA_TOOL_CALL', '{"tool":"web_search","query":"q"}', 'FREYA_TOOL_CALL_END'].join('\n'),
+      known,
+    ).kind).toBe('invalid')
+  })
+
+  it('refuses a reply carrying two envelopes', () => {
+    const one = ['FREYA_TOOL_CALL', '{"tool":"web_search","query":"q"}', 'FREYA_TOOL_CALL_END'].join('\n')
+    expect(parseToolResponse([one, one].join('\n'), known).kind).toBe('invalid')
+  })
+
+  it('never lets protocol syntax through as an ordinary answer', () => {
+    // The defect that mattered most: an envelope that was present but unreadable
+    // used to fall through to `answer`, so the owner saw raw JSON in their
+    // transcript where Freya's answer should have been.
     const parsed = parseToolResponse(
-      'Sure, let me check.\nFREYA_TOOL_CALL\n{"tool":"web_search","query":"q"}\nFREYA_TOOL_CALL_END',
+      ['FREYA_TOOL_CALL', '{"tool": not json}', 'FREYA_TOOL_CALL_END'].join('\n'),
       known,
     )
-    expect(parsed.kind).not.toBe('request')
+    expect(parsed.kind).toBe('invalid')
+    expect(parsed.kind).not.toBe('answer')
   })
 
-  it('refuses an envelope with anything after it', () => {
-    expect(
-      parseToolResponse(
-        'FREYA_TOOL_CALL\n{"tool":"web_search","query":"q"}\nFREYA_TOOL_CALL_END\nand here is my answer',
-        known,
-      ).kind,
-    ).not.toBe('request')
-  })
 
   it('refuses an unclosed envelope', () => {
     expect(parseToolResponse('FREYA_TOOL_CALL\n{"tool":"web_search"}', known).kind).toBe('invalid')

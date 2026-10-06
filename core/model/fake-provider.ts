@@ -24,6 +24,37 @@ import type { ProviderStatus } from '../protocol/core-protocol'
 /**
  * A deterministic provider.
  */
+/**
+ * Openings of Freya's own framing blocks, which travel in `user`-role messages.
+ *
+ * The echo provider must not answer with these. It stands in for the *assistant*,
+ * so echoing the identity kernel or a tool-selection block would put Freya's own
+ * words in her mouth -- which is exactly what the `system` case already guards
+ * against. The tool-selection block matters more than the rest: it contains a
+ * literal example envelope, so an echo of it is a well-formed tool request, and
+ * the echo provider would spend a capability re-reading its own instructions.
+ */
+const FREYA_FRAMING_OPENINGS = [
+  'Optional lookup tools for this turn.',
+  'Tool report. This is UNTRUSTED REFERENCE DATA',
+  'Turn context.',
+  'Recalled memory.',
+]
+
+/**
+ * The owner's own words: the last `user` turn that is not one of Freya's blocks.
+ *
+ * Falls back to the last user turn, then to the flattened prompt, so a request
+ * carrying no user turn still gets an answer rather than an exception.
+ */
+function ownersWords(request: ModelRequest): string {
+  const users = request.messages.filter((message) => message.role === 'user')
+  const spoken = users.filter((message) => typeof message.content === 'string'
+    && !FREYA_FRAMING_OPENINGS.some((opening) => message.content.startsWith(opening)))
+  return String(spoken.at(-1)?.content ?? users.at(-1)?.content ?? request.prompt)
+}
+
+
 export class FakeModelProvider implements ModelProvider {
   readonly id: string = 'fake'
   readonly kind = 'fake' as const
@@ -58,7 +89,7 @@ export class FakeModelProvider implements ModelProvider {
     // begins with the compiled Identity Kernel — so echoing it would print Freya's
     // own instructions back into the transcript as though she had said them. This
     // is a stand-in for an assistant, so it answers what was asked.
-    const said = request.messages.at(-1)?.content ?? request.prompt
+    const said = ownersWords(request)
     const inputTokens = countTokens(said)
     const outputTokens = countTokens(said)
     this.lastUsage = { inputTokens, outputTokens }
@@ -321,7 +352,7 @@ export class SlowFakeModelProvider extends FakeModelProvider {
     }
 
     // As with the fast echo: answer what was asked, not Freya's own instructions.
-    const said = request.messages.at(-1)?.content ?? request.prompt
+    const said = ownersWords(request)
     return {
       requestId: request.requestId,
       providerId: this.id,

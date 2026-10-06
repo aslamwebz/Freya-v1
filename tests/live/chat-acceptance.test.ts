@@ -322,6 +322,46 @@ async function describeImageWithVision(
 }
 
 /**
+ * Describe real image bytes with the live vision model.
+ *
+ * Used by TEST 7, where the image is a real download rather than a generated
+ * one, so the model sees the same kind of JPEG a person would have attached.
+ */
+async function describeImageFromBytes(
+  provider: ModelProvider,
+  bytes: Buffer,
+  filename: string,
+): Promise<{ subjects: string[]; raw: string }> {
+  const result = await provider.complete(
+    {
+      requestId: 'vision-live',
+      messages: [{
+        role: 'user',
+        content: 'Describe the subject of this image and its visual composition, as short comma-separated phrases.',
+        attachments: [{
+          type: 'image',
+          mimeType: sniffImage(bytes) ?? 'image/jpeg',
+          data: bytes.toString('base64'),
+          filename,
+        }],
+      }],
+      prompt: '',
+      // The muse models spend 150-800 output tokens reasoning before answering, so
+      // a small cap returns an empty reply that looks exactly like seeing nothing.
+      maxOutputTokens: 1_024,
+      model: null,
+    },
+    { signal: AbortSignal.timeout(180_000) },
+  )
+  const subjects = result.text
+    .split(/[,;\n]/)
+    .map((part: string) => part.replace(/^[\s\-*\d.]+/, '').trim())
+    .filter((part: string) => part.length > 2)
+    .slice(0, 6)
+  return { subjects, raw: result.text }
+}
+
+/**
  * A real PNG with real content, built here rather than committed.
  *
  * Two solid halves so "what is in this picture" has a checkable answer, which is
@@ -386,13 +426,19 @@ function crc32(buffer: Buffer): number {
  * plain Node process. `FREYA_BROWSER_LIVE=1` plus an Electron-capable harness is
  * what turns TEST 10 on.
  */
-function liveBrowserPort(visited: string[]): BrowserTaskPort | null {
+function liveBrowserPort(visited: string[], targets: string[]): BrowserTaskPort | null {
   const injected = (globalThis as { __freyaBrowserPort?: BrowserTaskPort }).__freyaBrowserPort
   if (injected === undefined) return null
   return {
     execute: async (request: BrowserRequest) => {
       if (typeof request.url === 'string' && request.url !== '') visited.push(request.url)
-      return injected.execute(request)
+      const result = await injected.execute(request)
+      // The runtime's own routing decision, not the model's account of it. This is
+      // the authoritative answer to "which browser serviced this", and reading it
+      // from `BrowserResult.target` is why the forbidden backend can be ruled out
+      // without trusting a sentence the model wrote about itself.
+      targets.push(result.ok ? result.target : `refused:${result.code}`)
+      return result
     },
   }
 }
@@ -434,7 +480,7 @@ describe.skipIf(!live)('TEST 2 — web search returns real sourced results', () 
     )
     const answer = await h.answer()
 
-    expect(turn.ok).toBe(true)
+    expect(turn.ok, `the turn did not complete: ${String(turn.reason)}`).toBe(true)
     expect(searched.length).toBeGreaterThan(0)
     // Not just links: an actual synthesis, so more than a bare URL list.
     expect(answer.replace(/\s+/g, ' ').length).toBeGreaterThan(180)
@@ -541,55 +587,190 @@ describe.skipIf(!live)('TEST 5 — video search returns actual videos', () => {
   }, 120_000)
 })
 
-describe.skipIf(!live)('TEST 7 — a search query derived from attachment CONTENT, not filename', () => {
-  it('routes an attached image to vision and does not search for its filename', async () => {
+/* --------------------------------------------------- the image format check */
+
+/**
+ * Identify an image from its **bytes**.
+ *
+ * Magic numbers, not the extension and not the content-type header. That is the
+ * whole point: an HTML error page served from a `.jpg` URL with `image/jpeg` in
+ * the header is exactly the case that would make a "downloaded an image" claim
+ * false.
+ */
+function sniffImage(bytes: Buffer): 'image/jpeg' | 'image/png' | 'image/webp' | null {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
+  if (bytes.length >= 8 && bytes.subarray(0, 8).toString('latin1') === '\x89PNG\r\n\x1a\n') return 'image/png'
+  if (bytes.length >= 12
+    && bytes.subarray(0, 4).toString('latin1') === 'RIFF'
+    && bytes.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp'
+  return null
+}
+
+/** Formats the attachment path accepts, JPEG first so a `.jpg` name is honest. */
+const WANTED_IMAGE_FORMATS = ['image/jpeg', 'image/png', 'image/webp'] as const
+
+/**
+ * Fetch one candidate image into a Freya-owned workspace, validating it.
+ *
+ * Bounded three ways: only under this run's own temp directory, only a bounded
+ * number of candidates, and only formats the attachment path actually takes. A
+ * body that is not a real image is skipped rather than saved, so nothing
+ * downstream ever sees a `.jpg` that is not one.
+ */
+async function downloadImage(
+  url: string,
+  filename: string,
+  want: readonly ('image/jpeg' | 'image/png' | 'image/webp')[],
+): Promise<{ path: string; bytes: number; format: string } | null> {
+  const destination = join(dir, 'downloads', filename)
+  await mkdir(join(dir, 'downloads'), { recursive: true })
+  try {
+    const response = await fetch(url, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(45_000),
+      headers: { accept: 'image/webp,image/png,image/jpeg,*/*' },
+    })
+    if (!response.ok) return null
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (bytes.length === 0 || bytes.length > 12 * 1024 * 1024) return null
+    const format = sniffImage(bytes)
+    if (format === null || !want.includes(format)) {
+      // Not an image, or not one the attachment path takes. Skipped, not saved.
+      note('TEST 6.probe', `skipped ${url.slice(0, 64)} -> ${response.headers.get('content-type') ?? '?'} (${bytes.length}b, format=${format ?? 'unrecognised'})`)
+      return null
+    }
+    await writeFile(destination, bytes)
+    return { path: destination, bytes: bytes.length, format }
+  } catch {
+    return null
+  }
+}
+
+describe.skipIf(!live)('TEST 6 — find and download a real image for a later similarity test', () => {
+  it('downloads a validated image into a bounded workspace and keeps its provenance', async () => {
+    const searcher = new Searcher({
+      provider: new PreferredSearchProvider([
+        new SearxngSearchProvider({ env: { FREYA_SEARXNG_URL: SEARXNG_URL, FREYA_ALLOW_WEB_SEARCH: '1' } }),
+      ]),
+    })
+    // Several phrasings, because the image engines are inconsistent about what they
+    // treat as an image. One query answering with HTML pages is not a product
+    // failure, it is a search engine being a search engine; what must hold is that
+    // *some* real, byte-verified image is reachable.
+    const QUERIES = [
+      'Hubble Ultra Deep Field high resolution image NASA ESA',
+      'James Webb Space Telescope deep field photograph',
+      'Hubble deep field galaxies astronomy photo',
+    ]
+    const results: SearchResult[] = []
+    for (const query of QUERIES) {
+      const found = await searcher.searchWeb(query, { limit: 10, vertical: 'images' })
+      results.push(...found)
+      if (found.some((result) => (result.mediaUrl ?? result.thumbnailUrl) !== null)) break
+    }
+    expect(results.length, 'image search returned nothing').toBeGreaterThan(0)
+
+    // A real image under a name with no topical content in it. TEST 7's whole
+    // claim is that the filename cannot influence the query, so the name has to be
+    // meaningless -- and it ends `.jpg`, so a JPEG is tried first.
+    const NAME = 'reference-7f41a2.jpg'
+    let saved: { path: string; bytes: number; format: string } | null = null
+    let provenance: { url: string; title: string; domain: string } | null = null
+    let tried = 0
+
+    for (const want of [['image/jpeg'] as const, WANTED_IMAGE_FORMATS]) {
+      for (const candidate of results) {
+        const media = candidate.mediaUrl ?? candidate.thumbnailUrl
+        if (media === null || media === undefined) continue
+        tried += 1
+        const outcome = await downloadImage(media, NAME, want)
+        if (outcome !== null) {
+          saved = outcome
+          provenance = { url: candidate.url, title: candidate.title, domain: candidate.sourceDomain }
+          break
+        }
+      }
+      if (saved !== null) break
+    }
+
+    expect(saved, `no candidate was a real image (tried ${tried})`).not.toBeNull()
+    expect(saved!.path.startsWith(dir), 'the download escaped the bounded workspace').toBe(true)
+
+    const written = await readFile(saved!.path)
+    expect(sniffImage(written), 'the saved file is not a recognised image').toBe(saved!.format)
+    expect(written.length).toBe(saved!.bytes)
+
+    // Remote provenance is kept beside the local reference.
+    expect(provenance!.url).toMatch(/^https:\/\//)
+    expect(provenance!.title.trim().length).toBeGreaterThan(0)
+
+    note('TEST 6', `saved=${NAME} format=${saved!.format} bytes=${saved!.bytes} media=${provenance!.url.slice(0, 64)}`)
+    ;(globalThis as { __acceptanceImage?: unknown }).__acceptanceImage = { ...saved!, ...provenance! }
+  }, 300_000)
+})
+describe.skipIf(!live)('TEST 7 — a similarity search derived from the real image CONTENT, not its filename', () => {
+  it('reads the downloaded image, derives concepts from it, and searches for real results', async () => {
+    const carried = (globalThis as {
+      __acceptanceImage?: { path: string; bytes: number; format: string; url: string; title: string }
+    }).__acceptanceImage
+    // TEST 6 must have run first: the two are one flow by design, and a synthetic
+    // image here would prove nothing about a real download.
+    expect(carried, 'TEST 6 must have downloaded a real image first').toBeDefined()
+
+    const bytes = await readFile(carried!.path)
+    expect(sniffImage(bytes)).toBe(carried!.format)
+    const filename = basename(carried!.path)
+    expect(filename).toBe('reference-7f41a2.jpg')
+
+    // The pixels go to a real vision model. Nothing about the name is sent that
+    // could steer the answer, and the answer is checked for it below.
     const provider = new CountingProvider('meta/muse-spark-1.2-contributor')
-    const fabric = await EventFabric.open({
-      store: memoryEventStore(),
-      now: () => T0,
-      newId: (() => { let n = 0; return () => `evt-${(n += 1).toString().padStart(4, '0')}` })(),
-    })
-    const store = new MemoryConversationStore({ mode: 'memory' })
-    await store.putConversation({
-      conversationId: 'attach', title: 'attach',
-      createdAt: T0.toISOString(), updatedAt: T0.toISOString(),
-    })
-    const guard = new DefaultGuard()
-    const gateway = new ModelGateway({ providers: [provider], recorder: silentRecorder, now: () => T0 })
-    const cognition = new CognitionService({ fabric, gateway, guard, now: () => T0 }, initialCoreState())
-    // The Mind is constructed so the attachment path runs through the same
-    // real service the other tests use; only its contract is read here.
-    expect(new MindService({
-      fabric, store, authority: cognition.ownerAuthority(), gateway, now: () => T0,
-      newId: (() => { let n = 0; return () => `id-${(n += 1).toString().padStart(4, '0')}` })(),
-    })).toBeDefined()
-
-    // A deliberately meaningless name. If anything searched for the filename the
-    // assertions below would catch it, which is the adversarial check the spec asks for.
-    const FILENAME = 'reference-7f41a2.jpg'
-    const described = await describeImageWithVision(provider, FILENAME)
+    const described = await describeImageFromBytes(provider, bytes, filename)
     expect(described.subjects.length, 'the vision model described nothing').toBeGreaterThan(0)
-    // The description is about the picture's content, not its name.
     expect(described.raw.toLowerCase()).not.toContain('7f41a2')
+    expect(described.raw.toLowerCase()).not.toContain('reference-')
 
-    // Those concepts become the query, which is the whole mechanism.
+    // Real external search on those concepts.
     const query = described.subjects.join(' ')
     const searcher = new Searcher({
       provider: new PreferredSearchProvider([
         new SearxngSearchProvider({ env: { FREYA_SEARXNG_URL: SEARXNG_URL, FREYA_ALLOW_WEB_SEARCH: '1' } }),
       ]),
     })
-    const results: SearchResult[] = await searcher.searchWeb(`${query} deep field galaxies`, { limit: 5, vertical: 'images' })
-    expect(results.length).toBeGreaterThan(0)
+    const results = await searcher.searchWeb(`${query} deep space galaxies`, { limit: 5, vertical: 'images' })
+    expect(results.length, 'the similarity search returned nothing').toBeGreaterThan(0)
+    for (const result of results) {
+      expect(() => new URL(result.url)).not.toThrow()
+      expect(result.sourceDomain).toBe(new URL(result.url).hostname)
+    }
+    expect(results.filter((result) => (result.mediaUrl ?? result.thumbnailUrl) !== null).length).toBeGreaterThan(0)
 
-    note('TEST 7', `filename=${FILENAME}; content-derived query=${JSON.stringify(query)}; ${results.length} results`)
+    note('TEST 7', `source image ${carried!.format} ${carried!.bytes}b as ${filename}; content-derived query=${JSON.stringify(query)}; ${results.length} real results (semantic similarity, not reverse-image search)`)
+  }, 300_000)
+})
+
+/**
+ * The original deterministic vision case: a generated image with a known answer.
+ *
+ * Kept because it pins the mechanism with no network, and because "the model can
+ * tell two colours apart" is worth asserting on its own. It is **not** TEST 7 live
+ * acceptance and is named so it cannot be mistaken for it.
+ */
+describe.skipIf(!live)('attachment vision integration — a generated image, described deterministically', () => {
+  it('describes a two-tone image from its pixels alone', async () => {
+    const provider = new CountingProvider('meta/muse-spark-1.2-contributor')
+    const described = await describeImageWithVision(provider, 'reference-7f41a2.jpg')
+    expect(described.subjects.length).toBeGreaterThan(0)
+    expect(described.raw.toLowerCase()).not.toContain('7f41a2')
+    note('vision.integration', `concepts=${JSON.stringify(described.subjects.join(' '))}`)
   }, 300_000)
 })
 
 describe.skipIf(!live || !browserLive)('TEST 10 — Freya\'s OWN browser, never the extension', () => {
   it('searches, opens the official docs, and is serviced by the native/public port', async () => {
     const browsed: string[] = []
-    const browser = liveBrowserPort(browsed)
+    const targets: string[] = []
+    const browser = liveBrowserPort(browsed, targets)
     expect(browser, 'no native browser port was provided (set FREYA_BROWSER_LIVE=1 in an Electron-capable run)').not.toBeNull()
 
     const h = await harness({ tools: [createBrowserTaskTool({ browser: browser! })] })
@@ -604,14 +785,27 @@ describe.skipIf(!live || !browserLive)('TEST 10 — Freya\'s OWN browser, never 
     // It really read the official page.
     expect(browsed.some((url) => /laravel\.com/.test(url))).toBe(true)
 
-    // The decisive assertion: the native/public port, and the forbidden one named
-    // nowhere in what the turn produced.
+    // THE decisive assertion, and it reads the runtime rather than the model.
+    //
+    // Every routed command landed on the public partition. `authenticated` is the
+    // port the Chrome extension serves, so its total absence here is the proof the
+    // extension was not used -- and it comes from `routeBrowserIntent`, not from
+    // anything the model said about itself.
+    expect(targets.length).toBeGreaterThan(0)
+    expect(new Set(targets), `routed somewhere other than public: ${targets.join(', ')}`)
+      .toEqual(new Set(['public']))
+    expect(targets.some((t) => t !== 'public')).toBe(false)
+    // Nothing was refused either, so this was a real read rather than a guard.
+    expect(targets.every((t) => t === 'public')).toBe(true)
+
+    // The observation names which browser answered, so the transcript is honest
+    // about it too -- but this is corroboration, not the proof.
     expect(answer).toContain('native/public Freya browser')
     expect(answer).not.toContain('paired Chrome extension')
     // And it does not claim to have driven a UI it only read.
     expect(answer).toMatch(/Nothing was clicked, typed, submitted or logged into/)
 
-    note('TEST 10', `browsed=${browsed.join(' -> ')}; actor=native/public; extension absent`)
+    note('TEST 10', `browsed=${browsed.join(' -> ')}; runtime targets=${[...new Set(targets)].join(',')} (n=${targets.length}); extension never routed`)
   }, 300_000)
 })
 

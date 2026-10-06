@@ -115,6 +115,14 @@ export const MIND_TOOL_LIMITS = Object.freeze({
 
   /** Characters allowed in the JSON body of one tool request. */
   maxRequestChars: 600,
+  /**
+   * How much text may sit around a tool envelope before the reply is rejected.
+   *
+   * Observed narration from a real model: two sentences of the order of 150
+   * characters. 600 leaves room for that with a wide margin while still refusing a
+   * reply that is mostly essay with a request hidden at one end.
+   */
+  maxToolCallProseChars: 600,
 
   /** Sources listed in the transcript footer. */
   maxFooterSources: 5,
@@ -515,10 +523,25 @@ export type ParsedToolResponse =
 /**
  * Read one provider response as either an answer or a tool request.
  *
- * Strict on purpose. The envelope must be the **entire** response, trimmed and
- * nothing else, and its body must be a JSON object whose `tool` is a plain
- * string. Anything looser would let a model that is merely *mentioning* a tool —
- * in prose, in a code block, in a quotation — accidentally spend a capability.
+ * This was "the envelope must be the entire response", and live acceptance broke
+ * it: `qwen/qwen3.8-27b-uncensored` narrated first -- "I'll do this with two
+ * tools: a web_search for the doc page, and a browser_read for the section
+ * anchor." -- and then wrote a correct envelope. The strict reading discarded the
+ * whole reply, and because an unreadable envelope was also being treated as an
+ * ordinary answer, the owner was shown a raw `FREYA_TOOL_CALL` JSON block as
+ * though it were Freya's reply. That second half was the real defect.
+ *
+ * The envelope is now located rather than assumed, with three limits that keep the
+ * original protection: exactly **one** envelope; **bounded** surrounding prose,
+ * which is discarded rather than read; and a present-but-unreadable envelope is
+ * `invalid`, never `answer`. That last one is the point -- protocol syntax must
+ * never reach a transcript as if it were prose.
+ *
+ * The injection risk strictness was serving is real, since untrusted page text can
+ * reach the model inside an observation. It is not answered by demanding position
+ * zero, because a tool call is only ever a *request*: {@link MindToolRegistry.invoke}
+ * refuses an unknown name and evaluates Guard before any body runs, so a smuggled
+ * envelope buys nothing it could not have asked for by asking.
  *
  * A name outside the registry is not rejected here. This function has no
  * registry; {@link MindToolRegistry.invoke} is what refuses an unknown name, and
@@ -526,17 +549,35 @@ export type ParsedToolResponse =
  */
 export function parseToolResponse(text: string, known: (name: string) => boolean): ParsedToolResponse {
   const trimmed = text.trim()
-  if (!trimmed.startsWith(TOOL_CALL_OPEN)) return { kind: 'answer' }
 
-  const closing = trimmed.lastIndexOf(TOOL_CALL_CLOSE)
+  // Locate the envelope rather than assuming it sits at position zero.
+  const open = trimmed.indexOf(TOOL_CALL_OPEN)
+  if (open === -1) return { kind: 'answer' }
+
+  const closing = trimmed.indexOf(TOOL_CALL_CLOSE, open)
   if (closing === -1) {
     return { kind: 'invalid', reason: 'the tool request was not closed' }
   }
-  const body = trimmed.slice(TOOL_CALL_OPEN.length, closing).trim()
-  const tail = trimmed.slice(closing + TOOL_CALL_CLOSE.length).trim()
-  if (tail !== '') {
-    return { kind: 'invalid', reason: 'a tool request must be the whole reply, with nothing after it' }
+
+  // Two envelopes is not a request; it is a reply that could be read two ways.
+  //
+  // The search starts *after* the closing marker, not after the opening one,
+  // because `FREYA_TOOL_CALL_END` begins with `FREYA_TOOL_CALL`. Looking after the
+  // opening marker finds the closing marker itself and reports every well-formed
+  // request as a duplicate.
+  const afterClose = closing + TOOL_CALL_CLOSE.length
+  if (trimmed.indexOf(TOOL_CALL_OPEN, afterClose) !== -1) {
+    return { kind: 'invalid', reason: 'the reply contained more than one tool request' }
   }
+
+  // Surrounding prose is discarded, never read. Capped so a long ramble cannot
+  // ride along with a request.
+  const prose = trimmed.slice(0, open).length + trimmed.slice(closing + TOOL_CALL_CLOSE.length).length
+  if (prose > MIND_TOOL_LIMITS.maxToolCallProseChars) {
+    return { kind: 'invalid', reason: 'the reply was mostly prose around a tool request' }
+  }
+
+  const body = trimmed.slice(open + TOOL_CALL_OPEN.length, closing).trim()
   if (body.length === 0) {
     return { kind: 'invalid', reason: 'the tool request was empty' }
   }
@@ -636,7 +677,24 @@ export function renderObservation(observation: ToolObservation): ModelMessage {
     lines.push('You must tell the owner the lookup failed. Do not answer as if it had run.')
   }
 
-  return { role: 'user', content: boundText(lines.join('\n'), MIND_TOOL_LIMITS.maxObservationChars) }
+  return {
+    role: 'user',
+    content: boundObservation(lines.join('\n'), MIND_TOOL_LIMITS.maxObservationChars),
+  }
+}
+
+/**
+ * Bound an observation, and *say* when it was cut.
+ *
+ * `boundText` ends with a bare ellipsis, which is fine for a label but not for a
+ * quote: a truncated extract must never read as a whole one, or the model reasons
+ * from missing text and reports a complete page it did not finish reading. The
+ * marker is appended by this code, not by the model, so it cannot be edited away.
+ */
+function boundObservation(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value
+  const marker = '\n(the observation was cut here; more of it exists)'
+  return `${value.slice(0, Math.max(0, maxChars - marker.length))}${marker}`
 }
 
 /**

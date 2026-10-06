@@ -40,3 +40,8 @@ await build({
   outfile: 'dist-electron/main.cjs',
   external: ['electron', 'better-sqlite3', 'pdfjs-dist'],
 })
+
+// NOTE: the live TEST 10 acceptance runner is deliberately NOT built here.
+// It is a real Electron integration harness, not part of the product, and
+// `scripts/build-chat-browser-acceptance.mjs` builds it on its own so a
+// production build never ships a test-only binary.

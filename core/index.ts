@@ -1981,6 +1981,7 @@ class FreyaCore implements Core {
       captureSupported: this.options.voiceCaptureSupported ?? true,
       transcriptionTimeoutMs: this.options.voiceTranscriptionTimeoutMs,
       autoSpeak: this.options.voiceAutoSpeak,
+      proactiveAlerts: this.options.voiceProactiveAlerts,
       followUpWindowMs: this.options.voiceFollowUpWindowMs,
       stopAll: () => this.state.stopAll.active,
       // The canonical door. This is the same function `conversation.turn.submit`
@@ -2189,6 +2190,11 @@ class FreyaCore implements Core {
       now: this.options.now,
       newId: this.options.newId,
       onChange: () => this.publishAttention(),
+      onDecision: (decision) => {
+        if (decision.outcome === 'speak' || decision.outcome === 'interrupt') {
+          void this.voiceService.announceAttention(decision.kind, decision.outcome)
+        }
+      },
       focus: () => this.attentionFocus(),
       stopAll: () => this.state.stopAll.active,
       getState: () => this.state.attention,
@@ -7452,6 +7458,22 @@ state: {
           }
           await this.voiceService.setAutoSpeak(enabled)
           return { requestId, ok: true, status: this.status(), voice: { operation: 'auto-speak', enabled } }
+        }
+
+        case 'voice.proactive-alerts.set': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const enabled = readRaw(envelope.payload, 'enabled')
+          if (typeof enabled !== 'boolean') {
+            return { requestId, ok: false, refusal: { reason: 'proactive alerts is a true or false setting' } }
+          }
+          await this.voiceService.setProactiveAlerts(enabled)
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            voice: { operation: 'proactive-alerts', enabled },
+          }
         }
 
         case 'voice.tts.speak': {

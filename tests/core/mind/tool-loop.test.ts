@@ -1376,3 +1376,79 @@ describe('the search tool and what it is asked for', () => {
   })
 })
 
+describe('explicit owner browser intent', () => {
+  it('executes browser_read through Guard before the first provider call when the owner chose the browser and supplied the URL', async () => {
+    const opened: string[] = []
+    const browserTool: MindTool = {
+      name: 'browser_read',
+      description: 'read one page in Freya own browser',
+      capability: 'browser.read',
+      parameters: [{ name: 'url', description: 'address', required: true }],
+      run: async (request) => {
+        opened.push(request.arguments['url'] ?? '')
+        return {
+          summary: 'Freya own browser read the requested page.',
+          sources: [{
+            title: 'Laravel queues',
+            url: request.arguments['url'] ?? '',
+            sourceDomain: 'laravel.com',
+            snippet: 'The page was read through the native browser.',
+            rank: 1,
+            retrievedAt: T0.toISOString(),
+          }],
+          provenance: {
+            actor: 'native/public Freya browser',
+            steps: ['page.navigate — navigated', 'page.describe — read-text'],
+            extract: ['Retry failed jobs with the queue retry command.'],
+          },
+        }
+      },
+    }
+
+    const h = await harness({
+      tools: [browserTool],
+      script: ['I read the requested page in Freya own browser and answered from it.'],
+    })
+
+    const result_ = await h.mind.runTurn({
+      conversationId: CONVERSATION_ID,
+      turnId: 'turn-browser-preflight',
+      text: 'Use your own browser yourself. Open https://laravel.com/docs/queues and tell me what it says.',
+    })
+
+    expect(result_.outcome).toBe('completed')
+    expect(opened).toEqual(['https://laravel.com/docs/queues'])
+    expect(h.provider.calls).toBe(1)
+    expect(
+      h.provider.requests[0]?.messages.some((message) =>
+        message.content.includes('native/public Freya browser'),
+      ),
+    ).toBe(true)
+  })
+
+  it('does not drive the browser merely because ordinary conversation contains a URL', async () => {
+    const opened: string[] = []
+    const browserTool: MindTool = {
+      name: 'browser_read',
+      description: 'read one page in Freya own browser',
+      capability: 'browser.read',
+      parameters: [{ name: 'url', description: 'address', required: true }],
+      run: async (request) => {
+        opened.push(request.arguments['url'] ?? '')
+        return { summary: 'read', sources: [] }
+      },
+    }
+
+    const h = await harness({ tools: [browserTool], script: ['A direct answer.'] })
+    const result_ = await h.mind.runTurn({
+      conversationId: CONVERSATION_ID,
+      turnId: 'turn-url-no-browser',
+      text: 'What do you think about the API design at https://example.org/docs?',
+    })
+
+    expect(result_.outcome).toBe('completed')
+    expect(opened).toEqual([])
+    expect(h.provider.calls).toBe(1)
+  })
+})
+

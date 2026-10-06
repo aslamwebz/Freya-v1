@@ -28,6 +28,11 @@ export interface MediaItem {
    * Video cards use this instead of pretending a watch-page URL is an image.
    */
   readonly thumbnailUrl?: string | null
+  /**
+   * A hosted player URL for an in-Chat video preview, when the search provider
+   * supplied one from a known player host. Never used for images/documents.
+   */
+  readonly embedUrl?: string | null
   /** The page it was found on, kept only as provenance. */
   readonly page: string
   readonly title: string

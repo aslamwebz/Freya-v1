@@ -132,6 +132,20 @@ export function VoiceSettings({ voice }: { voice: VoiceDock }) {
               onChange={() => voice.saveConfig({ autoSpeak: !(config?.autoSpeak ?? false) })}
             />
 
+            <Switch
+              label="Speak important alerts"
+              detail={
+                config?.proactiveAlerts
+                  ? 'On. Only Attention decisions rated speak or interrupt may use Freya’s voice, and the spoken sentence comes from Core’s closed event vocabulary.'
+                  : 'Off. Work, Mission, Research and system events stay visual even when Attention marks them important.'
+              }
+              on={config?.proactiveAlerts ?? false}
+              disabled={view.configBusy || config?.ttsProvider !== 'platform'}
+              onChange={() =>
+                voice.saveConfig({ proactiveAlerts: !(config?.proactiveAlerts ?? false) })
+              }
+            />
+
             {view.voices.length > 0 && config?.ttsProvider === 'platform' ? (
               <label>
                 <span>System voice</span>

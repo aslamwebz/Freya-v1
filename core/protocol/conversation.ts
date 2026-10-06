@@ -194,6 +194,18 @@ export interface VoiceProjection {
    * and nothing else. Turning voice on does not turn this on.
    */
   autoSubmit: boolean
+  /** Whether a stored answer should be read after a voice-submitted turn. */
+  autoSpeak: boolean
+  /**
+   * Conversational attention is process-local. A restart always returns to
+   * standby; the follow-up window only exists after the wake phrase was heard.
+   */
+  attention: {
+    state: 'standby' | 'attentive'
+    wakePhrase: 'Freya'
+    attentiveUntil: string | null
+    followUpWindowMs: number
+  }
   wake: {
     armed: boolean
     available: boolean
@@ -205,7 +217,7 @@ export interface VoiceProjection {
      * speech-activity gate and no wake-phrase model, and the type is where that
      * fact is written down.
      */
-    kind: 'speech-activity'
+    kind: 'speech-activity' | 'wake-phrase'
     detail: string
     maxArmedMs: number
   }

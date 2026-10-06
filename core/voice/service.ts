@@ -1375,7 +1375,7 @@ export class VoiceService {
         armed: this.wakeArmedAt !== null,
         available: this.wakeGate.availability === 'available',
         gate: this.wakeGate.id,
-        kind: 'wake-phrase' as const,
+        kind: this.wakeGate.availability === 'available' ? 'wake-phrase' as const : 'speech-activity' as const,
         detail:
           this.wakeGate.availability === 'available'
             ? 'Hands-free uses local speech activity to capture one bounded clip; Core then requires the wake phrase Freya unless a follow-up window is already active.'

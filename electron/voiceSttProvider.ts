@@ -9,81 +9,108 @@ import {
 } from '../core/voice/types'
 
 /**
- * Hosted STT is deliberately a main-process-only adapter.
+ * NanoGPT-backed STT, main-process only.
  *
- * The destination is fixed in code rather than supplied by a renderer or a
- * settings field. The API key is attached only to this exact HTTPS endpoint, so
- * enabling speech recognition cannot become a credential-forwarding primitive.
+ * The destination is fixed in code. A renderer can choose a model from a bounded
+ * id field, but it can never choose where the existing NanoGPT credential is sent.
  */
-export const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions'
-export const DEFAULT_REMOTE_STT_MODEL = 'gpt-4o-mini-transcribe'
+export const NANOGPT_TRANSCRIPTIONS_URL = 'https://nano-gpt.com/api/v1/audio/transcriptions'
+export const DEFAULT_REMOTE_STT_MODEL = 'Whisper-Large-V3'
 
 const MAX_PROVIDER_RESPONSE_CHARS = 64 * 1024
-const MODEL_ID = /^[A-Za-z0-9._:-]{1,128}$/
+const MODEL_ID = /^[A-Za-z0-9._:/-]{1,160}$/
 
 type FetchLike = typeof fetch
 
+export interface VoiceSttRuntimeConfig {
+  readonly provider: 'off' | 'nanogpt'
+  readonly model: string
+  readonly remoteEnabled: boolean
+}
+
 /**
- * Build the production speech-input adapter from main-process environment.
+ * Build the speech-input adapter from trusted host configuration.
  *
- * Remote STT is opt-in even when a key is present. Until both the explicit switch
- * and a credential exist, this returns an honest unavailable adapter and audio
- * never leaves the machine.
+ * Voice has a separate spend/privacy switch from Chat. Merely configuring NanoGPT
+ * for cognition never causes microphone audio to leave the device.
  */
+export function createVoiceStt(
+  config: VoiceSttRuntimeConfig,
+  env: NodeJS.ProcessEnv,
+  transport: FetchLike = fetch,
+): VoiceSttAdapter {
+  if (config.provider === 'off') {
+    return unavailable(
+      'voice-stt-off',
+      'Speech recognition is off. Microphone audio stays on this device.',
+    )
+  }
+  if (!config.remoteEnabled) {
+    return unavailable(
+      'remote-stt-disabled',
+      'NanoGPT speech recognition is selected but remote speech is not enabled. Audio stays on this device.',
+    )
+  }
+
+  const apiKey = (env.NANOGPT_API_KEY ?? '').trim()
+  if (apiKey === '') {
+    return unavailable(
+      'nanogpt-stt-unconfigured',
+      'NanoGPT speech recognition is selected, but the NanoGPT API key is not configured. The recording will not be sent anywhere.',
+    )
+  }
+
+  const model = (config.model || DEFAULT_REMOTE_STT_MODEL).trim()
+  if (!MODEL_ID.test(model)) {
+    return unavailable(
+      'nanogpt-stt-invalid-model',
+      'The speech-recognition model id is invalid. Choose a valid NanoGPT audio model.',
+    )
+  }
+
+  return new NanoGptSttAdapter({ apiKey, model, transport })
+}
+
+/** Backwards-compatible environment construction used by tests and headless probes. */
 export function createVoiceSttFromEnv(
   env: NodeJS.ProcessEnv,
   transport: FetchLike = fetch,
 ): VoiceSttAdapter {
-  if (env.FREYA_ALLOW_REMOTE_STT !== '1') {
-    return new UnavailableSttAdapter({
-      id: 'remote-stt-disabled',
-      kind: 'provider',
-      availability: 'configuration-required',
-      detail:
-        'Hosted speech recognition is off. Audio stays on this device. Set FREYA_ALLOW_REMOTE_STT=1 and provide OPENAI_API_KEY to opt in.',
-    })
-  }
-
-  const apiKey = (env.OPENAI_API_KEY ?? '').trim()
-  if (apiKey === '') {
-    return new UnavailableSttAdapter({
-      id: 'openai-stt-unconfigured',
-      kind: 'provider',
-      availability: 'configuration-required',
-      detail:
-        'Hosted speech recognition is enabled, but OPENAI_API_KEY is not configured. The recording will not be sent anywhere.',
-    })
-  }
-
-  const model = (env.FREYA_STT_MODEL ?? DEFAULT_REMOTE_STT_MODEL).trim()
-  if (!MODEL_ID.test(model)) {
-    return new UnavailableSttAdapter({
-      id: 'openai-stt-invalid-model',
-      kind: 'provider',
-      availability: 'configuration-required',
-      detail:
-        'The speech-recognition model id is invalid. Use a bounded provider model id before enabling transcription.',
-    })
-  }
-
-  return new OpenAiSttAdapter({ apiKey, model, transport })
+  return createVoiceStt(
+    {
+      provider: env.FREYA_STT_PROVIDER === 'off' ? 'off' : 'nanogpt',
+      model: env.FREYA_STT_MODEL ?? DEFAULT_REMOTE_STT_MODEL,
+      remoteEnabled: env.FREYA_ALLOW_REMOTE_STT === '1',
+    },
+    env,
+    transport,
+  )
 }
 
-export interface OpenAiSttAdapterOptions {
+function unavailable(id: string, detail: string): VoiceSttAdapter {
+  return new UnavailableSttAdapter({
+    id,
+    kind: 'provider',
+    availability: 'configuration-required',
+    detail,
+  })
+}
+
+export interface NanoGptSttAdapterOptions {
   readonly apiKey: string
   readonly model?: string
   readonly transport?: FetchLike
 }
 
 /**
- * OpenAI-compatible audio transcription using the fixed OpenAI endpoint.
+ * OpenAI-compatible multipart transcription over NanoGPT.
  *
- * Input is the already-validated PCM held by VoiceService. It is wrapped as an
- * in-memory WAV only for the request body: no temporary file is written and no
- * audio or transcript is logged here.
+ * Input is already-validated PCM. It is wrapped as an in-memory WAV for the
+ * request body; no temporary audio file, transcript, key or provider response
+ * body is written to disk or to the Core journal.
  */
-export class OpenAiSttAdapter implements VoiceSttAdapter {
-  readonly id = 'openai-stt'
+export class NanoGptSttAdapter implements VoiceSttAdapter {
+  readonly id = 'nanogpt-stt'
   readonly kind = 'provider' as const
   readonly availability = 'available' as const
   readonly streaming = false
@@ -93,7 +120,7 @@ export class OpenAiSttAdapter implements VoiceSttAdapter {
   private readonly model: string
   private readonly transport: FetchLike
 
-  constructor(options: OpenAiSttAdapterOptions) {
+  constructor(options: NanoGptSttAdapterOptions) {
     const apiKey = options.apiKey.trim()
     if (apiKey === '') throw new Error('speech provider API key is empty')
 
@@ -104,7 +131,7 @@ export class OpenAiSttAdapter implements VoiceSttAdapter {
     this.model = model
     this.transport = options.transport ?? fetch
     this.detail =
-      `Hosted speech recognition is ready with ${model}. Audio leaves this device only after an explicit capture is released for transcription.`
+      `NanoGPT speech recognition is ready with ${model}. Audio leaves this device only for an explicitly authorised transcription.`
   }
 
   async transcribe(request: SttRequest): Promise<SttResult> {
@@ -118,11 +145,9 @@ export class OpenAiSttAdapter implements VoiceSttAdapter {
     const fileBytes = wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength) as ArrayBuffer
     form.set('file', new Blob([fileBytes], { type: 'audio/wav' }), 'freya-capture.wav')
 
-    const response = await this.transport(OPENAI_TRANSCRIPTIONS_URL, {
+    const response = await this.transport(NANOGPT_TRANSCRIPTIONS_URL, {
       method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.apiKey}`,
-      },
+      headers: { authorization: `Bearer ${this.apiKey}` },
       body: form,
       signal: request.signal,
       redirect: 'error',
@@ -143,7 +168,6 @@ export class OpenAiSttAdapter implements VoiceSttAdapter {
     } catch {
       throw new Error('speech provider returned invalid JSON')
     }
-
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       throw new Error('speech provider returned an invalid transcription envelope')
     }
@@ -153,17 +177,11 @@ export class OpenAiSttAdapter implements VoiceSttAdapter {
       throw new Error('speech provider response did not contain transcription text')
     }
 
-    return {
-      text,
-      engine: `openai/${this.model}`,
-    }
+    return { text, engine: `nanogpt/${this.model}` }
   }
 }
 
-/**
- * Wrap validated PCM-S16LE in the smallest standard WAV container accepted by
- * hosted transcription APIs. The returned bytes exist in memory only.
- */
+/** Wrap PCM-S16LE in a standard WAV container, entirely in memory. */
 export function pcmToWav(audio: CapturedAudio): Uint8Array {
   if (audio.format !== VOICE_FORMAT) throw new Error('speech audio must be pcm-s16le')
   if (!Number.isInteger(audio.sampleRate) || audio.sampleRate <= 0) {
@@ -181,10 +199,8 @@ export function pcmToWav(audio: CapturedAudio): Uint8Array {
     throw new Error('speech audio is not aligned to whole PCM frames')
   }
 
-  const headerBytes = 44
-  const output = new Uint8Array(headerBytes + audio.bytes.byteLength)
+  const output = new Uint8Array(44 + audio.bytes.byteLength)
   const view = new DataView(output.buffer)
-
   writeAscii(output, 0, 'RIFF')
   view.setUint32(4, 36 + audio.bytes.byteLength, true)
   writeAscii(output, 8, 'WAVE')
@@ -198,8 +214,7 @@ export function pcmToWav(audio: CapturedAudio): Uint8Array {
   view.setUint16(34, 16, true)
   writeAscii(output, 36, 'data')
   view.setUint32(40, audio.bytes.byteLength, true)
-  output.set(audio.bytes, headerBytes)
-
+  output.set(audio.bytes, 44)
   return output
 }
 

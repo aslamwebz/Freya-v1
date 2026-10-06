@@ -44,8 +44,10 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // Phase 45 adds the bounded Voice command/capability/playback channel. After the
   // bounded browser renderer bridge and latest main attachment surface are composed,
   // CI measures preload.cjs at 186,235 bytes. Phase 47's mission projection/surface
-  // composition measures the reconciled preload at 192,892 bytes. Retain narrow headroom.
-  preloadBytes: 196_000,
+  // composition measures the reconciled preload at 192,892 bytes. The E.V.-style
+  // Voice settings/permission bridge now measures 196,184 bytes on PR #89. Keep
+  // only 816 bytes of explicit headroom rather than hiding further bridge growth.
+  preloadBytes: 197_000,
   presencePreloadBytes: 50_000,
   largestRendererJsBytes: 650_000,
   // Phase 19 added the ui-v2 shell: a finished design with ~1.9MB of webp imagery and
@@ -58,9 +60,12 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // branch measured the resulting ceiling at ~3.70MB.
   // The live-orb containment dashboard is an intentional renderer-only expansion;
   // CI measures the dashboard-only build at 3,717,135 bytes. Composing the verified
-  // persistent Chat/browser workspace on top measures 3,741,650 bytes. Keep narrow,
-  // explicit headroom over the combined artifact rather than weakening the gate.
-  rendererTotalBytes: 3_760_000,
+  // persistent Chat/browser workspace on top measures 3,741,650 bytes. PR #89 adds
+  // the dedicated Voice settings/runtime, bounded wake VAD/pre-roll and E.V.-style
+  // attention controls; CI measures the resulting renderer at 3,767,045 bytes.
+  // Keep 7,955 bytes of explicit headroom so later renderer growth still has to be
+  // explained at this gate.
+  rendererTotalBytes: 3_775_000,
 })
 
 export function inspectLockfile(pkg, lock) {

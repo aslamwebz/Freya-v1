@@ -74,6 +74,30 @@ function cardSafeUrl(value: unknown): string | null {
   }
 }
 
+/**
+ * Hosted players are the one deliberate exception to "renderer gets data bytes".
+ * They stay inside the preview modal and are restricted to well-known video
+ * player origins; an arbitrary search-result URL can never become an iframe.
+ */
+function safeVideoEmbed(value: string | null): string | null {
+  if (value === null) return null
+  try {
+    const parsed = new URL(value)
+    const host = parsed.hostname.toLowerCase()
+    const allowed =
+      host === 'www.youtube.com' ||
+      host === 'youtube.com' ||
+      host === 'www.youtube-nocookie.com' ||
+      host === 'youtube-nocookie.com' ||
+      host === 'player.vimeo.com' ||
+      host === 'www.dailymotion.com' ||
+      host === 'dailymotion.com'
+    return allowed ? parsed.toString() : null
+  } catch {
+    return null
+  }
+}
+
 /** A source is only worth a card if it names media that exists. */
 function toItem(source: ToolSource): MediaItem | null {
   const page = cardSafeUrl(source.url)
@@ -86,6 +110,7 @@ function toItem(source: ToolSource): MediaItem | null {
   let kind: MediaItem['kind'] | null = null
   let mediaUrl: string | null = null
   let thumbnailUrl: string | null = null
+  let embedUrl: string | null = null
 
   if (vertical === 'images') {
     kind = 'image'
@@ -93,10 +118,11 @@ function toItem(source: ToolSource): MediaItem | null {
     thumbnailUrl = thumbnail ?? mediaUrl
   } else if (vertical === 'videos') {
     kind = 'video'
-    // A search result may give a direct playable file, a hosted watch page, or only
-    // a poster. The card still belongs in Chat when a poster exists; "playable" is
-    // reserved for a direct media address that Chromium can actually play.
-    mediaUrl = media ?? page
+    const direct = media !== null && looksPlayable(media) ? media : null
+    embedUrl = direct === null ? safeVideoEmbed(media) : null
+    // The human-openable result page stays the canonical video address when the
+    // provider supplied an iframe. The iframe itself is kept separately.
+    mediaUrl = direct ?? page
     thumbnailUrl = thumbnail
   } else if (vertical === 'documents') {
     kind = 'document'
@@ -117,6 +143,7 @@ function toItem(source: ToolSource): MediaItem | null {
     kind,
     url: mediaUrl,
     ...(thumbnailUrl === null ? {} : { thumbnailUrl }),
+    ...(embedUrl === null ? {} : { embedUrl }),
     page,
     title: source.title === '' ? mediaUrl : source.title,
     host: source.sourceDomain === '' ? hostOf(page) : source.sourceDomain,

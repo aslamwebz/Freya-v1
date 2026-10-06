@@ -24,6 +24,8 @@ export interface VoiceConfig {
   /** Hands-free never auto-arms on launch; this selects how an explicit arm works. */
   wakeProvider: VoiceWakeProvider
   autoSpeak: boolean
+  /** Let Attention's code-owned speak/interrupt decisions use Voice output. */
+  proactiveAlerts: boolean
 }
 
 export type VoiceConfigPatch = Partial<Omit<VoiceConfig, 'version'>>
@@ -38,6 +40,7 @@ export const DEFAULT_VOICE_CONFIG: VoiceConfig = Object.freeze({
   ttsModel: 'system',
   wakeProvider: 'off',
   autoSpeak: true,
+  proactiveAlerts: false,
 })
 
 const MODEL_ID = /^[A-Za-z0-9._:/-]{1,160}$/
@@ -122,5 +125,6 @@ function parseVoiceConfig(input: unknown): VoiceConfig {
     ttsModel: 'system',
     wakeProvider,
     autoSpeak: record.autoSpeak !== false,
+    proactiveAlerts: record.proactiveAlerts === true,
   }
 }

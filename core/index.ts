@@ -618,6 +618,10 @@ export interface CoreOptions {
   voiceTranscriptionTimeoutMs?: number
   /** Whether voice-submitted answers are read aloud after they are stored. */
   voiceAutoSpeak?: boolean
+  /** Let deterministic Attention speak/interrupt decisions use Voice output. */
+  voiceProactiveAlerts?: boolean
+  /** Initial output mute from the host's persisted TTS preference. */
+  voiceMuted?: boolean
   /** Bounded follow-up window after the wake phrase is heard. */
   voiceFollowUpWindowMs?: number
   /** Overrides the conversation context budget. For tests. */

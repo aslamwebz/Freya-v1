@@ -223,9 +223,14 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
       }
 
       if (item.kind === 'video') {
+        if (item.embedUrl) {
+          if (!alive) return
+          setLoading(false)
+          return
+        }
         if (!item.playable) {
           if (!alive) return
-          setReason('This result is a hosted video page, not a direct video file. Freya can show its poster here but will not open a browser automatically.')
+          setReason('This video has no safe in-app player. Freya will keep the result here instead of opening a browser automatically.')
           setLoading(false)
           return
         }
@@ -285,14 +290,25 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
           ) : null}
 
           {!loading && item.kind === 'video' ? (
-            videoData !== null
-              ? <video className="chats-overlay-video" src={videoData} controls autoPlay playsInline />
-              : (
-                <div className="chats-overlay-video-fallback">
-                  {fallbackPoster === null ? null : <img src={fallbackPoster} alt="" />}
-                  {reason === null ? null : <p className="chats-overlay-note">{reason}</p>}
-                </div>
+            item.embedUrl
+              ? (
+                <iframe
+                  className="chats-overlay-video-embed"
+                  src={item.embedUrl}
+                  title={item.title || 'Video preview'}
+                  allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+                  sandbox="allow-scripts allow-same-origin allow-presentation"
+                  allowFullScreen
+                />
               )
+              : videoData !== null
+                ? <video className="chats-overlay-video" src={videoData} controls autoPlay playsInline />
+                : (
+                  <div className="chats-overlay-video-fallback">
+                    {fallbackPoster === null ? null : <img src={fallbackPoster} alt="" />}
+                    {reason === null ? null : <p className="chats-overlay-note">{reason}</p>}
+                  </div>
+                )
           ) : null}
 
           {!loading && item.kind === 'document' && documentData !== null ? (

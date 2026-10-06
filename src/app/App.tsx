@@ -33,26 +33,6 @@ import { useVoiceDock } from './voice/useVoiceDock'
 import { VoiceSettings } from './voice/VoiceSettings'
 import { BootScreen } from './boot/BootScreen'
 
-interface RailItem {
-  readonly id: string
-  readonly label: string
-  readonly symbol: string
-}
-
-const RAIL: readonly RailItem[] = [
-  { id: 'home', label: 'Home', symbol: 'home' },
-  { id: 'chat', label: 'Chats', symbol: 'chat' },
-  { id: 'mind', label: 'Mind', symbol: 'mind' },
-  { id: 'focus', label: 'Focus', symbol: 'focus' },
-  { id: 'people', label: 'People', symbol: 'people' },
-  { id: 'workforce', label: 'Workforce', symbol: 'workforce' },
-  { id: 'world', label: 'World', symbol: 'world' },
-  { id: 'memory', label: 'Memory', symbol: 'memory' },
-  { id: 'life', label: 'Life', symbol: 'life' },
-  { id: 'create', label: 'Foundry', symbol: 'forge' },
-  { id: 'relay', label: 'Relay', symbol: 'relay' },
-]
-
 export function App({
   preferences,
   dressing,

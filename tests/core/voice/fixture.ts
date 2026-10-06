@@ -26,6 +26,7 @@ export function absentVoiceProjection(overrides: Partial<VoiceProjection> = {}):
     state: 'permission-required',
     micEnabled: false,
     permission: 'unknown',
+    permissionRequestOpen: false,
     capturing: false,
     sessionId: null,
     interim: '',
@@ -51,6 +52,13 @@ export function absentVoiceProjection(overrides: Partial<VoiceProjection> = {}):
     muted: false,
     selectedVoiceId: null,
     autoSubmit: false,
+    autoSpeak: false,
+    attention: {
+      state: 'standby',
+      wakePhrase: 'Freya',
+      attentiveUntil: null,
+      followUpWindowMs: 45_000,
+    },
     wake: {
       armed: false,
       available: false,

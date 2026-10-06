@@ -616,6 +616,10 @@ export interface CoreOptions {
   voiceCaptureSupported?: boolean
   /** Tightens the transcription deadline. Cannot raise it past the hard limit. */
   voiceTranscriptionTimeoutMs?: number
+  /** Whether voice-submitted answers are read aloud after they are stored. */
+  voiceAutoSpeak?: boolean
+  /** Bounded follow-up window after the wake phrase is heard. */
+  voiceFollowUpWindowMs?: number
   /** Overrides the conversation context budget. For tests. */
   contextBudget?: ContextBudget
   /**
@@ -1976,6 +1980,8 @@ class FreyaCore implements Core {
       wake: this.options.voiceWake ?? LOCAL_ENERGY_WAKE_GATE,
       captureSupported: this.options.voiceCaptureSupported ?? true,
       transcriptionTimeoutMs: this.options.voiceTranscriptionTimeoutMs,
+      autoSpeak: this.options.voiceAutoSpeak,
+      followUpWindowMs: this.options.voiceFollowUpWindowMs,
       stopAll: () => this.state.stopAll.active,
       // The canonical door. This is the same function `conversation.turn.submit`
       // reaches, so a spoken sentence is a typed sentence from the Mind down: same
@@ -9722,6 +9728,13 @@ case 'forge.run': {
         muted: false,
         selectedVoiceId: null,
         autoSubmit: false,
+        autoSpeak: false,
+        attention: {
+          state: 'standby',
+          wakePhrase: 'Freya',
+          attentiveUntil: null,
+          followUpWindowMs: 45_000,
+        },
         wake: {
           armed: false,
           available: false,

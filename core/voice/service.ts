@@ -5,6 +5,7 @@ import { clipText, validateAudio, type AudioValidation } from './audio'
 import { isSttUnavailable, SttTimeout, withTimeout } from './stt'
 import { boundUtterance, clampSpeakingTuning, isTtsUnavailable } from './tts'
 import { LOCAL_ENERGY_WAKE_GATE, crossesWakeThreshold } from './wake'
+import { DEFAULT_FOLLOW_UP_WINDOW_MS, DEFAULT_WAKE_PHRASE, VoiceAttentionSession, interpretVoiceAddress } from './attention'
 import type { VoiceProjection } from '../protocol/conversation'
 import {
   VOICE_FORMAT,
@@ -111,6 +112,10 @@ export interface VoiceServiceOptions {
    * would be an option somebody eventually raises.
    */
   transcriptionTimeoutMs?: number
+  /** Read completed voice turns aloud. Separate from whether transcripts auto-submit. */
+  autoSpeak?: boolean
+  /** The bounded conversational follow-up window after "Freya" is heard. */
+  followUpWindowMs?: number
 
   now?: () => Date
   newId?: () => string
@@ -186,8 +191,11 @@ export class VoiceService {
   private permission: 'unknown' | VoicePermissionOutcome = 'unknown'
   private muted = false
   private autoSubmit = false
+  private autoSpeak: boolean
   private selectedVoiceId: string | null = null
   private wakeArmedAt: string | null = null
+  private readonly voiceAttention: VoiceAttentionSession
+  private cueSpeaking: { utteranceId: string; cue: 'wake-ack' | 'standby-ack' } | null = null
 
   private queue: QueuedUtterance[] = []
   private speaking: QueuedUtterance | null = null
@@ -212,6 +220,11 @@ export class VoiceService {
     this.timeoutMs = Math.max(1, Math.min(options.transcriptionTimeoutMs ?? VOICE_LIMITS.transcriptionTimeoutMs, VOICE_LIMITS.transcriptionTimeoutMs))
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => randomUUID())
+    this.autoSpeak = options.autoSpeak ?? false
+    this.voiceAttention = new VoiceAttentionSession(
+      Math.max(5_000, Math.min(options.followUpWindowMs ?? DEFAULT_FOLLOW_UP_WINDOW_MS, 5 * 60_000)),
+      this.now,
+    )
     // Derived, never assigned from outside: a build with no capture path starts
     // in `unsupported` and no command can talk it out of it.
     this.state = this.captureSupported ? 'permission-required' : 'unsupported'
@@ -331,7 +344,7 @@ export class VoiceService {
    * Explicit, bounded, and one at a time: a second press while one is open is
    * refused rather than interleaving two microphones.
    */
-  async beginCapture(): Promise<
+  async beginCapture(activation: 'explicit' | 'wake' = 'explicit'): Promise<
     { ok: true; session: VoiceCaptureSession } | { ok: false; reason: string }
   > {
     if (!this.captureSupported) return { ok: false, reason: 'this platform offers no microphone capture' }
@@ -353,6 +366,7 @@ export class VoiceService {
     const session: VoiceCaptureSession = {
       sessionId: this.newId(),
       startedAt: this.now().toISOString(),
+      activation,
       format: VOICE_FORMAT,
       sampleRate: VOICE_LIMITS.sampleRate,
       channels: VOICE_LIMITS.channels,
@@ -369,7 +383,7 @@ export class VoiceService {
         format: session.format,
         sampleRate: session.sampleRate,
         channels: session.channels,
-        activation: 'explicit',
+        activation,
       },
       session.sessionId,
     )
@@ -625,6 +639,19 @@ export class VoiceService {
     }
 
     const bounded = clipText(text, VOICE_LIMITS.maxTranscriptCharacters)
+
+    // Hands-free audio is not a user message merely because it was transcribed.
+    // Core decides whether it addressed Freya before the words reach a composer,
+    // Conversation, Mind, memory, or the transcript channel.
+    if (session.activation === 'wake') {
+      return await this.handleWakeTranscript(
+        session.sessionId,
+        bounded,
+        audio.bytes.byteLength,
+        audio.durationMs,
+      )
+    }
+
     const finalAt = this.now().toISOString()
     this.abort = null
     this.lastFinal = bounded
@@ -690,6 +717,116 @@ export class VoiceService {
 
     const submitted = await this.submitConfirmed(session.sessionId, bounded, audio.bytes.byteLength, audio.durationMs)
     return submitted
+  }
+
+  private async handleWakeTranscript(
+    sessionId: string,
+    transcript: string,
+    byteLength: number,
+    durationMs: number,
+  ): Promise<VoiceEndResult> {
+    const addressed = interpretVoiceAddress(
+      transcript,
+      this.voiceAttention.isAttentive(),
+      DEFAULT_WAKE_PHRASE,
+    )
+
+    if (addressed.kind === 'ignore') {
+      this.move(this.baseState())
+      this.publish()
+      return {
+        sessionId,
+        reason: 'completed',
+        text: null,
+        detail: 'Speech was heard, but it did not address Freya.',
+        byteLength,
+        durationMs,
+        transcribed: true,
+        turnId: null,
+      }
+    }
+
+    if (addressed.kind === 'standby') {
+      this.voiceAttention.standby()
+      await this.speakCue('standby-ack')
+      this.publish()
+      return {
+        sessionId,
+        reason: 'completed',
+        text: null,
+        detail: 'Freya returned to standby.',
+        byteLength,
+        durationMs,
+        transcribed: true,
+        turnId: null,
+      }
+    }
+
+    this.voiceAttention.activate()
+
+    if (addressed.kind === 'wake-only') {
+      await this.speakCue('wake-ack')
+      this.publish()
+      return {
+        sessionId,
+        reason: 'completed',
+        text: null,
+        detail: 'Freya is listening for a follow-up.',
+        byteLength,
+        durationMs,
+        transcribed: true,
+        turnId: null,
+      }
+    }
+
+    const command = clipText(addressed.text, VOICE_LIMITS.maxTranscriptCharacters)
+    const finalAt = this.now().toISOString()
+    this.lastFinal = command
+    this.lastFinalAt = finalAt
+    this.pushTranscript({ sessionId, kind: 'final', text: command, at: finalAt })
+
+    const submitted = await this.submitConfirmed(sessionId, command, byteLength, durationMs)
+    if (submitted.turnId !== null) {
+      this.voiceAttention.activate()
+      if (this.autoSpeak) await this.speakTurn({ turnId: submitted.turnId })
+    }
+    this.publish()
+    return submitted
+  }
+
+  /**
+   * Speak one closed Core-owned cue. A renderer never supplies these words.
+   *
+   * This intentionally is not journalled as a stored-answer utterance: it is
+   * ephemeral interaction chrome, not a conversation turn.
+   */
+  private async speakCue(cue: 'wake-ack' | 'standby-ack'): Promise<void> {
+    if (this.muted || this.stopAllLatch()) return
+    if (this.tts === undefined || this.tts.availability !== 'available') return
+    const text = cue === 'wake-ack' ? 'Yes?' : 'Okay.'
+    const utteranceId = this.newId()
+    this.cueSpeaking = { utteranceId, cue }
+    this.move('speaking')
+    this.publish()
+    const controller = new AbortController()
+    this.speakAbort = controller
+    try {
+      await this.tts.speak({
+        utteranceId,
+        text,
+        voiceId: this.selectedVoiceId,
+        rate: 1,
+        pitch: 1,
+        signal: controller.signal,
+      })
+    } catch {
+      // A cue is best-effort. The visible attentive/standby state remains true.
+    } finally {
+      if (this.cueSpeaking?.utteranceId === utteranceId) this.cueSpeaking = null
+      if (this.speakAbort === controller) this.speakAbort = null
+      this.move(this.baseState())
+      this.publish()
+    }
   }
 
   /**
@@ -952,6 +1089,12 @@ export class VoiceService {
     return this.state
   }
 
+  async setAutoSpeak(enabled: boolean): Promise<VoiceState> {
+    this.autoSpeak = enabled
+    this.publish()
+    return this.state
+  }
+
   /* ----------------------------------------------------------------- wake */
 
   /**
@@ -1010,7 +1153,7 @@ export class VoiceService {
       { gate: this.wakeGate.id, sustainedMs: Math.round(sustainedMs) },
       this.wakeGate.id,
     )
-    const started = await this.beginCapture()
+    const started = await this.beginCapture('wake')
     if (!started.ok) return { fired: false, reason: started.reason }
     this.publish()
     return { fired: true }
@@ -1085,6 +1228,8 @@ export class VoiceService {
       )
     }
     this.speaking = null
+    this.cueSpeaking = null
+    this.voiceAttention.standby()
     this.wakeArmedAt = null
     void this.tts?.cancel()
     await this.record('voice.stopped', { scope: 'all', reason }, this.newId())
@@ -1138,17 +1283,27 @@ export class VoiceService {
         availability: this.tts?.availability ?? 'unavailable',
         detail: this.tts?.detail ?? NO_OUTPUT_DETAIL,
       },
-      speaking: this.speaking !== null,
+      speaking: this.speaking !== null || this.cueSpeaking !== null,
       queued: this.queue.length,
       muted: this.muted,
       selectedVoiceId: this.selectedVoiceId,
       autoSubmit: this.autoSubmit,
+      autoSpeak: this.autoSpeak,
+      attention: {
+        state: this.voiceAttention.state,
+        wakePhrase: DEFAULT_WAKE_PHRASE,
+        attentiveUntil: this.voiceAttention.attentiveUntil,
+        followUpWindowMs: this.voiceAttention.windowMs,
+      },
       wake: {
         armed: this.wakeArmedAt !== null,
         available: this.wakeGate.availability === 'available',
         gate: this.wakeGate.id,
-        kind: 'speech-activity' as const,
-        detail: this.wakeGate.detail,
+        kind: 'wake-phrase' as const,
+        detail:
+          this.wakeGate.availability === 'available'
+            ? 'Hands-free uses local speech activity to capture one bounded clip; Core then requires the wake phrase Freya unless a follow-up window is already active.'
+            : this.wakeGate.detail,
         maxArmedMs: this.wakeGate.maxArmedMs,
       },
       limits: {

@@ -123,9 +123,11 @@ export function VoiceSettings({ voice }: { voice: VoiceDock }) {
             <Switch
               label="Freya answers aloud"
               detail={
-                config?.autoSpeak
-                  ? 'On. Answers produced by a spoken turn are read aloud after Core stores them.'
-                  : 'Off. Freya still answers in Chat, but does not automatically read the answer.'
+                !projection.synthesis.available
+                  ? projection.synthesis.detail
+                  : config?.autoSpeak
+                    ? 'On. Answers produced by a spoken turn are read aloud after Core stores them.'
+                    : 'Off. Freya still answers in Chat, but does not automatically read the answer.'
               }
               on={config?.autoSpeak ?? false}
               disabled={

@@ -530,6 +530,8 @@ export type CoreCommandName =
   | 'voice.mic.enable'
   /** Turn the microphone off and release any open capture. */
   | 'voice.mic.disable'
+  /** Open one short-lived window in which the OS permission prompt may be asked. */
+  | 'voice.permission.request'
   /** What the OS said. Never a request, and never a grant. */
   | 'voice.permission.report'
   | 'voice.capture.start'

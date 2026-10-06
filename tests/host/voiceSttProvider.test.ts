@@ -2,8 +2,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_REMOTE_STT_MODEL,
-  OPENAI_TRANSCRIPTIONS_URL,
-  OpenAiSttAdapter,
+  NANOGPT_TRANSCRIPTIONS_URL,
+  NanoGptSttAdapter,
   createVoiceSttFromEnv,
   pcmToWav,
 } from '../../electron/voiceSttProvider'
@@ -30,7 +30,7 @@ function request(sample = audio(), signal = new AbortController().signal): SttRe
 
 describe('hosted voice STT', () => {
   it('is opt-in even when a credential already exists', () => {
-    const adapter = createVoiceSttFromEnv({ OPENAI_API_KEY: 'secret' })
+    const adapter = createVoiceSttFromEnv({ NANOGPT_API_KEY: 'secret' })
     expect(adapter.kind).toBe('provider')
     expect(adapter.availability).toBe('configuration-required')
     expect(adapter.detail).toContain('Audio stays on this device')
@@ -39,15 +39,15 @@ describe('hosted voice STT', () => {
   it('refuses truthfully when enabled without a credential', () => {
     const adapter = createVoiceSttFromEnv({ FREYA_ALLOW_REMOTE_STT: '1' })
     expect(adapter.availability).toBe('configuration-required')
-    expect(adapter.detail).toContain('OPENAI_API_KEY')
+    expect(adapter.detail).toContain('NANOGPT_API_KEY')
   })
 
   it('uses a bounded default paid transcription model', () => {
     const adapter = createVoiceSttFromEnv({
       FREYA_ALLOW_REMOTE_STT: '1',
-      OPENAI_API_KEY: 'secret',
+      NANOGPT_API_KEY: 'secret',
     })
-    expect(adapter).toBeInstanceOf(OpenAiSttAdapter)
+    expect(adapter).toBeInstanceOf(NanoGptSttAdapter)
     expect(adapter.availability).toBe('available')
     expect(adapter.detail).toContain(DEFAULT_REMOTE_STT_MODEL)
     expect(adapter.detail).not.toContain('secret')
@@ -56,7 +56,7 @@ describe('hosted voice STT', () => {
   it('refuses an invalid model id before any network request exists', () => {
     const adapter = createVoiceSttFromEnv({
       FREYA_ALLOW_REMOTE_STT: '1',
-      OPENAI_API_KEY: 'secret',
+      NANOGPT_API_KEY: 'secret',
       FREYA_STT_MODEL: 'bad model with spaces',
     })
     expect(adapter.availability).toBe('configuration-required')
@@ -74,14 +74,14 @@ describe('hosted voice STT', () => {
       })
     }
 
-    const adapter = new OpenAiSttAdapter({
+    const adapter = new NanoGptSttAdapter({
       apiKey: 'top-secret',
-      model: 'gpt-4o-mini-transcribe',
+      model: 'Whisper-Large-V3',
       transport,
     })
     const result = await adapter.transcribe(request())
 
-    expect(seenUrl).toBe(OPENAI_TRANSCRIPTIONS_URL)
+    expect(seenUrl).toBe(NANOGPT_TRANSCRIPTIONS_URL)
     expect(seenInit?.method).toBe('POST')
     expect(seenInit?.redirect).toBe('error')
     const headers = new Headers(seenInit?.headers)
@@ -90,7 +90,7 @@ describe('hosted voice STT', () => {
     const form = seenInit?.body
     expect(form).toBeInstanceOf(FormData)
     const data = form as FormData
-    expect(data.get('model')).toBe('gpt-4o-mini-transcribe')
+    expect(data.get('model')).toBe('Whisper-Large-V3')
     const file = data.get('file')
     expect(file).not.toBeNull()
     expect(typeof file).not.toBe('string')
@@ -101,12 +101,12 @@ describe('hosted voice STT', () => {
 
     expect(result).toEqual({
       text: 'hello Freya',
-      engine: 'openai/gpt-4o-mini-transcribe',
+      engine: 'openai/Whisper-Large-V3',
     })
   })
 
   it('never includes the credential in provider failures', async () => {
-    const adapter = new OpenAiSttAdapter({
+    const adapter = new NanoGptSttAdapter({
       apiKey: 'never-print-me',
       transport: async () => new Response('denied', { status: 401 }),
     })
@@ -123,7 +123,7 @@ describe('hosted voice STT', () => {
 
   it('honours cancellation before a byte can leave the process', async () => {
     let calls = 0
-    const adapter = new OpenAiSttAdapter({
+    const adapter = new NanoGptSttAdapter({
       apiKey: 'secret',
       transport: async () => {
         calls += 1

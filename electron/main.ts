@@ -207,7 +207,14 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
           deniedRoots: [join(userData, 'vault')],
           allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
           allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
-          allowedEnvNames: [],
+          // Device Hands refuses an empty allowlist — correctly, since "nothing is shared"
+          // must be a decision somebody made. A surface that genuinely shares nothing
+          // therefore has to say so with a name it will never match, rather than with an
+          // empty list the policy refuses outright. Without this, a strict build could
+          // not start the browser at all and every page read arrived as
+          // `authority-refused`, which reads like a permissions problem rather than a
+          // list nobody filled in.
+          allowedEnvNames: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ENV_NAMES),
         },
     grants,
     enabled: true,
@@ -1516,7 +1523,7 @@ app.whenReady().then(async () => {
               deniedRoots: [join(app.getPath('userData'), 'vault')],
               allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
               allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
-              allowedEnvNames: [],
+              allowedEnvNames: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ENV_NAMES),
             },
       })
       browserExtensionHost

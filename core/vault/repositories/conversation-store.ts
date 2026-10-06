@@ -1,3 +1,4 @@
+import { MEDIA_LIMITS, type MediaItem } from '../../media/types'
 import {
   ConversationStoreError,
   type ConversationStore,
@@ -97,7 +98,7 @@ export class VaultConversationStore implements ConversationStore {
       const conversation = decodeConversation(row)
       const messages = this.vault
         .all<MessageRow>(
-          `SELECT message_id, conversation_id, role, content, created_at, turn_id
+          `SELECT message_id, conversation_id, role, content, created_at, turn_id, media
            FROM chat_messages WHERE conversation_id = ?
            ORDER BY created_at ASC, message_id ASC`,
           [id],
@@ -137,8 +138,8 @@ export class VaultConversationStore implements ConversationStore {
           throw new ConversationStoreError('not-found', `no such conversation: ${value.conversationId}`)
         }
         tx.run(
-          `INSERT INTO chat_messages (message_id, conversation_id, role, content, created_at, turn_id)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO chat_messages (message_id, conversation_id, role, content, created_at, turn_id, media)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             value.messageId,
             value.conversationId,
@@ -146,6 +147,11 @@ export class VaultConversationStore implements ConversationStore {
             value.content,
             value.createdAt,
             value.turnId,
+            // `null` rather than `'[]'` for a message that found nothing, so the column
+            // says the same thing the field does: nothing was looked up.
+            value.media === undefined || value.media.length === 0
+              ? null
+              : JSON.stringify(value.media),
           ],
         )
       })
@@ -302,6 +308,8 @@ interface MessageRow {
   content: string
   created_at: string
   turn_id: string
+  /** Nullable JSON: what a search found, when it found anything. */
+  media: string | null
 }
 
 interface TurnRow {
@@ -353,7 +361,80 @@ function decodeMessage(row: MessageRow, conversationId: string): ConversationMes
     content: row.content,
     createdAt: row.created_at,
     turnId: row.turn_id,
+    ...decodeMedia(row.media, row.message_id),
   })
+}
+
+/**
+ * The media column, read as data or not at all.
+ *
+ * Parsed and **re-validated**, not cast. The column lives inside an encrypted database
+ * that only this process writes, but "only this process writes it" is a property of the
+ * deployment and not of the bytes: a row can be older than the code that wrote it, hand-
+ * edited while the Vault was unlocked, or restored from a backup taken by a build with a
+ * different shape. So every item is checked to be a typed media item with plain fields,
+ * and one item that fails takes the media with it rather than reaching a renderer.
+ *
+ * A malformed column is therefore a *missing* column, which is the same thing the reader
+ * already handles: a message with no cards.
+ */
+function decodeMedia(raw: string | null, messageId: string): { media?: readonly MediaItem[] } {
+  // The id is used only in the one message a maintainer reading a log will ever see.
+  void messageId
+  if (raw === null || raw === '') return {}
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return {}
+  }
+  if (!Array.isArray(parsed)) return {}
+
+  const items: MediaItem[] = []
+  for (const entry of parsed) {
+    const item = decodeMediaItem(entry)
+    if (item === null) return {}
+    items.push(item)
+    if (items.length > MEDIA_LIMITS.cardsPerAnswer) return {}
+  }
+  return items.length === 0 ? {} : { media: items }
+}
+
+/** One item, or `null` — in which case the whole column is discarded. */
+function decodeMediaItem(value: unknown): MediaItem | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  if (record['kind'] !== 'image' && record['kind'] !== 'video' && record['kind'] !== 'document') return null
+  const url = record['url']
+  const page = record['page']
+  const host = record['host']
+  if (typeof url !== 'string' || !isPlainWebUrl(url)) return null
+  if (typeof page !== 'string' || !isPlainWebUrl(page)) return null
+  if (typeof host !== 'string') return null
+  const title = record['title']
+
+  return {
+    kind: record['kind'],
+    url,
+    page,
+    title: typeof title === 'string' ? title.slice(0, 300) : '',
+    host: host.slice(0, 120),
+    duration: typeof record['duration'] === 'string' ? record['duration'].slice(0, 16) : null,
+    bytes: typeof record['bytes'] === 'number' && Number.isInteger(record['bytes']) ? record['bytes'] : null,
+    pages: typeof record['pages'] === 'number' && Number.isInteger(record['pages']) ? record['pages'] : null,
+    playable: record['playable'] === true,
+  }
+}
+
+/** `http` or `https` and nothing else, re-checked on the way out of storage. */
+function isPlainWebUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 function decodeTurn(row: TurnRow, conversationId: string): ConversationTurn {

@@ -14,7 +14,7 @@ import type { NativeConnection } from './binding'
  * with no extra table to bootstrap.
  */
 
-export const VAULT_SCHEMA_VERSION = 4
+export const VAULT_SCHEMA_VERSION = 5
 
 export interface VaultMigrationContext {
   exec(sql: string): void
@@ -265,6 +265,23 @@ export const VAULT_MIGRATIONS: readonly VaultMigration[] = Object.freeze([
       context.exec(
         'CREATE INDEX IF NOT EXISTS chat_conversations_visible ON chat_conversations (archived_at, updated_at DESC, conversation_id)',
       )
+    },
+  },
+  {
+    version: 5,
+    name: 'conversation-media',
+    up: (context) => {
+      // What a search found, kept beside the answer it belongs to.
+      //
+      // One nullable JSON column rather than a table: media is read only as a whole
+      // list, always with its message, and never queried across messages. It is JSON
+      // because the items are typed data that arrives from a lookup — an address and a
+      // few labels — and because a column per attribute would fix the shape of a search
+      // result into the schema, which is the wrong place for it to live.
+      //
+      // Nullable, so a message that found nothing reads back as no column at all and
+      // `media` stays absent rather than becoming an empty list.
+      context.exec('ALTER TABLE chat_messages ADD COLUMN media TEXT')
     },
   },
 

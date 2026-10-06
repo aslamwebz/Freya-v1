@@ -145,3 +145,36 @@ describe('collecting cards from what a search returned', () => {
     expect(items[0]?.kind).toBe('image')
   })
 })
+  it('makes a card for a document the search returned as a plain link', () => {
+    // The documents vertical has no media URL behind its rows: a search for a report
+    // returns links to the PDF and nothing else. Without falling back to the source's own
+    // address, every document search produced a paragraph of links and no cards.
+    const items = mediaFromObservations([ok([
+      source({
+        url: 'https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=OJ:L_202401689',
+        sourceDomain: 'eur-lex.europa.eu',
+        title: 'Regulation (EU) 2024/1689',
+        vertical: 'documents',
+      }),
+    ])])
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      kind: 'document',
+      url: 'https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=OJ:L_202401689',
+      page: 'https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=OJ:L_202401689',
+      host: 'eur-lex.europa.eu',
+    })
+    // A document is not playable and never claims a runtime.
+    expect(items[0]?.playable).toBe(false)
+    expect(items[0]?.duration).toBeNull()
+  })
+
+  it('does not turn an ordinary web link into a card', () => {
+    // The fallback is for the documents vertical only. A web result that happens to end
+    // in .pdf is a link in a sentence, not a document Freya was asked to fetch.
+    const items = mediaFromObservations([ok([
+      source({ url: 'https://example.org/paper.pdf', vertical: 'web' }),
+    ])])
+    expect(items).toEqual([])
+  })

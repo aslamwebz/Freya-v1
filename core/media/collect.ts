@@ -76,10 +76,17 @@ function cardSafeUrl(value: unknown): string | null {
 
 /** A source is only worth a card if it names media that exists. */
 function toItem(source: ToolSource): MediaItem | null {
-  const mediaUrl = cardSafeUrl(source.mediaUrl)
-  if (mediaUrl === null) return null
-  const kind = kindFor(source.vertical, mediaUrl)
+  // A document is usually the page itself rather than a separate media address: a search
+  // for a report returns links to the PDF, and there is no "media URL" behind them.
+  // Reading `mediaUrl` first and falling back to the source's own address is what lets a
+  // document become a card at all — otherwise the documents vertical produces a
+  // transcript of links and no cards, which is precisely the case the card exists for.
+  const candidate = cardSafeUrl(source.mediaUrl) ?? (source.vertical === 'documents' ? cardSafeUrl(source.url) : null)
+  if (candidate === null) return null
+
+  const kind = kindFor(source.vertical, candidate)
   if (kind === null) return null
+  const mediaUrl = candidate
 
   return {
     kind,

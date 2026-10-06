@@ -74,6 +74,95 @@ describe('Vault conversation schema', () => {
 })
 
 describe('VaultConversationStore', () => {
+  it('round-trips the media an answer carried', async () => {
+    // This is the round-trip that was silently lossy. `chat_messages` had no column for
+    // media, so a card drew from the live in-memory view and then vanished on the next
+    // read — which reads, from the outside, exactly like the search never found
+    // anything. Asserted here so the column and the field cannot drift apart again.
+    const store = new VaultConversationStore(harnessVault())
+    await store.putConversation({
+      conversationId: 'c1',
+      title: 'A private chat',
+      createdAt: '2026-10-05T12:00:00.000Z',
+      updatedAt: '2026-10-05T12:00:00.000Z',
+    })
+    await store.appendMessage({
+      messageId: 'm1',
+      conversationId: 'c1',
+      role: 'assistant',
+      content: 'here are some pictures',
+      createdAt: '2026-10-05T12:00:02.000Z',
+      turnId: 't1',
+      media: [{
+        kind: 'image',
+        url: 'https://images-assets.nasa.gov/image/PIA12348/PIA12348~thumb.jpg',
+        page: 'https://science.nasa.gov/webb',
+        title: 'Webb first light',
+        host: 'science.nasa.gov',
+        duration: null,
+        bytes: null,
+        pages: null,
+        playable: false,
+      }],
+    })
+    await store.appendMessage({
+      messageId: 'm2',
+      conversationId: 'c1',
+      role: 'assistant',
+      content: 'an answer with no lookup behind it',
+      createdAt: '2026-10-05T12:00:03.000Z',
+      turnId: 't2',
+    })
+
+    const record = await store.readConversation('c1')
+    const withMedia = record?.messages.find((message) => message.messageId === 'm1')
+    expect(withMedia?.media).toHaveLength(1)
+    expect(withMedia?.media?.[0]?.url).toBe('https://images-assets.nasa.gov/image/PIA12348/PIA12348~thumb.jpg')
+
+    // Absent, not an empty list: a message that looked nothing up must read back that
+    // way, or every card-less answer looks like a failed search.
+    const without = record?.messages.find((message) => message.messageId === 'm2')
+    expect(without?.media).toBeUndefined()
+  })
+
+  it('discards a media column it cannot trust, rather than drawing it', async () => {
+    // The column is inside an encrypted database, but a row can be hand-edited while
+    // the Vault is unlocked or restored from a backup written by a different build.
+    // One item that fails validation takes the whole list with it.
+    const store = new VaultConversationStore(harnessVault())
+    await store.putConversation({
+      conversationId: 'c1',
+      title: 'A private chat',
+      createdAt: '2026-10-05T12:00:00.000Z',
+      updatedAt: '2026-10-05T12:00:00.000Z',
+    })
+    await store.appendMessage({
+      messageId: 'm1',
+      conversationId: 'c1',
+      role: 'assistant',
+      content: 'a tampered row',
+      createdAt: '2026-10-05T12:00:02.000Z',
+      turnId: 't1',
+      // A `javascript:` address is exactly what a card must never be handed.
+      media: [{
+        kind: 'image',
+        url: 'javascript:alert(1)',
+        page: 'https://example.org',
+        title: 'x',
+        host: 'example.org',
+        duration: null,
+        bytes: null,
+        pages: null,
+        playable: false,
+      }],
+    })
+
+    const record = await store.readConversation('c1')
+    // Refused at the point of writing rather than trusted into storage, so the row
+    // either never held it or never reads back as a card.
+    expect(record?.messages.find((m) => m.messageId === 'm1')?.media).toBeUndefined()
+  })
+
   it('round-trips a completed conversation without a second persistence format', async () => {
     const store = new VaultConversationStore(harnessVault())
     await store.putConversation({

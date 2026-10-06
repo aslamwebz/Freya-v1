@@ -747,6 +747,7 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'voice.status.read',
   'voice.mic.enable',
   'voice.mic.disable',
+  'voice.permission.request',
   'voice.permission.report',
   'voice.capture.start',
   'voice.transcript.interim',
@@ -1356,6 +1357,7 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     case 'security.resume':
     case 'conversation.list':
     case 'voice.status.read':
+    case 'voice.permission.request':
     case 'voice.capture.start':
     case 'voice.capture.cancel':
     case 'voice.tts.stop':

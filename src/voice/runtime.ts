@@ -75,6 +75,7 @@ export class VoiceRuntime {
   private wakeSustainedMs = 0
   private wakeTimer: ReturnType<typeof setInterval> | null = null
   private wakeMeter: WakeMeter | null = null
+  private wakeArmedAtPerf: number | null = null
   private wakeSessionId: string | null = null
   private wakeClipStartedAt: number | null = null
   private wakeSilenceMs = 0
@@ -338,6 +339,7 @@ export class VoiceRuntime {
       this.notice(armed.reason ?? 'hands-free is not available on this build')
       return
     }
+    this.wakeArmedAtPerf = performance.now()
     await this.openWakeCapture()
   }
 
@@ -348,6 +350,7 @@ export class VoiceRuntime {
     }
     const capture = this.wakeMeter
     this.wakeMeter = null
+    this.wakeArmedAtPerf = null
     if (this.wakeSessionId !== null) await this.mirror.cancelCapture()
     this.wakeSessionId = null
     this.wakeClipStartedAt = null
@@ -388,6 +391,17 @@ export class VoiceRuntime {
   private async tickWake(): Promise<void> {
     const meter = this.wakeMeter
     if (meter === null || this.capture !== null) return
+
+    const maxArmedMs = this.mirror.projection?.wake.maxArmedMs ?? VOICE_LIMITS.maxWakeArmedMs
+    if (
+      this.wakeArmedAtPerf !== null &&
+      performance.now() - this.wakeArmedAtPerf >= maxArmedMs
+    ) {
+      await this.disarmWake()
+      this.notice('Hands-free returned to standby after its safety window expired.')
+      return
+    }
+
     this.wakeLevel = meter.level
 
     if (this.wakeSessionId !== null) {
@@ -500,6 +514,7 @@ export class VoiceRuntime {
     }
     const meter = this.wakeMeter
     this.wakeMeter = null
+    this.wakeArmedAtPerf = null
     if (this.wakeSessionId !== null) await this.mirror.cancelCapture()
     this.wakeSessionId = null
     this.wakeClipStartedAt = null

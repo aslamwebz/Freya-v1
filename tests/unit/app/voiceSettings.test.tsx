@@ -3,6 +3,20 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { VoiceSettings, describeVoiceState } from '../../../src/app/voice/VoiceSettings'
 import type { VoiceDock, VoiceView } from '../../../src/app/voice/useVoiceDock'
 import { absentVoiceProjection } from '../../core/voice/fixture'
+import type { VoiceConfig } from '../../../electron/voiceConfig'
+
+const DEFAULT_TEST_VOICE_CONFIG: VoiceConfig = {
+  version: 1,
+  sttProvider: 'nanogpt',
+  sttModel: 'Whisper-Large-V3',
+  remoteSttEnabled: true,
+  ttsProvider: 'platform',
+  ttsVoiceId: null,
+  ttsModel: 'system',
+  wakeProvider: 'off',
+  autoSpeak: true,
+  proactiveAlerts: false,
+}
 
 /**
  * The voice settings row.
@@ -47,6 +61,8 @@ function dock(overrides: Partial<VoiceView> & { autoSubmit?: boolean } = {}): Vo
       capabilities: { capture: true, recognition: { available: false, local: false, detail: 'no API' } },
       voices: [],
       ...overrides,
+      config: overrides.config ?? DEFAULT_TEST_VOICE_CONFIG,
+      configBusy: overrides.configBusy ?? false,
     },
     pressed,
     press: () => pressed.push('press'),
@@ -58,6 +74,7 @@ function dock(overrides: Partial<VoiceView> & { autoSubmit?: boolean } = {}): Vo
     toggleAutoSubmit: () => pressed.push('toggleAutoSubmit'),
     stopSpeaking: () => pressed.push('stopSpeaking'),
     chooseVoice: () => pressed.push('chooseVoice'),
+    saveConfig: () => pressed.push('saveConfig'),
   }
 }
 

@@ -7331,6 +7331,21 @@ state: {
           return { requestId, ok: true, status: this.status(), voice: { operation: 'state', state: this.voice().state } }
         }
 
+        case 'voice.permission.request': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const opened = this.voiceService.requestPermissionWindow()
+          return opened.ok
+            ? { requestId, ok: true, status: this.status(), voice: { operation: 'state', state: this.voice().state } }
+            : {
+                requestId,
+                ok: false,
+                refusal: { reason: opened.reason },
+                status: this.status(),
+                voice: { operation: 'refused', reason: opened.reason },
+              }
+        }
+
         case 'voice.permission.report': {
           const outcome = readString(envelope.payload, 'outcome')
           if (outcome !== 'granted' && outcome !== 'denied' && outcome !== 'revoked') {
@@ -9726,6 +9741,7 @@ case 'forge.run': {
         state: 'unsupported',
         micEnabled: false,
         permission: 'unknown',
+        permissionRequestOpen: false,
         capturing: false,
         sessionId: null,
         interim: '',

@@ -189,6 +189,7 @@ export class VoiceService {
   private micEnabled = false
 
   private permission: 'unknown' | VoicePermissionOutcome = 'unknown'
+  private permissionRequestUntilMs: number | null = null
   private muted = false
   private autoSubmit = false
   private autoSpeak: boolean
@@ -294,9 +295,28 @@ export class VoiceService {
     return { ok: true, state: this.state }
   }
 
+  /**
+   * Open a short-lived OS permission acquisition window.
+   *
+   * This is not a capture and carries no audio. It exists solely to break the
+   * first-use deadlock where Core needs the OS verdict before a real capture can
+   * begin. The host reads this projection synchronously and the window expires
+   * even if the renderer disappears without reporting a result.
+   */
+  requestPermissionWindow(): { ok: true; expiresAt: string } | { ok: false; reason: string } {
+    if (!this.captureSupported) return { ok: false, reason: 'this platform offers no microphone capture' }
+    if (this.stopAllLatch()) return { ok: false, reason: 'Freya is stopped; resume before using the microphone' }
+    if (!this.micEnabled) return { ok: false, reason: MIC_OFF_REASON }
+    const expiresAtMs = this.now().getTime() + 10_000
+    this.permissionRequestUntilMs = expiresAtMs
+    this.publish()
+    return { ok: true, expiresAt: new Date(expiresAtMs).toISOString() }
+  }
+
   /** Turn the microphone off. Idempotent, and safe at any point in the machine. */
   async disableMic(reason = 'the owner turned the microphone off'): Promise<void> {
     this.micEnabled = false
+    this.permissionRequestUntilMs = null
     this.wakeArmedAt = null
     await this.releaseSession(reason)
     this.move(this.baseState())
@@ -314,6 +334,7 @@ export class VoiceService {
    * from this flag.
    */
   async reportPermission(outcome: VoicePermissionOutcome): Promise<VoiceState> {
+    this.permissionRequestUntilMs = null
     this.permission = outcome
     await this.record(
       'voice.permission.changed',
@@ -1239,6 +1260,7 @@ export class VoiceService {
     this.speaking = null
     this.cueSpeaking = null
     this.voiceAttention.standby()
+    this.permissionRequestUntilMs = null
     this.wakeArmedAt = null
     void this.tts?.cancel()
     await this.record('voice.stopped', { scope: 'all', reason }, this.newId())
@@ -1264,6 +1286,8 @@ export class VoiceService {
       state: this.state,
       micEnabled: this.micEnabled,
       permission: this.permission,
+      permissionRequestOpen:
+        this.permissionRequestUntilMs !== null && this.now().getTime() < this.permissionRequestUntilMs,
       capturing: this.session !== null,
       sessionId: this.session?.sessionId ?? null,
       interim: this.session?.interim ?? '',

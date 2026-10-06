@@ -229,6 +229,11 @@ export class Vault implements VaultTransaction {
       this.connection.exec(`ATTACH DATABASE '${escaped}' AS vault_backup KEY "x'${this.keyHex}'"`)
       try {
         this.connection.exec(`SELECT sqlcipher_export('vault_backup')`)
+        // `sqlcipher_export()` copies schema and data, but SQLite metadata such as
+        // `PRAGMA user_version` is not part of that schema. Preserve Freya's
+        // code-owned migration version explicitly so a restored current backup is
+        // not reopened as version 0 and migrated a second time.
+        this.connection.exec(`PRAGMA vault_backup.user_version = ${this.schemaVersion()}`)
       } finally {
         this.connection.exec('DETACH DATABASE vault_backup')
       }

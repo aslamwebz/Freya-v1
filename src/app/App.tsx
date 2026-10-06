@@ -26,7 +26,7 @@ import { Focus } from './screens/Focus'
 import { People } from './screens/People'
 import { Memory } from './screens/Memory'
 import type { SettingsCategory } from './screens/Settings'
-import { setAppLayout, type AppLayout } from './state/workspace'
+import { setAppLayout, startupAppLayout, type AppLayout } from './state/workspace'
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
 import { useVoiceDock } from './voice/useVoiceDock'
@@ -57,6 +57,7 @@ export function App({
   preferences,
   dressing,
   adapter,
+  initialLayout,
 }: {
   preferences: PreferencesStore
   dressing: DressingStore
@@ -69,7 +70,7 @@ export function App({
   // Every cold start lands on the Dashboard. Workspace persistence still keeps
   // conversation/window state for when the owner deliberately opens those surfaces,
   // but it must not turn yesterday's Chat route into today's launch screen.
-  const [screen, setScreen] = useState('home')
+  const [screen, setScreen] = useState(() => startupAppLayout(initialLayout).nav)
   const [dressingOpen, setDressingOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('appearance')

@@ -574,6 +574,9 @@ function currentHostEnv(): HostEnv {
 async function reEnvCore(): Promise<void> {
   if (!providerStore) return
   await providerStore.applyToEnv(process.env, EXPLICIT_ENV)
+  if (voiceConfigStore !== null) {
+    voiceInput.configure(sttRuntimeConfig(await voiceConfigStore.read()))
+  }
   await coreHost?.restartWithEnv(currentHostEnv())
 }
 

@@ -539,6 +539,8 @@ export type CoreCommandName =
   | 'voice.capture.cancel'
   /** Whether a confirmed transcript enters the conversation path unprompted. */
   | 'voice.submit.set'
+  /** Whether a successful voice turn should read its stored answer aloud. */
+  | 'voice.auto-speak.set'
   /** Read a stored turn aloud. The payload is a turn id and nothing else. */
   | 'voice.tts.speak'
   /** Finish at a boundary and drop the queue. */

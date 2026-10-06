@@ -19,7 +19,9 @@ import { pickAttachments } from './attachments'
 import { PresenceHost } from './presence/host'
 import { createBrowserExtensionHost, type BrowserExtensionHost } from './browserext'
 import { HostVoiceOutput, registerVoiceOutputIpc } from './voiceHost'
-import { createVoiceSttFromEnv } from './voiceSttProvider'
+import { ConfigurableVoiceSttAdapter } from './voiceSttProvider'
+import { VoiceConfigStore, sttRuntimeConfig, type VoiceConfigPatch } from './voiceConfig'
+import { buildLocalWakeGate } from '../core/voice/wake'
 import {
   createDualBrowserActivation,
   createFreyaBrowserAdapter,
@@ -60,6 +62,8 @@ let workspace: WorkspaceFile | null = null
  * created once the app is ready, reached from a window only through named IPC.
  */
 let providerStore: ProviderConfigStore | null = null
+/** Voice preferences are non-secret and live beside provider.json. */
+let voiceConfigStore: VoiceConfigStore | null = null
 /** One Core per process. Survives renderer reloads; dies only with the app. */
 let coreHost: ElectronCoreHost | null = null
 /**
@@ -71,11 +75,11 @@ let coreHost: ElectronCoreHost | null = null
  */
 const voiceOutput = new HostVoiceOutput()
 /**
- * Speech input is main-process-only and opt-in. The adapter itself refuses until
- * FREYA_ALLOW_REMOTE_STT=1 and OPENAI_API_KEY are both present; merely having a
- * credential in the environment never sends microphone audio anywhere.
+ * Speech input is main-process-only and reconfigurable. It reuses the NanoGPT
+ * credential after that credential has been applied to this process, but voice
+ * keeps its own explicit provider/model/privacy choice.
  */
-const voiceInput = createVoiceSttFromEnv(process.env)
+const voiceInput = new ConfigurableVoiceSttAdapter(process.env)
 /** The presence host. Owns the presence window and pushes frames to it. */
 let presenceHost: PresenceHost | null = null
 /**
@@ -508,6 +512,11 @@ function requireCore(): ElectronCoreHost {
 function requireProviderConfig(): ProviderConfigStore {
   if (!providerStore) throw new Error('provider config used before the app was ready')
   return providerStore
+}
+
+function requireVoiceConfig(): VoiceConfigStore {
+  if (!voiceConfigStore) throw new Error('voice config used before the app was ready')
+  return voiceConfigStore
 }
 
 /**
@@ -1097,6 +1106,40 @@ function registerIpc(): void {
     return saved
   })
 
+  ipcMain.handle('freya:voice-config:read', () => requireVoiceConfig().read())
+  ipcMain.handle('freya:voice-config:write', async (_event, input: VoiceConfigPatch) => {
+    const saved = await requireVoiceConfig().write(input)
+    voiceInput.configure(sttRuntimeConfig(saved))
+
+    const host = coreHost
+    if (host !== null) {
+      await host.submit({
+        command: 'voice.auto-speak.set',
+        requestId: `voice-config-auto-speak-${Date.now()}`,
+        payload: { enabled: saved.autoSpeak },
+      })
+      await host.submit({
+        command: 'voice.mute.set',
+        requestId: `voice-config-tts-${Date.now()}`,
+        payload: { muted: saved.ttsProvider === 'off' },
+      })
+      if (saved.ttsVoiceId !== null) {
+        await host.submit({
+          command: 'voice.tts.voice.select',
+          requestId: `voice-config-voice-${Date.now()}`,
+          payload: { voiceId: saved.ttsVoiceId },
+        })
+      }
+      if (saved.wakeProvider === 'off') {
+        await host.submit({
+          command: 'voice.wake.disarm',
+          requestId: `voice-config-wake-${Date.now()}`,
+        })
+      }
+    }
+    return saved
+  })
+
   ipcMain.handle('freya:workspace:load', () => requireWorkspace().load())
   // The whole privileged act of "attach a file": a dialog in this process, a
   // bounded read behind it, and a typed outcome in front of it.
@@ -1261,10 +1304,13 @@ app.whenReady().then(async () => {
   // Created beside the workspace, and created before Core so the stored provider
   // values can be applied to the process environment Core is then built from.
   providerStore = new ProviderConfigStore(join(app.getPath('userData'), 'provider.json'))
+  voiceConfigStore = new VoiceConfigStore(join(app.getPath('userData'), 'voice.json'))
   // A credential saved through the Settings surface must be usable on the next
   // launch, so it is applied here — before Core reads `process.env.NANOGPT_*`.
   // A real launch environment still wins; the `.env` file does not.
   await providerStore.applyToEnv(process.env, EXPLICIT_ENV)
+  const voiceConfig = await voiceConfigStore.read()
+  voiceInput.configure(sttRuntimeConfig(voiceConfig))
   // The keys are fetched before the Core is constructed, and they are the only
   // secrets this process handles. A machine with no OS secure storage gets `null`
   // for both, which makes Core fall back to ephemeral stores that label themselves —
@@ -1428,17 +1474,19 @@ app.whenReady().then(async () => {
          *
          * TTS remains the platform engine. STT is a main-process adapter whose
          * destination is fixed in code and whose credential never crosses the
-         * preload bridge. It stays `configuration-required` unless the owner set
-         * FREYA_ALLOW_REMOTE_STT=1 and supplied OPENAI_API_KEY; with the switch off,
-         * recordings are discarded exactly as Phase 45 originally required.
+         * preload bridge. It reuses the existing NanoGPT credential, but remote
+         * speech remains a separate opt-in and its model is selected independently
+         * from the Chat model. With remote speech off, recordings are not uploaded.
          *
          * `voiceCaptureSupported` is not asserted either: main has no microphone to
          * ask about, so the renderer reports that from `navigator.mediaDevices` and
          * a machine without a device gets `unsupported` from the renderer instead
          * of a button that cannot work.
          */
-        voiceTts: voiceOutput,
+        ...(voiceConfig.ttsProvider === 'platform' ? { voiceTts: voiceOutput } : {}),
         voiceStt: voiceInput,
+        voiceWake: buildLocalWakeGate(),
+        voiceAutoSpeak: voiceConfig.autoSpeak,
       },
     )
     registerIpc()

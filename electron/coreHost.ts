@@ -644,6 +644,8 @@ export interface CoreHostOptions {
   voiceAutoSpeak?: boolean
   /** Let deterministic Attention speak/interrupt decisions use Voice output. */
   voiceProactiveAlerts?: boolean
+  /** Initial output mute from the persisted TTS provider preference. */
+  voiceMuted?: boolean
   /** Bounded follow-up window after the wake phrase is heard. */
   voiceFollowUpWindowMs?: number
   /**
@@ -1189,6 +1191,9 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.voiceProactiveAlerts === undefined
           ? {}
           : { voiceProactiveAlerts: this.options.voiceProactiveAlerts }),
+        ...(this.options.voiceMuted === undefined
+          ? {}
+          : { voiceMuted: this.options.voiceMuted }),
         ...(this.options.voiceFollowUpWindowMs === undefined
           ? {}
           : { voiceFollowUpWindowMs: this.options.voiceFollowUpWindowMs }),

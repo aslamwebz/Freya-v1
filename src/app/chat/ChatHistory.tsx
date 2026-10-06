@@ -62,12 +62,12 @@ export function ChatHistory({ onOpen, collapsed = false, current = false }: {
 
   const archive = async (conversationId: string): Promise<void> => {
     const wasActive = conversationId === active
-    const remaining = conversations.filter((conversation) => conversation.conversationId !== conversationId)
     const outcome = await mirror.archive(conversationId)
     if (outcome.operation !== 'archived' || !wasActive) return
-    const next = remaining[0]
-    if (next) await mirror.read(next.conversationId)
-    else await mirror.create()
+
+    // Closing the active chat must not silently select another old conversation.
+    // History is reused only when the owner clicks that exact history row.
+    await mirror.create()
     onOpen?.()
   }
 

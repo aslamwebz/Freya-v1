@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import type { MediaItem } from '../../core/media/types'
 import type { FreyaHostBridge } from '../../src/platform/host'
@@ -56,6 +56,7 @@ function installBridge() {
 }
 
 afterEach(() => {
+  cleanup()
   delete window.freyaHost
   vi.restoreAllMocks()
 })
@@ -88,9 +89,9 @@ describe('Chat media preview', () => {
     const card = await screen.findByRole('button', { name: 'Preview Queue tutorial' })
     fireEvent.click(card)
 
-    const frame = await screen.findByTitle('Queue tutorial')
-    expect(frame.tagName).toBe('IFRAME')
-    expect(frame.getAttribute('src')).toBe('https://www.youtube.com/embed/abc')
+    const frame = (await screen.findAllByTitle('Queue tutorial')).find((node) => node.tagName === 'IFRAME')
+    expect(frame).toBeDefined()
+    expect(frame?.getAttribute('src')).toBe('https://www.youtube.com/embed/abc')
     expect(screen.getByRole('dialog', { name: 'Media preview' })).toBeTruthy()
   })
 

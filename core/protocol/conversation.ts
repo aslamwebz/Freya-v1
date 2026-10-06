@@ -296,4 +296,5 @@ export type VoiceCommandOutcome =
   | { operation: 'voice-selected'; voiceId: string }
   | { operation: 'voices'; voices: readonly { voiceId: string; label: string; language: string | null; isDefault: boolean | null }[] }
   | { operation: 'auto-submit'; enabled: boolean }
+  | { operation: 'auto-speak'; enabled: boolean }
   | { operation: 'refused'; reason: string }

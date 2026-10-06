@@ -45,7 +45,8 @@
     "qualify:json": "node scripts/qualify.mjs --format=json",
     "test:chat-live": "vitest run tests/live",
     "test:chat-search": "vitest run tests/live/searxng-live.test.ts",
-    "test:chat-acceptance": "vitest run tests/live/chat-acceptance.test.ts"
+    "test:chat-acceptance": "vitest run tests/live/chat-acceptance.test.ts",
+    "test:voice-stt-live": "vitest run tests/live/voice-stt-live.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1",

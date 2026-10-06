@@ -839,7 +839,10 @@ describe('J — hands-free is off', () => {
 /* ------------------------------------------- E.V.-style voice attention path */
 
 describe('J2 — Freya wake phrase opens one bounded conversation', () => {
-  async function fireWake(c: Core, requestId: string): Promise<VoiceCommandOutcome> {
+  async function fireWake(
+    c: Core,
+    requestId: string,
+  ): Promise<Extract<VoiceCommandOutcome, { operation: 'capture-ended' }>> {
     const fired = await c.handleCommand({
       command: 'voice.wake.energy',
       requestId: `${requestId}-energy`,
@@ -848,7 +851,11 @@ describe('J2 — Freya wake phrase opens one bounded conversation', () => {
     expect(fired.ok).toBe(true)
     const sessionId = c.voice().sessionId
     expect(sessionId).not.toBeNull()
-    return await endCapture(c, sessionId!, { durationMs: 30 })
+    const outcome = await endCapture(c, sessionId!, { durationMs: 30 })
+    if (outcome.operation !== 'capture-ended') {
+      throw new Error(`wake capture ended as ${outcome.operation}`)
+    }
+    return outcome
   }
 
   it('strips "Freya" and sends the request through the ordinary Conversation/Mind path once', async () => {

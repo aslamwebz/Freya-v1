@@ -39,7 +39,7 @@ describe('hosted voice STT', () => {
   it('refuses truthfully when enabled without a credential', () => {
     const adapter = createVoiceSttFromEnv({ FREYA_ALLOW_REMOTE_STT: '1' })
     expect(adapter.availability).toBe('configuration-required')
-    expect(adapter.detail).toContain('NANOGPT_API_KEY')
+    expect(adapter.detail).toContain('NanoGPT API key')
   })
 
   it('uses a bounded default paid transcription model', () => {

@@ -119,9 +119,9 @@ off this machine" — and enables neither. It never invokes the constructor it f
 because a feature detector that calls what it finds is no longer a detector.
 
 **This build can now transcribe when the owner explicitly enables hosted STT.**
-The production host supplies a main-process-only adapter for OpenAI's transcription
+The production host supplies a main-process-only adapter for NanoGPT's transcription
 endpoint. It remains `configuration-required` unless `FREYA_ALLOW_REMOTE_STT=1`
-and `OPENAI_API_KEY` are both present. The endpoint is fixed in code, the key
+and `NANOGPT_API_KEY` are both present. The endpoint is fixed in code, the key
 never crosses the preload bridge, audio is wrapped as WAV in memory only, and
 nothing is written to disk or to the journal. With the switch off, the original
 Phase 45 behavior is unchanged: the recording is discarded and no network request
@@ -233,7 +233,7 @@ kept.
 | **TTS — cancel / stop / queue** | **YES** | `cancel` truncates mid-word, `stop` at a boundary; Core holds the queue and the status |
 | **Barge-in — press while she speaks** | **YES** | Playback cancelled, then capture begins |
 | **Barge-in — automatic, via wake** | **NO** | Needs a microphone open during playback. Available only when hands-free is armed, and hands-free is unavailable on this build |
-| **STT — transcription** | **YES, opt-in** | Paid hosted adapter; requires `FREYA_ALLOW_REMOTE_STT=1` plus `OPENAI_API_KEY`. Otherwise reports `configuration-required` and sends nothing |
+| **STT — transcription** | **YES, opt-in** | Paid hosted adapter; requires `FREYA_ALLOW_REMOTE_STT=1` plus `NANOGPT_API_KEY`. Otherwise reports `configuration-required` and sends nothing |
 | **STT — interim transcripts** | **NO** | Follows STT. Interim display works the moment an adapter streams |
 | **STT — browser recognition** | **NO** | Feature-detected absent in Electron, and cloud where present. Neither enabled |
 | **Final transcript → conversation** | **YES** | Injected submitter, same function typed text uses. One model call |

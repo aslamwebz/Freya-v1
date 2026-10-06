@@ -2520,6 +2520,16 @@ async function main(): Promise<void> {
             'steps verified',
           ),
         )
+        // The run and task projections arrive independently. A completed run is
+        // the prerequisite for the task becoming done, not proof the renderer has
+        // already received that second projection in the same tick.
+        await work.waitForFunction(
+          () =>
+            document.querySelector('[role="dialog"][aria-label="Work"] .work-tasks li')?.getAttribute('data-status') ===
+            'done',
+          undefined,
+          { timeout: 30_000 },
+        )
         check(
           'the task the completed run belonged to is done',
           (await board.locator('.work-tasks li').first().getAttribute('data-status')) === 'done',

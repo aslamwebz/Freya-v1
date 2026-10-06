@@ -1,6 +1,6 @@
 # Phase 45 — Voice
 
-**Status:** IMPLEMENTED — push-to-talk and speech output are live; hosted transcription is available behind an explicit paid-provider opt-in. Hands-free wake remains an honest gap.
+**Status:** IMPLEMENTED + EV-STYLE ACTIVATION — push-to-talk, NanoGPT-backed STT, local/platform TTS, bounded "Freya" hands-free attention, conversational follow-up, barge-in, STOP ALL, and Attention-driven proactive speech are live behind explicit owner settings.
 **Branch:** `runtime/phase45-voice`
 **Baseline:** `89d4fa7` (Phases 38 + 39 merge, App Mode/UI merge, provider endpoint
 security, provider reconfiguration correctness)
@@ -31,7 +31,7 @@ ALL.
 │ WindowSpeechOutput            │◀──│ HostVoiceOutput           │◀─│  ports           │
 │  speechSynthesis              │   │  forwards, then waits     │  │                  │
 │ detectRecognitionSupport()    │   │                           │  │ injected         │
-│ wake meter (RMS, stores none) │   │                           │  │  submitTurn()    │
+│ local VAD + bounded pre-roll   │   │ VoiceConfigStore          │  │  submitTurn()    │
 └──────────┬───────────────────┘   └───────────────────────────┘  │  resolveTurnText │
            │ voiceClient                                          └────────┬─────────┘
            ▼ 19 bounded commands                                             │ same door
@@ -52,14 +52,16 @@ spoken word becomes a turn is by being handed to Core's own submitter.
 | `core/voice/audio.ts` | The audio edge — takes `unknown`, checks metadata against bytes |
 | `core/voice/stt.ts` | STT port, deadline enforcement, deterministic and scripted adapters |
 | `core/voice/tts.ts` | TTS port, tuning clamps, unavailability that refuses |
-| `core/voice/wake.ts` | The local energy gate, and what it honestly is |
-| `core/voice/service.ts` | The state machine, the permission lifecycle, the queue |
+| `core/voice/wake.ts` | The local speech-activity pre-filter; never a word recogniser by itself |
+| `core/voice/attention.ts` | Wake phrase parsing and the bounded standby → attentive → standby follow-up window |
+| `core/voice/service.ts` | The state machine, permission lifecycle, wake-address decision, proactive Attention speech and queue |
 | `electron/voiceHost.ts` | The speech adapter that reaches the platform from main |
-| `src/voice/runtime.ts` | Device capture, barge-in, the wake meter, disposal |
+| `src/voice/runtime.ts` | Device capture, 16 kHz resampling, barge-in, bounded wake pre-roll/VAD, disposal |
 | `src/voice/output.ts` | `speechSynthesis`, its missing callbacks and its sharp edges |
 | `src/voice/recognition.ts` | Feature detection, and the finding that it is unusable |
 | `src/platform/voiceClient.ts` | The renderer's mirror, with no method that executes a transcript |
-| `src/app/voice/` | App Mode's push-to-talk and the settings row |
+| `electron/voiceConfig.ts` | Dedicated persisted Voice provider/model/privacy/output preferences; no credential |
+| `src/app/voice/` | App Mode push-to-talk and the separate Voice provider/model/attention settings |
 
 ---
 
@@ -74,11 +76,17 @@ Four facts, and every gate reads the same two of them:
 | Permission is held | `voice.permission.report`, reporting the OS | no |
 | A capture is open | `voice.capture.start`, after the two above | no |
 
-`voice.permission.report` is a **report**, not a request. Core cannot grant
-permission and has no way to ask for it; capture is refused unless the last thing
-reported was `granted`. A renderer that lies here can only obtain a capture the
-operating system has already refused — and the host grants the device from its own
-gate, not from this flag.
+`voice.permission.report` is still a **report**, not a grant. First use now has
+a separate `voice.permission.request` command that opens a Core-owned ten-second
+permission-acquisition window. Electron may allow one OS `getUserMedia` probe only
+while that window is open; the probe is released immediately and the OS result is
+reported back to Core. Real capture still requires the reported state to be
+`granted`.
+
+This removes the old first-use deadlock without turning the renderer into a
+permission authority. The host derives permission directly from Core's current
+projection: a real capture, an explicitly armed hands-free mode, or the short
+permission-acquisition window.
 
 The host installs **both** Electron permission handlers. `setPermissionCheckHandler`
 is not redundancy: it is the only place a renderer can be caught asking whether it
@@ -118,14 +126,16 @@ platform has no recognition API" and "the platform has one that would send audio
 off this machine" — and enables neither. It never invokes the constructor it finds,
 because a feature detector that calls what it finds is no longer a detector.
 
-**This build can now transcribe when the owner explicitly enables hosted STT.**
-The production host supplies a main-process-only adapter for NanoGPT's transcription
-endpoint. It remains `configuration-required` unless `FREYA_ALLOW_REMOTE_STT=1`
-and `NANOGPT_API_KEY` are both present. The endpoint is fixed in code, the key
-never crosses the preload bridge, audio is wrapped as WAV in memory only, and
-nothing is written to disk or to the journal. With the switch off, the original
-Phase 45 behavior is unchanged: the recording is discarded and no network request
-exists.
+**This build can transcribe when the owner explicitly enables hosted STT in Voice
+Settings.** The production host supplies a main-process-only NanoGPT adapter. Voice
+reuses the existing `NANOGPT_API_KEY`, but it has its own provider/model/privacy
+configuration: selecting Chat's NanoGPT model does not select Voice's STT model, and
+having a key stored never enables microphone upload by itself.
+
+The endpoint is fixed in code, the key never crosses the preload bridge, PCM is
+resampled to a real 16 kHz wire format and wrapped as WAV in memory only, and raw
+audio/transcript text is never written to the Core journal. With remote STT off,
+no microphone clip is sent to NanoGPT.
 
 ### TTS — the platform really does provide this
 
@@ -165,8 +175,10 @@ Minimal and functional; no visual redesign.
 - Its accessible name is the truthful state, not a fixed label. The decorative
   placeholder it replaced was a live control whose honest outcome was "not
   connected yet".
-- Durable preferences live in Settings: microphone, Freya speaks, send-what-I-say,
-  hands-free, and a voice picker. Each states what it currently means in words.
+- Voice has a **separate** Settings group from Chat cognition: STT provider/model,
+  remote-audio consent, TTS provider/system voice, automatic answer speech,
+  proactive Attention speech, hands-free "Freya", and push-to-talk auto-submit.
+  The NanoGPT key is reused from the secure provider store and never appears here.
 - The legacy shell's microphone goes through the same runtime, so both surfaces
   share one implementation rather than two that can disagree.
 
@@ -232,8 +244,8 @@ kept.
 | **TTS — Freya reads stored answers** | **YES** | `speechSynthesis` is present in Electron; Core resolves the words from a turn id |
 | **TTS — cancel / stop / queue** | **YES** | `cancel` truncates mid-word, `stop` at a boundary; Core holds the queue and the status |
 | **Barge-in — press while she speaks** | **YES** | Playback cancelled, then capture begins |
-| **Barge-in — automatic, via wake** | **NO** | Needs a microphone open during playback. Available only when hands-free is armed, and hands-free is unavailable on this build |
-| **STT — transcription** | **YES, opt-in** | Paid hosted adapter; requires `FREYA_ALLOW_REMOTE_STT=1` plus `NANOGPT_API_KEY`. Otherwise reports `configuration-required` and sends nothing |
+| **Barge-in — automatic, via wake** | **YES when armed** | The owner explicitly arms hands-free; local VAD can interrupt playback before a wake clip is evaluated |
+| **STT — transcription** | **YES, opt-in** | Voice Settings chooses NanoGPT + its own STT model and separately enables remote audio. It reuses the secured `NANOGPT_API_KEY` |
 | **STT — interim transcripts** | **NO** | Follows STT. Interim display works the moment an adapter streams |
 | **STT — browser recognition** | **NO** | Feature-detected absent in Electron, and cloud where present. Neither enabled |
 | **Final transcript → conversation** | **YES** | Injected submitter, same function typed text uses. One model call |
@@ -241,7 +253,7 @@ kept.
 | **Mute / unmute** | **YES** | |
 | **Truthful indicators** | **YES** | Every label derives from Core's `VoiceState` |
 | **STOP ALL over voice** | **YES** | Capture, transcription, submission and playback, twice around the latch |
-| **Hands-free wake** | **NO, honestly** | A local energy gate exists and is wired, but the projection reports `kind: 'speech-activity'` and Core refuses to arm it: no local detector is configured. There is no wake-*word* model and the UI never claims one |
+| **Hands-free "Freya"** | **YES, opt-in** | Local VAD/pre-roll detects one speech clip; configured STT transcribes that bounded clip; Core requires "Freya" in standby, then keeps a 45s follow-up window. There is no continuous cloud stream |
 | **Interruption during a turn** | **YES** | `voice.tts.cancel` marks `interrupted`; the underlying text response is untouched |
 
 ---
@@ -290,22 +302,23 @@ not compression, imagery or a dependency.
 
 ---
 
-## 12. What a later phase would have to do
+## 12. What a later phase can improve
 
-- **A local recogniser.** Whisper.cpp, `whisper.cpp` bindings, Vosk, or a platform
-  engine. Supplied through `CoreOptions.voiceStt`; nothing else changes. Until then
-  `configuration-required` is the truthful answer.
-- **A local wake-phrase detector**, which would let `wake.kind` stop being
-  `speech-activity` and mean the word it currently refuses to mean.
-- **A hosted STT or TTS adapter**, if one is ever wanted. The port fits one
-  unchanged; the credential stays in the main process and the endpoint follows the
-  same discipline as a model request. It should not be added to close the
-  transcription gap — that gap is the honest part of this phase.
+- **Local STT / local wake-word recognition.** The current continuous component is
+  local VAD, but the wake clip uses the selected STT provider. A future
+  whisper.cpp/Vosk/openWakeWord-style adapter can fit behind the same ports and
+  remove that network/privacy trade-off without changing Freya's attention logic.
+- **Higher-quality TTS providers.** Platform `speechSynthesis` is the free/local
+  default. A future provider TTS can be added behind the same TTS port, with its own
+  Voice Settings provider/model and explicit spend/privacy posture.
+- **More proactive event vocabulary.** Attention, not Voice, remains the authority
+  that chooses `speak` or `interrupt`; Voice should only gain new closed Core
+  phrases when Attention gains a corresponding trusted event kind.
 
 ## 13. Safe to integrate
 
 Yes. No authority boundary moved: Guard, Governor, STOP ALL, budgets, approvals and
 the conversation path are all upstream of voice, and one test per boundary exists
-to say so. The two things that are not live — transcription and hands-free — report
-themselves as not live rather than degrading into something that looks like it
-works.
+to say so. Hosted transcription and hands-free now work only when the owner explicitly
+configures and arms them. When they are unavailable or disabled, the projection and
+Settings surface still report that truth rather than simulating success.

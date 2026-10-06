@@ -56,34 +56,37 @@ import {
  * yet — which is the window `core/research/coreIntegration.ts` closes the same
  * way.
  *
- * ## Spend
+ * ## Spend — and the ceiling it runs into
  *
  * The grant this loop spends is the same single foreground grant the turn already
- * creates. `calls` bounds the iterations; `maxOutputTokens` bounds the *sum* of
- * every iteration's reservation, so the ceiling is per turn and not per call.
- * `budgetFor` below is what makes that arithmetic explicit rather than implicit.
- */
-
-/**
- * Split the turn's whole output allowance across its calls.
+ * creates. `calls` bounds the iterations, and `outputTokenBudgetReserved` bounds
+ * the *sum* of every iteration's ask, because that reservation is authorisation
+ * arithmetic taken **before** the provider is called and deliberately never
+ * released — a grant with 300 of 1000 reserved has 700 left whatever the
+ * provider went on to do. So every call's ask must sum to at most
+ * `maxOutputTokensPerTurn`, and `budgetFor` makes that arithmetic explicit.
  *
- * The existing per-turn ceiling (`CONVERSATION_LIMITS.maxOutputTokensPerTurn`)
- * is a **total for the turn**, and it was sized for one call. Rather than raise
- * it — which would silently multiply what one turn can cost — the loop divides
- * it, and the sum of every iteration's ask is exactly the number that was
- * already the ceiling.
+ * ## The measured constraint
  *
- * - **The first call** gets the remainder after reserving what the two possible
- *   continuations will need. On the configured numbers that is
- *   `1024 - 2 × 256 = 512`.
- * - **Each continuation** gets `followUpOutputTokens`, because a continuation's
- *   only job is to read a short observation and answer from it.
+ * Against the live endpoint, for `qwen/qwen3.8-27b-uncensored`:
  *
- * The grant's own `maxOutputTokens` stays at `maxOutputTokensPerTurn` and its
- * `maxCalls` is the iteration ceiling, so the Governor refuses a fourth
- * iteration on **arithmetic alone** — the grant cannot cover it — before a
- * provider is chosen. There is no path by which the loop spends more than one
- * turn spent before the loop existed.
+ * | what | output tokens |
+ * |---|---|
+ * | a tool call | ~35 |
+ * | a plain answer | ~550 |
+ * | an answer from supplied evidence | ~414 |
+ *
+ * Those three numbers do not fit in 1024 alongside a three-call turn. A first
+ * call has to be able to answer *without* a tool, so it must be capped near 550;
+ * that leaves ~474 for continuations, and a continuation answering from evidence
+ * needs ~414, which fits — but only once. A second continuation has nothing left
+ * and is refused by the Governor, which the loop reports as an exhausted
+ * allowance rather than as an answer.
+ *
+ * Raising `maxOutputTokensPerTurn` is the only way to buy more room, and that is
+ * a spend decision rather than an arithmetic one. It is deliberately not taken
+ * here: the ceiling is code-owned and the reservation model is a security
+ * boundary, and neither should move as a side effect of adding a feature.
  */
 export function budgetFor(iteration: number, perTurnAllowance: number): number {
   const continuations = MIND_TOOL_LIMITS.maxProviderCalls - 1

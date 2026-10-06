@@ -7,6 +7,7 @@ import {
   loadAppLayout,
   resetAppWorkspace,
   setAppLayout,
+  startupAppLayout,
 } from '../../../src/app/state/workspace'
 
 /**
@@ -60,6 +61,20 @@ describe('App Mode workspace collect', () => {
     armAppWorkspace()
     armAppWorkspace()
     expect(registrations).toBe(1)
+  })
+
+  it('cold-starts on Home even when the saved workspace was an old chat', () => {
+    expect(
+      startupAppLayout({
+        nav: 'chat',
+        navCollapsed: true,
+        conversationId: 'conv-old',
+      }),
+    ).toEqual({
+      nav: 'home',
+      navCollapsed: true,
+      conversationId: 'conv-old',
+    })
   })
 
   it('tracks layout updates', () => {

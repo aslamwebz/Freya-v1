@@ -119,6 +119,8 @@ export interface VoiceServiceOptions {
   followUpWindowMs?: number
   /** Allow Attention's deterministic speak/interrupt decisions to reach TTS. */
   proactiveAlerts?: boolean
+  /** Initial output mute, used by the host's persisted TTS provider preference. */
+  initialMuted?: boolean
 
   now?: () => Date
   newId?: () => string
@@ -230,6 +232,7 @@ export class VoiceService {
     this.newId = options.newId ?? (() => randomUUID())
     this.autoSpeak = options.autoSpeak ?? false
     this.proactiveAlerts = options.proactiveAlerts ?? false
+    this.muted = options.initialMuted ?? false
     this.voiceAttention = new VoiceAttentionSession(
       Math.max(5_000, Math.min(options.followUpWindowMs ?? DEFAULT_FOLLOW_UP_WINDOW_MS, 5 * 60_000)),
       this.now,

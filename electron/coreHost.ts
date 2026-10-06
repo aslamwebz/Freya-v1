@@ -642,6 +642,8 @@ export interface CoreHostOptions {
   voiceCaptureSupported?: boolean
   /** Read voice-submitted answers aloud after they are stored. */
   voiceAutoSpeak?: boolean
+  /** Let deterministic Attention speak/interrupt decisions use Voice output. */
+  voiceProactiveAlerts?: boolean
   /** Bounded follow-up window after the wake phrase is heard. */
   voiceFollowUpWindowMs?: number
   /**
@@ -1184,6 +1186,9 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.voiceAutoSpeak === undefined
           ? {}
           : { voiceAutoSpeak: this.options.voiceAutoSpeak }),
+        ...(this.options.voiceProactiveAlerts === undefined
+          ? {}
+          : { voiceProactiveAlerts: this.options.voiceProactiveAlerts }),
         ...(this.options.voiceFollowUpWindowMs === undefined
           ? {}
           : { voiceFollowUpWindowMs: this.options.voiceFollowUpWindowMs }),

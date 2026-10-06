@@ -19,6 +19,7 @@ import { pickAttachments } from './attachments'
 import { PresenceHost } from './presence/host'
 import { createBrowserExtensionHost, type BrowserExtensionHost } from './browserext'
 import { HostVoiceOutput, registerVoiceOutputIpc } from './voiceHost'
+import { createVoiceSttFromEnv } from './voiceSttProvider'
 import {
   createDualBrowserActivation,
   createFreyaBrowserAdapter,
@@ -69,6 +70,12 @@ let coreHost: ElectronCoreHost | null = null
  * of voices the window reported or strand an utterance that was playing.
  */
 const voiceOutput = new HostVoiceOutput()
+/**
+ * Speech input is main-process-only and opt-in. The adapter itself refuses until
+ * FREYA_ALLOW_REMOTE_STT=1 and OPENAI_API_KEY are both present; merely having a
+ * credential in the environment never sends microphone audio anywhere.
+ */
+const voiceInput = createVoiceSttFromEnv(process.env)
 /** The presence host. Owns the presence window and pushes frames to it. */
 let presenceHost: PresenceHost | null = null
 /**
@@ -1417,16 +1424,13 @@ app.whenReady().then(async () => {
         // file; Core's own STOP ALL is composed on top of it by the host.
         ...(deviceHandsSeam ? { deviceHands: deviceHandsSeam } : {}),
         /*
-         * Speech output, and nothing for speech input.
+         * Speech output plus explicit, opt-in hosted speech input.
          *
-         * The platform does give the window a speech engine, so `voiceTts` is
-         * wired and Freya can genuinely read a stored answer aloud. It does *not*
-         * give this build a recogniser, so no `voiceStt` is passed — and that is
-         * the whole reason Core reports transcription as `configuration-required`
-         * and discards recordings. The tempting move here is to attach a hosted
-         * recogniser to close the gap; it is refused because audio would then leave
-         * the machine over a path a window cannot see and a credential would sit in
-         * this process, and the honest gap is cheaper than that.
+         * TTS remains the platform engine. STT is a main-process adapter whose
+         * destination is fixed in code and whose credential never crosses the
+         * preload bridge. It stays `configuration-required` unless the owner set
+         * FREYA_ALLOW_REMOTE_STT=1 and supplied OPENAI_API_KEY; with the switch off,
+         * recordings are discarded exactly as Phase 45 originally required.
          *
          * `voiceCaptureSupported` is not asserted either: main has no microphone to
          * ask about, so the renderer reports that from `navigator.mediaDevices` and
@@ -1434,6 +1438,7 @@ app.whenReady().then(async () => {
          * of a button that cannot work.
          */
         voiceTts: voiceOutput,
+        voiceStt: voiceInput,
       },
     )
     registerIpc()

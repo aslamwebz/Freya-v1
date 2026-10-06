@@ -1,3 +1,4 @@
+import type { SearchVertical } from './types'
 import type { Capability } from '../protocol/core-protocol'
 import type { OwnerAuthority } from '../authority'
 import type { Guard } from '../security/guard'
@@ -197,7 +198,7 @@ export class ResearchIntegration {
 
   private async guardedSearchWeb(
     query: string,
-    options: { signal?: AbortSignal; limit?: number; offset?: number } = {},
+    options: { signal?: AbortSignal; limit?: number; offset?: number; vertical?: SearchVertical } = {},
   ) {
     if (this.options.stopped()) throw new Error('Core is stopped.')
     const verdict = this.options.guard.evaluate(this.options.principal, 'search.web')
@@ -205,9 +206,27 @@ export class ResearchIntegration {
     return this.searcher.searchWeb(query, options)
   }
 
-  /** One guarded web search. No model is involved, so this costs nothing. */
-  async searchWeb(query: string, signal?: AbortSignal): Promise<unknown[]> {
-    return this.guardedSearchWeb(query, signal ? { signal } : {})
+  /**
+   * One guarded search, in a named vertical. No model is involved, so this costs nothing.
+   *
+   * The vertical is a parameter rather than an assumption because "find me pictures of
+   * this" and "find me pages about this" are different searches. Defaulting every
+   * lookup to the web index is why an image request came back as a list of articles.
+   */
+  async searchWeb(
+    query: string,
+    verticalOrSignal?: SearchVertical | AbortSignal,
+    signal?: AbortSignal,
+  ): Promise<unknown[]> {
+    // Called as `(query, signal)` before the vertical existed, and by the research
+    // coordinator still. An AbortSignal in this position is the old two-argument call
+    // rather than a vertical named "signal", so it is read as one.
+    const calledWithSignalOnly = verticalOrSignal instanceof AbortSignal
+    const vertical: SearchVertical = calledWithSignalOnly || verticalOrSignal === undefined
+      ? 'web'
+      : verticalOrSignal
+    const liveSignal = calledWithSignalOnly ? verticalOrSignal : signal
+    return this.guardedSearchWeb(query, { ...(liveSignal === undefined ? {} : { signal: liveSignal }), vertical })
   }
 
   /** One guarded page read. Creates and closes its own session. */

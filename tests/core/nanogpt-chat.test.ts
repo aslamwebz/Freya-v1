@@ -300,7 +300,14 @@ describe('the selected model reaches the provider', () => {
     // header, completions path, and the code-owned output ceiling.
     expect(secondCall.headers.authorization).toBe(`Bearer ${SECRET}`)
     expect(secondCall.url).toBe(`${BASE_URL}/chat/completions`)
-    expect(secondCall.body!.max_tokens).toBe(CONVERSATION_LIMITS.maxOutputTokensPerTurn)
+    // The code-owned output ceiling, and specifically the *per-answer* one. A turn that
+    // used no tools made a single call, and that call is one answer — asking the
+    // endpoint for the whole turn allowance (7680, which exists to cover nine lookups
+    // plus an answer) would make every routine question the most expensive call there
+    // is, and would exceed what the Governor authorises in one request.
+    expect(secondCall.body!.max_tokens).toBe(CONVERSATION_LIMITS.maxOutputTokensPerAnswer)
+    expect(CONVERSATION_LIMITS.maxOutputTokensPerAnswer)
+      .toBeLessThan(CONVERSATION_LIMITS.maxOutputTokensPerTurn)
   })
 
   it('refuses a model no configured provider can serve, keeps the old selection, and fails truthfully when the endpoint rejects it', async () => {

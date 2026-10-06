@@ -64,6 +64,18 @@ export interface HostEnv extends NanoGptEnv {
   BRAVE_SEARCH_API_KEY?: string
   FREYA_ALLOW_WEB_SEARCH?: string
   /**
+   * Where the local metasearch daemon is listening.
+   *
+   * Named here because the provider list *prefers* it: a locally-running daemon
+   * needs no credential, so it is asked before any keyed provider. It was missing
+   * from this interface and from every object main built to fill it, which left the
+   * preferred backend unreachable in the shipping app no matter how the machine was
+   * configured — research reported `unconfigured` while a daemon was answering on
+   * the very port named in the environment. A preference that cannot be configured
+   * is not a preference.
+   */
+  FREYA_SEARXNG_URL?: string
+  /**
    * E2E gates. Main-process only, and both must be present before any research
    * fixture is used.
    *

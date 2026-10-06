@@ -297,18 +297,30 @@ describe('the composer adapter keeps its old contract', () => {
     })
   })
 
-  it('opens a fresh search for every search intent', () => {
+  it('opens a session for media discovery and answers questions in conversation', () => {
+    // Media discovery is a gathering task, so it goes to Freya's Eye.
     expect(routePromptIntent('find 5 videos about Laravel queues', { activeEyeSession: false })).toEqual({
       kind: 'eye-new',
       reason: 'media-discovery',
     })
+
+    // A question is a question. This used to open a research session instead, which
+    // meant the shipping window could not reach the search tools at all: the run
+    // reported into a research card and the conversation got no answer.
     expect(routePromptIntent('search the web for the latest Laravel release notes', { activeEyeSession: false })).toEqual({
-      kind: 'eye-new',
-      reason: 'explicit-search',
+      kind: 'chat',
+      reason: 'conversation',
     })
     expect(routePromptIntent('About the roadmap, can you summarise?', { activeEyeSession: false })).toEqual({
       kind: 'chat',
       reason: 'conversation',
+    })
+  })
+
+  it('keeps an explicit Deep Research ask in Deep Research', () => {
+    expect(routePromptIntent('deep research the EU AI Act across multiple sources', { activeEyeSession: false })).toEqual({
+      kind: 'deep-research',
+      reason: 'explicit-deep-research',
     })
   })
 })

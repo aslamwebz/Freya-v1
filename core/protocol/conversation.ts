@@ -15,12 +15,21 @@ import type { ConversationPersistenceMode } from '../conversation/store'
  */
 
 /** One rendered message. The full content, because this is the transcript. */
+import type { MediaItem } from '../media/types'
 export interface ConversationMessageView {
   messageId: string
   role: 'user' | 'assistant'
   content: string
   createdAt: string
   turnId: string
+  /**
+   * What the lookups behind this answer returned, as typed items to draw.
+   *
+   * A mirror field: it arrived from Core with the message and the renderer cannot
+   * write it. Absent when the turn looked nothing up, which is most turns — so a
+   * reader must not treat "absent" as "empty" without saying which it means.
+   */
+  media?: readonly MediaItem[]
 }
 
 export interface ConversationSummaryView {

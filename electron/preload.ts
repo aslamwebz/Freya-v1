@@ -88,6 +88,26 @@ const api = {
    */
   attachmentPick: (): Promise<unknown> => ipcRenderer.invoke('freya:attachment:pick'),
 
+  /**
+   * Fetch a picture to draw, and hand back bytes rather than an address.
+   *
+   * The window names what it wants to see; the main process decides whether it may be
+   * fetched and does the fetching. That asymmetry is the whole point — a window that
+   * fetched its own pictures would be making requests to addresses that came out of a
+   * search result, which is the shape of request that turns a search result into a way
+   * to reach the owner's own network. What comes back is a `data:` URL, which cannot
+   * phone anywhere.
+   *
+   * A refusal is an ordinary answer here, not an exception: a card that cannot be
+   * drawn shows nothing, and a card that draws an error page is worse.
+   */
+  mediaThumbnail: (url: string): Promise<unknown> =>
+    ipcRenderer.invoke('freya:media:thumbnail', boundedMediaUrl(url)),
+
+  /** A document's bytes, for the PDF renderer. Base64, never a path. */
+  mediaDocument: (url: string): Promise<unknown> =>
+    ipcRenderer.invoke('freya:media:document', boundedMediaUrl(url)),
+
   // Frameless-window controls. Each acts on the window that asked.
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('freya:window:minimize'),
   windowMaximize: (): Promise<void> => ipcRenderer.invoke('freya:window:maximize'),
@@ -716,6 +736,9 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'conversation.create',
   'conversation.list',
   'conversation.read',
+  // The sidebar's close button submits this. It was missing here while Core
+  // implemented it, so closing a conversation failed with `unknown command`.
+  'conversation.archive',
   'conversation.turn.submit',
   'conversation.turn.cancel',
   // Model catalogue and selection. A window may ask which text models the
@@ -774,6 +797,17 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'research.start',
   'research.cancel',
   'research.status.read',
+  // Freya's Eye sessions: the same research capability, carried across a
+  // conversation. These were implemented in Core and called by the renderer while
+  // absent from this list, so the Eye route was refused before it could run.
+  'research.session.create',
+  'research.session.list',
+  'research.session.read',
+  'research.session.followup',
+  'research.session.collect',
+  'research.session.pause',
+  'research.session.resume',
+  'research.session.cancel',
 
   // Work. A window may plan and drive work and decide an approval, and that is the
   // whole list. Note what it still cannot do: it cannot name a capability Core does
@@ -1502,6 +1536,18 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     }
 
     case 'conversation.read': {
+      const conversationId = string('conversationId', MAX_ID_CHARS)
+      if (conversationId === null || conversationId === undefined) {
+        return { ok: false, reason: 'conversation id is invalid' }
+      }
+      return { ok: true, payload: { conversationId } }
+    }
+
+    case 'conversation.archive': {
+      // Archiving is the owner tidying their own history. It carries the one id and
+      // nothing else — in particular not a `permanent` or `delete` flag, because a
+      // window that could name the difference could turn "close this" into "erase
+      // this" behind the button's label.
       const conversationId = string('conversationId', MAX_ID_CHARS)
       if (conversationId === null || conversationId === undefined) {
         return { ok: false, reason: 'conversation id is invalid' }
@@ -2383,6 +2429,63 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       return { ok: true, payload: { researchId } }
     }
 
+    /* ------------------------------------------------ Freya's Eye sessions */
+    // The Eye sessions are the same capability as `research.start`, spread over a
+    // conversation: a request, a follow-up, and the lifecycle verbs. They were
+    // missing from `CORE_COMMANDS` while Core and the renderer both already
+    // implemented them, so the composer's Eye route was refused with
+    // `unknown command` and the turn never ran at all.
+    //
+    // Nothing beyond the two strings is forwarded, for the same reason as
+    // `research.start`: iteration counts, budgets and models stay Core's.
+
+    case 'research.session.create': {
+      const request = string('request', MAX_RESEARCH_QUESTION_CHARS)
+      if (request === null || request === undefined) {
+        return { ok: false, reason: 'a search request is required' }
+      }
+      return { ok: true, payload: { request } }
+    }
+
+    case 'research.session.list': {
+      // No payload at all: the list is the whole answer, and a window cannot narrow
+      // it by naming a subset.
+      return { ok: true, payload: {} }
+    }
+
+    case 'research.session.read': {
+      const sessionId = string('sessionId', MAX_ID_CHARS)
+      if (sessionId === null || sessionId === undefined) {
+        return { ok: false, reason: 'a session id is required' }
+      }
+      return { ok: true, payload: { sessionId } }
+    }
+
+    case 'research.session.followup': {
+      const sessionId = string('sessionId', MAX_ID_CHARS)
+      if (sessionId === null || sessionId === undefined) {
+        return { ok: false, reason: 'a session id is required' }
+      }
+      const text = string('text', MAX_RESEARCH_QUESTION_CHARS)
+      if (text === null || text === undefined) {
+        return { ok: false, reason: 'a follow-up is required' }
+      }
+      return { ok: true, payload: { sessionId, text } }
+    }
+
+    // The four lifecycle verbs are the same shape, and share one contract rather
+    // than four copies that can drift.
+    case 'research.session.collect':
+    case 'research.session.pause':
+    case 'research.session.resume':
+    case 'research.session.cancel': {
+      const sessionId = string('sessionId', MAX_ID_CHARS)
+      if (sessionId === null || sessionId === undefined) {
+        return { ok: false, reason: 'a session id is required' }
+      }
+      return { ok: true, payload: { sessionId } }
+    }
+
 
     case 'work.task.create': {
       const title = string('title', WORK_LIMITS.maxLabelChars)
@@ -2671,6 +2774,24 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     // and someone forgets to add a bounded renderer shape at the same time.
     default:
       return { ok: false, reason: 'command has no renderer payload contract' }
+  }
+}
+
+/**
+ * One web address, or nothing.
+ *
+ * Read on the way in so the handler never sees a `file:` path, a `data:` document or a
+ * ten-kilobyte string dressed as a URL. Returning `null` rather than throwing keeps
+ * the refusal in the shape the caller already handles.
+ */
+function boundedMediaUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2_000) return null
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    return parsed.toString()
+  } catch {
+    return null
   }
 }
 

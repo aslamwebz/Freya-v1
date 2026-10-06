@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ElectronCoreHost } from '../../electron/coreHost'
@@ -239,7 +239,116 @@ async function contractBetween(
   return { source, contract }
 }
 
+/**
+ * The names on the preload's allowlist, and nothing else.
+ *
+ * Bounded deliberately. An earlier version of this guard sliced from the
+ * declaration to the end of the file, which also swallowed the `case 'x.y':` labels
+ * in `rendererPayload` — so a command removed from the allowlist was still seen as
+ * allowed and the guard passed. It now stops at the closing bracket, so what it
+ * returns is the list and not the whole file.
+ */
+function allowlistedCommands(source: string): Set<string> {
+  const declaration = source.slice(source.indexOf('const CORE_COMMANDS'))
+  const block = declaration.slice(0, declaration.indexOf('])'))
+  return new Set(
+    [...block.matchAll(/^\s*'([a-z][A-Za-z0-9]*(?:\.[a-zA-Z0-9]+)+)',/gm)].map((match) => match[1]!),
+  )
+}
+
 describe('the renderer bridge refuses what a window should not name', () => {
+  it('reaches every command the renderer actually submits', async () => {
+    // The failure this guards against is not hypothetical. `research.session.*` was
+    // implemented in Core and called by `src/platform/researchClient.ts`, but missing
+    // from `CORE_COMMANDS`, so the preload refused it with `unknown command` and the
+    // composer's Deep Research route could never run: the turn produced no answer at
+    // all, and nothing on screen said why beyond a notice in a composer.
+    //
+    // Three lists have to agree — the renderer's clients, the preload's allowlist and
+    // Core's protocol. Asserting that the renderer cannot name a command the bridge
+    // refuses is the direction that catches this, because a command that exists in two
+    // places and not the third is invisible until a person uses the feature.
+    const preload = await readFile(new URL('../../electron/preload.ts', import.meta.url), 'utf8')
+    const allowed = allowlistedCommands(preload)
+
+    // Every command any renderer client submits, read from the clients themselves
+    // rather than a copy, so adding a call site is what breaks this test. The whole
+    // `src/platform` directory is scanned rather than a hand-picked few, because the
+    // bug was a command missing from one list while present in another, and a list of
+    // three clients would have missed it too.
+    const submitted = new Set<string>()
+    for (const client of await readdir(new URL('../../src/platform/', import.meta.url))) {
+      if (!client.endsWith('.ts')) continue
+      const source = await readFile(new URL(`../../src/platform/${client}`, import.meta.url), 'utf8')
+      for (const match of source.matchAll(/submit\(\s*'([a-z][A-Za-z0-9.]+)'/g)) {
+        submitted.add(match[1]!)
+      }
+    }
+    expect(submitted.size, 'no renderer commands were discovered; the scan is broken')
+      .toBeGreaterThan(10)
+
+    /**
+     * Commands a renderer client may name that the bridge deliberately does not carry
+     * yet, each with the reason. Anything added here is a decision, not a silence: the
+     * point of this list is that "unreachable" is always a choice somebody wrote down.
+     */
+    const STAGED = new Map<string, string>([
+      // The Foundry client exists and Core implements all thirteen commands, but no
+      // screen calls it yet, so nothing a person can click is affected. Wiring the
+      // allowlist before the UI would hand a window thirteen commands it has no use
+      // for; each needs a payload contract of its own when the screen lands.
+      ...[
+        'forge.status.read', 'forge.generate', 'forge.validate', 'forge.install',
+        'forge.enable', 'forge.disable', 'forge.run', 'forge.rollback',
+        'forge.remove', 'forge.approve', 'forge.search', 'forge.export',
+        'forge.detail.read',
+      ].map((command): [string, string] => [command, 'no UI caller yet']),
+    ])
+
+    const unreachable = [...submitted]
+      .filter((command) => !allowed.has(command) && !STAGED.has(command))
+      .sort()
+    expect(
+      unreachable,
+      `the renderer submits these but the preload bridge refuses them, so the feature silently cannot run:\n  ${unreachable.join('\n  ')}`,
+    ).toEqual([])
+  })
+
+  it('never lets a command without a payload contract forward its payload', async () => {
+    // Completeness is the wrong thing to assert here. A command can legitimately be
+    // on the allowlist before its surface exists — the Foundry's thirteen verbs are,
+    // with no screen calling them yet — and demanding a contract for each would only
+    // invite writing one nobody needs.
+    //
+    // The property that actually matters is fail-closed: a command with no contract
+    // must be *refused*, so a payload can never cross the boundary by falling out of
+    // the switch. That is asserted here directly, and the staged names are asserted to
+    // be refused rather than forwarded.
+    const source = await readFile(
+      new URL('../../electron/preload.ts', import.meta.url),
+      'utf8',
+    )
+    const defaultBranch = source.slice(source.indexOf('    default:', source.indexOf('rendererPayload')))
+    expect(defaultBranch.slice(0, 200)).toContain("ok: false")
+    expect(defaultBranch.slice(0, 200)).toContain('no renderer payload contract')
+    // The refusal must not also hand the payload back.
+    expect(defaultBranch.slice(0, 200)).not.toContain('payload: record')
+
+    const listed = [...allowlistedCommands(source)]
+    const contracts = new Set(
+      [...source.matchAll(/case '([a-z][A-Za-z0-9.]+)':/g)].map((match) => match[1]!),
+    )
+    const withoutContract = listed.filter((command) => !contracts.has(command))
+
+    // Not "these must all gain contracts" — "these must all be ones we meant".
+    expect(
+      withoutContract,
+      `these commands are allowlisted with no payload contract, so they are refused at the boundary.\n`
+      + `That is only correct while nothing in the UI calls them; if a screen has landed,\n`
+      + `give the command a contract here:\n  ${withoutContract.join('\n  ')}`,
+    ).toEqual(withoutContract.filter((command) => command.startsWith('forge.')))
+  })
+
   it('does not include grant governance, which Core does support', async () => {
     // Core can create and revoke grants. A window cannot. The list the preload
     // bridge checks is a subset on purpose, so a compromised renderer has no

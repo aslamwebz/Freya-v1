@@ -20,3 +20,10 @@ release/
 
 # Local design/source references. Keep on the developer machine; never commit.
 References/
+
+# Visible-acceptance evidence. Screenshots and per-run results are for the person
+# watching the run, not for the repository; `artifacts/acceptance.env` is this
+# harness's own settings and may hold a credential.
+artifacts/live-visible/
+artifacts/*.png
+artifacts/acceptance.env

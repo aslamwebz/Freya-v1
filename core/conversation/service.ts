@@ -1,3 +1,4 @@
+import type { MediaItem } from '../media/types'
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
 import type { ModelGateway } from '../model/gateway'
@@ -455,6 +456,7 @@ function toMessageView(message: {
   content: string
   createdAt: string
   turnId: string
+  media?: readonly MediaItem[]
 }): ConversationMessageView {
   return {
     messageId: message.messageId,
@@ -462,6 +464,10 @@ function toMessageView(message: {
     content: message.content,
     createdAt: message.createdAt,
     turnId: message.turnId,
+    // The key is omitted rather than set to an empty list when there is nothing, so
+    // "no lookup found anything" and "a lookup found an empty list" stay distinct all
+    // the way to the renderer.
+    ...(message.media === undefined || message.media.length === 0 ? {} : { media: message.media }),
   }
 }
 

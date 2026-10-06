@@ -53,10 +53,16 @@ describe('global composer intent routing', () => {
     expect(routePromptIntent('find the bug in this PHP function', { activeEyeSession: false }).kind).toBe('chat')
   })
 
-  it('routes clearly fresh discovery requests to live search', () => {
+  it('answers a fresh-information question in the conversation, not in a research session', () => {
+    // The routing is not cosmetic: `eye-new` opens a multi-iteration session whose
+    // result is reported in a research card, so a question that needed looking up
+    // produced no answer in the conversation and the owner had nothing to read.
     expect(routePromptIntent('find the latest Laravel news', { activeEyeSession: false })).toEqual({
-      kind: 'eye-new',
-      reason: 'explicit-search',
+      kind: 'chat',
+      reason: 'conversation',
     })
+    expect(routePromptIntent('what is the current official Laravel version?', { activeEyeSession: false }).kind).toBe('chat')
+    expect(routePromptIntent('use your own browser to open the Laravel docs on queues', { activeEyeSession: false }).kind)
+      .toBe('chat')
   })
 })

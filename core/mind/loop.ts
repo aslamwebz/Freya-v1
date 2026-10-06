@@ -184,7 +184,15 @@ export async function runToolLoop(
       // they meant before the loop existed. Continuations are suffixed so each is
       // separately accounted for and separately cancellable, and so usage
       // accounting can attribute tokens to the call that produced them.
-      cognitionRequestId: iteration === 0 ? deps.turnId : `${deps.turnId}#${iteration}`,
+      // The separator is `:`, not `#`, and that is load-bearing rather than
+      // stylistic. A `cognition.requested` event's `requestId` is validated by
+      // `isEventId`, whose pattern is `[A-Za-z0-9._:-]` — so an id containing `#`
+      // is an event Core writes and then cannot read back. The next launch finds
+      // its own journal corrupt, quarantines it, and refuses every command, which
+      // is exactly what happened to a real profile. `:` is already the house
+      // separator for "the same thing, attempt N" (`wakeId:attempt` in the life
+      // loop, `scheduleId:repeats` in the attention engine) and is valid in an id.
+      cognitionRequestId: iteration === 0 ? deps.turnId : `${deps.turnId}:${iteration}`,
       requestedModel: deps.selectedModel(),
       goalId: null,
       signal: deps.signal,

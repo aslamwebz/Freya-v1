@@ -879,10 +879,11 @@ async function turnHarness(options: TurnHarnessOptions) {
 }
 
 describe('the turn the spec describes: search, open the official result, say what it says', () => {
-  it('fits inside the existing ceiling without raising it', async () => {
-    // Three provider calls and two tool executions is exactly `maxProviderCalls` and
-    // `maxToolCalls` — no ceiling was raised to make this work, and the search and the
-    // browser read are two separately-gated capabilities rather than one tool spending two.
+  it('answers a search-then-read turn inside the turn ceiling', async () => {
+    // Two separately-gated capabilities rather than one tool spending twice, and a turn
+    // that needs a search and a page read now has room for both plus a follow-up: the
+    // ceiling is ten calls, and this uses three. The bound that matters is the money,
+    // asserted below — the sum of what the calls reserved cannot exceed the ceiling.
     const h = await turnHarness({
       script: [
         toolCall('web_search', { query: 'the official page' }),
@@ -899,12 +900,18 @@ describe('the turn the spec describes: search, open the official result, say wha
     })
 
     expect(outcome.outcome).toBe('completed')
-    expect(h.provider.calls).toBe(MIND_TOOL_LIMITS.maxProviderCalls)
+    // Search, read, answer — and then it *stopped*, which is the part worth asserting.
+    // The old ceiling made this look like it had run out of room; it had simply finished.
+    expect(h.provider.calls).toBe(3)
+    expect(MIND_TOOL_LIMITS.maxProviderCalls).toBeGreaterThan(3)
     expect(h.grants()[0]?.maxCalls).toBe(MIND_TOOL_LIMITS.maxProviderCalls)
 
-    // The grant's whole output allowance is still the turn's existing ceiling, so the sum
-    // of the three calls did not quietly multiply what a turn can cost.
+    // The grant's whole output allowance is the turn's ceiling, and what the three calls
+    // actually reserved fits inside it. This is the invariant that a larger ceiling must
+    // not quietly break: more calls, not more money.
     expect(h.grants()[0]?.maxOutputTokens).toBe(CONVERSATION_LIMITS.maxOutputTokensPerTurn)
+    expect(h.grants()[0]?.usage.outputTokenBudgetReserved)
+      .toBeLessThanOrEqual(CONVERSATION_LIMITS.maxOutputTokensPerTurn)
 
     const answer = outcome.assistantMessage?.content ?? ''
     expect(answer).toContain(PAGE)
@@ -953,13 +960,13 @@ describe('the turn the spec describes: search, open the official result, say wha
     expect(answer).toContain('Nothing in the answer above came from a search')
   })
 
-  it('spends its whole allowance on two lookups and then answers, rather than starting a third', async () => {
+  it('runs two lookups and then answers, rather than opening a third', async () => {
     const port = scriptedPort()
     const h = await turnHarness({
       script: [
         toolCall('browser_read', { url: PAGE }),
         toolCall('browser_read', { url: 'https://example.org/other' }),
-        'I ran out of room to open the second page.',
+        'Both pages opened.',
       ],
       browser: port,
     })
@@ -967,10 +974,28 @@ describe('the turn the spec describes: search, open the official result, say wha
     const outcome = await h.mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 't1', text: 'open both pages' })
 
     expect(outcome.outcome).toBe('completed')
-    // Both executions ran; a third would have needed a fourth provider call, which the
-    // ceiling does not allow, so the loop answered instead of widening anything.
-    expect(h.provider.calls).toBe(MIND_TOOL_LIMITS.maxProviderCalls)
+    // Both executions ran and the third call produced the answer. With room left in the
+    // ceiling, the reason the loop stopped is that the model answered — which is the
+    // behaviour that matters, and the reason the ceiling can be raised safely.
+    expect(h.provider.calls).toBe(3)
     expect(port.requests.filter((request) => request.command === 'session.open')).toHaveLength(2)
+  })
+
+  it('still stops a model that will not stop asking', async () => {
+    // The other half of raising the ceiling: a bigger allowance must not mean an
+    // unbounded turn. A script that only ever asks for a tool has to end, truthfully.
+    const port = scriptedPort()
+    const h = await turnHarness({
+      script: [toolCall('browser_read', { url: PAGE })],
+      browser: port,
+    })
+
+    const outcome = await h.mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 't1', text: 'keep reading' })
+
+    expect(outcome.outcome).toBe('failed')
+    expect(outcome.reason).toMatch(/allowed for one turn/i)
+    // Exactly the ceiling, never one more.
+    expect(h.provider.calls).toBe(MIND_TOOL_LIMITS.maxProviderCalls)
   })
 
   it('reports honestly when a browser read is requested but the owner has no such tool', async () => {

@@ -45,4 +45,16 @@ export default tseslint.config(
       'no-console': 'off',
     },
   },
+  {
+    // A Playwright driver is two programs in one file: a Node CLI that launches
+    // Electron, and browser-context callbacks handed to `page.evaluate`, where
+    // `document` and `window` are the real globals. Declaring both is what the
+    // code actually is; without this the driver cannot be linted at all, and the
+    // alternative — silencing `no-undef` file-wide — would hide genuine typos in
+    // the Node half.
+    files: ['scripts/chat-acceptance-visible.mjs'],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser },
+    },
+  },
 )

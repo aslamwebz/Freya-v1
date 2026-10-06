@@ -399,9 +399,9 @@ async function main(): Promise<void> {
     tools: [
       createWebSearchTool({
         now: () => new Date(),
-        searchWeb: async (query, signal) => {
+        searchWeb: async (query, vertical, signal) => {
           searched.push(query)
-          return searcher.searchWeb(query, { limit: 6, signal, vertical: 'web' })
+          return searcher.searchWeb(query, { limit: 6, signal, vertical })
         },
       }),
       createBrowserTaskTool({

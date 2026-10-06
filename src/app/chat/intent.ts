@@ -285,7 +285,7 @@ function isFreshInformationRequest(lower: string): boolean {
 
 export type PromptRoute =
   | { readonly kind: 'chat'; readonly reason: 'conversation' | 'ambiguous' }
-  | { readonly kind: 'eye-new'; readonly reason: 'explicit-search' | 'media-discovery' | 'fresh-information' }
+  | { readonly kind: 'eye-new'; readonly reason: 'media-discovery' }
   | { readonly kind: 'eye-follow-up'; readonly reason: 'search-refinement' }
   | { readonly kind: 'deep-research'; readonly reason: 'explicit-deep-research' }
 
@@ -327,7 +327,20 @@ export function routePromptIntent(
     case 'web_search':
     case 'document_search':
     case 'native_browser_task':
-      return { kind: 'eye-new', reason: 'explicit-search' }
+      // These answer in conversation rather than opening a research session.
+      //
+      // They used to route to Freya's Eye too, which made the chat-and-tools path
+      // unreachable from the shipping window: every search became a multi-iteration
+      // research run, which reported its findings in a research card and produced no
+      // answer in the conversation at all. So a person asking a question that needed
+      // looking up got a panel and no reply, and the citations and the "what Freya
+      // did for this answer" footer — the things that make an answer auditable — were
+      // never written.
+      //
+      // Freya's Eye is for *gathering*, so it keeps what it is good at: media
+      // discovery, and anything the owner asked for explicitly. A question is a
+      // question, and it gets an answer.
+      return { kind: 'chat', reason: 'conversation' }
   }
 }
 

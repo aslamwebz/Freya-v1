@@ -238,8 +238,12 @@ function liveSearchTool(
   })
   return createWebSearchTool({
     now: () => T0,
-    searchWeb: async (query: string, signal?: AbortSignal) => {
+    searchWeb: async (query: string, askedVertical?: unknown, signal?: AbortSignal) => {
       log.push(query)
+      // The tool now names the vertical; this harness fixed one when it built the tool,
+      // so a request for another is recorded rather than quietly rewritten.
+      const wanted = (askedVertical ?? vertical) as SearchVertical
+      if (wanted !== vertical) throw new Error(`this harness searches ${vertical}, not ${wanted}`)
       const results: SearchResult[] = await searcher.searchWeb(query, { limit: 6, signal, vertical })
       for (const result of results) capabilities.push(result.url)
       return results

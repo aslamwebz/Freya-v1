@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { EventFabric } from '../../../core/events/fabric'
+import { isEventId, validateDurableEvent } from '../../../core/events/validate'
 import type { EventStore } from '../../../core/events/store'
 import type { AnyCoreEvent } from '../../../core/events/envelope'
 import { MemoryConversationStore } from '../../../core/conversation/memory-store'
@@ -154,8 +155,10 @@ function harnessWithGuard(
 
 async function harness(options: HarnessOptions & { guard?: Guard } = {}) {
   const provider = new ScriptedProvider(options.script ?? ['a plain answer'])
+  const journal = memoryEventStore()
+  const store_ = journal.readAll
   const fabric = await EventFabric.open({
-    store: memoryEventStore(),
+    store: journal,
     now: () => T0,
     newId: (() => {
       let n = 0
@@ -208,6 +211,9 @@ async function harness(options: HarnessOptions & { guard?: Guard } = {}) {
     gateway,
     registry,
     tools,
+    /** Everything Core appended, for assertions about what the journal now holds. */
+    events: async () => store_(),
+    store_,
     grants: () => authority.grants(),
     setStopped: (value: boolean) => {
       stopped = value
@@ -1150,7 +1156,7 @@ describe('the search tool is an adapter, not a second search system', () => {
     const controller = new AbortController()
     let sawSignal = false
     const tool = createWebSearchTool({
-      searchWeb: async (_query: string, signal?: AbortSignal) => {
+      searchWeb: async (_query: string, _vertical: unknown, signal?: AbortSignal) => {
         sawSignal = signal !== undefined
         return [result()]
       },
@@ -1172,3 +1178,201 @@ describe('the search tool is an adapter, not a second search system', () => {
     expect(tool.capability).toBe('search.web')
   })
 })
+
+/* -------------------------------------------------- the journal round-trip */
+
+/**
+ * Core must be able to read back everything it writes.
+ *
+ * This is the invariant a real profile lost. A turn that needed a continuation
+ * built its cognition request id as `${turnId}#${iteration}`, but `isEventId`
+ * permits only `[A-Za-z0-9._:-]`. Core therefore *wrote* a `cognition.requested`
+ * event that its own validator rejected; on the next launch it found the journal
+ * corrupt, quarantined the whole file, and refused every command — which is how a
+ * working profile became permanently degraded.
+ *
+ * Asserting the id is valid would only test the constant. What is asserted here is
+ * the property that actually broke: every event the loop appends, replayed through
+ * the real validator in sequence order, is accepted.
+ */
+describe('the journal a tool-using turn writes', () => {
+  it('replays through the real validator, so Core can read its own log back', async () => {
+    const h = await harness({
+      script: [toolCall('web_search', { query: 'laravel failed jobs' }), 'the answer with a source [1]'],
+    })
+
+    const result = await h.mind.runTurn({
+      conversationId: CONVERSATION_ID,
+      turnId: 'turn-round-trip',
+      text: 'Search for how Laravel retries failed jobs.',
+    })
+    expect(result.outcome).toBe('completed')
+
+    const written = await h.events()
+    // The turn must actually have taken the continuation path, or this proves nothing.
+    expect(
+      written.filter((event) => event.type === 'cognition.requested').length,
+      'the turn did not request cognition more than once, so no continuation id was built',
+    ).toBeGreaterThan(1)
+
+    let previous = 0
+    const rejected: string[] = []
+    for (const event of written) {
+      const verdict = validateDurableEvent(event, previous)
+      if (!verdict.ok) rejected.push(`seq ${event.sequence} ${event.type}: ${verdict.reason}`)
+      previous = event.sequence
+    }
+    expect(rejected, `Core wrote events it cannot read back:\n  ${rejected.join('\n  ')}`).toEqual([])
+  })
+
+  it('builds continuation request ids that are valid event ids', async () => {
+    const h = await harness({
+      script: [toolCall('web_search', { query: 'a continuation' }), 'the answer [1]'],
+    })
+    await h.mind.runTurn({
+      conversationId: CONVERSATION_ID,
+      turnId: 'turn-id-shape',
+      text: 'Search for something.',
+    })
+
+    const ids = (await h.events())
+      .filter((event) => event.type === 'cognition.requested')
+      .map((event) => (event.payload as { requestId?: unknown }).requestId)
+
+    expect(ids.length).toBeGreaterThan(1)
+    for (const id of ids) {
+      // The `#` that broke this is asserted against by name, so a regression says
+      // what is wrong rather than only that something is.
+      expect(String(id)).not.toContain('#')
+      expect(isEventId(id), `${String(id)} is not a valid event id`).toBe(true)
+    }
+  })
+})
+
+/* ------------------------------------------------- media on a stored answer */
+
+/**
+ * A turn that looked something up stores what it found.
+ *
+ * The cards a transcript draws come from here, and this is the whole chain in one
+ * test: a search seam returning media, the tool carrying it, the observation keeping
+ * it, and the stored assistant message holding it as typed items. The last step is
+ * the one that would be easy to lose — media is the sort of thing that works in a
+ * live view and quietly vanishes on reload, because the live view has the observation
+ * in hand and the reload does not.
+ */
+describe('media a turn found, on the answer it stored', () => {
+  it('is stored on the assistant message as typed items', async () => {
+    const h = await harness({
+      script: [
+        toolCall('web_search', { query: 'james webb images', type: 'images' }),
+        'here are some pictures [1]',
+      ],
+      tools: [createWebSearchTool({
+        searchWeb: async () => [{
+          title: 'Webb first light',
+          url: 'https://science.nasa.gov/webb',
+          snippet: 'the first images',
+          sourceDomain: 'science.nasa.gov',
+          mediaUrl: 'https://images-assets.nasa.gov/image/PIA12348/PIA12348~thumb.jpg',
+          thumbnailUrl: 'https://images-assets.nasa.gov/image/PIA12348/PIA12348~thumb.jpg',
+          vertical: 'images',
+          retrievedAt: null,
+        }],
+        now: () => T0,
+      })],
+    })
+
+    const outcome = await h.mind.runTurn({
+      conversationId: CONVERSATION_ID,
+      turnId: 'turn-media',
+      text: 'Show me pictures of the Webb telescope.',
+    })
+    expect(outcome.outcome).toBe('completed')
+
+    const record = await h.store.readConversation(CONVERSATION_ID)
+    const answer = record?.messages.find((message) => message.role === 'assistant')
+    expect(answer?.media).toHaveLength(1)
+    expect(answer?.media?.[0]).toMatchObject({
+      kind: 'image',
+      url: 'https://images-assets.nasa.gov/image/PIA12348/PIA12348~thumb.jpg',
+      page: 'https://science.nasa.gov/webb',
+      host: 'science.nasa.gov',
+    })
+    // A duration nobody stated must not appear on a picture card.
+    expect(answer?.media?.[0]?.duration).toBeNull()
+  })
+
+  it('stores no media key at all on a turn that looked nothing up', async () => {
+    const h = await harness({ script: ['a plain answer'] })
+    await h.mind.runTurn({
+      conversationId: CONVERSATION_ID,
+      turnId: 'turn-no-media',
+      text: 'What is a queue?',
+    })
+    const record = await h.store.readConversation(CONVERSATION_ID)
+    const answer = record?.messages.find((message) => message.role === 'assistant')
+    // Absent rather than empty: "nothing was found" and "an empty list of things" are
+    // different claims and a reader should not have to guess which one this is.
+    expect(answer?.media).toBeUndefined()
+  })
+})
+
+describe('the search tool and what it is asked for', () => {
+  it('searches the vertical the model named', async () => {
+    // This is the reason the tool takes a vertical at all. Asked for pictures and given
+    // only the web index, an image request returned articles *about* the subject — and
+    // the model, having no way to ask for pictures, told the owner it had no image
+    // tool. The card then had nothing to draw, and the honest answer was an empty
+    // transcript rather than a wrong picture.
+    const asked: string[] = []
+    const tool = createWebSearchTool({
+      searchWeb: async (_query: string, vertical: string) => {
+        asked.push(vertical)
+        return [result({ vertical, mediaUrl: 'https://cdn.example/a.jpg' })]
+      },
+      now: () => T0,
+    })
+
+    for (const type of ['images', 'videos', undefined]) {
+      await tool.run({
+        arguments: type === undefined
+          ? { query: 'webb telescope' }
+          : { query: 'webb telescope', type },
+        signal: new AbortController().signal,
+      })
+    }
+
+    expect(asked).toEqual(['images', 'videos', 'web'])
+  })
+
+  it('reads the words a model actually uses for a kind', async () => {
+    const asked: string[] = []
+    const tool = createWebSearchTool({
+      searchWeb: async (_query: string, vertical: string) => {
+        asked.push(vertical)
+        return []
+      },
+      now: () => T0,
+    })
+    for (const type of ['image', 'photo', 'pdf', 'document', 'clip']) {
+      await tool.run({ arguments: { query: 'q', type }, signal: new AbortController().signal })
+    }
+    expect(asked).toEqual(['images', 'images', 'documents', 'documents', 'videos'])
+  })
+
+  it('falls back to the web rather than discarding a good query', async () => {
+    const asked: string[] = []
+    const tool = createWebSearchTool({
+      searchWeb: async (_query: string, vertical: string) => {
+        asked.push(vertical)
+        return []
+      },
+      now: () => T0,
+    })
+    // One bad adjective must not throw away a query the owner actually typed.
+    await tool.run({ arguments: { query: 'queues', type: 'interpretive dance' }, signal: new AbortController().signal })
+    expect(asked).toEqual(['web'])
+  })
+})
+

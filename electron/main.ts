@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, screen, shell, safeStorage } from 'electro
 import { join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
+import { fetchDocumentBytes, fetchThumbnail } from './media'
 import { ElectronCoreHost, type HostEnv, type DeviceHandsHostOptions } from './coreHost'
 import {
   createElectronDeviceHandsEffects,
@@ -520,6 +521,9 @@ function currentHostEnv(): HostEnv {
     FREYA_ALLOW_LIVE_MODEL: process.env.FREYA_ALLOW_LIVE_MODEL,
     BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY,
     FREYA_ALLOW_WEB_SEARCH: process.env.FREYA_ALLOW_WEB_SEARCH,
+    // The preferred backend. It has to be named here as well as on `HostEnv`, or the
+    // provider that is asked first can never be given a URL to ask.
+    FREYA_SEARXNG_URL: process.env.FREYA_SEARXNG_URL,
     FREYA_E2E: process.env.FREYA_E2E,
     FREYA_E2E_RESEARCH: process.env.FREYA_E2E_RESEARCH,
   }
@@ -1098,6 +1102,21 @@ function registerIpc(): void {
   // ever open a dialog parented to itself. There is deliberately no companion
   // channel that accepts a path from the renderer — that would be an arbitrary
   // filesystem read dressed as an attachment.
+  // A picture a card draws. The window asked; the main process fetched; the bytes came
+  // back as a data: URL. `null` means the window sent something that is not an ordinary
+  // web address, which is a refusal rather than an error worth a dialog.
+  ipcMain.handle('freya:media:thumbnail', async (_event, url: unknown) => {
+    if (typeof url !== 'string') {
+      return { ok: false, dataUrl: null, bytes: 0, format: null, claimedType: null, reason: 'that is not an address' }
+    }
+    return fetchThumbnail(url)
+  })
+
+  ipcMain.handle('freya:media:document', async (_event, url: unknown) => {
+    if (typeof url !== 'string') return { ok: false, reason: 'that is not an address' }
+    return fetchDocumentBytes(url)
+  })
+
   ipcMain.handle('freya:attachment:pick', async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender)
     if (owner === null) {
@@ -1354,6 +1373,7 @@ app.whenReady().then(async () => {
         // provider object it cannot inspect.
         BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY,
         FREYA_ALLOW_WEB_SEARCH: process.env.FREYA_ALLOW_WEB_SEARCH,
+        FREYA_SEARXNG_URL: process.env.FREYA_SEARXNG_URL,
         // Gates for the offline research fixtures. Both are required, and they are
         // read here in main rather than accepted from a window, so no renderer can
         // put a production build into fixture mode.

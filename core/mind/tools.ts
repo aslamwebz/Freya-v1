@@ -1,4 +1,5 @@
 import type { ModelMessage } from '../model/provider'
+import type { SearchVertical } from '../research/types'
 import type { Capability } from '../protocol/core-protocol'
 import type { Guard, Principal } from '../security/guard'
 
@@ -53,21 +54,30 @@ export const MIND_TOOL_LIMITS = Object.freeze({
    * How many provider requests one turn may make in total, including the first.
    *
    * **The iteration ceiling.** Two is the minimum that makes a tool loop mean
-   * anything (ask, then answer), and three is chosen because it allows one
-   * question that genuinely needs two lookups while still being a number a person
-   * could state out loud. A model that asks for a tool on the third iteration
-   * gets no fourth: the loop stops and reports that it ran out of room.
+   * anything (ask, then answer). It was three, chosen so a person could state it out
+   * loud — and that turned out to be the wrong trade. Three means one search and one
+   * page read, which is not enough to answer most questions honestly: a refusal on
+   * either lookup left no room to try anything else, so a turn that hit the ceiling
+   * answered from whatever the first search happened to return rather than from the
+   * source it had been asked about.
+   *
+   * Ten buys room for a real line of enquiry — search, open, follow a link, read a
+   * second page — and still stops. It is a bound, not a budget to spend: a model that
+   * keeps asking gets nothing on the eleventh, and the transcript says so.
    */
-  maxProviderCalls: 3,
+  maxProviderCalls: 10,
 
   /**
    * How many tool bodies one turn may actually execute.
    *
-   * One below the call ceiling, because the last call is always the answer. A
-   * Guard denial and a malformed request still cost a provider call but execute
-   * nothing, so this is a second, independent bound rather than a restatement.
+   * The same number as the call ceiling, deliberately, and the alternation in the loop
+   * is what actually bounds it: a body can only run between two provider requests, so
+   * ten requests admit at most nine bodies and the last one is always the answer. A
+   * separate constant rather than `maxProviderCalls - 1` because a body can also be
+   * refused or malformed — those cost a call and execute nothing — and a turn should
+   * not be able to run out of room merely by asking badly.
    */
-  maxToolCalls: 2,
+  maxToolCalls: 10,
 
   /** Results kept from one search. Enough to answer from; not a crawl. */
   maxResultsPerTool: 5,
@@ -137,13 +147,20 @@ export const MIND_TOOL_LIMITS = Object.freeze({
    * the call that truncated, which is the worst possible place for it: the tool
    * ran, the evidence was in hand, and the answer was cut off anyway.
    *
-   * 1024 is comfortably above a measured answer and below the 3072 turn ceiling,
-   * which `budgetFor` splits as `1024 + 1024 + 1024`. The sum is exactly the
-   * per-turn ceiling and not a multiple of it, because
-   * `outputTokenBudgetReserved` is authorisation arithmetic taken before the
-   * call and never released.
+   * 512 rather than 1024, because the continuation count is now nine rather than two
+   * and the two numbers cannot both stay put. A measured answer grounded in evidence
+   * costs ~414 output tokens, so 512 leaves headroom over that; at 1024 the nine
+   * continuations alone wanted 9216 tokens against a 3072 turn ceiling, which made
+   * `budgetFor` hand the *first* call a single token and the turn was refused before it
+   * began. A continuation that cannot be answered from evidence is a continuation the
+   * model should not have asked for.
+   *
+   * `maxOutputTokensPerTurn` is raised to match, so the schedule divides rather than
+   * multiplies: `3072 + 9 x 512 = 7680`, the sum of the whole turn. An ordinary turn
+   * still reserves 3072 and costs what it always cost — the larger ceiling is only
+   * reachable by a turn that really does use nine lookups.
    */
-  followUpOutputTokens: 1_024,
+  followUpOutputTokens: 512,
 })
 
 /* ------------------------------------------------------------- observations */
@@ -165,6 +182,20 @@ export interface ToolSource {
   /** 1-based, so `[1]` in an answer means exactly one thing. */
   readonly rank: number
   readonly retrievedAt: string | null
+  /**
+   * The media itself, when the lookup returned some.
+   *
+   * Carried as data beside the citation rather than left inside the snippet, because a
+   * card needs an address to fetch and a duration to print. Absent for a lookup that
+   * found none — which is most lookups — so a reader must treat every one of these as
+   * optional rather than as an empty promise.
+   */
+  readonly mediaUrl?: string | null
+  readonly thumbnailUrl?: string | null
+  /** Which vertical produced the row, so a card can be an image or a video honestly. */
+  readonly vertical?: string
+  /** Runtime as the source stated it. Not parsed, not reformatted, or absent. */
+  readonly duration?: string | null
 }
 
 /**
@@ -770,9 +801,24 @@ export function renderToolFooter(steps: readonly ToolStepRecord[], observations:
  * remote input even when the code that fetched them was ours.
  */
 export function createWebSearchTool(options: {
-  readonly searchWeb: (query: string, signal?: AbortSignal) => Promise<readonly unknown[]>
+  /**
+   * Runs one query in one vertical.
+   *
+   * The vertical is named rather than implied because the model chooses it, and it
+   * cannot choose what it is not offered: without this the tool could only ever search
+   * the web, so "find me pictures of the telescope" came back as links to pages *about*
+   * telescopes — and the model, having no image tool, said so rather than inventing
+   * one. Asking for images and asking for pages are different searches with different
+   * results, and only the first returns something a card can draw.
+   */
+  readonly searchWeb: (
+    query: string,
+    vertical: SearchVertical,
+    signal?: AbortSignal,
+  ) => Promise<readonly unknown[]>
   readonly now?: () => Date
   readonly maxResults?: number
+  readonly verticals?: readonly SearchVertical[]
 }): MindTool {
   const now = options.now ?? (() => new Date())
   const maxResults = Math.min(options.maxResults ?? MIND_TOOL_LIMITS.maxResultsPerTool, MIND_TOOL_LIMITS.maxResultsPerTool)
@@ -780,13 +826,22 @@ export function createWebSearchTool(options: {
   return {
     name: 'web_search',
     description:
-      'Search the public web and return ranked results with their titles, URLs and snippets.',
+      'Search the public web and return ranked results with their titles, URLs and snippets. '
+      + 'Name the kind of thing being looked for, so the right index is searched.',
     capability: 'search.web',
-    parameters: [{ name: 'query', description: 'the search query', required: true }],
+    parameters: [
+      { name: 'query', description: 'the search query', required: true },
+      {
+        name: 'type',
+        description: 'what to look for: web (default), images, videos or documents',
+        required: false,
+      },
+    ],
     async run(request) {
       const query = (request.arguments['query'] ?? '').trim()
       if (query.length === 0) throw new Error('the search query was empty')
-      const rows = await options.searchWeb(query, request.signal)
+      const vertical = readVertical(request.arguments['type'], options.verticals ?? DEFAULT_VERTICALS)
+      const rows = await options.searchWeb(query, vertical, request.signal)
       const at = now().toISOString()
       const results: ToolSource[] = []
       for (const row of rows.slice(0, maxResults)) {
@@ -796,12 +851,35 @@ export function createWebSearchTool(options: {
       return {
         summary:
           results.length === 0
-            ? `The search for "${query}" returned nothing.`
-            : `The search for "${query}" returned ${results.length} result${results.length === 1 ? '' : 's'}.`,
+            ? `The ${vertical} search for "${query}" returned nothing.`
+            : `The ${vertical} search for "${query}" returned ${results.length} result${results.length === 1 ? '' : 's'}.`,
         sources: results,
       }
     },
   }
+}
+
+
+/** The verticals a search may name, in the words the model is offered. */
+const DEFAULT_VERTICALS = ['web', 'images', 'videos', 'documents'] as const satisfies readonly SearchVertical[]
+
+/**
+ * The vertical a request asked for, or `web`.
+ *
+ * An unknown word is `web` rather than a refusal: the model naming a kind this build
+ * does not have should still get an answer, and the alternative — throwing away a
+ * perfectly good query because of one bad adjective — helps nobody.
+ */
+function readVertical(value: unknown, allowed: readonly SearchVertical[]): SearchVertical {
+  if (typeof value !== 'string') return 'web'
+  const asked = value.trim().toLowerCase()
+  const match = allowed.find((vertical) => vertical === asked)
+  if (match !== undefined) return match
+  // A couple of words people and models both reach for, mapped rather than refused.
+  if (asked === 'image' || asked === 'picture' || asked === 'photo') return 'images'
+  if (asked === 'video' || asked === 'clip') return 'videos'
+  if (asked === 'document' || asked === 'pdf' || asked === 'file') return 'documents'
+  return 'web'
 }
 
 /** Narrow one unknown row to a bounded, linkable source. Or null. */
@@ -818,6 +896,14 @@ function toSource(row: unknown, rank: number, retrievedAt: string): ToolSource |
   const snippet = typeof record['snippet'] === 'string' ? record['snippet'] : ''
   const domain = typeof record['sourceDomain'] === 'string' ? record['sourceDomain'] : safeUrl
 
+  // The media addresses go through the same `http`-only gate as the page URL. A
+  // `data:` or `javascript:` "thumbnail" is remote input wearing an image's clothes,
+  // and a card is exactly the place where it would be handed to something that renders.
+  const mediaUrl = optionalHttpUrl(record['mediaUrl'])
+  const thumbnailUrl = optionalHttpUrl(record['thumbnailUrl'])
+  const vertical = typeof record['vertical'] === 'string' ? record['vertical'] : undefined
+  const duration = typeof record['duration'] === 'string' ? record['duration'] : null
+
   return {
     title: sanitiseUntrustedText(title, MIND_TOOL_LIMITS.maxTitleChars),
     url: safeUrl,
@@ -825,7 +911,17 @@ function toSource(row: unknown, rank: number, retrievedAt: string): ToolSource |
     snippet: sanitiseUntrustedText(snippet, MIND_TOOL_LIMITS.maxSnippetChars),
     rank,
     retrievedAt,
+    ...(mediaUrl === null ? {} : { mediaUrl }),
+    ...(thumbnailUrl === null ? {} : { thumbnailUrl }),
+    ...(vertical === undefined ? {} : { vertical }),
+    duration,
   }
+}
+
+/** An address that is either absent or an ordinary web address. Never invented. */
+function optionalHttpUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  return safeHttpUrl(value)
 }
 
 /**
@@ -862,6 +958,12 @@ function boundSources(sources: readonly ToolSource[]): ToolSource[] {
     if (typeof source !== 'object' || source === null) continue
     const url = safeHttpUrl(source.url)
     if (url === null) continue
+    // The media fields survive the bound, re-gated rather than trusted: this is the
+    // last pass over a source before it is stored on a message, and a source that
+    // reached here from a provider has already been through `toSource` but not
+    // through anybody who checked the addresses again.
+    const mediaUrl = optionalHttpUrl(source.mediaUrl)
+    const thumbnailUrl = optionalHttpUrl(source.thumbnailUrl)
     out.push({
       title: sanitiseUntrustedText(source.title, MIND_TOOL_LIMITS.maxTitleChars),
       url,
@@ -869,6 +971,10 @@ function boundSources(sources: readonly ToolSource[]): ToolSource[] {
       snippet: sanitiseUntrustedText(source.snippet, MIND_TOOL_LIMITS.maxSnippetChars),
       rank: out.length + 1,
       retrievedAt: source.retrievedAt ?? null,
+      ...(mediaUrl === null ? {} : { mediaUrl }),
+      ...(thumbnailUrl === null ? {} : { thumbnailUrl }),
+      ...(typeof source.vertical === 'string' ? { vertical: source.vertical } : {}),
+      duration: typeof source.duration === 'string' ? source.duration : null,
     })
   }
   return out

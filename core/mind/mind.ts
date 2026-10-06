@@ -31,7 +31,9 @@ import {
 } from './expression'
 import type { CueKind, CueUsageLedger, InteractionFact, RelationshipItem } from '../personality/types'
 import { runToolLoop, type ToolIteration } from './loop'
-import { MIND_TOOL_LIMITS, renderToolFooter, type MindToolRegistry } from './tools'
+import { MIND_TOOL_LIMITS, renderToolFooter, type MindToolRegistry, type ToolObservation } from './tools'
+import { mediaFromObservations } from '../media/collect'
+import type { MediaItem } from '../media/types'
 
 /**
  * The Mind.
@@ -479,6 +481,18 @@ export interface OwnerMessageEvent {
   readonly endedAt: string
   /** The gateway's own account of contact. Never inferred from the outcome. */
   readonly providerContacted: boolean
+}
+
+/**
+ * The `media` field for a stored answer, or nothing at all.
+ *
+ * Spread rather than assigned, so a turn that looked nothing up stores no `media` key
+ * at all instead of an empty array — the difference between "there was nothing" and
+ * "there was an empty list", which a later reader cannot otherwise tell apart.
+ */
+function mediaField(observations: readonly ToolObservation[]): { media?: readonly MediaItem[] } {
+  const media = mediaFromObservations(observations)
+  return media.length === 0 ? {} : { media }
 }
 
 export class MindService {
@@ -958,6 +972,9 @@ export class MindService {
         content: cognition.text,
         createdAt: endedAt,
         turnId,
+        // What the lookups really returned, kept as typed items beside the prose. The
+        // answer is the model's account of the search; this is the search.
+        ...mediaField(cognition.steps.map((iteration) => iteration.observation)),
       }
       try {
         await this.store.appendMessage(assistantMessage)
@@ -1060,7 +1077,13 @@ export class MindService {
         kind: 'user_turn',
         prompt: input.messages.map((m) => m.content).join('\n\n'),
         messages: input.messages,
-        maxOutputTokens: input.perTurnAllowance,
+        // One call, so one answer's worth — not the loop's whole allowance. See
+        // `maxOutputTokensPerAnswer`; the Governor would refuse the larger number
+        // anyway, and a plain conversation should not cost what a nine-lookup turn does.
+        maxOutputTokens: Math.min(
+          input.perTurnAllowance,
+          CONVERSATION_LIMITS.maxOutputTokensPerAnswer,
+        ),
         grantId: input.grantId,
         correlationId: input.turnId,
         cognitionRequestId: input.turnId,
@@ -1218,6 +1241,8 @@ export class MindService {
       content: renderTruncatedAnswer(cognition.text, footer),
       createdAt: endedAt,
       turnId: turn.turnId,
+      // A cut-off answer still looked things up, and the cards it earned are still real.
+      ...mediaField(cognition.steps.map((iteration) => iteration.observation)),
     }
 
     try {

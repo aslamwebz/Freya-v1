@@ -153,6 +153,11 @@ function installFakeBridge() {
     // The picker is a host dialog; a fake bridge refuses rather than pretending a
     // file was chosen, which is the behaviour the renderer has to survive.
     attachmentPick: async () => ({ ok: false, reason: 'no host in this test' }),
+    // A refusal, like every other host call in this fake. A window that asked for a
+    // picture here gets nothing, which is the honest answer and lets the card decide
+    // to draw nothing rather than a placeholder.
+    mediaThumbnail: async () => ({ ok: false, dataUrl: null, bytes: 0, format: null, claimedType: null, reason: 'no host in this test' }),
+    mediaDocument: async () => ({ ok: false, reason: 'no host in this test' }),
     onCollect: () => {},
     windowMinimize: async () => {},
     windowMaximize: async () => {},

@@ -122,6 +122,18 @@ export interface FreyaHostBridge {
    */
   attachmentPick(): Promise<unknown>
 
+  /**
+   * Fetch a picture to draw, on the window's behalf.
+   *
+   * The window never fetches media itself: the address came out of a search result,
+   * and a window that could fetch an arbitrary address would be a way to reach the
+   * owner's own network. The main process answers with a `data:` URL or a refusal.
+   */
+  mediaThumbnail(url: string): Promise<unknown>
+
+  /** A document's bytes, as base64. Never a path, so the window gets no file handle. */
+  mediaDocument(url: string): Promise<unknown>
+
   /** Frameless-window controls. Each acts on the window that calls. */
   windowMinimize(): Promise<void>
   windowMaximize(): Promise<void>

@@ -1081,7 +1081,8 @@ attentionTick(now?: Date): Promise<number>
    * Read-only, and the shape of the read is the whole policy. A package's program
    * and description are not fields of the projection: they cross only through an
    * explicit  orge.detail.read for one package, to the owner. The projection also
-   * carries untimeNotice, which states what the runtime cannot do, because a
+   * carries 
+untimeNotice, which states what the runtime cannot do, because a
    * generated package that cannot reach the filesystem is a fact a person needs
    * rather than a surprise.
    */
@@ -1934,7 +1935,7 @@ class FreyaCore implements Core {
         const tools = [
           ...(this.researchIntegration
             ? [createWebSearchTool({
-              searchWeb: (query, signal) => this.researchIntegration!.searchWeb(query, signal),
+              searchWeb: (query, vertical, signal) => this.researchIntegration!.searchWeb(query, vertical, signal),
             })]
             : []),
           ...(this.dualBrowser

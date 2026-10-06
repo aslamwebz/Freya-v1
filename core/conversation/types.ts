@@ -28,6 +28,7 @@
  * Renderer input becomes `user` and nothing else. The mapping is in the
  * Conversation Service, not in a type the renderer can satisfy with a string.
  */
+import type { MediaItem } from '../media/types'
 export type MessageRole = 'user' | 'assistant'
 
 export interface ConversationMessage {
@@ -38,6 +39,14 @@ export interface ConversationMessage {
   createdAt: string
   /** The turn this belongs to. One turn is one user message and its answer. */
   turnId: string
+  /**
+   * What the lookups behind this answer actually returned, as typed items.
+   *
+   * Beside the text rather than inside it, and never recovered by re-reading the
+   * prose: a card needs an address, and an address guessed out of a sentence is a
+   * fabrication. Absent on a turn that looked nothing up, which is most turns.
+   */
+  media?: readonly MediaItem[]
 }
 
 export interface Conversation {
@@ -169,8 +178,32 @@ export const CONVERSATION_LIMITS = Object.freeze({
    * This number is a *ceiling*, not a forecast. Actual spend is bounded by
    * reported usage against the grant, so a turn that answers briefly costs
    * briefly; what this stops is a turn being unable to finish.
+   *
+   * It was 3072, which covered the old three-call turn as `1024 + 1024 + 1024`. With
+   * ten calls the schedule divides as `3072 + 9 x 512 = 7680`, and the sum is the
+   * ceiling rather than a multiple of it, because `outputTokenBudgetReserved` is
+   * authorisation arithmetic taken before the call and never released.
+   *
+   * An ordinary turn still reserves 3072, so the everyday cost of a conversation has
+   * not changed: only a turn that genuinely takes nine lookups can reach the rest.
    */
-  maxOutputTokensPerTurn: 3_072,
+  maxOutputTokensPerTurn: 7_680,
+
+  /**
+   * The most one answer may ask for, however it was reached.
+   *
+   * Separate from the turn ceiling because they answer different questions. The turn
+   * ceiling bounds the *worst case* of a turn that spends nine lookups and then answers
+   * — 3072 for the answer plus 512 for each of them. A turn that used no tools made one
+   * call, and handing that single call the whole 7680 would both exceed what the
+   * Governor will authorise in one request and quietly turn a routine conversation into
+   * the most expensive kind of turn there is.
+   *
+   * It is also the first call's share in the loop: `budgetFor(0, maxOutputTokensPerTurn)`
+   * works out to exactly this number, so a tool-using turn and a plain one can both
+   * write a full-length answer.
+   */
+  maxOutputTokensPerAnswer: 3_072,
 })
 
 /* ---------------------------------------------------------------- helpers */

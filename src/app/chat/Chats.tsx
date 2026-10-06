@@ -8,6 +8,7 @@ import {
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import type { WorkspaceResearchView } from './modes'
 import { RichMessage } from './RichMessage'
+import { MediaGrid } from './MediaCards'
 import { BrowserWorkspace } from './BrowserWorkspace'
 import './chat.css'
 
@@ -218,6 +219,12 @@ export function Chats({
                   {message.role === 'assistant'
                     ? <RichMessage content={message.content} onOpenLink={onBrowserOpenUrl} />
                     : <p className="chats-user-text">{message.content}</p>}
+                  {/* What the lookups behind this answer returned. Drawn from the
+                      message Core stored, never recovered from the prose: a card needs
+                      an address, and an address read out of a sentence is a guess. */}
+                  {message.role === 'assistant' && message.media !== undefined && message.media.length > 0 ? (
+                    <MediaGrid items={message.media} onOpenPage={onBrowserOpenUrl} />
+                  ) : null}
                 </div>
               </div>
             </article>

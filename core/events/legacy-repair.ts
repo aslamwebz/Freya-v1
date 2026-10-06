@@ -29,6 +29,8 @@ export function repairKnownLegacyJournal(raw: string): KnownJournalRepair | null
   const events: AnyCoreEvent[] = []
   const repairedLineNumbers: number[] = []
   let previousSequence = 0
+  let legacyRequestId: string | null = null
+  let repairedRequestId: string | null = null
 
   for (let index = 0; index < sourceLines.length; index += 1) {
     const line = sourceLines[index] ?? ''
@@ -40,8 +42,20 @@ export function repairKnownLegacyJournal(raw: string): KnownJournalRepair | null
       continue
     }
 
-    const repaired = repairLegacyCognitionRequest(line, previousSequence)
+    const repaired: RepairedLegacyLine | null = legacyRequestId === null
+      ? repairLegacyCognitionRequest(line, previousSequence)
+      : repairLegacyToolLoopContinuation(
+          line,
+          previousSequence,
+          legacyRequestId,
+          repairedRequestId!,
+        )
     if (repaired === null) return null
+
+    if (legacyRequestId === null) {
+      legacyRequestId = repaired.legacyRequestId
+      repairedRequestId = repaired.repairedRequestId
+    }
 
     outputLines.push(repaired.line)
     events.push(repaired.event)
@@ -60,10 +74,17 @@ export function repairKnownLegacyJournal(raw: string): KnownJournalRepair | null
   }
 }
 
+interface RepairedLegacyLine {
+  readonly line: string
+  readonly event: AnyCoreEvent
+  readonly legacyRequestId: string
+  readonly repairedRequestId: string
+}
+
 function repairLegacyCognitionRequest(
   line: string,
   previousSequence: number,
-): { line: string; event: AnyCoreEvent } | null {
+): RepairedLegacyLine | null {
   let value: unknown
   try {
     value = JSON.parse(line)
@@ -97,5 +118,65 @@ function repairLegacyCognitionRequest(
   const verdict = parseDurableEvent(repairedLine, previousSequence)
   if (!verdict.ok) return null
 
-  return { line: repairedLine, event: verdict.event }
+  return {
+    line: repairedLine,
+    event: verdict.event,
+    legacyRequestId: request.requestId,
+    repairedRequestId: `${match[1]}:${match[2]}`,
+  }
+}
+
+const LEGACY_CHAIN_TYPES = new Set<string>([
+  'cognition.allowed',
+  'cognition.grant.reserved',
+  'model.request.started',
+  'model.request.completed',
+  'cognition.grant.usage_reported',
+])
+
+function repairLegacyToolLoopContinuation(
+  line: string,
+  previousSequence: number,
+  legacyRequestId: string,
+  repairedRequestId: string,
+): RepairedLegacyLine | null {
+  let value: unknown
+  try {
+    value = JSON.parse(line)
+  } catch {
+    return null
+  }
+
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const event = value as Record<string, unknown>
+  if (typeof event.type !== 'string' || !LEGACY_CHAIN_TYPES.has(event.type)) return null
+
+  const payload = event.payload
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null
+  const record = payload as Record<string, unknown>
+  if (record.requestId !== legacyRequestId) return null
+
+  const correlationId = event.correlationId
+  if (correlationId !== legacyRequestId && correlationId !== legacyRequestId.split('#')[0]) return null
+
+  const repairedValue = {
+    ...event,
+    correlationId:
+      correlationId === legacyRequestId ? repairedRequestId : correlationId,
+    payload: {
+      ...record,
+      requestId: repairedRequestId,
+    },
+  }
+
+  const repairedLine = JSON.stringify(repairedValue)
+  const verdict = parseDurableEvent(repairedLine, previousSequence)
+  if (!verdict.ok) return null
+
+  return {
+    line: repairedLine,
+    event: verdict.event,
+    legacyRequestId,
+    repairedRequestId,
+  }
 }

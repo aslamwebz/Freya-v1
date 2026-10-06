@@ -1122,6 +1122,11 @@ function registerIpc(): void {
         payload: { enabled: saved.autoSpeak },
       })
       await host.submit({
+        command: 'voice.proactive-alerts.set',
+        requestId: `voice-config-proactive-${Date.now()}`,
+        payload: { enabled: saved.proactiveAlerts },
+      })
+      await host.submit({
         command: 'voice.mute.set',
         requestId: `voice-config-tts-${Date.now()}`,
         payload: { muted: saved.ttsProvider === 'off' },
@@ -1490,6 +1495,7 @@ app.whenReady().then(async () => {
         voiceStt: voiceInput,
         voiceWake: buildLocalWakeGate(),
         voiceAutoSpeak: voiceConfig.autoSpeak,
+        voiceProactiveAlerts: voiceConfig.proactiveAlerts,
       },
     )
     registerIpc()

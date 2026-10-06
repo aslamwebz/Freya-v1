@@ -144,7 +144,12 @@ export function App({
 
     if (effectiveMode === 'chat') {
       setResearchView(null)
-      const result = await sendMessage(mirror, conversation?.activeConversationId ?? null, composed.text, payload.attachments)
+      const result = await sendMessage(
+        mirror,
+        screen === 'chat' ? (conversation?.activeConversationId ?? null) : null,
+        composed.text,
+        payload.attachments,
+      )
       // The payload and the tray are cleared only once Core has accepted the turn,
       // so a refusal leaves the owner's files where they can be retried.
       if (result.ok) {

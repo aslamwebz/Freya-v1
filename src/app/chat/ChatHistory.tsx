@@ -47,32 +47,43 @@ export function ChatHistory({ onOpen, collapsed = false, current = false }: {
   const active = projection?.activeConversationId ?? null
   const busy = projection?.activeTurn != null
 
-  const read = (conversationId: string): void => {
-    void mirror.read(conversationId)
+  // History is reusable only by explicit row selection. Generic Chats/New
+  // entry creates first, then opens the workspace, so a restored conversation can
+  // never leak into a new interaction.
+  const startNew = async (): Promise<void> => {
+    await mirror.create()
+    onOpen?.()
+  }
+
+  const read = async (conversationId: string): Promise<void> => {
+    await mirror.read(conversationId)
     onOpen?.()
   }
 
   const archive = async (conversationId: string): Promise<void> => {
     const wasActive = conversationId === active
-    const remaining = conversations.filter((conversation) => conversation.conversationId !== conversationId)
     const outcome = await mirror.archive(conversationId)
     if (outcome.operation !== 'archived' || !wasActive) return
-    const next = remaining[0]
-    if (next) await mirror.read(next.conversationId)
-    else await mirror.create()
+
+    // Closing the active chat must not silently select another old conversation.
+    // History is reused only when the owner clicks that exact history row.
+    await mirror.create()
     onOpen?.()
   }
 
   return (
     <div className="chats-history" data-collapsed={!open || undefined}>
       <header className="chats-history-head">
-        {/* The title is the one control: it shows and hides the conversations.
-            New chat stays beside it. Collapsed, there is no room to disclose into,
-            so the same button becomes an ordinary place row that opens Chats. */}
+        {/* Entering Chats from another workspace is a New Chat action. History
+            reuse only happens on a conversation row below. Once already in Chat,
+            the heading goes back to being the disclosure control for that history. */}
         <button type="button" className="chats-history-title" aria-expanded={collapsed ? undefined : open}
           aria-current={current ? 'page' : undefined}
-          aria-label={collapsed ? 'Open Chats' : (open ? 'Hide the conversation list' : 'Show the conversation list')}
-          onClick={() => { if (collapsed) { onOpen?.(); return } setOpen((value) => !value) }}>
+          aria-label={!current ? 'Start a new chat' : collapsed ? 'Start a new chat' : (open ? 'Hide the conversation list' : 'Show the conversation list')}
+          onClick={() => {
+            if (!current || collapsed) { void startNew(); return }
+            setOpen((value) => !value)
+          }}>
           <Glyph name="chat" size={20} style={open && !collapsed ? undefined : { opacity: 0.75 }} />
           <span>Chats</span>
         </button>
@@ -82,10 +93,7 @@ export function ChatHistory({ onOpen, collapsed = false, current = false }: {
           disabled={busy}
           aria-label="Start a new conversation"
           title={busy ? 'Freya is answering — stop the response before starting a new conversation' : 'Start a new conversation'}
-          onClick={() => {
-            void mirror.create()
-            onOpen?.()
-          }}
+          onClick={() => { void startNew() }}
         >
           <Glyph name="plus" size={12} />
           <span>New</span>
@@ -107,7 +115,7 @@ export function ChatHistory({ onOpen, collapsed = false, current = false }: {
                 className="chats-history-item"
                 aria-current={conversation.conversationId === active ? 'true' : undefined}
                 title={`${conversation.title} · ${conversation.messageCount} message${conversation.messageCount === 1 ? '' : 's'}`}
-                onClick={() => read(conversation.conversationId)}
+                onClick={() => { void read(conversation.conversationId) }}
               >
                 <span className="chats-history-copy"><b>{conversation.title}</b></span>
                 {busy && conversation.conversationId === active ? (

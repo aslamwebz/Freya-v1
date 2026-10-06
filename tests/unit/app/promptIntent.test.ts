@@ -5,8 +5,8 @@ import { parseSearchRequest } from '../../../core/research/sessions'
 describe('global composer intent routing', () => {
   it('treats "find 10 cat videos" as a complete discovery request, not a clarification', () => {
     expect(routePromptIntent('find 10 cat videos', { activeEyeSession: false })).toEqual({
-      kind: 'eye-new',
-      reason: 'media-discovery',
+      kind: 'chat',
+      reason: 'conversation',
     })
 
     const parsed = parseSearchRequest('find 10 cat videos')

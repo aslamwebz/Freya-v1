@@ -297,11 +297,12 @@ describe('the composer adapter keeps its old contract', () => {
     })
   })
 
-  it('opens a session for media discovery and answers questions in conversation', () => {
-    // Media discovery is a gathering task, so it goes to Freya's Eye.
+  it('keeps media discovery and normal questions in conversation', () => {
+    // Images, video and documents are ordinary Chat results. Eye remains an
+    // explicit mode rather than an automatic detour.
     expect(routePromptIntent('find 5 videos about Laravel queues', { activeEyeSession: false })).toEqual({
-      kind: 'eye-new',
-      reason: 'media-discovery',
+      kind: 'chat',
+      reason: 'conversation',
     })
 
     // A question is a question. This used to open a research session instead, which

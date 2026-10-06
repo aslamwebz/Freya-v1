@@ -110,6 +110,10 @@ const api = {
   mediaDocument: (url: string): Promise<unknown> =>
     ipcRenderer.invoke('freya:media:document', boundedMediaUrl(url)),
 
+  /** A direct video preview, fetched and byte-validated by the main process. */
+  mediaVideo: (url: string): Promise<unknown> =>
+    ipcRenderer.invoke('freya:media:video', boundedMediaUrl(url)),
+
   // Frameless-window controls. Each acts on the window that asked.
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('freya:window:minimize'),
   windowMaximize: (): Promise<void> => ipcRenderer.invoke('freya:window:maximize'),

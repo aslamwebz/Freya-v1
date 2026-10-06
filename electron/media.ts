@@ -114,6 +114,59 @@ export async function fetchThumbnail(
 }
 
 /**
+ * Fetch a direct video only after the owner opens its preview.
+ *
+ * Hosted watch pages are expected to fail this check and fall back to their poster.
+ * That is deliberate: Freya never claims a web page is a playable file, and the
+ * renderer never receives an arbitrary remote URL to fetch on its own.
+ */
+export async function fetchVideoPreview(
+  url: string,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<MediaFetchResult> {
+  let response
+  try {
+    response = await transport.get(url, {
+      timeoutMs: 20_000,
+      signal: options.signal ?? new AbortController().signal,
+      headers: { accept: 'video/mp4,video/webm,video/ogg,*/*;q=0.1', 'user-agent': USER_AGENT },
+      maxBytes: MEDIA_LIMITS.videoBytes,
+    })
+  } catch (error) {
+    return refusal(error)
+  }
+
+  const claimed = response.headers['content-type'] ?? null
+  if (response.status !== 200) {
+    return { ok: false, dataUrl: null, bytes: response.body.length, format: null, claimedType: claimed, reason: `the server answered ${String(response.status)}` }
+  }
+  if (response.body.length === 0) {
+    return { ok: false, dataUrl: null, bytes: 0, format: null, claimedType: claimed, reason: 'the body was empty' }
+  }
+
+  const sniffed = sniffMediaKind(response.body)
+  if (sniffed === null || !sniffed.startsWith('video/')) {
+    return {
+      ok: false,
+      dataUrl: null,
+      bytes: response.body.length,
+      format: null,
+      claimedType: claimed,
+      reason: 'the body is not a recognised direct video',
+    }
+  }
+
+  return {
+    ok: true,
+    dataUrl: `data:${sniffed};base64,${Buffer.from(response.body).toString('base64')}`,
+    bytes: response.body.length,
+    format: sniffed,
+    claimedType: claimed,
+    reason: null,
+  }
+}
+
+/**
  * Fetch a document's bytes for the PDF renderer.
  *
  * Base64 rather than a path or a URL, because the renderer must not be able to re-fetch

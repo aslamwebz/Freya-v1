@@ -158,6 +158,7 @@ function installFakeBridge() {
     // to draw nothing rather than a placeholder.
     mediaThumbnail: async () => ({ ok: false, dataUrl: null, bytes: 0, format: null, claimedType: null, reason: 'no host in this test' }),
     mediaDocument: async () => ({ ok: false, reason: 'no host in this test' }),
+    mediaVideo: async () => ({ ok: false, dataUrl: null, bytes: 0, format: null, claimedType: null, reason: 'no host in this test' }),
     onCollect: () => {},
     windowMinimize: async () => {},
     windowMaximize: async () => {},

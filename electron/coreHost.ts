@@ -640,6 +640,10 @@ export interface CoreHostOptions {
   voiceWake?: WakeGate
   /** Whether the platform offers a capture path at all. */
   voiceCaptureSupported?: boolean
+  /** Read voice-submitted answers aloud after they are stored. */
+  voiceAutoSpeak?: boolean
+  /** Bounded follow-up window after the wake phrase is heard. */
+  voiceFollowUpWindowMs?: number
   /**
    * Replaces the production research stack wholesale. For tests.
    *
@@ -1177,6 +1181,12 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.voiceCaptureSupported === undefined
           ? {}
           : { voiceCaptureSupported: this.options.voiceCaptureSupported }),
+        ...(this.options.voiceAutoSpeak === undefined
+          ? {}
+          : { voiceAutoSpeak: this.options.voiceAutoSpeak }),
+        ...(this.options.voiceFollowUpWindowMs === undefined
+          ? {}
+          : { voiceFollowUpWindowMs: this.options.voiceFollowUpWindowMs }),
       })
       await core.start()
       if (this.stopRequested) {

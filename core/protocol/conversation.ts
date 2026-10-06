@@ -152,6 +152,8 @@ export interface VoiceProjection {
   micEnabled: boolean
   /** What the operating system last reported. `unknown` until it reports at all. */
   permission: 'unknown' | 'granted' | 'denied' | 'revoked'
+  /** True only inside Core's short-lived permission acquisition window. */
+  permissionRequestOpen: boolean
   capturing: boolean
   sessionId: string | null
   /**

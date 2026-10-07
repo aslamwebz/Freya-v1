@@ -11,6 +11,7 @@ import {
   type RecoveryReport,
 } from './validate'
 import { repairKnownLegacyJournal } from './legacy-repair'
+import { repairInterruptedTurnConversationId } from './interrupted-turn-repair'
 
 /**
  * An append-only JSONL event store.
@@ -56,7 +57,7 @@ import { repairKnownLegacyJournal } from './legacy-repair'
  * cannot tolerate truncation should do; see `lastTruncation`.
  */
 export interface KnownJournalRepairReport {
-  readonly code: 'legacy-tool-loop-request-id' | 'voice-wake-threshold-validator'
+  readonly code: 'legacy-tool-loop-request-id' | 'voice-wake-threshold-validator' | 'interrupted-conversation-id-recovery'
   readonly repairedEvents: number
   readonly sourceQuarantinePath: string
   readonly archivedDegradedPath: string | null
@@ -107,9 +108,12 @@ export class JsonlEventStore implements EventStore {
       throw error
     }
 
-    const known = repairKnownLegacyJournal(raw.toString('utf8'))
+const known = repairKnownLegacyJournal(raw.toString('utf8'))
     if (known !== null) {
-      const sourceQuarantinePath = await this.preserveKnownRepairSource()
+      const sourceQuarantinePath = await this.preserveKnownRepairSource([
+        'The only accepted repair is the historical cognition continuation request-id',
+        'separator (# -> :) and the entire resulting journal must validate.',
+      ])
       await writeFile(this.file, known.content, 'utf8')
       raw = Buffer.from(known.content, 'utf8')
       this.knownRepair = {
@@ -117,6 +121,25 @@ export class JsonlEventStore implements EventStore {
         repairedEvents: known.repairedEvents,
         sourceQuarantinePath,
         archivedDegradedPath: null,
+      }
+    } else {
+      const interrupted = repairInterruptedTurnConversationId(raw.toString('utf8'))
+      if (interrupted !== null) {
+        const sourceQuarantinePath = await this.preserveKnownRepairSource([
+          'The only accepted repair is the historical interrupted-turn empty',
+          'conversationId recovery: a conversation.turn.interrupted row whose',
+          'conversationId is the empty string is rebuilt with the conversationId',
+          'of the earlier, valid conversation.turn.started that shares its turnId,',
+          'and the entire resulting journal must validate end-to-end.',
+        ])
+        await writeFile(this.file, interrupted.content, 'utf8')
+        raw = Buffer.from(interrupted.content, 'utf8')
+        this.knownRepair = {
+          code: interrupted.code,
+          repairedEvents: interrupted.repairedEvents,
+sourceQuarantinePath,
+          archivedDegradedPath: null,
+        }
       }
     }
 
@@ -256,7 +279,9 @@ export class JsonlEventStore implements EventStore {
     }
     if (fault === null || repairedAfterFault) return
     const wakeValidatorFault = fault.payload.reason.includes('payload does not match the shape of voice.wake.armed')
-    if (!wakeValidatorFault && !fault.payload.reason.includes('cognition.requested')) return
+    const cognitionRequestedFault = fault.payload.reason.includes('cognition.requested')
+    const interruptedTurnFault = fault.payload.reason.includes('conversation.turn.interrupted')
+    if (!wakeValidatorFault && !cognitionRequestedFault && !interruptedTurnFault) return
 
     let quarantined: string
     try {
@@ -265,13 +290,24 @@ export class JsonlEventStore implements EventStore {
       return
     }
 
-    const validatedWakeEvents = wakeValidatorFault ? parseCompleteJournal(quarantined) : null
-    const boundary = validatedWakeEvents?.[fault.payload.trustedPrefixEvents]
-    if (wakeValidatorFault && (!validatedWakeEvents || boundary?.type !== 'voice.wake.armed' || boundary.payload.threshold !== 0.14)) return
-    const repaired = wakeValidatorFault && validatedWakeEvents
-      ? { code: 'voice-wake-threshold-validator' as const, content: quarantined, events: validatedWakeEvents, repairedEvents: validatedWakeEvents.filter(e => e.type === 'voice.wake.armed').length }
-      : repairKnownLegacyJournal(quarantined)
-    if (repaired === null) return
+    let repaired: { code: 'legacy-tool-loop-request-id' | 'voice-wake-threshold-validator' | 'interrupted-conversation-id-recovery'; content: string; events: readonly AnyCoreEvent[]; repairedEvents: number } | null = null
+    if (wakeValidatorFault) {
+      const validatedWakeEvents = parseCompleteJournal(quarantined)
+      const boundary = validatedWakeEvents?.[fault.payload.trustedPrefixEvents]
+      if (!validatedWakeEvents || boundary?.type !== 'voice.wake.armed' || boundary.payload.threshold !== 0.14) return
+      repaired = {
+        code: 'voice-wake-threshold-validator',
+        content: quarantined,
+        events: validatedWakeEvents,
+        repairedEvents: validatedWakeEvents.filter((e) => e.type === 'voice.wake.armed').length,
+      }
+    } else if (interruptedTurnFault) {
+      repaired = repairInterruptedTurnConversationId(quarantined)
+      if (repaired === null) return
+    } else {
+      repaired = repairKnownLegacyJournal(quarantined)
+      if (repaired === null) return
+    }
 
     const prefixCount = fault.payload.trustedPrefixEvents
     // Never replace newer authority decisions with an older quarantine. Keep the
@@ -293,7 +329,7 @@ export class JsonlEventStore implements EventStore {
   }
 
   /** Preserve the original malformed file before an in-place known repair. */
-  private async preserveKnownRepairSource(): Promise<string> {
+  private async preserveKnownRepairSource(description: readonly string[]): Promise<string> {
     const target = this.availableSiblingPath(`${this.file}.quarantine-known-repair`)
     await copyFile(this.file, target)
     await writeFile(
@@ -301,8 +337,7 @@ export class JsonlEventStore implements EventStore {
       [
         'Freya Core event log, preserved before a code-owned compatibility repair.',
         `Original: ${this.file}`,
-        'The only accepted repair is the historical cognition continuation request-id',
-        'separator (# -> :) and the entire resulting journal must validate.',
+        ...description,
         '',
       ].join(EOL),
       'utf8',

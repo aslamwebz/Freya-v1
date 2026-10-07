@@ -915,7 +915,7 @@ const PAYLOAD_RULES: {
     isNonNegativeInt(p.trustedPrefixBytes) &&
     isNonNegativeInt(p.damagedBytes),
   'core.integrity_repaired': (p) =>
-    (p.code === 'legacy-tool-loop-request-id' || p.code === 'voice-wake-threshold-validator') &&
+    (p.code === 'legacy-tool-loop-request-id' || p.code === 'voice-wake-threshold-validator' || p.code === 'interrupted-conversation-id-recovery') &&
     isPositiveInt(p.repairedEvents) &&
     isNonEmptyString(p.sourceQuarantinePath) &&
     (p.archivedDegradedPath === null || isNonEmptyString(p.archivedDegradedPath)),

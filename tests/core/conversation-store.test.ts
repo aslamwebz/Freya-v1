@@ -418,7 +418,7 @@ describe('turn bookkeeping', () => {
     })
 
     const recovered = await store.recoverInterruptedTurns('2026-03-02T09:00:00.000Z')
-    expect(recovered).toEqual(['t1'])
+    expect(recovered).toEqual([{ turnId: 't1', conversationId: 'c1' }])
 
     const record = await store.readConversation('c1')
     expect(record?.turns[0]?.outcome).toBe('interrupted')
@@ -446,7 +446,7 @@ describe('turn bookkeeping', () => {
       model: null,
       reason: null,
     })
-    expect(await store.recoverInterruptedTurns('2026-03-02T09:00:00.000Z')).toEqual(['t1'])
+    expect(await store.recoverInterruptedTurns('2026-03-02T09:00:00.000Z')).toEqual([{ turnId: 't1', conversationId: 'c1' }])
     // A second pass finds nothing to do, so a restart cannot rewrite history.
     expect(await store.recoverInterruptedTurns('2026-03-02T10:00:00.000Z')).toEqual([])
   })

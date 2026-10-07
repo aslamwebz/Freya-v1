@@ -249,13 +249,13 @@ export class VaultConversationStore implements ConversationStore {
     }
   }
 
-  async recoverInterruptedTurns(now: string): Promise<string[]> {
+  async recoverInterruptedTurns(now: string): Promise<{ turnId: string; conversationId: string }[]> {
     this.ensureWritable()
     validateTime(now, 'recovery')
     try {
       return this.vault.transaction((tx) => {
-        const rows = tx.all<{ turn_id: string }>(
-          "SELECT turn_id FROM chat_turns WHERE outcome = 'pending' ORDER BY started_at ASC, turn_id ASC",
+        const rows = tx.all<{ turn_id: string; conversation_id: string }>(
+          "SELECT turn_id, conversation_id FROM chat_turns WHERE outcome = 'pending' ORDER BY started_at ASC, turn_id ASC",
         )
         for (const row of rows) {
           tx.run(
@@ -263,7 +263,7 @@ export class VaultConversationStore implements ConversationStore {
             [now, row.turn_id],
           )
         }
-        return rows.map((row) => row.turn_id)
+        return rows.map((row) => ({ turnId: row.turn_id, conversationId: row.conversation_id }))
       })
     } catch (error) {
       if (error instanceof ConversationStoreError) throw error

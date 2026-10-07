@@ -253,7 +253,7 @@ describe('VaultConversationStore', () => {
     })
     await store.recordTurnStart(turn())
 
-    expect(await store.recoverInterruptedTurns('2026-10-05T12:05:00.000Z')).toEqual(['t1'])
+    expect(await store.recoverInterruptedTurns('2026-10-05T12:05:00.000Z')).toEqual([{ turnId: 't1', conversationId: 'c1' }])
     const record = await store.readConversation('c1')
     expect(record?.messages).toHaveLength(1)
     expect(record?.turns[0]).toMatchObject({ outcome: 'interrupted', assistantMessageId: null })

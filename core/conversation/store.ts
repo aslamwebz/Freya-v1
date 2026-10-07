@@ -125,12 +125,15 @@ export interface ConversationStore {
   /**
    * Find turns that started and never finished, and mark them interrupted.
    *
-   * Called once at start-up. Returns the turn ids it changed so the change can
-   * be journalled. It never completes a turn, never retries it, and never
-   * guesses why it stopped: a question is on disk and no answer is, and that is
-   * the entire claim.
+   * Called once at start-up. Returns the turn id and the conversation it
+   * belonged to for each one it changed, so the journal can record the pair
+   * honestly: a turn without its conversation is not a turn, and an empty-string
+   * conversation id in the audit would later fail the event validator and
+   * degrade Core. It never completes a turn, never retries it, and never guesses
+   * why it stopped: a question is on disk and no answer is, and that is the
+   * entire claim.
    */
-  recoverInterruptedTurns(now: string): Promise<string[]>
+  recoverInterruptedTurns(now: string): Promise<{ turnId: string; conversationId: string }[]>
 
   /** Release handles. Safe to call more than once. */
   close(): Promise<void>

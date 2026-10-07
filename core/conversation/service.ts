@@ -120,9 +120,9 @@ export class ConversationService {
    * was running when the process died has exactly one true state, which is that a
    * question is on disk and no answer is.
    */
-  async recoverInterruptedTurns(): Promise<string[]> {
+  async recoverInterruptedTurns(): Promise<{ turnId: string; conversationId: string }[]> {
     const at = this.now().toISOString()
-    let recovered: string[] = []
+    let recovered: { turnId: string; conversationId: string }[] = []
 
     try {
       recovered = await this.store.recoverInterruptedTurns(at)
@@ -135,11 +135,12 @@ export class ConversationService {
       ]
     }
 
-    for (const turnId of recovered) {
+    for (const recoveredTurn of recovered) {
+      const { turnId, conversationId } = recoveredTurn
       await this.fabric.append(
         'conversation.turn.interrupted',
         {
-          conversationId: '',
+          conversationId,
           turnId,
           userMessageId: null,
           assistantMessageId: null,

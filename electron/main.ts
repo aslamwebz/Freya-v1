@@ -2,7 +2,7 @@ import { CapabilitySettingsStore } from './capabilitySettings'
 import { readRuntimeCapabilityRegistry } from '../core/model/capability-runtime'
 import type { CapabilityPreferences } from '../core/capabilities'
 import { app, BrowserWindow, WebContentsView, ipcMain, screen, shell, safeStorage } from 'electron'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
 import { fetchDocumentBytes, fetchThumbnail, fetchVideoPreview, attachEmbedView, detachEmbedView } from './media'
@@ -357,12 +357,52 @@ function browserUnavailable(command: BrowserResult['command'], reason: string): 
   }
 }
 
+// Dev-only seam for a SECOND isolated Freya instance (acceptance test, parallel
+// dev run, or the dev:kilo launcher spinning up an alternate profile).
+//
+// Honoured only when ALL THREE hold:
+//   1. FREYA_DEV_USER_DATA is set to an absolute or launcher-relative path.
+//   2. The launch was explicitly dev-tagged (process.argv includes --dev), which
+//      dev:desktop, electron:dev and dev:kilo all pass. Packaged production and
+//      `npm start` do not pass --dev, so this block is a no-op for them.
+//   3. The env var is non-empty.
+//
+// Applied BEFORE any app.getPath('userData') read and BEFORE
+// app.requestSingleInstanceLock(), so single-instance scoping, workspace,
+// provider config, journal, diagnostics, vault, keyring, capabilities and voice
+// settings all land in the chosen directory. The path is resolved to an absolute
+// form so a relative value (e.g. '.kilo/acceptance-profile') resolves against
+// the repo root the launcher was started from, not against whatever cwd Electron
+// inherits.
+//
+// The .env file is NEVER consulted for FREYA_DEV_USER_DATA. The launcher passes
+// it through `env:` in the spawn options, and .env remains the single source of
+// truth for provider credentials.
+const devUserData = process.env.FREYA_DEV_USER_DATA
+if (
+  process.argv.includes('--dev') &&
+  typeof devUserData === 'string' &&
+  devUserData.length > 0
+) {
+  const absoluteDevUserData = resolve(devUserData)
+  app.setPath('userData', absoluteDevUserData)
+}
+
 // The E2E harness sometimes opens two throwaway processes against the same
 // temporary profile to prove session cleanup. Production never does: both explicit
 // E2E gates are required before the profile lock may be bypassed.
+//
+// The dev:kilo acceptance-profile launcher has its OWN, non-E2E bypass so the
+// 9223 test instance can run alongside the 9222 primary without inheriting any
+// E2E test keys, fixture providers, fake research or E2E behaviour. It is gated
+// by --dev (never present in packaged launches) AND FREYA_DEV_ALLOW_MULTI_INSTANCE,
+// and only skips the single-instance lock — nothing else.
 const e2eAllowsParallelInstances =
   process.env.FREYA_E2E === '1' && process.env.FREYA_E2E_ALLOW_MULTI_INSTANCE === '1'
-const ownsProfile = e2eAllowsParallelInstances || installSingleInstanceGuard(
+const devAllowsParallelInstances =
+  process.argv.includes('--dev') && process.env.FREYA_DEV_ALLOW_MULTI_INSTANCE === '1'
+const allowsParallelInstances = e2eAllowsParallelInstances || devAllowsParallelInstances
+const ownsProfile = allowsParallelInstances || installSingleInstanceGuard(
   {
     requestLock: () => app.requestSingleInstanceLock(),
     quit: () => app.quit(),

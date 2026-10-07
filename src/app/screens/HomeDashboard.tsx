@@ -43,7 +43,6 @@ interface Props {
   maxMessageCharacters: number | null
   browserOpen: boolean
   browserRequestedUrl: string | null
-  onBrowserToggle: () => void
   onBrowserOpenUrl: (url: string) => void
   onBrowserRequestedUrlHandled: () => void
   onBrowserClose: () => void
@@ -120,7 +119,7 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserToggle, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
+export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   /*
@@ -375,9 +374,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
         onStopResponse={onStopResponse}
         onVoicePress={onVoicePress}
         onVoiceRelease={onVoiceRelease}
-        maxMessageCharacters={maxMessageCharacters}
-        browserOpen={browserOpen}
-        onBrowserToggle={onBrowserToggle}
+maxMessageCharacters={maxMessageCharacters}
       />
     </div></div>
 

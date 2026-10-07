@@ -145,8 +145,6 @@ export function GlobalComposer({
   onVoicePress,
   onVoiceRelease,
   maxMessageCharacters,
-  browserOpen,
-  onBrowserToggle,
 }: {
   generating: boolean
   notice: string
@@ -158,14 +156,17 @@ export function GlobalComposer({
   onVoicePress: () => void
   onVoiceRelease: (cancelled?: boolean) => void
   maxMessageCharacters: number | null
-  browserOpen: boolean
-  onBrowserToggle: () => void
 }) {
   const [text, setText] = useState('')
   const [voiceNotice, setVoiceNotice] = useState('')
   const [sending, setSending] = useState(false)
   const [attaching, setAttaching] = useState(false)
   const [mode, setMode] = useState<ComposerMode>('chat')
+  // Two intents the user can pin to the next message. Either or both, free.
+  // Held only between presses; Send clears them and they take effect for the
+  // one message they were held for.
+  const [wantWeb, setWantWeb] = useState(false)
+  const [wantBrowser, setWantBrowser] = useState(false)
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
@@ -195,13 +196,25 @@ export function GlobalComposer({
   const submit = async () => {
     const value = text.trim()
     if (value.length === 0 || generating || sending) return
+    // Wrap the draft with the intents the user has held. The intent layer
+    // already detects both phrases, so no new infrastructure is needed — the
+    // button just states a path the model would have guessed.
+    let body = value
+    if (wantWeb && !/^\s*(?:find|search|look up)\b/i.test(body)) body = `find on the web: ${body}`
+    if (wantBrowser && !/\bus(?:e|ing)\b.*\bbrowser\b/i.test(body)) body = `use your browser: ${body}`
+    const fire = () => {
+      setWantWeb(false)
+      setWantBrowser(false)
+    }
     setVoiceNotice('')
     setSending(true)
     try {
-      const accepted = await onSend(value, mode)
+      const accepted = await onSend(body, mode)
       if (accepted) setText('')
+      fire()
     } finally {
       setSending(false)
+      if (!text) fire()
     }
   }
 
@@ -267,13 +280,25 @@ export function GlobalComposer({
           onClick={() => { void attach() }}
         ><Glyph name="attach" size={18} /></button>
         <ModeSelector mode={mode} onChange={setMode} />
+        {/* Two intent buttons. Pressed state means the wrapper is applied at
+            Send, then cleared. Pressing the same one again drops the wrapper. */}
+        <button
+          type="button"
+          className="hd-tool hd-tool-search"
+          aria-pressed={wantWeb}
+          aria-label={wantWeb ? 'Web search is on for the next message' : 'Add web search to the next message'}
+          title={wantWeb ? 'Click to drop the search directive' : 'Add web search to the next message'}
+          onClick={() => setWantWeb((value) => !value)}
+        >
+          <Glyph name="search" size={16} />
+        </button>
         <button
           type="button"
           className="hd-tool hd-tool-browser"
-          aria-pressed={browserOpen}
-          aria-label={browserOpen ? 'Close the browser workspace' : 'Open the browser workspace'}
-          title={browserOpen ? 'Close the browser workspace' : 'Open the browser workspace'}
-          onClick={onBrowserToggle}
+          aria-pressed={wantBrowser}
+          aria-label={wantBrowser ? 'Browser use is on for the next message' : 'Add browser use to the next message'}
+          title={wantBrowser ? 'Click to drop the browser directive' : 'Add browser use to the next message'}
+          onClick={() => setWantBrowser((value) => !value)}
         >
           <Glyph name="world" size={17} />
         </button>

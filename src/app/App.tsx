@@ -268,10 +268,6 @@ export function App({
     setBrowserRequestedUrl(url)
   }, [])
 
-  const handleBrowserToggle = useCallback(() => {
-    setScreen('chat')
-    setBrowserOpen((open) => !open)
-  }, [])
 
   const handleBrowserRequestedUrlHandled = useCallback(() => {
     setBrowserRequestedUrl(null)
@@ -302,7 +298,6 @@ export function App({
       maxMessageCharacters={conversation?.maxMessageCharacters ?? null}
       browserOpen={browserOpen}
       browserRequestedUrl={browserRequestedUrl}
-      onBrowserToggle={handleBrowserToggle}
       onBrowserOpenUrl={openBrowserUrl}
       onBrowserRequestedUrlHandled={handleBrowserRequestedUrlHandled}
       onBrowserClose={() => setBrowserOpen(false)}

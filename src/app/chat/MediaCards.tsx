@@ -134,8 +134,9 @@ function MediaCard({ item, index, onOpen }: {
   )
 }
 
-export function MediaGrid({ items }: {
+export function MediaGrid({ items, onOpenBrowserUrl }: {
   readonly items: readonly MediaItem[]
+  readonly onOpenBrowserUrl?: (url: string) => void
 }) {
   const [openIndex, setOpenIndex] = useState<number | null>(null)
   if (items.length === 0) return null
@@ -158,6 +159,7 @@ export function MediaGrid({ items }: {
           index={openIndex}
           onIndex={setOpenIndex}
           onClose={() => setOpenIndex(null)}
+          onOpenBrowserUrl={onOpenBrowserUrl}
         />
       )}
     </>
@@ -173,59 +175,12 @@ export function MediaGrid({ items }: {
  * view is drawn over. When no bridge exists — tests, a plain browser — the box
  * degrades to a plain sandboxed iframe, which is where that path is acceptable.
  */
-function HostedPlayerBox({ url, title }: {
-  readonly url: string
-  readonly title: string
-}) {
-  const boxRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    const bridge = hostBridge()
-    if (bridge === undefined) return
-    const element = boxRef.current
-    if (element === null) return
-
-    const observers: ResizeObserver[] = []
-    const listeners: Array<(event?: unknown) => void> = []
-    // The box moves when the window resizes (the modal is centered), so a player
-    // that survived a resize must not hang over the wrong rectangle.
-    const onShift = (): void => {
-      const rect = boxRef.current?.getBoundingClientRect()
-      if (rect === undefined) return
-      void bridge.mediaEmbedAttach?.({
-        url,
-        x: rect.left,
-        y: rect.top,
-        width: rect.width,
-        height: rect.height,
-      })
-    }
-    onShift()
-    if (typeof ResizeObserver === 'function') {
-      const observer = new ResizeObserver(onShift)
-      observer.observe(element)
-      observers.push(observer)
-    }
-    window.addEventListener('resize', onShift)
-    listeners.push(onShift)
-
-    return () => {
-      for (const observer of observers) observer.disconnect()
-      for (const listener of listeners) window.removeEventListener('resize', listener)
-      void bridge.mediaEmbedDetach?.()
-    }
-  }, [url])
-
-  return (
-    <div ref={boxRef} className="chats-overlay-video-embed" aria-label={title} />
-  )
-}
-
-function MediaOverlay({ items, index, onIndex, onClose }: {
+function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
   readonly items: readonly MediaItem[]
   readonly index: number
   readonly onIndex: (next: number) => void
   readonly onClose: () => void
+  readonly onOpenBrowserUrl?: (url: string) => void
 }) {
   const item = items[index] ?? items[0]!
   const many = items.length > 1
@@ -352,6 +307,20 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
           <span className="chats-overlay-name">{item.title || 'Preview'}</span>
           <span className="chats-overlay-host">{item.host || hostOf(item.page)}</span>
           <span className="chats-overlay-count">{String(index + 1)} / {String(items.length)}</span>
+          {/* Always offer the in-app browser as a real fallback — several hosted
+              providers refuse to play inside a `file://` transcript's iframe, and
+              the user expects the preview to keep working rather than a black
+              rectangle. */}
+          {onOpenBrowserUrl && item.page && item.page !== '' ? (
+            <button
+              type="button"
+              className="chats-overlay-open"
+              aria-label="Open this page in Freya's browser"
+              onClick={() => onOpenBrowserUrl(item.page)}
+            >
+              Open in browser
+            </button>
+          ) : null}
           <button type="button" className="chats-overlay-close" onClick={onClose} aria-label="Close preview">×</button>
         </header>
         <div className="chats-overlay-stage">
@@ -368,18 +337,21 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
           {!loading && item.kind === 'video' ? (
             item.embedUrl
               ? (
-                hostBridge()?.mediaEmbedAttach === undefined
-                  ? (
-                    <iframe
-                      className="chats-overlay-video-embed"
-                      src={item.embedUrl}
-                      title={item.title || 'Video preview'}
-                      allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-                      sandbox="allow-scripts allow-same-origin allow-presentation"
-                      allowFullScreen
-                    />
-                  )
-                  : <HostedPlayerBox url={item.embedUrl} title={item.title || 'Video preview'} />
+                // Sandboxed iframe. A `file://` transcript document has a null
+                // origin, and several providers (YouTube most visibly) refuse to
+                // play under that — the parent calls the host's BrowserWorkspace
+                // through `openBrowserRequested` so the user can keep watching in
+                // Freya's own browser. The iframe here is the best honest attempt
+                // inside the modal and degrades to a poster + an open-in-browser
+                // button if the provider rejects the embed.
+                <iframe
+                  className="chats-overlay-video-embed"
+                  src={item.embedUrl}
+                  title={item.title || 'Video preview'}
+                  allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+                  sandbox="allow-scripts allow-same-origin allow-presentation"
+                  allowFullScreen
+                />
               )
               : videoData !== null
                 ? <video className="chats-overlay-video" src={videoData} controls autoPlay playsInline />

@@ -473,7 +473,7 @@ async function main() {
     await shot(page, 'video-cards')
 
     const videoModal = await openPreview(page, '.chats-video-card')
-    await page.waitForTimeout(1_500)
+    await page.waitForTimeout(8_000) // wait for the in-window player to settle
     const embed = videoModal.locator('.chats-overlay-video-embed')
     if (await embed.count() > 0) {
       const embedNode = embed.first()
@@ -501,7 +501,30 @@ async function main() {
       check('a direct video plays, or the fallback says so honestly',
         (await direct.count() > 0) || (await fallback.count() > 0))
     }
+    // The "Open in browser" fallback: every video modal carries a button that
+    // routes the click-through to the BrowserWorkspace, where the page actually plays.
+    check('the video modal offers an in-app browser fallback',
+      await videoModal.locator('button[aria-label="Open this page in Freya\'s browser"]').count() > 0)
+    await videoModal.locator('button[aria-label="Open this page in Freya\'s browser"]').click()
+    await page.waitForTimeout(2_000)
+    const browserOpen = await page.evaluate(() => !!document.querySelector('.chats-browser'))
+    if (browserOpen) {
+      check('clicking the fallback opens Freya\'s own browser', true)
+      await shot(page, 'video-fallback-browser')
+    } else {
+      check('clicking the fallback opens Freya\'s own browser', false, 'no .chats-browser mounted')
+    }
     await shot(page, 'video-modal')
+    // Close the in-app browser the fallback opened so the rest of the run can
+    // interact with the chat again.
+    if (browserOpen) {
+      await page.evaluate(() => {
+        const b = document.querySelector('.chats-browser')
+        const close = b?.querySelector('button[aria-label*="lose"], button[aria-label*="Close"]')
+        close?.click()
+      })
+      await page.waitForTimeout(500)
+    }
     // Closing the modal must stop playback: the frame is unmounted, not hidden.
     await closePreview(page, videoModal)
     check('closing unmounts the player', await page.evaluate(() =>

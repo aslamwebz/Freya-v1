@@ -257,7 +257,7 @@ export function attachEmbedView(
     contentView: { addChildView(view: unknown): void; removeChildView(view: unknown): void }
   },
   electronModule: {
-    WebContentsView: new (options: Record<string, unknown>) => {
+WebContentsView: new (options: Record<string, unknown>) => {
       setBounds(bounds: { x: number; y: number; width: number; height: number }): void
       webContents: { loadURL(url: string): Promise<void>; close(): void; isDestroyed(): boolean }
     }
@@ -304,7 +304,7 @@ export function detachEmbedView(
   const attached = embedViews.get(window)
   if (attached === undefined) return false
   embedViews.delete(window)
-  try {
+try {
     window.contentView.removeChildView(attached.view as never)
     const contents = (attached.view as { webContents?: { isDestroyed(): boolean; close(): void } }).webContents
     if (contents !== undefined && !contents.isDestroyed()) contents.close()

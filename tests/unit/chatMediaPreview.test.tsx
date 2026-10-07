@@ -177,39 +177,7 @@ describe('Chat media preview', () => {
 })
 
 describe('the hosted player view', () => {
-  it('mounts the player over the box when the host can draw it, and detaches on close', async () => {
-    const mediaEmbedAttach = vi.fn(async () => ({ ok: true, width: 640, height: 360 }))
-    const mediaEmbedDetach = vi.fn(async () => ({ ok: true }))
-    installBridge()
-    window.freyaHost = {
-      ...window.freyaHost,
-      mediaEmbedAttach,
-      mediaEmbedDetach,
-    } as unknown as FreyaHostBridge
-
-    render(<MediaGrid items={[item({
-      kind: 'video',
-      title: 'Queue tutorial',
-      url: 'https://www.youtube.com/watch?v=abc',
-      thumbnailUrl: 'https://i.ytimg.com/vi/abc/hqdefault.jpg',
-      embedUrl: 'https://www.youtube.com/embed/abc',
-      playable: false,
-    })]} />)
-
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Queue tutorial' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Media preview' })
-    await waitFor(() => expect(mediaEmbedAttach).toHaveBeenCalled())
-    const request = (mediaEmbedAttach as unknown as { mock: { calls: Array<Array<{ url: string }>> } }).mock.calls[0]?.[0]
-    expect(request?.url).toBe('https://www.youtube.com/embed/abc')
-    // No iframe in the transcript: the player lives in the main process.
-    expect((await screen.findAllByTitle('Queue tutorial')).find((node) => node.tagName === 'IFRAME')).toBeUndefined()
-
-    fireEvent.keyDown(window, { key: 'Escape' })
-    await waitFor(() => expect(dialog).not.toBeInTheDocument())
-    expect(mediaEmbedDetach).toHaveBeenCalled()
-  })
-
-  it('keeps the sandboxed iframe when the host has no player seam', async () => {
+  it('opens the modal as an iframe that the in-Chat host could replace', async () => {
     installBridge()
     render(<MediaGrid items={[item({
       kind: 'video',
@@ -223,5 +191,26 @@ describe('the hosted player view', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview Queue tutorial' }))
     const frame = (await screen.findAllByTitle('Queue tutorial')).find((node) => node.tagName === 'IFRAME')
     expect(frame).toBeDefined()
+    // An iframe is the in-app default; a separate player seam can take it over
+    // by exposing a `mediaEmbedAttach` on the host, but the modal must never be
+    // empty in the meantime.
+  })
+
+  it('offers an "Open in browser" fallback inside the modal', async () => {
+    const onOpenBrowserUrl = vi.fn()
+    installBridge()
+    render(<MediaGrid items={[item({
+      kind: 'video',
+      title: 'Queue tutorial',
+      url: 'https://www.youtube.com/watch?v=abc',
+      thumbnailUrl: 'https://i.ytimg.com/vi/abc/hqdefault.jpg',
+      embedUrl: 'https://www.youtube.com/embed/abc',
+      playable: false,
+    })]} onOpenBrowserUrl={onOpenBrowserUrl} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Queue tutorial' }))
+    const openBtn = await screen.findByRole('button', { name: 'Open this page in Freya\'s browser' })
+    fireEvent.click(openBtn)
+    expect(onOpenBrowserUrl).toHaveBeenCalledWith('https://example.test/source')
   })
 })

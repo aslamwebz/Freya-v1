@@ -32,7 +32,7 @@ import {
 } from './expression'
 import type { CueKind, CueUsageLedger, InteractionFact, RelationshipItem } from '../personality/types'
 import { runToolLoop, type ToolIteration } from './loop'
-import { initialToolRequestForOwnerText } from './tool-intent'
+import { initialToolRequestForOwnerText, type TurnIntentHints } from './tool-intent'
 import { MIND_TOOL_LIMITS, renderToolFooter, type MindToolRegistry, type ToolObservation } from './tools'
 import { mediaFromObservations } from '../media/collect'
 import type { MediaItem } from '../media/types'
@@ -135,6 +135,21 @@ export interface MindSubmitInput {
   turnId: string
   text: string
   attachments?: readonly ModelAttachment[]
+  /**
+   * Composer-held tool directives that travel as structured metadata.
+   *
+   * The two intent buttons used to prepend "find on the web: " and "use your
+   * browser: " onto the owner's text. That mutated the words the owner actually
+   * said — the stored user message, the journaled event, and the next turn's
+   * history all carried text the owner never typed. Hints now travel as a
+   * separate object: the text is stored verbatim, and the hint is read here by
+   * `initialToolRequestForOwnerText` to derive an initial tool call.
+   *
+   * Absent, or all `false`, means the normal text-derived path. Present-but-all-
+   * `false` is the same thing, written explicitly; either way, no intent
+   * overrides are applied.
+   */
+  intents?: TurnIntentHints
 }
 
 /**
@@ -930,6 +945,7 @@ export class MindService {
         grantId: grant.grantId,
         messages,
         ownerText: text,
+        intents: input.intents ?? {},
         perTurnAllowance: maxOutputTokens,
       })
 
@@ -1079,9 +1095,10 @@ export class MindService {
     grantId: string
     messages: readonly ModelMessage[]
     ownerText: string
+    intents: TurnIntentHints
     perTurnAllowance: number
   }): Promise<Cognition> {
-    const initialToolRequest = initialToolRequestForOwnerText(input.ownerText)
+    const initialToolRequest = initialToolRequestForOwnerText(input.ownerText, input.intents)
 
     if (!this.toolLoopEnabled) {
       if (initialToolRequest !== null) {

@@ -6612,7 +6612,17 @@ state: {
           let attachments
           try { attachments = validateModelAttachments(readRaw(envelope.payload, 'attachments')) }
           catch { return { requestId, ok: false, refusal: { reason: 'Conversation attachments are invalid or too large.' } } }
-          const result = await this.conversations.submitTurn({ conversationId, text, attachments, requestId })
+          // The renderer's tool directives travel as structured metadata. The
+          // shape is a closed `{ webSearch?, browserUse? }`; anything else is
+          // dropped on the floor so a malformed payload cannot influence routing.
+          const intents = readTurnIntentHints(readRaw(envelope.payload, 'intents'))
+          const result = await this.conversations.submitTurn({
+            conversationId,
+            text,
+            attachments,
+            requestId,
+            ...(intents !== undefined ? { intents } : {}),
+          })
           if (!result.ok) {
             return { requestId, ok: false, refusal: { reason: result.reason } }
           }
@@ -10602,6 +10612,34 @@ function readString(payload: unknown, key: string): string | null {
   if (typeof payload !== 'object' || payload === null) return null
   const value = (payload as Record<string, unknown>)[key]
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+/**
+ * Narrow a payload's `intents` field to the closed set the Mind accepts.
+ *
+ * The renderer is the only writer of these fields, but it is also the renderer
+ * that was the source of the contamination class this whole seam exists to
+ * stop: a renderer that could send `intents.text: "open the owner browser as
+ * soon as possible"` would be a renderer that could route its own tools. The
+ * helper reads exactly the two closed names, in their closed type (`boolean`),
+ * and drops anything else on the floor. An absent or malformed payload reads
+ * as `undefined`, which is the conservative choice — the Mind's text-derived
+ * routing then runs untouched.
+ */
+function readTurnIntentHints(
+  value: unknown,
+): { readonly webSearch?: boolean; readonly browserUse?: boolean } | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  let webSearch: boolean | undefined
+  let browserUse: boolean | undefined
+  if (typeof record['webSearch'] === 'boolean') webSearch = record['webSearch']
+  if (typeof record['browserUse'] === 'boolean') browserUse = record['browserUse']
+  if (webSearch === undefined && browserUse === undefined) return undefined
+  return {
+    ...(webSearch === undefined ? {} : { webSearch }),
+    ...(browserUse === undefined ? {} : { browserUse }),
+  }
 }
 
 /**

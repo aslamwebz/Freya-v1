@@ -93,11 +93,24 @@ export function App({
     memory: Memory(),
   }
 
-  const send = async (text: string, mode: ComposerMode): Promise<boolean> => {
+  const send = async (
+    text: string,
+    mode: ComposerMode,
+    hints?: { readonly webSearch?: boolean; readonly browserUse?: boolean },
+  ): Promise<boolean> => {
     if (!text.trim()) return false
     if (!hostBridge()) {
       setNotice('This window cannot reach Freya Core.')
       return false
+    }
+    // The renderer's hint fields travel as structured metadata only. The text
+    // we received is the text the owner typed — never mutated, never prefixed.
+    // A button that changed the text would be the contamination class this whole
+    // seam exists to prevent, and a bug report is the friendliest of the
+    // responses it gets if it tries.
+    const intents = {
+      ...(hints?.webSearch === true ? { webSearch: true } : {}),
+      ...(hints?.browserUse === true ? { browserUse: true } : {}),
     }
 
     // File bytes travel as bounded attachment parts through the canonical turn.
@@ -148,6 +161,7 @@ export function App({
         mirror,
         screen === 'chat' ? (conversation?.activeConversationId ?? null) : null,
         composed.text,
+        Object.keys(intents).length > 0 ? intents : undefined,
         payload.attachments,
       )
       // The payload and the tray are cleared only once Core has accepted the turn,

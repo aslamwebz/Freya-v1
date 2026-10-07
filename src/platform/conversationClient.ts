@@ -1,4 +1,5 @@
 import type { ModelAttachment } from '../../core/model/provider'
+import type { TurnIntentHints } from '../../core/mind/tool-intent'
 import type {
   ConversationCommandOutcome,
   ConversationMessageView,
@@ -38,7 +39,12 @@ export interface ConversationMirror {
   list(): Promise<ConversationCommandOutcome>
   read(conversationId: string): Promise<ConversationCommandOutcome>
   archive(conversationId: string): Promise<ConversationCommandOutcome>
-  submitTurn(conversationId: string, text: string, attachments?: readonly ModelAttachment[]): Promise<ConversationCommandOutcome>
+  submitTurn(
+    conversationId: string,
+    text: string,
+    intents?: TurnIntentHints,
+    attachments?: readonly ModelAttachment[],
+  ): Promise<ConversationCommandOutcome>
   cancelTurn(turnId: string): Promise<ConversationCommandOutcome>
 
   /**
@@ -83,6 +89,28 @@ export function ensureConversationAttached(): Promise<ConversationMirror> {
 export function resetConversationMirror(): void {
   shared = null
   attachPromise = null
+}
+
+/**
+ * Narrow a hint set to the closed names `TurnIntentHints` accepts, dropping
+ * anything else on the floor so the renderer cannot smuggle routing through
+ * the field. The composer emits two keys and nothing else; the wire carries
+ * exactly those keys, and the rest of the system treats them as opaque
+ * metadata the Mind reads alongside the text.
+ */
+function normaliseIntents(
+  value: TurnIntentHints | undefined,
+): { readonly webSearch?: boolean; readonly browserUse?: boolean } | undefined {
+  if (value === undefined) return undefined
+  let webSearch: boolean | undefined
+  let browserUse: boolean | undefined
+  if (value.webSearch === true) webSearch = true
+  if (value.browserUse === true) browserUse = true
+  if (webSearch === undefined && browserUse === undefined) return undefined
+  return {
+    ...(webSearch === undefined ? {} : { webSearch }),
+    ...(browserUse === undefined ? {} : { browserUse }),
+  }
 }
 
 export function createConversationMirror(): ConversationMirror {
@@ -148,7 +176,17 @@ export function createConversationMirror(): ConversationMirror {
     read: (conversationId) => submit('conversation.read', { conversationId }),
     archive: (conversationId) => submit('conversation.archive', { conversationId }),
 
-    submitTurn: (conversationId, text, attachments) => submit('conversation.turn.submit', { conversationId, text, ...(attachments?.length ? { attachments } : {}) }),
+    submitTurn: (conversationId, text, intents, attachments) => {
+      // The renderer's exact text reaches Core as `text`; the button directive
+      // travels as structured metadata under `intents`. The text is never
+      // mutated here — the contamination that used to live in this layer is
+      // closed by construction.
+      const payload: Record<string, unknown> = { conversationId, text }
+      const normalised = normaliseIntents(intents)
+      if (normalised !== undefined) payload['intents'] = normalised
+      if (attachments && attachments.length > 0) payload['attachments'] = attachments
+      return submit('conversation.turn.submit', payload)
+    },
 
     cancelTurn: (turnId) => submit('conversation.turn.cancel', { turnId }),
 

@@ -54,7 +54,7 @@ jobs:
         run: npm ci
 
       - name: Run headless verification
-        run: npm run typecheck && npm run lint && npm run test && npm run build
+        run: npm run verify:full
 
       - name: Run Phase 18 release check
         run: npm run release:check

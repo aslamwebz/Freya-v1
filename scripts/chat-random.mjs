@@ -107,11 +107,11 @@ async function freshChat(label) {
 async function ask(text, { useWebButton = false, useBrowserButton = false } = {}) {
   console.log(`\n>>> ${text}`)
   if (useWebButton) {
-    await page.locator('button[aria-label*="web search to the next message"]').click()
+    await page.locator('button[aria-label*="web search"], button[aria-label*="Web search"]').click()
     await page.waitForTimeout(150)
   }
   if (useBrowserButton) {
-    await page.locator('button[aria-label*="browser use to the next message"]').click()
+    await page.locator('button[aria-label*="browser use"], button[aria-label*="Browser use"]').click()
     await page.waitForTimeout(150)
   }
   await page.locator('form[aria-label="Freya composer"] textarea').fill(text)
@@ -139,8 +139,8 @@ try {
 
   // Section 1: verify the new composer has BOTH buttons (web search + browser use).
   const buttons = await page.evaluate(() => ({
-    webSearch: !!document.querySelector('button[aria-label*="web search to the next message"]'),
-    browserUse: !!document.querySelector('button[aria-label*="browser use to the next message"]'),
+    webSearch: !!document.querySelector('button[aria-label*="web search"], button[aria-label*="Web search"]'),
+    browserUse: !!document.querySelector('button[aria-label*="browser use"], button[aria-label*="Browser use"]'),
     oldBrowserToggle: !!document.querySelector('button[aria-label*="browser workspace"]'),
   }))
   check('the composer has a Web search button', buttons.webSearch)
@@ -195,10 +195,10 @@ try {
 
   // Section 7: tapping a button then tapping it again drops the directive.
   await freshChat('toggle')
-  await page.locator('button[aria-label*="web search to the next message"]').click()
-  const pressed = await page.evaluate(() => document.querySelector('button[aria-label*="web search to the next message"]')?.getAttribute('aria-pressed') === 'true')
-  await page.locator('button[aria-label*="web search to the next message"]').click()
-  const unpressed = await page.evaluate(() => document.querySelector('button[aria-label*="web search to the next message"]')?.getAttribute('aria-pressed') === 'false')
+  await page.locator('button[aria-label*="web search"], button[aria-label*="Web search"]').click()
+  const pressed = await page.evaluate(() => document.querySelector('button[aria-label*="web search"], button[aria-label*="Web search"]')?.getAttribute('aria-pressed') === 'true')
+  await page.locator('button[aria-label*="web search"], button[aria-label*="Web search"]').click()
+  const unpressed = await page.evaluate(() => document.querySelector('button[aria-label*="web search"], button[aria-label*="Web search"]')?.getAttribute('aria-pressed') === 'false')
   check('the Web search button toggles', pressed && unpressed)
 
   console.log(`\n=== SUMMARY ===`)

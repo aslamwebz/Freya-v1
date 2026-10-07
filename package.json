@@ -49,7 +49,8 @@
     "test:chat-browser": "npm run build:chat-browser-acceptance && electron dist-electron/acceptance-native-browser.cjs",
     "build:chat-browser-acceptance": "node scripts/build-chat-browser-acceptance.mjs",
     "test:chat-live-all": "npm run test:chat-acceptance && npm run test:chat-browser",
-    "test:chat-onscreen": "node scripts/chat-onscreen-acceptance.mjs"
+    "test:chat-onscreen": "node scripts/chat-onscreen-acceptance.mjs",
+    "test:chat-random": "node scripts/chat-random.mjs"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1",

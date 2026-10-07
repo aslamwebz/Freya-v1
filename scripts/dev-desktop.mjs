@@ -83,7 +83,16 @@ if (!ready) {
   shutdown(1)
 } else {
   console.log(`[dev:desktop] Vite ready at ${DEV_SERVER}. Launching Electron…`)
-  electron = spawn(require('electron'), ['.', '--dev'], {
+  // Expose a Chromium DevTools port so the running window can be driven from
+  // outside the process. The port is opt-out via `FREYA_NO_DEBUG_PORT=1` for the
+  // rare case where a developer wants the dev run to look exactly like a
+  // packaged launch. Without this, the only way to interact with the live
+  // window is by hand — which is fine until it isn't.
+  const debugPort = process.env.FREYA_NO_DEBUG_PORT === '1' ? null : (process.env.FREYA_DEBUG_PORT || 9222)
+  const electronArgs = ['.', '--dev']
+  if (debugPort) electronArgs.push('--remote-debugging-port=' + String(debugPort))
+
+  electron = spawn(require('electron'), electronArgs, {
     cwd: ROOT,
     stdio: 'inherit',
     shell: false,

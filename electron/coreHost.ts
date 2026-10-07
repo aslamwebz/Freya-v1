@@ -2200,6 +2200,7 @@ const ABSENT_WORK: WorkProjection = {
 /** A valid status for a host whose Core has not started. Nothing is guessed. */
 const NOT_READY: CoreStatus = {
   lifecycle: 'booting',
+  operational: false,
   eventSequence: 0,
   coreStartedAt: null,
   integrity: {
@@ -2209,6 +2210,8 @@ const NOT_READY: CoreStatus = {
     eventsRead: 0,
     bytesDiscarded: 0,
   },
+  persistence: { mode: 'durable', durable: true, reason: 'no Core has reported yet', eventStorePath: null },
+  diagnostics: { path: null, writeFailures: 0 },
   stopAll: { active: false, activatedAt: null, activatedBy: null },
   guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
   governor: { status: 'unknown', grantsActive: 0 },

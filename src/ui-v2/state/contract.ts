@@ -8,6 +8,24 @@ export type Resource<T> =
 export interface CoreView {
   readonly lifecycle: string; readonly sequence: number; readonly activeRequests: number
   readonly stopped: boolean; readonly integrity: string; readonly faultCount: number
+  /**
+   * Whether the Core process can currently serve commands. Distinct from the
+   * aggregate `lifecycle`: a Core can be `degraded` and still operational, and
+   * a Core that fell back to an ephemeral event store is operational even
+   * though its history is not durable. Use this in the UI to decide whether
+   * the workspace is usable.
+   */
+  readonly operational: boolean
+  /** Whether the Core's history is being persisted to a durable store. */
+  readonly persistenceDurable: boolean
+  /** Short label for the persistence mode (durable / ephemeral-fallback). */
+  readonly persistenceMode: 'durable' | 'ephemeral-fallback'
+  /** Human-readable reason the persistence is in this mode, when it is not durable. */
+  readonly persistenceReason: string | null
+  /** Where the runtime diagnostics log is being written, when known. */
+  readonly diagnosticsPath: string | null
+  readonly diagnosticsWriteFailures: number
+  readonly faults: readonly string[]
   /** Reported provider usage. Optional: a preview or an older projection may omit it. */
   readonly sessionUsage?: { readonly calls: number; readonly inputTokens: number | null; readonly outputTokens: number | null; readonly unknownUsageCalls: number }
   readonly durableUsage?: { readonly calls: number; readonly inputTokens: number | null; readonly outputTokens: number | null; readonly unknownUsageCalls: number }

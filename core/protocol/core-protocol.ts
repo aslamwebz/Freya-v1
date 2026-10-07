@@ -426,7 +426,17 @@ export interface JournalFault {
 
 export interface CoreStatus {
   lifecycle: CoreLifecycle
-  /** Last durable event sequence, or 0 when the log is empty. */
+  /**
+   * Whether the Core process is currently able to serve commands.
+   *
+   * Operational is a *process-level* property: a Core in the ephemeral-fallback
+   * path is still operational even though `persistence.durable` is false, and
+   * a Core in the durable path with a single corrupt subsystem is still
+   * operational. Use this in the UI to decide whether the workspace is
+   * usable, never `lifecycle === 'ready'` alone.
+   */
+  operational: boolean
+  /** Last active event sequence. Persistence describes whether it is durable. */
   eventSequence: number
   coreStartedAt: string | null
   /**
@@ -434,7 +444,43 @@ export interface CoreStatus {
    * a warning is not the same thing as a warning that is absent.
    */
   integrity: JournalFault
-  /** The latch is derived from durable events, so it survives a restart. */
+  /**
+   * How durable the current process's history actually is. A Core that opened
+   * its durable store normally reports `durable: true`; a Core that fell back
+   * to the in-memory store because the durable store could not be opened
+   * reports `durable: false` with a `mode: 'ephemeral-fallback'` and a
+   * `reason` naming the failure. The UI uses this to label the workspace
+   * honestly — "event history is temporary" — without
+   * locking the owner out.
+   */
+  persistence: {
+    mode: 'durable' | 'ephemeral-fallback'
+    durable: boolean
+    /** Always present; explains what the mode is and why. */
+    reason: string | null
+    /** The on-disk path of the active event store, when one exists. */
+    eventStorePath: string | null
+  }
+  /**
+   * Where runtime diagnostics are being written. Always present after start;
+   * lets the UI surface "show last error" without hardcoding a path.
+   */
+  diagnostics: {
+    path: string | null
+    /** How many record writes have failed since this Core started. */
+    writeFailures: number
+  }
+  /**
+   * The most recent lifecycle transition, for "what changed" UX. Optional so
+   * the first render before the first transition is still valid.
+   */
+  lastLifecycleTransition?: {
+    from: CoreLifecycle
+    to: CoreLifecycle
+    at: string
+    reason: string | null
+  }
+  /** The event-derived latch survives restart only with durable persistence. */
   stopAll: {
     active: boolean
     activatedAt: string | null

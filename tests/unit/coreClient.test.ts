@@ -14,7 +14,10 @@ import type { CoreCommandName, CoreStatus } from '../../core/protocol/core-proto
 function status(over: Partial<CoreStatus> = {}): CoreStatus {
   return {
     lifecycle: 'ready',
-    eventSequence: 7,
+
+    operational: true,
+    persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null },
+    diagnostics: { path: null, writeFailures: 0 },    eventSequence: 7,
     coreStartedAt: '2026-03-01T12:00:00.000Z',
     integrity: {
       integrity: 'ok',

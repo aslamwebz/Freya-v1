@@ -14,6 +14,7 @@ import { brainState, type BrainState } from '../presence/state'
 import { ChatHistory } from '../chat/ChatHistory'
 import { SettingsOverlay, type SettingsCategory } from './Settings'
 import { GlobalComposer } from './GlobalComposer'
+import { CoreHealth } from './CoreHealth'
 import { hostBridge } from '../../platform/host'
 import type { DressingStore, DressingState } from '../dressing/store'
 import { PersistentWorkspaceLayers } from './PersistentWorkspaceLayers'
@@ -144,7 +145,17 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
   const attention = home?.attention.profiles[0]
   const preview = snapshot.home.status === 'ready' && snapshot.home.source === 'preview'
   const core = ready(snapshot.core)
-  const online = core?.lifecycle === 'ready'
+  const online = core?.operational === true
+  // The top-bar pill labels a Core that is up but not pristine. A degraded
+  // Core that is still operational is labelled with the cause rather than
+  // hidden behind a "WORKING" pill that would imply everything is fine.
+  const degradedReason: string | null = (() => {
+    if (!core) return null
+    if (core.operational === true && core.lifecycle === 'ready') return null
+    if (core.persistenceDurable === false) return 'EPHEMERAL'
+    if (core.lifecycle === 'degraded') return 'DEGRADED'
+    return core.lifecycle === 'booting' ? null : core.lifecycle.toUpperCase()
+  })()
   const workers = ready(snapshot.workforce)
   const activity = ready(snapshot.activity)
   const provider = ready(snapshot.provider)
@@ -153,6 +164,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
     working: workers?.working ?? 0,
     faultCount: core?.faultCount ?? 0,
     lifecycle: core?.lifecycle ?? 'booting',
+    operational: core?.operational,
   })
   const open = (screen: string) => () => onNavigate(screen)
 
@@ -196,9 +208,14 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
   // while Core reports any; it is the one "needs you" sign this screen can
   // read without inventing one.
   const warnCount = core?.faultCount ?? 0
-  const pill = cognition === 'uncertainty'
-    ? { kind: 'needs', word: 'NEEDS YOU' }
-    : cognition === 'calm' ? null : { kind: 'working', word: 'WORKING' }
+  const pill = (() => {
+    // A Core that is up but not pristine is labelled with the cause. A
+    // healthy Core only wears the cognition pill.
+    if (degradedReason !== null) return { kind: 'needs', word: degradedReason }
+    if (cognition === 'uncertainty') return { kind: 'needs', word: 'NEEDS YOU' }
+    if (cognition === 'calm') return null
+    return { kind: 'working', word: 'WORKING' }
+  })()
   const agoLabel = (at: number): string => {
     const seconds = Math.max(0, Math.round((Date.now() - at) / 1000))
     if (seconds < 60) return 'just now'
@@ -228,7 +245,9 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
     <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-background={design.background} data-browser={browserOpen || undefined} style={{ '--chats-thread': String(100 - browserPercent) } as CSSProperties}>
       <header className="hd-top">
         <div className="hd-brand"><b>FREYA</b></div>
-        {pill ? <div className={`hd-pill ${pill.kind}`}>{pill.word}</div> : null}
+        {core && (core.lifecycle === 'degraded' || core.persistenceDurable === false || core.faultCount > 0 || core.diagnosticsWriteFailures > 0)
+          ? <CoreHealth core={core} />
+          : pill ? <div className={`hd-pill ${pill.kind}`}>{pill.word}</div> : null}
         <span className="hd-gap" />
         <div className="hd-counts">
           {workingCount > 0 ? <span className="hd-count on">{workingCount} working</span> : null}

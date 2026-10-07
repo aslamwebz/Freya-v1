@@ -20,7 +20,10 @@ import {
 function core(over: Partial<CoreStatus> = {}): CoreStatus {
   return {
     lifecycle: 'ready',
-    eventSequence: 12,
+
+    operational: true,
+    persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null },
+    diagnostics: { path: null, writeFailures: 0 },    eventSequence: 12,
     coreStartedAt: '2026-03-01T12:00:00.000Z',
     integrity: { integrity: 'ok', reason: 'read in full', line: null, eventsRead: 12, bytesDiscarded: 0 },
     stopAll: { active: false, activatedAt: null, activatedBy: null },

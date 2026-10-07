@@ -3,11 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ThinkingSelector } from '../../../src/app/screens/ThinkingSelector'
 import { ModelSelector } from '../../../src/app/screens/ModelSelector'
 const api = vi.hoisted(() => ({ readModelCatalog: vi.fn(), selectModel: vi.fn() }))
+const coreApi = vi.hoisted(() => ({ attach: vi.fn() }))
 vi.mock('../../../src/platform/modelClient', () => api)
-vi.mock('../../../src/platform/coreClient', () => ({ coreMirror: () => ({ subscribe: () => () => {} }), ensureCoreAttached: async () => ({ status: null }) }))
+vi.mock('../../../src/platform/coreClient', () => ({ coreMirror: () => ({ subscribe: () => () => {} }), ensureCoreAttached: coreApi.attach }))
 vi.mock('../../../src/platform/host', () => ({ hostBridge: () => undefined }))
 beforeEach(() => {
   localStorage.clear()
+  coreApi.attach.mockResolvedValue({ status: null })
   api.readModelCatalog.mockResolvedValue({ operation: 'catalog', defaultModel: 'MiniMax-M3', selected: null, models: [
     { id: 'MiniMax-M3', ownedBy: 'minimax', providerId: 'minimax' },
     { id: 'anthropic/claude', ownedBy: 'anthropic', providerId: 'nanogpt' },
@@ -18,6 +20,14 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 describe('App Mode model picker', () => {
+  it('reports the actual model selection from a degraded operational Core', async () => {
+    coreApi.attach.mockResolvedValue({ status: { lifecycle: 'degraded', operational: true,
+      modelSelection: { model: 'anthropic/claude', providerId: 'nanogpt', defaultModel: 'MiniMax-M3' } } })
+    render(<ModelSelector defaultModel="MiniMax-M3" />)
+    expect(await screen.findByText('claude')).toBeVisible()
+    expect(api.readModelCatalog).not.toHaveBeenCalled()
+  })
+
   it('keeps favorites visible while searching across provider names and model names', async () => {
     localStorage.setItem('freya.favoriteModels', JSON.stringify(['MiniMax-M3']))
     render(<ModelSelector defaultModel="MiniMax-M3" />)

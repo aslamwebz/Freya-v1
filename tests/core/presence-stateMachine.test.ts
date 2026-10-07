@@ -15,6 +15,9 @@ import { absentVoiceProjection } from './voice/fixture'
 function coreStatus(overrides: Partial<CoreStatus> = {}): CoreStatus {
   return {
     lifecycle: 'ready',
+    operational: true,
+    persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null },
+    diagnostics: { path: null, writeFailures: 0 },
     eventSequence: 1,
     coreStartedAt: '2026-01-01T00:00:00.000Z',
     integrity: { integrity: 'ok', reason: 'no fault', line: null, eventsRead: 1, bytesDiscarded: 0 },

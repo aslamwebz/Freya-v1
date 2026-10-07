@@ -28,7 +28,7 @@ export function createPreviewAdapter(): UiAdapter {
         { id: 'innovation', title: 'Innovation', detail: 'Breakthroughs worth understanding.', icon: 'create' },
         { id: 'opportunity', title: 'Opportunities', detail: 'New possibilities for connection.', icon: 'world' }],
     }),
-    core: sample({ lifecycle: 'ready', sequence: 19, activeRequests: 0, stopped: false, integrity: 'ok', faultCount: 0 }),
+    core: sample({ lifecycle: 'ready', sequence: 19, activeRequests: 0, stopped: false, integrity: 'ok', faultCount: 0, operational: true, persistenceDurable: true, persistenceMode: 'durable', persistenceReason: null, diagnosticsPath: null, diagnosticsWriteFailures: 0, faults: [] }),
     attention: sample({ focus: 'focused', ingested: 42, decisions: 18, cued: 12, spoke: 4, interrupted: 1, budgetExceeded: 0, inboxCount: 3 }),
     provider: sample({ connected: true, baseUrl: 'https://nano-gpt.com/api/v1', model: 'openai/gpt-4.1-nano', liveEnabled: true, hasKey: true, credentialState: 'stored', credentialReason: null, endpointApproved: true, detail: 'preview — sample provider configuration' }),
     mission: sample({

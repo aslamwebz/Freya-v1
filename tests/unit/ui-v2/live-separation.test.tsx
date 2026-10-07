@@ -33,7 +33,7 @@ function liveSnapshot(overrides: Partial<UiSnapshot> = {}): UiSnapshot {
   const live = <T,>(data: T): Resource<T> => ({ status: 'ready', source: 'live', data })
   return {
     home: live({ focus: { title: 'Freya Core is running', detail: 'Idle and listening.', progress: null }, mission: '3 Missions · 1 active', attention: { focused: null, caption: 'Core reports focused', categories: [], profiles: [] } }),
-    core: live({ lifecycle: 'running', sequence: 42, activeRequests: 0, stopped: false, integrity: 'ok', faultCount: 0 }),
+    core: live({ lifecycle: 'running', sequence: 42, activeRequests: 0, stopped: false, integrity: 'ok', faultCount: 0, operational: true, persistenceDurable: true, persistenceMode: 'durable', persistenceReason: null, diagnosticsPath: null, diagnosticsWriteFailures: 0, faults: [] }),
     mission: live({ rows: [{ id: 'mission-real-1', status: 'active', runs: 5, verifiedRuns: 3, needsAttention: true }], total: 1, hidden: 0, durable: true }),
     workforce: live({ rows: [{ id: 'worker-real-1', state: 'Researching', specialization: 'Research agent' }], total: 1, working: 1 }),
     activity: live([{ id: 'act-1', text: 'Core reported a verified outcome', at: 1790956800000, sequence: 42, tone: 'good' }]),

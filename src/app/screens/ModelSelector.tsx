@@ -73,7 +73,11 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
     let live = true
     const mirror = coreMirror()
     const apply = (status: CoreStatus | null) => {
-      if (!live || status?.lifecycle !== 'ready') return
+      // A degraded Core is still operational; a Core that has not started
+      // is not. Use the explicit operational flag rather than the
+      // aggregate lifecycle so a healthy model selection is still picked
+      // up when the journal had to be quarantined.
+      if (!live || !status?.operational) return
       if (status.modelSelection) {
         setSelected(status.modelSelection.model)
         setSelectedProvider(status.modelSelection.providerId)

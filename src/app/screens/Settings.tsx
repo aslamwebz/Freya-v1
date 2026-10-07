@@ -417,8 +417,8 @@ function SecurityCard({ snapshot }: { snapshot: SettingsProps['snapshot'] }) {
    *
    * There is no second stop system here and no local boolean pretending Freya is
    * stopped. `security.stopAll` is the same command the legacy Security surface
-   * issues; it latches durably in the journal, cancels in-flight provider calls,
-   * closes research, Relay and the workforce, and survives a restart. The only way
+   * issues; it latches in Core, cancels in-flight provider calls,
+   * closes research, Relay and the workforce. Durability follows Core's store. The only way
    * back is an explicit `security.resume`.
    *
    * Two rules this deliberately keeps:
@@ -481,7 +481,10 @@ function SecurityCard({ snapshot }: { snapshot: SettingsProps['snapshot'] }) {
         </div>
         <p className="st-note">
           STOP ALL latches in Core: it cancels in-flight provider calls, closes research,
-          Relay and the workforce, and survives a restart. Only an explicit resume clears it.
+          Relay and the workforce. Only an explicit resume clears it.{' '}
+          {core.persistenceDurable
+            ? 'The latch survives a restart.'
+            : 'Event history is temporary: the latch cannot be guaranteed after a restart.'}
         </p>
         {notice.length > 0 && <p className="st-notice" role="status">{notice}</p>}
       </div>

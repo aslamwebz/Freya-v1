@@ -55,6 +55,9 @@ const IDLE_STOP_ALL: StopAllState = { active: false, activatedAt: null, activate
 function coreStatus(over: Partial<CoreStatus> = {}): CoreStatus {
   return {
     lifecycle: 'ready',
+    operational: true,
+    persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null },
+    diagnostics: { path: null, writeFailures: 0 },
     eventSequence: 42,
     coreStartedAt: '2026-10-03T09:00:00.000Z',
     integrity: { integrity: 'ok', reason: '', line: null, eventsRead: 0, bytesDiscarded: 0 },

@@ -22,7 +22,9 @@ import type { AttentionProjection } from '../../../core/protocol/attention'
 
 const coreStatus: CoreStatus = {
   lifecycle: 'ready',
-  eventSequence: 42,
+
+        operational: true,
+        persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null }, diagnostics: { path: null, writeFailures: 0 },  eventSequence: 42,
   coreStartedAt: '2026-10-03T00:00:00.000Z',
   integrity: { integrity: 'ok', reason: 'Journal is healthy.', line: null, eventsRead: 42, bytesDiscarded: 0 },
   stopAll: { active: false, activatedAt: null, activatedBy: null },

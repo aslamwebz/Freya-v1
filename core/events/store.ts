@@ -1,30 +1,30 @@
 import type { AnyCoreEvent } from './envelope'
 
 /**
- * Durable event storage.
+ * Ordered event storage.
  *
  * The interface is deliberately tiny: append, read in order, read from a
  * sequence. Everything else — ordering, recovery, durability guarantees — is a
- * property of an implementation, and Phase 1 has one.
+ * property of an implementation. Core reports active durability separately.
  *
- * Implementations must guarantee that `append` either persists the event or
+ * Implementations must guarantee that `append` either retains the event or
  * throws. There is no partial success: a caller may treat a resolved promise as
- * "this event will be seen by anybody who replays the log".
+ * "this event is available for replay in the active store". Durable stores
+ * additionally persist it across restart; ephemeral fallback does not.
  */
 export interface EventStore {
   /**
-   * Persist one event. Resolves only once the event is durable.
-   * Rejects if it is not.
+   * Retain one event before publishing it. Rejects if the active store cannot.
    */
   append(event: AnyCoreEvent): Promise<void>
 
-  /** Every persisted event, in ascending sequence order. */
+  /** Every retained event, in ascending sequence order. */
   readAll(): Promise<AnyCoreEvent[]>
 
-  /** Persisted events with `sequence > afterSequence`, ascending. */
+  /** Retained events with `sequence > afterSequence`, ascending. */
   readAfter(afterSequence: number): Promise<AnyCoreEvent[]>
 
-  /** The highest persisted sequence, or 0 when the log is empty. */
+  /** The highest retained sequence, or 0 when the log is empty. */
   lastSequence(): Promise<number>
 
   /** A short description of the backing store, for the status projection. */

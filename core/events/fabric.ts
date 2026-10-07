@@ -8,10 +8,10 @@ import type { PrincipalId } from '../protocol/core-protocol'
  *
  * One rule holds everything together: **an event becomes visible to subscribers
  * only after its append has succeeded.** The store is awaited first; there is
- * no code path that publishes first and persists later, because that is the
- * failure mode where a crash loses an event somebody already reacted to.
+ * no code path that publishes before the active store accepts the event.
+ * Across-restart durability depends on the store; Core reports fallback mode.
  *
- * Appends are serialised. Sequence assignment, the durable write and
+ * Appends are serialised. Sequence assignment, the store write and
  * publication happen one at a time, in call order, so concurrent callers cannot
  * be handed the same sequence number. See `enqueue`.
  *
@@ -75,14 +75,14 @@ export class EventFabric {
   private lastId: string | null = null
 
   /**
-   * Persist an event, then publish it.
+   * Store an event, then publish it.
    *
    * The store is awaited before a single subscriber is called. If the append
    * throws, nothing is published and the caller's promise rejects — the
    * sequence number is not consumed either, so the next event takes it.
    *
    * The whole body runs inside the append queue, so sequence assignment, the
-   * durable write and publication are one indivisible step. Without that, two
+   * store write and publication are one indivisible step. Without that, two
    * concurrent callers both read `sequence + 1` before either has written, and
    * the log ends up with a duplicate — which the store then rejects, having
    * already written one of the two lines.
@@ -107,7 +107,7 @@ export class EventFabric {
         payload,
       } as AnyCoreEvent
 
-      // Durable first.
+      // Active store first.
       await this.store.append(event)
       this.sequence = sequence
       this.lastId = event.eventId

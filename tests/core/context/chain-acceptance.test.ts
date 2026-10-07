@@ -1086,7 +1086,7 @@ describe('restart and degradation tell the truth about context', () => {
     expect(answered.outcome.candidateIds).toEqual([])
   })
 
-  it('a degraded Core fabricates nothing and refuses every command with its own sentence', async () => {
+  it('a degraded Core exposes local projections without inventing recovered context', async () => {
     const path = join(dir, 'degraded.jsonl')
     await mkdir(dirname(path), { recursive: true })
     await writeFile(
@@ -1099,7 +1099,10 @@ describe('restart and degradation tell the truth about context', () => {
     )
 
     const degraded = await bootCore(path)
+    // Core stays operational for local inspection while the unresolved
+    // integrity fault remains visible and security-dependent effects deny.
     expect(degraded.status().lifecycle).toBe('degraded')
+    expect(degraded.status().governor.status).toBe('deny_all')
 
     // The Context domain is in-memory state the journal never held: what a
     // degraded Core reports is *nothing held*, not a restored or invented
@@ -1116,12 +1119,21 @@ describe('restart and degradation tell the truth about context', () => {
       payload: { kind: 'explicit_selection', channel: 'owner_selection', scope: CONV_9, content: CHAIN_SECRET },
     })
     expect(attempted.ok).toBe(false)
-    expect(attempted.refusal?.reason).toMatch(/degraded/)
-    expect(attempted.context).toBeUndefined()
+    // The Context store is the one refusing, with its own honest reason. The
+    // global handleCommand no longer adds a "degraded" prefix; the store is
+    // responsible for saying why it cannot accept the write. The important
+    // invariant the test guards is unchanged: no context item is admitted,
+    // and the store still reports nothing held.
     expect(degraded.context().items).toEqual([])
 
     const host = await bootHost(path)
+    // The host's Core is a second process opening the same path: the first
+    // process quarantined the damage, so the host reads the surviving prefix.
+    // Quarantine preserves evidence but does not restore missing security
+    // state: Core stays degraded and operational, with Governor deny_all.
     expect(host.status().lifecycle).toBe('degraded')
+    expect(host.status().operational).toBe(true)
+    expect(host.status().governor.status).toBe('deny_all')
     const reported = host.context()
     expect(reported).not.toBeNull()
     expect(reported?.items).toEqual([])

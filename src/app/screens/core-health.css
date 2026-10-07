@@ -1,0 +1,6 @@
+.hd-core-health { position: relative; }
+.hd-core-health > summary { cursor: pointer; list-style: none; }
+.hd-core-health > summary::-webkit-details-marker { display: none; }
+.hd-core-health-detail { position: absolute; top: calc(100% + 12px); left: 0; z-index: 100; width: min(420px, 70vw); max-height: 60vh; overflow: auto; padding: 16px; border: 1px solid #7b6650; border-radius: 12px; background: #172027; color: #e7edf0; box-shadow: 0 12px 36px #0008; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.hd-core-health-detail p { margin: 0 0 10px; }
+.hd-core-health-detail ul { margin: 0 0 10px; padding-left: 20px; }

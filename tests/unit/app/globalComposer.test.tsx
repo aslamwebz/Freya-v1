@@ -18,8 +18,8 @@ function voice(): VoiceView {
     capturing: false,
     speaking: false,
     muted: false,
-    wakeArmed: false,
     notice: '',
+    wakeArmed: false,
     unavailableReason: 'Voice unavailable in this test.',
     capabilities: {
       capture: false,
@@ -36,7 +36,6 @@ describe('GlobalComposer', () => {
     render(
       <GlobalComposer
         generating={false}
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}
@@ -63,7 +62,6 @@ describe('GlobalComposer', () => {
     render(
       <GlobalComposer
         generating={false}
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}
@@ -90,7 +88,6 @@ describe('GlobalComposer', () => {
     render(
       <GlobalComposer
         generating={false}
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}
@@ -118,7 +115,6 @@ describe('GlobalComposer', () => {
     render(
       <GlobalComposer
         generating
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}
@@ -145,7 +141,6 @@ describe('GlobalComposer keyboard and bounds', () => {
     render(
       <GlobalComposer
         generating={false}
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}
@@ -172,7 +167,6 @@ describe('GlobalComposer keyboard and bounds', () => {
     render(
       <GlobalComposer
         generating={false}
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}

@@ -341,6 +341,24 @@
 .hd-memory-icon-3 { color: #ffddb3; background: #a7672c66; }
 .hd-memory-icon-4 { color: #b7d6ff; background: #516bb566; }
 .hd-dock { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(960px, 60vw); min-height: 54px; }
+
+/* ---- the conversation owns the window ----
+   On the chat screen the board chrome is not drawn at all: no top bar, no rail,
+   no gutter. The conversation, the browser and the composer are the whole
+   surface, so the chat reads as the application rather than as one tab inside
+   a dashboard.
+
+   The composer is still the one global bar, so it has to know how wide the
+   conversation column is. `--chats-thread` is published by the shell for exactly
+   that, and it is the same number the workspace builds its grid from. */
+.hd-dashboard[data-screen='chat'] .hd-top,
+.hd-dashboard[data-screen='chat'] .hd-rail { display: none; }
+.hd-dashboard[data-screen='chat'] .hd-main { top: 0; bottom: 0; left: 0; right: 0; max-width: none; }
+.hd-dashboard[data-screen='chat'] .hd-dock { width: min(960px, 100%); }
+.hd-dashboard[data-screen='chat'][data-browser] .hd-dock {
+  left: 0; transform: none;
+  width: calc((100% - 6px) * var(--chats-thread, 48) / 100);
+}
 /* min-height, not height: the composer field grows to 132px as the draft wraps,
    and a fixed 54px row clipped it. */
 .hd-dock form { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 5px 12px 5px 7px; border: 1px solid #b3e0fc; border-radius: 28px; background: linear-gradient(170deg, #425d7480, #07131bf5 35%, #0b1825f5 74%, #36566fca); box-shadow: inset 0 2px 4px #b9dfffaa, inset 0 -2px 4px #acddffaa, 0 0 9px #84a9ff87, 0 0 27px #65c9ff27, 0 8px 24px #0008; }
@@ -392,7 +410,6 @@
 .hd-send-busy:not(:disabled):hover { box-shadow: 0 0 14px #ff9ea955; }
 .hd-send-busy:not(:disabled) .hd-send-orb { box-shadow: 0 0 12px #ff9ea988; }
 @keyframes hd-spin { to { transform: rotate(360deg); } }
-.hd-notice { position: absolute; bottom: 62px; left: 18px; margin: 0; border: 1px solid #6fb6d559; border-radius: 10px; padding: 10px 16px; background: #071320f0; font-size: 13px; }
 .hd-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* --------------------------------------------------------------------------

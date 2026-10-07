@@ -123,11 +123,15 @@ function AttachmentTray() {
 /**
  * The global dock composer, self-contained.
  *
- * The draft, the listening toggle and the local voice notice live here, so a
+ * The draft and the listening toggle live here, so a
  * keystroke in the composer re-renders the composer and its two selectors —
  * never the dashboard, its panels or the centre. The draft is handed up only on
  * submit, which keeps the real conversation send contract (App still owns the
  * bridge call) while removing per-keystroke board reconciliation.
+ *
+ * Nothing is printed above the field any more: "Freya is thinking" and every
+ * local problem left this bar and now arrive in the conversation, where the chat
+ * folds them into one hide/show section.
  *
  * The attach button asks the host for files through the real bridge function and
  * puts whatever comes back into the attachment tray. It is the renderer end of a
@@ -136,7 +140,6 @@ function AttachmentTray() {
  */
 export function GlobalComposer({
   generating,
-  notice,
   defaultModel,
   voice,
   voiceTranscript,
@@ -145,9 +148,9 @@ export function GlobalComposer({
   onVoicePress,
   onVoiceRelease,
   maxMessageCharacters,
+  onNotice,
 }: {
   generating: boolean
-  notice: string
   defaultModel: string | null
   voice: VoiceView
   voiceTranscript: { id: number; text: string } | null
@@ -160,9 +163,16 @@ export function GlobalComposer({
   onVoicePress: () => void
   onVoiceRelease: (cancelled?: boolean) => void
   maxMessageCharacters: number | null
+  /**
+   * Where a local problem goes.
+   *
+   * The composer used to print its notices in a panel floating above itself. The
+   * chat now owns the one place a person reads what went wrong, so the composer
+   * reports rather than displays.
+   */
+  onNotice?: (message: string) => void
 }) {
   const [text, setText] = useState('')
-  const [voiceNotice, setVoiceNotice] = useState('')
   const [sending, setSending] = useState(false)
   const [attaching, setAttaching] = useState(false)
   const [mode, setMode] = useState<ComposerMode>('chat')
@@ -204,7 +214,7 @@ export function GlobalComposer({
     // the user's text and corrupted the stored message; that class is closed
     // by passing the text through unchanged and reporting the directives
     // separately.
-    setVoiceNotice('')
+    onNotice?.('')
     setSending(true)
     try {
       const accepted = await onSend(value, mode, { webSearch: wantWeb, browserUse: wantBrowser })
@@ -224,12 +234,12 @@ export function GlobalComposer({
    */
   const attach = async () => {
     if (attaching) return
-    setVoiceNotice('')
+    onNotice?.('')
     setAttaching(true)
     try {
       const picked = await pickAttachments()
       if (!picked.ok) {
-        setVoiceNotice(picked.reason)
+        onNotice?.(picked.reason)
         return
       }
       if (picked.attachments.length === 0) return
@@ -240,7 +250,7 @@ export function GlobalComposer({
       const refused = picked.attachments
         .filter((file) => file.detail !== null && file.kind === 'unsupported')
         .map((file) => file.detail as string)
-      setVoiceNotice([...refused, ...notices].join(' ') || '')
+      onNotice?.([...refused, ...notices].join(' ') || '')
     } finally {
       setAttaching(false)
     }
@@ -319,6 +329,5 @@ export function GlobalComposer({
         {generating ? 'Freya is responding.' : sending ? 'Sending your message.' : ''}
       </span>
     </form>
-    {(voice.notice || notice || voiceNotice || generating) && <p className="hd-notice" role="status">{voice.notice || notice || voiceNotice || 'Freya is thinking…'}</p>}
   </footer>
 }

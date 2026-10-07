@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import type { CoreActivityEvent } from '../../../core/protocol/activity'
 import {
   conversationList,
   conversationMirror,
   ensureConversationAttached,
   visibleMessages,
 } from '../../platform/conversationClient'
+import { coreMirror, ensureActivityAttached } from '../../platform/coreClient'
 import { researchMirror } from '../../platform/researchClient'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import type { WorkspaceResearchView } from './modes'
@@ -15,6 +17,34 @@ import { EyeSessionControls } from './EyeSessionControls'
 import { openResearchCitationInDockedBrowser } from './eyeHandoff'
 import { ActivityFeed } from './ActivityFeed'
 import './chat.css'
+
+/**
+ * How long a recorded failure stays worth reporting.
+ *
+ * The activity stream is replayed from the journal, so the newest turn-ending
+ * event in it may be from a run last week. A timeout is news for as long as it
+ * is the turn that just ended, and a stale error pinned above the composer
+ * forever is worse than none at all.
+ */
+const FAULT_WINDOW_MS = 120_000
+
+/**
+ * The last thing that ended a turn, if it ended badly.
+ *
+ * Read from what Core journalled rather than from anything a model said about
+ * itself: `conversation.turn.failed` carries the provider's own sentence — a
+ * timeout, a refusal, a dropped connection — and a turn that completed clears it,
+ * because the honest state after a good answer is "nothing went wrong".
+ */
+function latestTurnFault(events: readonly CoreActivityEvent[], now: number): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!
+    if (event.kind !== 'conversation.turn.failed' && event.kind !== 'conversation.turn.completed') continue
+    if (now - event.at > FAULT_WINDOW_MS) return null
+    return event.kind === 'conversation.turn.failed' ? event.text : null
+  }
+  return null
+}
 
 function timeLabel(value: string): string {
   const date = new Date(value)
@@ -144,7 +174,10 @@ export function Chats({
   researchView,
   onResearchViewChange,
   busy = false,
+  issue = '',
   browserOpen,
+  browserPercent,
+  onBrowserPercentChange,
   browserRequestedUrl,
   onBrowserOpenUrl,
   onBrowserRequestedUrlHandled,
@@ -153,7 +186,17 @@ export function Chats({
   researchView: WorkspaceResearchView | null
   onResearchViewChange?: (view: WorkspaceResearchView) => void
   busy?: boolean
+  /**
+   * A problem the shell already knows about, in Core's own words.
+   *
+   * It arrives here rather than being printed over the composer, so the one place
+   * a person reads what went wrong is the conversation it happened in.
+   */
+  issue?: string
   browserOpen: boolean
+  /** Share of the window the browser column takes, as a percentage. */
+  browserPercent: number
+  onBrowserPercentChange: (percent: number) => void
   browserRequestedUrl: string | null
   onBrowserOpenUrl: (url: string, origin?: DockedTabOrigin) => void
   onBrowserRequestedUrlHandled: () => void
@@ -162,7 +205,8 @@ export function Chats({
   const mirror = conversationMirror()
   const projection = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
   const [notice, setNotice] = useState('')
-  const [browserPercent, setBrowserPercent] = useState(52)
+  const [fault, setFault] = useState<string | null>(null)
+  const [issueOpen, setIssueOpen] = useState(false)
   const logRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -171,6 +215,31 @@ export function Chats({
         if (outcome.operation === 'refused') setNotice(outcome.reason)
       })
     })
+  }, [])
+
+  /**
+   * Watch for a turn that ended badly.
+   *
+   * This is the only place a timeout or a dropped provider request can be told
+   * to a person: the projection carries which turn is running, never why the last
+   * one stopped, so the sentence comes from the event Core already wrote.
+   */
+  useEffect(() => {
+    const activity = coreMirror()
+    let disposed = false
+    let disposeSubscription: (() => void) | null = null
+    const read = (events: readonly CoreActivityEvent[]) => {
+      if (!disposed) setFault(latestTurnFault(events, Date.now()))
+    }
+    void ensureActivityAttached().then(() => {
+      if (disposed) return
+      read(activity.activity)
+      disposeSubscription = activity.subscribeActivity(read)
+    })
+    return () => {
+      disposed = true
+      disposeSubscription?.()
+    }
   }, [])
 
   const conversations = conversationList(projection)
@@ -193,14 +262,22 @@ export function Chats({
       : '',
     notice,
   ].filter(Boolean))]
+  const problems = [...new Set([issue, fault].filter(Boolean) as string[])]
+  const problemKey = problems.join(' ')
+
+  // A problem opens itself, because a collapsed error is an error nobody reads;
+  // after that it stays exactly as the reader left it.
+  useEffect(() => {
+    setIssueOpen(problems.length > 0)
+  }, [problemKey])
 
   useEffect(() => {
     const log = logRef.current
     if (log) log.scrollTop = log.scrollHeight
-  }, [messages.length, generating])
+  }, [messages.length, generating, problemKey])
 
   return (
-    <div className="chats" data-browser-open={browserOpen || undefined} style={browserOpen ? { gridTemplateColumns: `minmax(280px, ${100 - browserPercent}fr) 6px minmax(320px, ${browserPercent}fr)` } : undefined}>
+    <div className="chats" data-browser-open={browserOpen || undefined}>
       {/*
         Conversation history lives in the left rail. This workspace owns the
         transcript and, when opened, Freya's bounded browser controller.
@@ -268,6 +345,23 @@ export function Chats({
               </div>
             </article>
           ) : null}
+          {problems.length > 0 ? (
+            /*
+             * One place for everything that went wrong, folded away until it is
+             * asked for. This used to be a strip above the chat bar that also
+             * carried "Freya is thinking", so the loudest thing on the screen was
+             * often not a fact. A timeout now arrives here, in Core's words, with
+             * the turn it belongs to, and the reader decides whether to open it.
+             */
+            <details className="chats-issue" open={issueOpen} onToggle={(event) => setIssueOpen(event.currentTarget.open)}>
+              <summary>
+                <span className="chats-issue-mark" aria-hidden="true">!</span>
+                <b>That did not finish</b>
+                <small>{problems.length === 1 ? 'Show what happened' : `${problems.length} problems`}</small>
+              </summary>
+              <div>{problems.map((problem) => <p key={problem}>{problem}</p>)}</div>
+            </details>
+          ) : null}
         </div>
 
         {boundaries.length > 0 ? (
@@ -277,12 +371,12 @@ export function Chats({
         ) : null}
       </section>
       {browserOpen ? <div className="chats-dock-divider" role="separator" aria-label="Resize browser" aria-orientation="vertical" tabIndex={0}
-        onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') setBrowserPercent((value) => Math.max(28, Math.min(72, value + (event.key === 'ArrowLeft' ? 2 : -2)))) }}
+        onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') onBrowserPercentChange(Math.max(28, Math.min(72, browserPercent + (event.key === 'ArrowLeft' ? 2 : -2)))) }}
         onPointerDown={(event) => {
           const divider = event.currentTarget
           divider.setPointerCapture(event.pointerId)
           const container = divider.parentElement!
-          const move = (next: PointerEvent) => { const rect = container.getBoundingClientRect(); setBrowserPercent(Math.max(28, Math.min(72, 100 * (rect.right - next.clientX) / rect.width))) }
+          const move = (next: PointerEvent) => { const rect = container.getBoundingClientRect(); onBrowserPercentChange(Math.max(28, Math.min(72, 100 * (rect.right - next.clientX) / rect.width))) }
           const finish = () => { divider.removeEventListener('pointermove', move); divider.removeEventListener('pointerup', finish); divider.removeEventListener('pointercancel', finish) }
           divider.addEventListener('pointermove', move); divider.addEventListener('pointerup', finish); divider.addEventListener('pointercancel', finish)
         }} /> : null}

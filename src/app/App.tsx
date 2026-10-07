@@ -62,6 +62,13 @@ export function App({
   const [booted, setBooted] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
   const [browserRequestedUrl, setBrowserRequestedUrl] = useState<string | null>(null)
+  /*
+   * The chat/browser split lives here rather than inside the chat workspace
+   * because two things have to agree on it: the workspace's own columns and the
+   * global composer, which sits over the conversation column so the input never
+   * straddles the divider. One number, one source.
+   */
+  const [browserPercent, setBrowserPercent] = useState(52)
   useEffect(() => {
     const store = sharedDockedBrowserStore()
     let count = store.getSnapshot().tabs.length
@@ -326,6 +333,8 @@ export function App({
       onVoiceRelease={voice.release}
       maxMessageCharacters={conversation?.maxMessageCharacters ?? null}
       browserOpen={browserOpen}
+      browserPercent={browserPercent}
+      onBrowserPercentChange={setBrowserPercent}
       browserRequestedUrl={browserRequestedUrl}
       onBrowserOpenUrl={openBrowserUrl}
       onBrowserRequestedUrlHandled={handleBrowserRequestedUrlHandled}

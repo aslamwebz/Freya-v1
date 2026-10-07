@@ -192,11 +192,18 @@ function safeWebUrl(value: string): string | null {
 /**
  * Inline formatting with a closed token set.
  *
- * The tokenizer only recognises code, strong/emphasis and explicit http(s) links.
- * HTML tags are never interpreted; React escapes them as text.
+ * The tokenizer recognises code, strong/emphasis, explicit http(s) links and bare
+ * http(s) URLs written as prose. A bare URL is a link a person can see and click,
+ * and refusing to link it only because it arrived without markdown brackets was
+ * the reason an address in an answer was dead text. HTML tags are never
+ * interpreted; React escapes them as text.
+ *
+ * The URL arm excludes trailing punctuation from the match, so a sentence that
+ * ends `… at https://example.com.` links the address and leaves the full stop as
+ * prose.
  */
 export function inlineRichText(text: string, onOpenLink?: (url: string, provenance?: { readonly kind: 'citation' | 'source' | 'inline'; readonly title?: string }) => void): ReactNode[] {
-  const token = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\))/g
+  const token = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\)|https?:\/\/[^\s<>()]*[^\s<>().,;:!?'")])/g
   const nodes: ReactNode[] = []
   let cursor = 0
   let match: RegExpExecArray | null
@@ -212,9 +219,9 @@ export function inlineRichText(text: string, onOpenLink?: (url: string, provenan
     } else if (raw.startsWith('*')) {
       nodes.push(<em key={key++}>{raw.slice(1, -1)}</em>)
     } else {
-      const link = raw.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
-      const label = link?.[1] ?? raw
-      const url = safeWebUrl(link?.[2] ?? '')
+      const link = raw.startsWith('http') ? null : raw.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
+      const label = link === null ? raw : (link?.[1] ?? raw)
+      const url = safeWebUrl(link === null ? raw : (link?.[2] ?? ''))
       if (url === null) {
         nodes.push(raw)
       } else {

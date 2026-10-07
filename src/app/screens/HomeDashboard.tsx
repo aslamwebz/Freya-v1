@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import type { UiSnapshot } from '../../ui-v2/state/contract'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { Clock } from '../../ui-v2/primitives/Clock'
@@ -48,6 +48,8 @@ interface Props {
   onVoiceRelease: (cancelled?: boolean) => void
   maxMessageCharacters: number | null
   browserOpen: boolean
+  browserPercent: number
+  onBrowserPercentChange: (percent: number) => void
   browserRequestedUrl: string | null
   onBrowserOpenUrl: (url: string, origin?: DockedTabOrigin) => void
   onBrowserRequestedUrlHandled: () => void
@@ -125,7 +127,7 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onResearchViewChange, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
+export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onResearchViewChange, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserPercent, onBrowserPercentChange, browserRequestedUrl, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   /*
@@ -207,8 +209,23 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
     return `${Math.round(hours / 24)}d ago`
   }
 
+  /*
+   * What the composer and the shell used to print over the chat bar, which the
+   * chat now says instead: the shell's own sentence, the microphone's bounded
+   * notice, and anything local the composer hit (a file the host would not read).
+   */
+  const [composerIssue, setComposerIssue] = useState('')
+  useEffect(() => { if (notice) setComposerIssue('') }, [notice])
+  const issue = [notice, voice.notice, composerIssue].filter(Boolean).join(' ')
+
   return <div className="freya-v2 hd-viewport" data-theme="abyss" ref={viewport}>
-    <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-background={design.background}>
+    {/*
+      The conversation is the whole window on its screen: no top bar, no rail, no
+      board gutter. The one number both the workspace columns and the composer
+      read is published here, so the composer can sit over the conversation column
+      instead of over the divider.
+    */}
+    <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-background={design.background} data-browser={browserOpen || undefined} style={{ '--chats-thread': String(100 - browserPercent) } as CSSProperties}>
       <header className="hd-top">
         <div className="hd-brand"><b>FREYA</b></div>
         {pill ? <div className={`hd-pill ${pill.kind}`}>{pill.word}</div> : null}
@@ -353,7 +370,10 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
             researchView={researchView}
             onResearchViewChange={onResearchViewChange}
             busy={generating}
+            issue={issue}
             browserOpen={browserOpen}
+            browserPercent={browserPercent}
+            onBrowserPercentChange={onBrowserPercentChange}
             browserRequestedUrl={browserRequestedUrl}
             onBrowserOpenUrl={onBrowserOpenUrl}
             onBrowserRequestedUrlHandled={onBrowserRequestedUrlHandled}
@@ -373,7 +393,6 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
       </main>
       <GlobalComposer
         generating={generating}
-        notice={notice}
         defaultModel={provider?.model ?? null}
         voice={voice}
         voiceTranscript={voiceTranscript}
@@ -382,6 +401,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
         onVoicePress={onVoicePress}
         onVoiceRelease={onVoiceRelease}
 maxMessageCharacters={maxMessageCharacters}
+        onNotice={setComposerIssue}
       />
     </div></div>
 

@@ -1,18 +1,17 @@
-/* Chats — a real board tab: session list on the left, live thread on the right.
-   Fills the board's main region (`.hd-main`), so it follows the same rail,
-   header and dock as every other tab. */
-/* The conversation list lives in the left rail (ChatHistory), so the workspace
-   owns the transcript plus the optional bounded browser controller. */
-.chats { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
-.chats[data-browser-open] { grid-template-columns: minmax(320px, .85fr) minmax(420px, 1.15fr); }
+/* Chats — the conversation, the browser beside it, and nothing drawn around
+   either. The workspace fills the window on its own screen: the app's top bar,
+   rail and gutters are all gone there, so the transcript and the page it is
+   reading are the whole surface. Borders and glass cards went with them; the
+   split is the only division left. */
+/* `--chats-thread` is the conversation column's share of the window, published by
+   the shell (HomeDashboard) because the global composer reads the same number to
+   sit over that column. The 6px middle track is the drag handle, so the gap goes
+   to zero rather than adding a second, invisible gutter. */
+.chats { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
+.chats[data-browser-open] { gap: 0; grid-template-columns: calc((100% - 6px) * var(--chats-thread, 48) / 100) 6px minmax(320px, 1fr); }
 
 .chats-list,
-.chats-thread {
-  min-height: 0; border: 1px solid #b0daf0bd; border-radius: 12px;
-  background: linear-gradient(125deg, #2442587d, #06101ada 43%, #08131eca 71%, #4264806b);
-  box-shadow: inset 1px 1px 1px #dcf1ff60, inset -1px -1px 1px #c0e5ff38, 0 7px 24px #0003, 0 0 9px #66c9ff15;
-  backdrop-filter: blur(9px);
-}
+.chats-thread { min-height: 0; }
 
 .chats-list { display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
 .chats-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #8db7d333; }
@@ -63,8 +62,10 @@
 .chats-list-empty small { max-width:160px; font-size:10px; line-height:1.45; }
 .chats-list-empty-ring { width:22px; height:22px; margin-bottom:4px; border:1px solid #69dcf18e; border-radius:50%; box-shadow:0 0 12px #64dfff22,inset 0 0 10px #5bdfff10; }
 
-.chats-thread { padding:0; gap:0; display:grid; grid-template-rows:auto minmax(0,1fr) auto; }
-.chats-workspace-head { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:64px; padding:9px 18px; border-bottom:1px solid #7fa9c02b; background:linear-gradient(180deg,#10263a59,#0715221e); }
+/* The bottom strip stays clear: the global composer floats over the window's
+   lower edge, and the transcript scrolls underneath it rather than into it. */
+.chats-thread { padding:0 0 92px; gap:0; display:grid; grid-template-rows:auto minmax(0,1fr) auto; }
+.chats-workspace-head { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:64px; padding:9px 18px; }
 .chats-workspace-identity { display:flex; align-items:center; gap:12px; min-width:0; }
 .chats-workspace-identity > span:last-child { display:grid; gap:1px; min-width:0; }
 .chats-workspace-identity small { color:#76dff6; font-size:9px; letter-spacing:.18em; }
@@ -114,6 +115,17 @@
 .chats-empty-orb i:nth-child(2) { inset:8px -17px; transform:rotate(20deg); border-color:#9a8cff45; }
 .chats-empty-orb span { position:absolute; left:17px; top:16px; width:21px; height:13px; border-radius:50%; background:#efffff91; filter:blur(5px); transform:rotate(-25deg); }
 
+/* What went wrong, folded away. It replaced the strip that used to float above
+   the composer, so a timeout is now said once, in Core's words, inside the
+   conversation it interrupted. */
+.chats-issue { margin:0 18px 14px; border:1px solid #d69a6a4d; border-radius:10px; background:#1b120bd9; overflow:hidden; }
+.chats-issue > summary { cursor:pointer; display:flex; align-items:center; gap:8px; padding:8px 12px; list-style:none; color:#f0c08c; font-size:12px; }
+.chats-issue > summary::-webkit-details-marker { display:none; }
+.chats-issue > summary b { font-weight:500; }
+.chats-issue > summary small { color:#b28f6e; font-size:10px; }
+.chats-issue-mark { display:grid; place-items:center; width:16px; height:16px; flex:none; border-radius:50%; background:#d69a6a2e; color:#ffd7ab; font-size:11px; }
+.chats-issue > div { display:grid; gap:6px; padding:0 12px 11px; }
+.chats-issue p { margin:0; color:#e8c9a4; font-size:12px; line-height:1.45; }
 .chats-status-stack { display:grid; gap:5px; padding:0 18px 13px; }
 .chats-boundary { margin:0; width:fit-content; max-width:min(720px,92%); padding:6px 10px; border-left:2px solid #efa966; border-radius:4px 9px 9px 4px; background:#2b1e1575; color:#e7b683; font-size:10px; line-height:1.4; }
 @keyframes chats-thinking { 0%,100%{opacity:.35;transform:translateY(0)} 50%{opacity:1;transform:translateY(-2px)} }
@@ -436,14 +448,7 @@
 
 /* Chat-owned browser controller. The web page itself stays in the isolated Electron
    browser window; this panel exposes only the Phase 51 projection and bounded actions. */
-.chats-browser {
-  min-width:0; min-height:0; overflow:hidden; display:grid;
-  grid-template-rows:auto auto auto auto minmax(0,1fr) auto;
-  border:1px solid #b0daf0bd; border-radius:12px;
-  background:linear-gradient(145deg,#112a3cc9,#06111be8 58%,#0d2030d7);
-  box-shadow:inset 1px 1px 1px #dcf1ff48,0 7px 24px #0003;
-  backdrop-filter:blur(9px);
-}
+.chats-browser { min-width:0; min-height:0; overflow:hidden; display:grid; grid-template-rows:auto auto auto auto minmax(0,1fr) auto; }
 .chats-browser-tabs {
   display:flex; flex-wrap:nowrap; gap:6px; padding:6px 9px 0;
   overflow-x:auto; scrollbar-width:thin;

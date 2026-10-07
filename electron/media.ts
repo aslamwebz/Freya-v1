@@ -1,4 +1,5 @@
 import { SafeHttpTransport } from '../core/research/transport'
+import { safeVideoEmbed } from '../core/media/collect'
 import { sniffMediaKind } from '../core/media/sniff'
 import { MEDIA_LIMITS } from '../core/media/types'
 
@@ -213,4 +214,102 @@ function refusal(error: unknown): MediaFetchResult {
 function describe(error: unknown): string {
   if (error instanceof Error && error.message !== '') return error.message
   return 'the address could not be fetched'
+}
+/**
+ * The in-window hosted video player.
+ *
+ * A hosted watch URL cannot simply be iframed from a transcript that ships as a
+ * `file://` document: the frame's origin serialises as `null`, and YouTube refuses
+ * such embeds with its "player configuration error". So the player is a real
+ * Chromium page — a `WebContentsView` layered over the window's content, bounds set
+ * to exactly the modal's player placeholder — and the address it loads is still
+ * gated by the same allowlist the renderer's collector enforces. The view is one
+ * per window, attached on preview open, detached on close or media switch, so
+ * switching items stops the previous playback rather than layering players.
+ */
+export interface EmbedAttachRequest {
+  readonly url: unknown
+  readonly x: unknown
+  readonly y: unknown
+  readonly width: unknown
+  readonly height: unknown
+}
+
+export type EmbedAttachOutcome =
+  | { ok: true; width: number; height: number }
+  | { ok: false; reason: string }
+
+/** Ceilings for a player's on-screen box, in DIPs. A modal is big; this is bigger. */
+const EMBED_BOUNDS = Object.freeze({
+  max: 4096,
+})
+
+function boundedBounds(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  return Math.max(0, Math.min(Math.floor(value), EMBED_BOUNDS.max))
+}
+
+const embedViews = new WeakMap<object, { view: unknown; url: string }>()
+
+export function attachEmbedView(
+  window: {
+    isDestroyed(): boolean
+    contentView: { addChildView(view: unknown): void; removeChildView(view: unknown): void }
+  },
+  electronModule: {
+    WebContentsView: new (options: Record<string, unknown>) => {
+      setBounds(bounds: { x: number; y: number; width: number; height: number }): void
+      webContents: { loadURL(url: string): Promise<void>; close(): void; isDestroyed(): boolean }
+    }
+  },
+  request: EmbedAttachRequest,
+): EmbedAttachOutcome {
+  const allowed = safeVideoEmbed(typeof request.url === 'string' ? request.url : null)
+  if (allowed === null) return { ok: false, reason: 'that host is not an in-app player Freya may embed' }
+  const x = boundedBounds(request.x)
+  const y = boundedBounds(request.y)
+  const width = boundedBounds(request.width)
+  const height = boundedBounds(request.height)
+  if (x === null || y === null || width === null || height === null) {
+    return { ok: false, reason: 'the player box was not a bounded rectangle' }
+  }
+  if (width < 2 || height < 2) return { ok: false, reason: 'the player box is too small to draw' }
+
+  // One player per window: switching media detaches the previous view here, so
+  // closing a preview never leaves a video playing behind the transcript.
+  detachEmbedView(window)
+  const view = new electronModule.WebContentsView({
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: false,
+    },
+  })
+  view.setBounds({ x, y, width, height })
+  window.contentView.addChildView(view)
+  embedViews.set(window, { view, url: allowed })
+  void view.webContents.loadURL(allowed).catch(() => {
+    detachEmbedView(window)
+  })
+  return { ok: true, width, height }
+}
+
+export function detachEmbedView(
+  window: {
+    isDestroyed(): boolean
+    contentView: { addChildView(view: unknown): void; removeChildView(view: unknown): void }
+  },
+): boolean {
+  const attached = embedViews.get(window)
+  if (attached === undefined) return false
+  embedViews.delete(window)
+  try {
+    window.contentView.removeChildView(attached.view as never)
+    const contents = (attached.view as { webContents?: { isDestroyed(): boolean; close(): void } }).webContents
+    if (contents !== undefined && !contents.isDestroyed()) contents.close()
+  } catch {
+    // A window mid-teardown can refuse the removal; the view dies with it either way.
+  }
+  return true
 }

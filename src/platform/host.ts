@@ -142,6 +142,15 @@ export interface FreyaHostBridge {
   /** A direct video's validated bytes as a data URL, only for an opened preview. */
   mediaVideo(url: string): Promise<unknown>
 
+  /**
+   * Attach the hosted player at the given box, and detach it.
+   *
+   * The main process re-checks the player allowlist, so the renderer names the
+   * address it wants but never decides whether it may be framed.
+   */
+  mediaEmbedAttach?(request: { url: string; x: number; y: number; width: number; height: number }): Promise<unknown>
+  mediaEmbedDetach?(): Promise<unknown>
+
   /** Frameless-window controls. Each acts on the window that calls. */
   windowMinimize(): Promise<void>
   windowMaximize(): Promise<void>

@@ -164,6 +164,63 @@ export function MediaGrid({ items }: {
   )
 }
 
+/**
+ * The hosted player's box, measured for the main process.
+ *
+ * The player itself is a main-process view layered over this box's bounds: a
+ * `file://` transcript cannot iframe a hosted player (the frame origin reads as
+ * `null` and the player refuses it), so the box here is only the placeholder the
+ * view is drawn over. When no bridge exists — tests, a plain browser — the box
+ * degrades to a plain sandboxed iframe, which is where that path is acceptable.
+ */
+function HostedPlayerBox({ url, title }: {
+  readonly url: string
+  readonly title: string
+}) {
+  const boxRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const bridge = hostBridge()
+    if (bridge === undefined) return
+    const element = boxRef.current
+    if (element === null) return
+
+    const observers: ResizeObserver[] = []
+    const listeners: Array<(event?: unknown) => void> = []
+    // The box moves when the window resizes (the modal is centered), so a player
+    // that survived a resize must not hang over the wrong rectangle.
+    const onShift = (): void => {
+      const rect = boxRef.current?.getBoundingClientRect()
+      if (rect === undefined) return
+      void bridge.mediaEmbedAttach?.({
+        url,
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+      })
+    }
+    onShift()
+    if (typeof ResizeObserver === 'function') {
+      const observer = new ResizeObserver(onShift)
+      observer.observe(element)
+      observers.push(observer)
+    }
+    window.addEventListener('resize', onShift)
+    listeners.push(onShift)
+
+    return () => {
+      for (const observer of observers) observer.disconnect()
+      for (const listener of listeners) window.removeEventListener('resize', listener)
+      void bridge.mediaEmbedDetach?.()
+    }
+  }, [url])
+
+  return (
+    <div ref={boxRef} className="chats-overlay-video-embed" aria-label={title} />
+  )
+}
+
 function MediaOverlay({ items, index, onIndex, onClose }: {
   readonly items: readonly MediaItem[]
   readonly index: number
@@ -179,6 +236,16 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
   const [documentData, setDocumentData] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [reason, setReason] = useState<string | null>(null)
+
+  // The renderer cannot revoke the object URL in the effect's cleanup through a
+  // state field, so it is remembered here instead: one per mounted overlay item.
+  const documentUrlRef = useRef<string | null>(null)
+  const revokeDocument = (): void => {
+    if (documentUrlRef.current !== null) {
+      URL.revokeObjectURL(documentUrlRef.current)
+      documentUrlRef.current = null
+    }
+  }
 
   const fallbackPoster = useMemo(() => {
     const address = posterAddress(item)
@@ -202,6 +269,7 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
     setDocumentData(null)
     setReason(null)
     setLoading(true)
+    revokeDocument()
 
     const load = async (): Promise<void> => {
       if (bridge === undefined) {
@@ -256,7 +324,14 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
       } | null
       if (!alive) return
       if (reply?.ok === true && typeof reply.base64 === 'string' && reply.base64.length > 0) {
-        setDocumentData(`data:application/pdf;base64,${reply.base64}`)
+        // A blob: URL, not the raw base64 data: URL. Chromium's built-in PDF viewer
+        // (pdf.js in Electron) refuses to render data: application/pdf frames, and the
+        // document's CSP does not carry `data:` in `frame-src` — a blob: URL is same-origin
+        // to this window, renders in the viewer, and dies with the modal.
+        const bytes = Uint8Array.from(atob(reply.base64), (char) => char.charCodeAt(0))
+        const objectUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+        documentUrlRef.current = objectUrl
+        setDocumentData(objectUrl)
       } else {
         setReason(typeof reply?.reason === 'string' ? reply.reason : 'This PDF could not be fetched safely for preview.')
       }
@@ -266,6 +341,7 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
     void load()
     return () => {
       alive = false
+      revokeDocument()
     }
   }, [bridge, fallbackPoster, item])
 
@@ -292,14 +368,18 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
           {!loading && item.kind === 'video' ? (
             item.embedUrl
               ? (
-                <iframe
-                  className="chats-overlay-video-embed"
-                  src={item.embedUrl}
-                  title={item.title || 'Video preview'}
-                  allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-                  sandbox="allow-scripts allow-same-origin allow-presentation"
-                  allowFullScreen
-                />
+                hostBridge()?.mediaEmbedAttach === undefined
+                  ? (
+                    <iframe
+                      className="chats-overlay-video-embed"
+                      src={item.embedUrl}
+                      title={item.title || 'Video preview'}
+                      allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+                      sandbox="allow-scripts allow-same-origin allow-presentation"
+                      allowFullScreen
+                    />
+                  )
+                  : <HostedPlayerBox url={item.embedUrl} title={item.title || 'Video preview'} />
               )
               : videoData !== null
                 ? <video className="chats-overlay-video" src={videoData} controls autoPlay playsInline />

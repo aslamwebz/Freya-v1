@@ -52,7 +52,7 @@ export default tseslint.config(
     // code actually is; without this the driver cannot be linted at all, and the
     // alternative — silencing `no-undef` file-wide — would hide genuine typos in
     // the Node half.
-    files: ['scripts/chat-acceptance-visible.mjs'],
+    files: ['scripts/chat-acceptance-visible.mjs', 'scripts/chat-onscreen-acceptance.mjs', 'scripts/media-probe.mjs'],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser },
     },

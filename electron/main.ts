@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, screen, shell, safeStorage } from 'electron'
+import { app, BrowserWindow, WebContentsView, ipcMain, screen, shell, safeStorage } from 'electron'
 import { join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
-import { fetchDocumentBytes, fetchThumbnail, fetchVideoPreview } from './media'
+import { fetchDocumentBytes, fetchThumbnail, fetchVideoPreview, attachEmbedView, detachEmbedView } from './media'
 import { ElectronCoreHost, type HostEnv, type DeviceHandsHostOptions } from './coreHost'
 import {
   createElectronDeviceHandsEffects,
@@ -1167,6 +1167,30 @@ function registerIpc(): void {
       return { ok: false, dataUrl: null, bytes: 0, format: null, claimedType: null, reason: 'that is not an address' }
     }
     return fetchVideoPreview(url)
+  })
+
+  // The hosted player overlay: the renderer names the address it wants played and
+  // the modal box to draw it in; this process re-checks the player allowlist, owns
+  // the view and detaches it when the preview closes or switches. The window is
+  // resolved from the asking webContents, so a preview can only ever attach to its
+  // own window.
+  ipcMain.handle('freya:media:embed-attach', async (event, request: unknown) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    if (owner === null || owner.isDestroyed()) return { ok: false, reason: 'no window is attached to this preview' }
+    const payload = (request ?? {}) as Record<string, unknown>
+    return attachEmbedView(owner, { WebContentsView }, {
+      url: payload['url'],
+      x: payload['x'],
+      y: payload['y'],
+      width: payload['width'],
+      height: payload['height'],
+    })
+  })
+
+  ipcMain.handle('freya:media:embed-detach', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    if (owner === null || owner.isDestroyed()) return { ok: false }
+    return { ok: detachEmbedView(owner) }
   })
 
   ipcMain.handle('freya:attachment:pick', async (event) => {

@@ -114,6 +114,20 @@ const api = {
   mediaVideo: (url: string): Promise<unknown> =>
     ipcRenderer.invoke('freya:media:video', boundedMediaUrl(url)),
 
+  /**
+   * Attach the hosted video player over the modal's player box.
+   *
+   * The window names the address and the box; the main process re-checks the
+   * player allowlist, owns the view and draws it at those bounds. Nothing is
+   * iframed from the transcript, and only one player exists per window.
+   */
+  mediaEmbedAttach: (request: { url: string; x: number; y: number; width: number; height: number }): Promise<unknown> =>
+    ipcRenderer.invoke('freya:media:embed-attach', request),
+
+  /** Detach this window's hosted player; stops playback and frees the view. */
+  mediaEmbedDetach: (): Promise<unknown> =>
+    ipcRenderer.invoke('freya:media:embed-detach'),
+
   // Frameless-window controls. Each acts on the window that asked.
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('freya:window:minimize'),
   windowMaximize: (): Promise<void> => ipcRenderer.invoke('freya:window:maximize'),

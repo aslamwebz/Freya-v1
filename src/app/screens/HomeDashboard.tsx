@@ -34,7 +34,11 @@ interface Props {
   settingsCategory: SettingsCategory
   onSettingsCategory: (category: SettingsCategory) => void
   onOpenDressing: () => void
-  onSend: (text: string, mode: ComposerMode) => Promise<boolean>
+  onSend: (
+    text: string,
+    mode: ComposerMode,
+    intents?: { readonly webSearch?: boolean; readonly browserUse?: boolean },
+  ) => Promise<boolean>
   onStopResponse: () => void
   researchView: WorkspaceResearchView | null
   onNavigate: (screen: string) => void

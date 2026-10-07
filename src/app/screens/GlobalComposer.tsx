@@ -151,7 +151,11 @@ export function GlobalComposer({
   defaultModel: string | null
   voice: VoiceView
   voiceTranscript: { id: number; text: string } | null
-  onSend: (text: string, mode: ComposerMode) => Promise<boolean>
+  onSend: (
+    text: string,
+    mode: ComposerMode,
+    intents?: { readonly webSearch?: boolean; readonly browserUse?: boolean },
+  ) => Promise<boolean>
   onStopResponse: () => void
   onVoicePress: () => void
   onVoiceRelease: (cancelled?: boolean) => void
@@ -196,12 +200,12 @@ export function GlobalComposer({
   const submit = async () => {
     const value = text.trim()
     if (value.length === 0 || generating || sending) return
-    // Wrap the draft with the intents the user has held. The intent layer
-    // already detects both phrases, so no new infrastructure is needed — the
-    // button just states a path the model would have guessed.
-    let body = value
-    if (wantWeb && !/^\s*(?:find|search|look up)\b/i.test(body)) body = `find on the web: ${body}`
-    if (wantBrowser && !/\bus(?:e|ing)\b.*\bbrowser\b/i.test(body)) body = `use your browser: ${body}`
+    // The owner's exact words reach Core as `value`. The two intent buttons
+    // travel as structured metadata only — never as text prefixes. The old
+    // behaviour prefixed "find on the web: " and "use your browser: " onto
+    // the user's text and corrupted the stored message; that class is closed
+    // by passing the text through unchanged and reporting the directives
+    // separately.
     const fire = () => {
       setWantWeb(false)
       setWantBrowser(false)
@@ -209,7 +213,7 @@ export function GlobalComposer({
     setVoiceNotice('')
     setSending(true)
     try {
-      const accepted = await onSend(body, mode)
+      const accepted = await onSend(value, mode, { webSearch: wantWeb, browserUse: wantBrowser })
       if (accepted) setText('')
       fire()
     } finally {

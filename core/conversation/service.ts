@@ -1,5 +1,6 @@
 import type { ModelAttachment } from '../model/provider'
 import type { MediaItem } from '../media/types'
+import type { TurnIntentHints } from '../mind/tool-intent'
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
 import type { ModelGateway } from '../model/gateway'
@@ -277,18 +278,23 @@ export class ConversationService {
    *
    * Note what the caller cannot influence: the turn id is ours, the grant is ours,
    * the context is compiled by ours, and the provider is chosen by the Gateway.
+   *
+   * `intents` travels as structured metadata only. The Mind reads it to seed an
+   * initial tool request; the stored user message is still `text`, unchanged.
    */
   async submitTurn(input: {
     conversationId: string
     text: string
     attachments?: readonly ModelAttachment[]
     requestId: string
+    intents?: TurnIntentHints
   }): Promise<TurnResult> {
     const result = await this.mind.runTurn({
       conversationId: input.conversationId,
       turnId: this.newId(),
       text: input.text,
       attachments: input.attachments,
+      ...(input.intents !== undefined ? { intents: input.intents } : {}),
     })
     this.publish()
     return { ok: true, turn: result }

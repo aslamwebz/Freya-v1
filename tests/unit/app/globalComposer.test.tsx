@@ -53,7 +53,7 @@ describe('GlobalComposer', () => {
     fireEvent.change(input(), { target: { value: 'do not lose me' } })
     fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
 
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('do not lose me', 'chat'))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('do not lose me', 'chat', { webSearch: false, browserUse: false }))
     expect(input().value).toBe('do not lose me')
   })
 
@@ -81,7 +81,7 @@ describe('GlobalComposer', () => {
     fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
 
     await waitFor(() => expect(input().value).toBe(''))
-    expect(onSend).toHaveBeenCalledWith('hello freya', 'chat')
+    expect(onSend).toHaveBeenCalledWith('hello freya', 'chat', { webSearch: false, browserUse: false })
   })
 
   it('sends the selected Freya mode with the draft', async () => {
@@ -109,7 +109,7 @@ describe('GlobalComposer', () => {
     fireEvent.change(input(), { target: { value: 'find 100 cat videos' } })
     fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
 
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('find 100 cat videos', 'eye'))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('find 100 cat videos', 'eye', { webSearch: false, browserUse: false }))
   })
 
   it('turns the send control into a real stop-response control while generating', () => {
@@ -165,7 +165,7 @@ describe('GlobalComposer keyboard and bounds', () => {
 
     fireEvent.change(input(), { target: { value: 'first line\nsecond line' } })
     fireEvent.keyDown(input(), { key: 'Enter' })
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('first line\nsecond line', 'chat'))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('first line\nsecond line', 'chat', { webSearch: false, browserUse: false }))
   })
 
   it('takes the message ceiling from Core instead of inventing a renderer limit', () => {

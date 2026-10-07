@@ -1,4 +1,5 @@
 import type { ModelAttachment } from '../../../core/model/provider'
+import type { TurnIntentHints } from '../../../core/mind/tool-intent'
 import type { ConversationCommandOutcome } from '../../../core/protocol/conversation'
 
 /**
@@ -13,11 +14,22 @@ import type { ConversationCommandOutcome } from '../../../core/protocol/conversa
  * Nothing here invents a message or a reply. The transcript arrives as a Core
  * projection; this only reports whether the send was accepted, and why not when
  * it was not.
+ *
+ * `intents` travels as structured metadata only. The text the owner typed
+ * reaches Core exactly as it was typed: hint buttons used to prepend
+ * "find on the web: " and "use your browser: " onto the text, which mutated
+ * the stored user message. That class is closed; the hint is now policy the
+ * Mind reads alongside the text, and the text itself is unchanged.
  */
 
 export interface ConversationSender {
   create(): Promise<ConversationCommandOutcome>
-  submitTurn(conversationId: string, text: string, attachments?: readonly ModelAttachment[]): Promise<ConversationCommandOutcome>
+  submitTurn(
+    conversationId: string,
+    text: string,
+    intents?: TurnIntentHints,
+    attachments?: readonly ModelAttachment[],
+  ): Promise<ConversationCommandOutcome>
 }
 
 export interface SendResult {
@@ -31,6 +43,7 @@ export async function sendMessage(
   sender: ConversationSender,
   currentConversationId: string | null,
   rawText: string,
+  intents?: TurnIntentHints,
   attachments?: readonly ModelAttachment[],
 ): Promise<SendResult> {
   const text = rawText.trim()
@@ -53,7 +66,9 @@ export async function sendMessage(
     conversationId = created.conversation.conversationId
   }
 
-  const outcome = await (attachments?.length ? sender.submitTurn(conversationId, text, attachments) : sender.submitTurn(conversationId, text))
+  const outcome = await (attachments?.length || intents
+    ? sender.submitTurn(conversationId, text, intents, attachments)
+    : sender.submitTurn(conversationId, text))
   if (outcome.operation === 'turn') {
     return outcome.turn.outcome === 'completed'
       ? { ok: true, conversationId, notice: '' }

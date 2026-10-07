@@ -305,6 +305,7 @@ export interface MindServiceOptions {
    * which is exactly what a turn did before any selector existed.
    */
   selectedModel?: () => string | null
+  selectedProviderId?: () => string | null
   /**
    * What Freya remembers about this turn's text, if anything.
    *
@@ -525,6 +526,7 @@ export class MindService {
   private readonly newId: () => string
   private readonly runtimeFacts: () => readonly string[]
   private readonly selectedModel: () => string | null
+  private readonly selectedProviderId: () => string | null
   private readonly recall: ((query: string) => ReferenceKnowledge | null) | null
   private readonly turnContext: TurnContextReader | null
   private readonly onTurnStateChange: () => void
@@ -591,6 +593,7 @@ export class MindService {
     this.newId = options.newId ?? (() => randomUUID())
     this.runtimeFacts = options.runtimeFacts ?? (() => [])
     this.selectedModel = options.selectedModel ?? (() => null)
+    this.selectedProviderId = options.selectedProviderId ?? (() => null)
     this.recall = options.recall ?? null
     this.turnContext = options.turnContext ?? null
     this.onTurnStateChange = options.onTurnStateChange ?? (() => {})
@@ -1130,6 +1133,7 @@ export class MindService {
         // decision: the Governor still authors, the Gateway still refuses any
         // model it cannot serve, and a null here is the ordinary default.
         requestedModel: this.selectedModel(),
+        requestedProviderId: this.selectedProviderId(),
         modelCapability,
         goalId: null,
       })
@@ -1176,6 +1180,7 @@ export class MindService {
           grantId: input.grantId,
           turnId: input.turnId,
           selectedModel: this.selectedModel,
+          selectedProviderId: this.selectedProviderId,
           modelCapability,
           perTurnAllowance: input.perTurnAllowance,
           signal: controller.signal,

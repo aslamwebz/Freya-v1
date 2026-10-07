@@ -49,7 +49,7 @@ describe('the preload bridge arms', () => {
     expect([...new Set(modelCommands)].sort()).toEqual(['model.catalog.read', 'model.select'])
   })
 
-  it('gives the catalogue read no payload and the selection one bounded string', async () => {
+  it('gives discovery no payload and bounds the model and provider choice', async () => {
     const source = await preloadSource()
     const catalog = source.match(/case 'model\.catalog\.read':[\s\S]*?\n\s{4}(?=case|\/\/)/)
     expect(catalog?.[0]).toMatch(/return \{ ok: true \}/)
@@ -57,7 +57,8 @@ describe('the preload bridge arms', () => {
     expect(select?.[0]).toMatch(/string\('model', MAX_MODEL_ID_CHARS, false\)/)
     expect(select?.[0]).toMatch(/model id is invalid/)
     // Rebuilt from the named field only — an ignored blob is never forwarded.
-    expect(select?.[0]).toMatch(/payload: model === undefined \? \{\} : \{ model \}/)
+    expect(select?.[0]).toMatch(/string\('providerId', MAX_ID_CHARS, false\)/)
+    expect(select?.[0]).toMatch(/provider id is invalid/)
   })
 
   it('never forwards environment content in any direction', async () => {

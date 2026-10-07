@@ -57,6 +57,7 @@ export interface CognitionIntent {
   /** The ceiling the caller is asking for. Never treated as a default. */
   maxOutputTokens: number
   requestedModel?: string | null
+  requestedProviderId?: string | null
   /** Trusted Core routing hint; does not grant authority or alter spend limits. */
   modelCapability?: 'chat' | 'browser'
   goalId?: string | null

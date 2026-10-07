@@ -9,6 +9,7 @@ import {
   readNanoGptConfig,
   type NanoGptConfig,
 } from '../../core/model/nanogpt-provider'
+import { CompatibleModelProvider } from '../../core/model/compatible-provider'
 import { CONVERSATION_LIMITS } from '../../core/conversation/types'
 import type { CoreCommandName, CoreCommandResult } from '../../core/protocol/core-protocol'
 import type { ConversationTurnView } from '../../core/protocol/conversation'
@@ -204,7 +205,7 @@ describe('the model catalogue', () => {
     expect(outcome.operation).toBe('catalog')
     expect(outcome.defaultModel).toBe(DEFAULT_MODEL)
     // Parsed, deduplicated, and junk-free: exactly the one valid, non-default id.
-    expect(outcome.models).toEqual([{ id: SELECTED_MODEL, ownedBy: 'anthropic' }])
+    expect(outcome.models).toEqual([{ id: DEFAULT_MODEL, ownedBy: 'nanogpt', providerId: 'nanogpt' }, { id: SELECTED_MODEL, ownedBy: 'anthropic', providerId: 'nanogpt' }])
 
     expect(fetch_.calls).toHaveLength(1)
     const call = fetch_.calls[0]!
@@ -258,6 +259,27 @@ describe('the model catalogue', () => {
 })
 
 describe('the selected model reaches the provider', () => {
+  it('carries an explicit provider choice from Core through Mind and the guarded permit', async () => {
+    const fetch_ = recordingFetch(call => call.url.endsWith('/models') ? reply(CATALOG_BODY) : chatBody(SELECTED_MODEL, 'NanoGPT answer'))
+    const mini = new CompatibleModelProvider('minimax', { apiKey: 'fixture', baseUrl: 'https://api.minimax.io/v1', model: SELECTED_MODEL, liveEnabled: true, vision: false }, (() => { throw new Error('wrong provider contacted') }) as typeof fetch)
+    core = createCore(options({ providers: [mini, provider(fetch_.impl)] }))
+    await core.start()
+    await submit(core, 'model.catalog.read')
+    const selected = await submit(core, 'model.select', { model: SELECTED_MODEL, providerId: 'nanogpt' })
+    expect(selected.model?.selectedProviderId).toBe('nanogpt')
+    expect(core.status().modelSelection?.providerId).toBe('nanogpt')
+    const created = await submit(core, 'conversation.create')
+    const conversationId = await createdConversationId(created)
+    const turn = turnOf(await submit(core, 'conversation.turn.submit', { conversationId, text: '  Preserve exact text  ' }))
+    expect(turn.outcome).toBe('completed')
+    expect(turn.providerId).toBe('nanogpt')
+    const refused = await submit(core, 'model.select', { model: SELECTED_MODEL, providerId: 'unconfigured' })
+    expect(refused.ok).toBe(false)
+    expect(core.status().modelSelection?.providerId).toBe('nanogpt')
+    await submit(core, 'model.select')
+    expect(core.status().modelSelection?.providerId).toBeNull()
+  })
+
   it('sends the selection on subsequent turns and never replaces it with a default', async () => {
     const fetch_ = recordingFetch((call, index) =>
       call.url.endsWith('/models')

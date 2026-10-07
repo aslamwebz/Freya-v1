@@ -56,6 +56,7 @@ export interface GatewayPermit {
   grantId: string | null
   providerId: string
   maxOutputTokens: number
+  requestedProviderId?: string | null
   modelCapability?: 'chat' | 'browser'
   model: string | null
   /**
@@ -209,6 +210,10 @@ export class ModelGateway {
     }
   }
 
+  defaultModel(): string | null {
+    return this.resolve(null)?.status().model ?? null
+  }
+
   statuses(): ProviderStatus[] {
     return [...this.providers.values()].map((provider) => provider.status())
   }
@@ -350,9 +355,12 @@ export class ModelGateway {
   }
 
   /** The provider a request should use: an explicit choice, else the first ready one. */
-  private resolve(requestedModel: string | null, capability: CapabilityId = 'chat'): ModelProvider | null {
+  private resolve(requestedModel: string | null, capability: CapabilityId = 'chat', requestedProviderId?: string | null): ModelProvider | null {
     const preference = this.providerPreference?.(capability)
-    const candidates = preference ? preference.map((id) => this.providers.get(id)).filter((provider): provider is ModelProvider => provider !== undefined) : [...this.providers.values()]
+    if (requestedProviderId && capability === 'vision' && preference && !preference.includes(requestedProviderId)) return null
+    // Explicit owner choices identify their credential recipient. Defaults still follow saved capability order.
+    const ids = requestedProviderId ? [requestedProviderId] : capability === 'vision' && preference ? preference : requestedModel ? [...new Set([...(preference ?? []), ...this.providers.keys()])] : preference
+    const candidates = ids ? ids.map((id) => this.providers.get(id)).filter((provider): provider is ModelProvider => provider !== undefined) : [...this.providers.values()]
     for (const provider of candidates) {
       if (provider.status().status !== 'configured') continue
       if (requestedModel !== null && !providerCanServe(provider, requestedModel)) continue
@@ -362,7 +370,7 @@ export class ModelGateway {
   }
 
   /**
-   * Read the model catalogue, without exposing a provider.
+   * Read all configured model catalogues, exposing only non-secret provider IDs.
    *
    * A metadata read, not a spend: it never touches the recorder, never enters
    * the active registry, and cannot make `activeCallCount` move — an idle Freya
@@ -372,43 +380,32 @@ export class ModelGateway {
    * returning an empty list that would look like "NanoGPT has no models".
    */
   async readModelCatalog(): Promise<
-    | { ok: true; providerId: string; defaultModel: string | null; models: readonly ModelCatalogEntry[] }
+    | { ok: true; providerId: string; defaultModel: string | null; models: readonly ModelCatalogEntry[]; reason?: string }
     | { ok: false; reason: string }
   > {
+    // Discovery covers every setup provider, independently of inference preference.
+    const providers = [...this.providers.values()]
+    const usable = providers.filter(provider => ['configured', 'disabled'].includes(provider.status().status))
+    if (usable.length === 0) return { ok: false, reason: `no configured provider can list models — ${providers[0]?.status().detail ?? 'the provider is not configured'}` }
+    const catalogs = await Promise.all(usable.map(async provider => {
+      try {
+        const entries = provider.listModels ? await provider.listModels({ signal: AbortSignal.timeout(15_000) }) : provider.status().model ? [{ id: provider.status().model!, ownedBy: provider.id }] : []
+        const configuredModel = provider.status().model
+        const models = configuredModel && !entries.some(entry => entry.id === configuredModel) ? [{ id: configuredModel, ownedBy: provider.id }, ...entries] : entries
+        return { provider, models: models.map(entry => ({ ...entry, providerId: provider.id })) }
+      } catch (error) {
+        return { provider, reason: error instanceof Error ? error.message : 'the model catalogue could not be read' }
+      }
+    }))
+    const successful = catalogs.filter(catalog => catalog.models !== undefined)
+    if (!successful.length) return { ok: false, reason: catalogs.map(catalog => catalog.reason).join('; ') }
     const preference = this.providerPreference?.('chat')
-    const candidates = preference ? preference.map((id) => this.providers.get(id)).filter((provider): provider is ModelProvider => provider !== undefined) : [...this.providers.values()]
-    const listable = candidates.filter(
-      (provider) => typeof provider.listModels === 'function',
-    )
-    if (listable.length === 0) {
-      return { ok: false, reason: 'no registered provider can list models' }
-    }
-    const states = listable.map((provider) => provider.status())
-    const usable = listable.filter(
-      (provider) => provider.status().status === 'configured' || provider.status().status === 'disabled',
-    )
-    if (usable.length === 0) {
-      const worst = states[0]?.detail ?? 'the provider is not configured'
-      return { ok: false, reason: `no configured provider can list models — ${worst}` }
-    }
-    // The *first* provider that can list. Provider order is Core's decision at
-    // construction, so this follows the same rule as `resolve` follows for turns.
-    const provider = usable[0] as ModelProvider
-    try {
-      const models = await provider.listModels!({ signal: AbortSignal.timeout(15_000) })
-      return {
-        ok: true,
-        providerId: provider.id,
-        defaultModel: provider.status().model,
-        models,
-      }
-    } catch (error) {
-      // The provider's message is already free of credentials — the key travels
-      // only in a header the fetch transport never echoes into an error.
-      return {
-        ok: false,
-        reason: error instanceof Error ? error.message : 'the model catalogue could not be read',
-      }
+    const preferred = this.resolve(null) ?? usable.find(provider => preference?.includes(provider.id)) ?? usable[0]!
+    const unavailable = catalogs.filter(catalog => catalog.reason !== undefined).map(catalog => catalog.provider.id)
+    return {
+      ok: true, providerId: preferred.id, defaultModel: preferred.status().model,
+      models: successful.flatMap(catalog => catalog.models ?? []),
+      ...(unavailable.length ? { reason: `Model discovery unavailable for: ${unavailable.join(', ')}.` } : {}),
     }
   }
 
@@ -419,8 +416,8 @@ export class ModelGateway {
    * making a turn. Core uses it to refuse an unusable selection visibly at the
    * moment it is chosen, rather than letting it fail later as a spent attempt.
    */
-  canServeModel(model: string): boolean {
-    return this.resolve(model) !== null
+  canServeModel(model: string, providerId?: string | null): boolean {
+    return this.resolve(model, 'chat', providerId) !== null
   }
 
   /**
@@ -448,7 +445,7 @@ export class ModelGateway {
       // nothing.
       this.assertContactable(call)
 
-      provider = this.resolve(permit.model, permit.messages?.some((message) => message.attachments?.some((attachment) => attachment.type === 'image')) ? 'vision' : permit.modelCapability ?? 'chat')
+      provider = this.resolve(permit.model, permit.messages?.some((message) => message.attachments?.some((attachment) => attachment.type === 'image')) ? 'vision' : permit.modelCapability ?? 'chat', permit.requestedProviderId)
       if (provider === null) {
         const reason =
           permit.model === null

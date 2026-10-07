@@ -1425,6 +1425,7 @@ class FreyaCore implements Core {
    * a budget nor survive a restart as a hidden preference.
    */
   private selectedModel: string | null = null
+  private selectedProviderId: string | null = null
   /**
    * The Work engine, or undefined before it is built.
    *
@@ -1931,6 +1932,7 @@ class FreyaCore implements Core {
       // Governor before anything is contacted — this only answers "which model,
       // if the owner named one" for a request that has already been allowed.
       selectedModel: () => this.selectedModel,
+      selectedProviderId: () => this.selectedProviderId,
       // Read-only recall. The Mind asks; the Brain decides what is recallable. This
       // callback holds no store and no admission policy, so the request path
       // cannot widen what Freya remembers — and a turn never writes memory at all,
@@ -2789,6 +2791,7 @@ class FreyaCore implements Core {
       return degradedStatus(this.lifecycle, this.state, this.startedAt)
     }
     return projectCoreStatus({
+      modelSelection: { model: this.selectedModel, providerId: this.selectedProviderId, defaultModel: this.gateway.defaultModel() },
       state: this.state,
       lifecycle: this.currentLifecycle,
       gateway: this.gateway,
@@ -6706,7 +6709,9 @@ state: {
             status: this.status(),
             model: {
               operation: 'catalog',
-              models: catalog.models.map((entry) => ({ id: entry.id, ownedBy: entry.ownedBy })),
+              models: catalog.models.map((entry) => ({ id: entry.id, ownedBy: entry.ownedBy, providerId: entry.providerId })),
+              ...(catalog.reason ? { reason: catalog.reason } : {}),
+              selectedProviderId: this.selectedProviderId,
               defaultModel: catalog.defaultModel,
               selected: this.selectedModel,
             },
@@ -6724,11 +6729,12 @@ state: {
           // would make "use the default" unspellable from a window.
           if (!hasKey(envelope.payload, 'model')) {
             this.selectedModel = null
+            this.selectedProviderId = null
             return {
               requestId,
               ok: true,
               status: this.status(),
-              model: { operation: 'selected', selected: null },
+              model: { operation: 'selected', selected: null, selectedProviderId: null },
             }
           }
           const model = readString(envelope.payload, 'model')
@@ -6740,7 +6746,9 @@ state: {
               model: { operation: 'refused', reason: 'a model id must be a string of at most 256 characters' },
             }
           }
-          if (!this.gateway.canServeModel(model)) {
+          const providerId = hasKey(envelope.payload, 'providerId') ? readString(envelope.payload, 'providerId') : null
+          if (hasKey(envelope.payload, 'providerId') && (providerId === null || providerId.length > 128)) return { requestId, ok: false, model: { operation: 'refused', reason: 'provider id is invalid' } }
+          if (!this.gateway.canServeModel(model, providerId)) {
             // Refused now, visibly, rather than becoming a turn that spends a
             // grant and fails mid-call. This is the same question the Gateway
             // will ask when the turn arrives, so a selection accepted here can
@@ -6756,11 +6764,12 @@ state: {
             }
           }
           this.selectedModel = model
+          this.selectedProviderId = providerId
           return {
             requestId,
             ok: true,
             status: this.status(),
-            model: { operation: 'selected', selected: model },
+            model: { operation: 'selected', selected: model, selectedProviderId: providerId },
           }
         }
 

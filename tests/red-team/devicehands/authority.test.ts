@@ -549,6 +549,8 @@ const result = await a.attempt({ actionId: 'atk-forged', actionKey: 'terminal.ru
       expect(surface.sort()).toEqual([
         'approvals',
         'cancel',
+        // Trusted host migration is flag-only; grants and STOP ALL remain guarded.
+        'enableOwnerPublicBrowser',
         'loadPolicy',
         'open',
         'perform',

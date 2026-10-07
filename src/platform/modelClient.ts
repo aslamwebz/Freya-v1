@@ -34,8 +34,8 @@ export async function readModelCatalog(): Promise<ModelCommandOutcome> {
  * runs the whole Guard → Governor → grant → compiled-context path with that
  * model riding inside the request rather than replacing it.
  */
-export async function selectModel(model: string | null): Promise<ModelCommandOutcome> {
-  const result = await coreMirror().submit('model.select', model === null ? {} : { model })
+export async function selectModel(model: string | null, providerId?: string): Promise<ModelCommandOutcome> {
+  const result = await coreMirror().submit('model.select', model === null ? {} : { model, ...(providerId ? { providerId } : {}) })
   if (result.model) return result.model
   return {
     operation: 'refused',

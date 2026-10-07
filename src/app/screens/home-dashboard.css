@@ -449,3 +449,5 @@
     top: 48.5vh;
   }
 }
+
+.hd-model-pick small { color: #7f9bb3; margin-left: 8px; font-size: 10px; }

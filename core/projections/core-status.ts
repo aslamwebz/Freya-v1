@@ -12,6 +12,7 @@ import type { EventFabric } from '../events/fabric'
  * placeholder, a default, or an estimate.
  */
 export interface ProjectionInput {
+  modelSelection?: CoreStatus['modelSelection']
   state: CoreState
   lifecycle: CoreLifecycle
   gateway: ModelGateway
@@ -57,6 +58,7 @@ export function projectCoreStatus(input: ProjectionInput): CoreStatus {
       grantsActive: activeGrants(state, now).length,
     },
 
+    ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
     providers: gateway.statuses(),
     // The one place live provider work is read. The gateway owns the registry
     // that holds the controllers, so this is a fact about the process rather

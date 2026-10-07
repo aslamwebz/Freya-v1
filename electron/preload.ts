@@ -1625,7 +1625,9 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       // boundary, not the only wall.
       const model = string('model', MAX_MODEL_ID_CHARS, false)
       if (model === null) return { ok: false, reason: 'model id is invalid' }
-      return { ok: true, payload: model === undefined ? {} : { model } }
+      const providerId = string('providerId', MAX_ID_CHARS, false)
+      if (providerId === null) return { ok: false, reason: 'provider id is invalid' }
+      return { ok: true, payload: model === undefined ? {} : { model, ...(providerId === undefined ? {} : { providerId }) } }
     }
 
     case 'foundry.status.read': {

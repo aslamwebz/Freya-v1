@@ -3,6 +3,7 @@ import { readModelCatalog, selectModel } from '../../platform/modelClient'
 import { coreMirror, ensureCoreAttached } from '../../platform/coreClient'
 import { hostBridge } from '../../platform/host'
 import type { CoreStatus } from '../../../core/protocol/core-protocol'
+import { describeProvider, isProviderId } from '../../../core/capabilities'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 
 /**
@@ -18,7 +19,9 @@ import { Glyph } from '../../ui-v2/primitives/Glyph'
  * Core's own `selected` — or reverts, in Core's words, if Core refuses it.
  */
 
-type ModelEntry = { readonly id: string; readonly ownedBy: string | null }
+type ModelEntry = { readonly id: string; readonly ownedBy: string | null; readonly providerId?: string; readonly unavailable?: boolean }
+const entryKey = (entry: ModelEntry) => entry.providerId ? `${entry.providerId}:${entry.id}` : entry.id
+const providerLabel = (entry: ModelEntry) => isProviderId(entry.providerId) ? describeProvider(entry.providerId) : entry.providerId ?? entry.ownedBy ?? ''
 
 const FAVORITES_KEY = 'freya.favoriteModels'
 
@@ -56,38 +59,30 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
   const [open, setOpen] = useState(false)
   const [models, setModels] = useState<readonly ModelEntry[]>([])
   const [selected, setSelected] = useState<string | null>(null)
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
   const [reportedDefault, setReportedDefault] = useState(catalogDefault)
   const [query, setQuery] = useState('')
   const [favorites, setFavorites] = useState<readonly string[]>(readFavorites)
   const [note, setNote] = useState('')
 
   /**
-   * Core answers two different questions, and the chip used to show neither.
-   *
-   * `selected` is the owner's explicit choice; `defaultModel` is the provider's own
-   * configured fallback, which is what a turn runs when nothing is selected. Both
-   * are reported by `model.catalog.read`, so asking once on mount is enough to name
-   * the model that is actually in use instead of printing the words "provider
-   * default" — which described the absence of a name rather than the model.
+   * Status names the current selection without fetching catalogues at startup.
    */
   useEffect(() => {
     let live = true
-    let requested = false
     const mirror = coreMirror()
     const apply = (status: CoreStatus | null) => {
-      if (live && status?.lifecycle === 'ready') setReportedDefault(status.providers.find(provider => provider.status === 'configured')?.model ?? null)
-      if (!live || requested || status?.lifecycle !== 'ready') return
-      requested = true
-      void readModelCatalog().then(outcome => {
-        if (!live || outcome.operation !== 'catalog') return
-        setSelected(outcome.selected ?? null)
-        setCatalogDefault(outcome.defaultModel ?? null)
-        if (outcome.defaultModel) setReportedDefault(outcome.defaultModel)
-      })
+      if (!live || status?.lifecycle !== 'ready') return
+      if (status.modelSelection) {
+        setSelected(status.modelSelection.model)
+        setSelectedProvider(status.modelSelection.providerId)
+        setReportedDefault(status.modelSelection.defaultModel)
+      } else setReportedDefault(status.providers.find(provider => provider.status === 'configured')?.model ?? null)
     }
     const detach = mirror.subscribe(apply)
-    void ensureCoreAttached().then(attached => apply(attached.status))
-    void hostBridge()?.coreStatus().then(apply)
+    void ensureCoreAttached().then(attached => apply(attached.status)).catch(() => {})
+    void hostBridge()?.coreStatus().then(apply).catch(() => {})
     return () => { live = false; detach() }
   }, [])
   const toggle = () => {
@@ -96,32 +91,39 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
     if (!next) return
     setNote('')
     setQuery('')
+    setLoading(true)
     void readModelCatalog().then(outcome => {
       if (outcome.operation === 'catalog') {
         if (outcome.models) setModels(outcome.models)
         setSelected(outcome.selected ?? null)
+        setSelectedProvider(outcome.selectedProviderId ?? null)
+        setNote(outcome.reason ?? '')
         setCatalogDefault(outcome.defaultModel ?? null)
         setReportedDefault(outcome.defaultModel ?? null)
       } else {
         setModels([])
         setNote(outcome.reason ?? 'The model catalogue is unavailable.')
       }
-    })
+    }).catch(() => setNote('The model catalogue could not be read.')).finally(() => setLoading(false))
   }
 
-  const choose = (id: string) => {
+  const choose = (entry: ModelEntry) => {
     const previous = selected
-    setSelected(id)
+    const previousProvider = selectedProvider
+    setSelected(entry.id)
+    setSelectedProvider(entry.providerId ?? null)
     setOpen(false)
-    void selectModel(id).then(outcome => {
-      if (outcome.operation === 'selected') setSelected(outcome.selected ?? id)
-      else { setSelected(previous); setNote(outcome.reason ?? 'Core refused that model.'); setOpen(true) }
-    })
+    void selectModel(entry.id, entry.providerId).then(outcome => {
+      if (outcome.operation === 'selected') { setSelected(outcome.selected ?? entry.id); setSelectedProvider(outcome.selectedProviderId ?? entry.providerId ?? null) }
+      else { setSelected(previous); setSelectedProvider(previousProvider); setNote(outcome.reason ?? 'Core refused that model.'); setOpen(true) }
+    }).catch(() => { setSelected(previous); setSelectedProvider(previousProvider); setNote('The model selection could not be saved.'); setOpen(true) })
   }
 
-  const toggleFavorite = (id: string) => {
+  const isFavorite = (entry: ModelEntry) => favorites.includes(entryKey(entry)) || favorites.includes(entry.id)
+  const toggleFavorite = (entry: ModelEntry) => {
+    const id = entryKey(entry)
     setFavorites(current => {
-      const next = current.includes(id) ? current.filter(value => value !== id) : [...current, id]
+      const next = isFavorite(entry) ? current.filter(value => value !== id && value !== entry.id) : [...current, id]
       try { window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(next)) } catch { /* storage is optional */ }
       return next
     })
@@ -130,13 +132,22 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
   // What a turn would actually run right now: the owner's selection if there is
   // one, otherwise the provider's own default. Only when Core has told us neither
   // is there genuinely nothing to name.
-  const selectedId = selected ?? defaultModel ?? reportedDefault
+  const selectedId = selected ?? reportedDefault ?? defaultModel
   const activeModel = selectedId ? modelName(selectedId) : 'no model reported'
   const search = query.trim().toLowerCase()
   const matches = models.filter(entry => search.length === 0
     || modelName(entry.id).toLowerCase().includes(search)
-    || entry.id.toLowerCase().includes(search))
-  const shown = [...matches.filter(entry => favorites.includes(entry.id)), ...matches.filter(entry => !favorites.includes(entry.id))]
+    || entry.id.toLowerCase().includes(search)
+    || providerLabel(entry).toLowerCase().includes(search)
+    || (entry.ownedBy ?? '').toLowerCase().includes(search))
+  // Favorites remain available even when a different provider is being searched.
+  const missingFavorites: ModelEntry[] = favorites.filter(key => !models.some(entry => entryKey(entry) === key || entry.id === key)).map(key => {
+    const colon = key.indexOf(':')
+    const providerId = key.slice(0, colon)
+    return colon > 0 && isProviderId(providerId) ? { id: key.slice(colon + 1), providerId, ownedBy: null, unavailable: true } : { id: key, ownedBy: null, unavailable: true }
+  })
+  const pinned = [...models.filter(isFavorite), ...missingFavorites]
+  const shown = [...pinned, ...matches.filter(entry => !isFavorite(entry))]
 
   return (
     <div className="hd-select">
@@ -144,15 +155,16 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
         <Glyph name="chip" size={17} /><span>{activeModel}</span><Glyph name="chevron" size={13} />
       </button>
       {open && <div className="hd-menu hd-menu-model" aria-label="Models">
-        <label className="hd-search"><Glyph name="search" size={14} /><input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="Search models" aria-label="Search models" spellCheck={false} /></label>
+        <label className="hd-search"><Glyph name="search" size={14} /><input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="Search models or providers" aria-label="Search models" spellCheck={false} /></label>
         {note ? <p className="hd-menu-note">{note}</p> : null}
-        {!note && shown.length === 0 ? <p className="hd-menu-note">{models.length === 0 ? 'No models reported.' : 'No models match.'}</p> : null}
+        {loading && <p className="hd-menu-note" role="status">Loading configured providers…</p>}
+        {!note && !loading && shown.length === 0 ? <p className="hd-menu-note">{models.length === 0 ? 'No models reported.' : 'No models match.'}</p> : null}
         {shown.map(entry => (
-          <div key={entry.id} className="hd-model-row">
-            <button type="button" className="hd-fav" aria-pressed={favorites.includes(entry.id)} aria-label={favorites.includes(entry.id) ? `Remove ${modelName(entry.id)} from favorites` : `Add ${modelName(entry.id)} to favorites`} onClick={() => toggleFavorite(entry.id)}>
-              <Glyph name="star" size={15} style={favorites.includes(entry.id) ? { fill: 'currentColor' } : undefined} />
+          <div key={entryKey(entry)} className="hd-model-row">
+            <button type="button" className="hd-fav" aria-pressed={isFavorite(entry)} aria-label={isFavorite(entry) ? `Remove ${modelName(entry.id)} (${providerLabel(entry)}) from favorites` : `Add ${modelName(entry.id)} (${providerLabel(entry)}) to favorites`} onClick={() => toggleFavorite(entry)}>
+              <Glyph name="star" size={15} style={isFavorite(entry) ? { fill: 'currentColor' } : undefined} />
             </button>
-            <button type="button" className="hd-model-pick" aria-pressed={entry.id === selectedId} onClick={() => choose(entry.id)}>{modelName(entry.id)}</button>
+            <button type="button" className="hd-model-pick" disabled={entry.unavailable} title={entry.unavailable ? 'This saved favorite is unavailable in the current provider catalogue.' : undefined} aria-pressed={entry.id === selectedId && (!selectedProvider || entry.providerId === selectedProvider)} onClick={() => choose(entry)}>{modelName(entry.id)} <small>{providerLabel(entry)}{entry.unavailable ? ' · unavailable' : ''}</small></button>
           </div>
         ))}
       </div>}

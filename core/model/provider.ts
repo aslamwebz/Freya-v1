@@ -564,6 +564,7 @@ export interface ModelCallOptions {
  * owner selected it.
  */
 export interface ModelCatalogEntry {
+  providerId?: string
   id: string
   ownedBy: string | null
 }

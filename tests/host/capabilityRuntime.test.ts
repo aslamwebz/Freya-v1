@@ -107,12 +107,57 @@ describe('configured adapter transport boundaries', () => {
 })
 
 describe('selected provider model discovery', () => {
-  it('catalogue and model admissibility follow the saved provider, without network spend', async () => {
+  it('discovers every configured provider while preserving the preferred default, without spend', async () => {
     const mini = new CompatibleModelProvider('minimax', compatibleConfig('minimax', { MINIMAX_API_KEY: 'secret', FREYA_ALLOW_LIVE_MODEL: '1' }))
     const openai = new CompatibleModelProvider('openai', compatibleConfig('openai', { OPENAI_API_KEY: 'different-secret', OPENAI_MODEL: 'configured-model', FREYA_ALLOW_LIVE_MODEL: '1' }))
     const gateway = new ModelGateway({ providers: [mini, openai], providerPreference: () => ['openai'], recorder: { started: vi.fn(), completed: vi.fn(), failed: vi.fn(), cancelled: vi.fn() } })
-    expect(await gateway.readModelCatalog()).toEqual({ ok: true, providerId: 'openai', defaultModel: 'configured-model', models: [{ id: 'configured-model', ownedBy: 'openai' }] })
+    expect(await gateway.readModelCatalog()).toEqual({ ok: true, providerId: 'openai', defaultModel: 'configured-model', models: [{ id: 'MiniMax-M3', ownedBy: 'minimax', providerId: 'minimax' }, { id: 'configured-model', ownedBy: 'openai', providerId: 'openai' }] })
     expect(gateway.canServeModel('configured-model')).toBe(true)
-    expect(gateway.canServeModel('MiniMax-M3')).toBe(false)
+    expect(gateway.canServeModel('MiniMax-M3', 'minimax')).toBe(true)
+    expect(gateway.canServeModel('MiniMax-M3', 'openai')).toBe(false)
+  })
+})
+
+
+describe('catalogue provider isolation', () => {
+  const response = () => new Response(JSON.stringify({ choices: [{ message: { content: 'answer' }, finish_reason: 'stop' }] }), { status: 200 })
+  it('keeps healthy catalogues when another provider fails and never runs inference', async () => {
+    const mini = new CompatibleModelProvider('minimax', compatibleConfig('minimax', { MINIMAX_API_KEY: 'secret', FREYA_ALLOW_LIVE_MODEL: '1' }))
+    const broken = new CompatibleModelProvider('openai', compatibleConfig('openai', { OPENAI_API_KEY: 'secret', OPENAI_MODEL: 'configured-model', FREYA_ALLOW_LIVE_MODEL: '1' }))
+    vi.spyOn(broken, 'listModels').mockRejectedValue(new Error('discovery unavailable'))
+    const complete = vi.spyOn(mini, 'complete')
+    const recorder = { started: vi.fn(), completed: vi.fn(), failed: vi.fn(), cancelled: vi.fn() }
+    const gateway = new ModelGateway({ providers: [broken, mini], providerPreference: () => ['minimax'], recorder })
+    const catalog = await gateway.readModelCatalog()
+    expect(catalog.ok).toBe(true)
+    if (catalog.ok) { expect(catalog.models).toHaveLength(1); expect(catalog.reason).toContain('openai') }
+    expect(complete).not.toHaveBeenCalled()
+    expect(recorder.started).not.toHaveBeenCalled()
+    expect(gateway.activeCallCount()).toBe(0)
+  })
+  it('does not let either an explicit provider or a model-only choice bypass vision admission', async () => {
+    const transport = vi.fn<typeof fetch>()
+    const env = { OPENAI_API_KEY: 'secret', OPENAI_MODEL: 'text-only', FREYA_ALLOW_LIVE_MODEL: '1' }
+    const openai = new CompatibleModelProvider('openai', compatibleConfig('openai', env), transport)
+    const recorder = { started: vi.fn(), completed: vi.fn(), failed: vi.fn(), cancelled: vi.fn() }
+    const gateway = new ModelGateway({ providers: [openai], providerPreference: capability => capability === 'vision' ? [] : ['openai'], recorder })
+    const permit = { requestId: 'vision', correlationId: 'vision', grantId: null, providerId: 'auto', model: 'text-only', maxOutputTokens: 32, messages: [{ role: 'user' as const, content: 'image', attachments: [{ type: 'image' as const, mimeType: 'image/png' as const, data: 'aGVsbG8=' }] }] }
+    await expect(gateway.execute(permit, 'image')).rejects.toThrow('no configured provider')
+    await expect(gateway.execute({ ...permit, requestedProviderId: 'openai' }, 'image')).rejects.toThrow('no configured provider')
+    expect(transport).not.toHaveBeenCalled()
+    expect(recorder.started).not.toHaveBeenCalled()
+  })
+  it('routes an explicit provider choice without replacing it with the preferred provider sharing its model ID', async () => {
+    const env = { MINIMAX_API_KEY: 'secret', MINIMAX_MODEL: 'shared', OPENAI_API_KEY: 'secret', OPENAI_MODEL: 'shared', FREYA_ALLOW_LIVE_MODEL: '1' }
+    const miniFetch = vi.fn<typeof fetch>().mockResolvedValue(response())
+    const openFetch = vi.fn<typeof fetch>().mockResolvedValue(response())
+    const mini = new CompatibleModelProvider('minimax', compatibleConfig('minimax', env), miniFetch)
+    const openai = new CompatibleModelProvider('openai', compatibleConfig('openai', env), openFetch)
+    const gateway = new ModelGateway({ providers: [mini, openai], providerPreference: () => ['minimax'], recorder: { started: vi.fn(), completed: vi.fn(), failed: vi.fn(), cancelled: vi.fn() } })
+    const result = await gateway.execute({ requestId: 'choice', correlationId: 'choice', grantId: null, providerId: 'auto', requestedProviderId: 'openai', model: 'shared', maxOutputTokens: 32 }, 'exact owner text')
+    expect(result.providerId).toBe('openai')
+    expect(openFetch).toHaveBeenCalledTimes(1)
+    expect(miniFetch).not.toHaveBeenCalled()
+    expect(JSON.parse(String(openFetch.mock.calls[0]?.[1]?.body)).model).toBe('shared')
   })
 })

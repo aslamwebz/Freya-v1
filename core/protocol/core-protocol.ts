@@ -455,6 +455,7 @@ export interface CoreStatus {
     status: 'ready' | 'deny_all' | 'unknown'
     grantsActive: number
   }
+  modelSelection?: { model: string | null; providerId: string | null; defaultModel: string | null }
   providers: ProviderStatus[]
   /**
    * Provider requests executing **right now**, in this Core process.
@@ -1159,6 +1160,7 @@ export interface OfficeCommandOutcome {
  * of those and an invented figure would be a lie the size of a number.
  */
 export interface ModelView {
+  providerId?: string
   id: string
   ownedBy: string | null
 }
@@ -1172,6 +1174,7 @@ export interface ModelView {
  */
 export interface ModelCommandOutcome {
   operation: 'catalog' | 'selected' | 'refused'
+  selectedProviderId?: string | null
   reason?: string
   models?: readonly ModelView[]
   /** The provider's own configured default, which is what "no selection" means. */

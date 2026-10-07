@@ -609,8 +609,6 @@ function currentHostEnv(): HostEnv {
 async function reEnvCore(): Promise<void> {
   if (!providerStore) return
   await providerStore.applyToEnv(process.env, EXPLICIT_ENV)
-  capabilityStore = new CapabilitySettingsStore(join(app.getPath('userData'), 'capabilities.json'))
-  capabilityPreferences = await capabilityStore.read()
   await coreHost?.restartWithEnv(currentHostEnv())
 }
 
@@ -1142,6 +1140,8 @@ function registerIpc(): void {
   ipcMain.handle('freya:capabilities:write', async (event, input: unknown) => {
     if (event.sender !== mainWindow?.webContents || !capabilityStore) throw new Error('Capability settings are unavailable.')
     capabilityPreferences = await capabilityStore.write(input)
+    // Refresh the Chat default immediately; the running Core reads the same preference closure.
+    if (coreHost && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('freya:core:status', coreHost.status())
     return capabilityRegistry()
   })
   ipcMain.handle('freya:voice:settings:read', () => ({ ...voicePreferences() }))
@@ -1412,6 +1412,8 @@ app.whenReady().then(async () => {
   // launch, so it is applied here — before Core reads `process.env.NANOGPT_*`.
   // A real launch environment still wins; the `.env` file does not.
   await providerStore.applyToEnv(process.env, EXPLICIT_ENV)
+  capabilityStore = new CapabilitySettingsStore(join(app.getPath('userData'), 'capabilities.json'))
+  capabilityPreferences = await capabilityStore.read()
   voiceConfig = new VoiceConfigStore(join(app.getPath('userData'), 'voice.json'))
   await voiceConfig.load()
   // The keys are fetched before the Core is constructed, and they are the only

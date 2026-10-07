@@ -96,7 +96,7 @@ const waitIdle = async (ms = 600_000) => {
   throw new Error('timeout waiting for turn to settle')
 }
 
-async function freshChat(label) {
+async function freshChat() {
   await page.locator('.hd-place[aria-label="Home"]').click().catch(() => {})
   await page.waitForFunction(() => document.querySelector('.hd-dashboard')?.getAttribute('data-screen') === 'home', { timeout: 10_000 }).catch(() => {})
   await page.locator('.chats-history-title').click()
@@ -149,7 +149,7 @@ try {
     'no "browser workspace" toggle in the composer anymore')
 
   // Section 2: a randomized image request through the plain composer.
-  await freshChat('img')
+  await freshChat()
   const imgPrompt = q('image')
   await ask(imgPrompt)
   const ms2 = await mediaState()
@@ -158,7 +158,7 @@ try {
   await shot('image-result')
 
   // Section 3: a randomized video request through the Web search button.
-  await freshChat('video')
+  await freshChat()
   const vidPrompt = q('video')
   await ask(vidPrompt, { useWebButton: true })
   const ms3 = await mediaState()
@@ -167,7 +167,7 @@ try {
   await shot('video-result')
 
   // Section 4: a randomized document request through the Web search button.
-  await freshChat('doc')
+  await freshChat()
   const docPrompt = q('doc')
   await ask(docPrompt, { useWebButton: true })
   const ms4 = await mediaState()
@@ -176,7 +176,7 @@ try {
   await shot('doc-result')
 
   // Section 5: a randomized plain web lookup WITHOUT the button.
-  await freshChat('plain')
+  await freshChat()
   const plainPrompt = q('web')
   await ask(plainPrompt)
   const ans5 = (await settled()).at(-1) ?? ''
@@ -185,7 +185,7 @@ try {
   await shot('plain-result')
 
   // Section 6: another randomized image request this time with BOTH intents.
-  await freshChat('both')
+  await freshChat()
   const bothPrompt = q('image')
   await ask(bothPrompt, { useWebButton: true, useBrowserButton: true })
   const ms6 = await mediaState()
@@ -194,7 +194,7 @@ try {
   await shot('both-result')
 
   // Section 7: tapping a button then tapping it again drops the directive.
-  await freshChat('toggle')
+  await freshChat()
   await page.locator('button[aria-label*="web search"], button[aria-label*="Web search"]').click()
   const pressed = await page.evaluate(() => document.querySelector('button[aria-label*="web search"], button[aria-label*="Web search"]')?.getAttribute('aria-pressed') === 'true')
   await page.locator('button[aria-label*="web search"], button[aria-label*="Web search"]').click()

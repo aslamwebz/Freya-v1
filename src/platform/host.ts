@@ -1,3 +1,5 @@
+import type { CapabilityRegistry, CapabilityPreferences } from '../../core/capabilities'
+import type { BrowserDockRequest } from '../../electron/browser/rendererRequest'
 import type {
   CoreCommandName,
   CoreCommandResult,
@@ -111,6 +113,8 @@ export interface FreyaHostBridge {
   voiceSettingsWrite?(patch: Partial<VoiceSettings>): Promise<VoiceSettings>
   isDesktop: true
 
+  getCapabilitySettings(): Promise<CapabilityRegistry>
+  setCapabilitySettings(input: CapabilityPreferences): Promise<CapabilityRegistry>
   getRuntimeInfo(): Promise<HostRuntimeInfo>
   loadWorkspace(): Promise<unknown>
   saveWorkspace(payload: unknown): Promise<boolean>
@@ -163,7 +167,9 @@ export interface FreyaHostBridge {
    * A request submitted here is re-bounded by preload/main and then routed through
    * the existing dual-browser runtime, which remains behind Device Hands.
    */
+  onBrowserOpenUrl?(handler: (url: string) => void): () => void
   browserState(): Promise<BrowserBridgeState>
+  browserDock?(input: BrowserDockRequest): Promise<boolean>
   browserExecute(request: BrowserRequest): Promise<BrowserResult>
 
   /**

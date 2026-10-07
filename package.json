@@ -51,7 +51,8 @@
     "test:chat-live-all": "npm run test:chat-acceptance && npm run test:chat-browser",
     "test:chat-onscreen": "node scripts/chat-onscreen-acceptance.mjs",
     "test:chat-random": "node scripts/chat-random.mjs",
-    "test:chat-v2-shots": "node scripts/chat-v2-screenshot.mjs"
+    "test:chat-v2-shots": "node scripts/chat-v2-screenshot.mjs",
+    "test:browser-dock": "node scripts/build-docked-browser-smoke.mjs && electron dist-electron/smoke-docked-browser.cjs"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1",

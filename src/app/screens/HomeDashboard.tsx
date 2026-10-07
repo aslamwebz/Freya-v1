@@ -18,6 +18,7 @@ import { hostBridge } from '../../platform/host'
 import type { DressingStore, DressingState } from '../dressing/store'
 import { PersistentWorkspaceLayers } from './PersistentWorkspaceLayers'
 import type { PreferencesStore } from '../../ui-v2/theme/preferences'
+import type { DockedTabOrigin } from '../chat/BrowserWorkspace'
 import './home-dashboard.css'
 
 interface Props {
@@ -41,13 +42,14 @@ interface Props {
   ) => Promise<boolean>
   onStopResponse: () => void
   researchView: WorkspaceResearchView | null
+  onResearchViewChange: (view: WorkspaceResearchView) => void
   onNavigate: (screen: string) => void
   onVoicePress: () => void
   onVoiceRelease: (cancelled?: boolean) => void
   maxMessageCharacters: number | null
   browserOpen: boolean
   browserRequestedUrl: string | null
-  onBrowserOpenUrl: (url: string) => void
+  onBrowserOpenUrl: (url: string, origin?: DockedTabOrigin) => void
   onBrowserRequestedUrlHandled: () => void
   onBrowserClose: () => void
 }
@@ -123,7 +125,7 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
+export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onResearchViewChange, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   /*
@@ -349,6 +351,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
         </>) : workspaceId === 'chat' ? (
           <Chats
             researchView={researchView}
+            onResearchViewChange={onResearchViewChange}
             busy={generating}
             browserOpen={browserOpen}
             browserRequestedUrl={browserRequestedUrl}

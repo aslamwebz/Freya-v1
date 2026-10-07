@@ -7,7 +7,7 @@ export interface RichMessageProps {
    * Links are actions, not raw anchors. Until a browser workspace is attached, they
    * render visibly but cannot escape Freya through the renderer on their own.
    */
-  readonly onOpenLink?: (url: string) => void
+  readonly onOpenLink?: (url: string, provenance?: { readonly kind: 'citation' | 'source' | 'inline'; readonly title?: string }) => void
   /**
    * Show a "Copy" affordance on every code block. Defaults to `false` so the
    * plain-text path stays zero-feature.
@@ -195,7 +195,7 @@ function safeWebUrl(value: string): string | null {
  * The tokenizer only recognises code, strong/emphasis and explicit http(s) links.
  * HTML tags are never interpreted; React escapes them as text.
  */
-export function inlineRichText(text: string, onOpenLink?: (url: string) => void): ReactNode[] {
+export function inlineRichText(text: string, onOpenLink?: (url: string, provenance?: { readonly kind: 'citation' | 'source' | 'inline'; readonly title?: string }) => void): ReactNode[] {
   const token = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\))/g
   const nodes: ReactNode[] = []
   let cursor = 0

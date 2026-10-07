@@ -100,6 +100,9 @@ async function launch(
       // enable flags are set to 0, so the only providers reachable in this run are
       // the ones a test injects.
       ...process.env,
+      MINIMAX_API_KEY: '',
+      OPENAI_API_KEY: '',
+      LOCAL_MODEL_BASE_URL: '',
       NANOGPT_API_KEY: '',
       NANOGPT_BASE_URL: '',
       NANOGPT_MODEL: '',
@@ -2044,7 +2047,7 @@ async function main(): Promise<void> {
          * must still fail this test instead of being hidden by a wider regex exception.
          */
         const SETTINGS_MEMBERS = new Set(['providerConfig', 'saveProviderConfig'])
-        const BOUNDED_BROWSER_MEMBERS = new Set(['browserState', 'browserExecute'])
+        const BOUNDED_BROWSER_MEMBERS = new Set(['browserState', 'browserExecute', 'browserDock', 'onBrowserOpenUrl'])
         const handles = keys.filter(
           (key) =>
             !SETTINGS_MEMBERS.has(key) &&

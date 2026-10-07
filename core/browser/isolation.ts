@@ -114,7 +114,7 @@ export function assertNonPersistentPartition(name: string): IsolationReading {
  * One per live session, and {@link BROWSER_LIMITS_MAX} caps the sessions, so this is the
  * second of two independent bounds rather than the only one.
  */
-export const PUBLIC_BROWSER_POOL_SIZE = 2
+export const PUBLIC_BROWSER_POOL_SIZE = 12
 
 /* ------------------------------------------------------------- permissions */
 

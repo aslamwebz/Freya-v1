@@ -4,6 +4,7 @@ import { resetCoreMirror } from '../../../src/platform/coreClient'
 import { resetMissionMirror } from '../../../src/platform/missionClient'
 import { resetWorkforceMirror } from '../../../src/platform/workforceClient'
 import { resetAttentionMirror } from '../../../src/platform/attentionClient'
+import { buildCapabilityRegistry } from '../../../core/capabilities'
 import type { FreyaHostBridge } from '../../../src/platform/host'
 import type { CoreStatus } from '../../../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../../../core/protocol/activity'
@@ -147,6 +148,8 @@ const attentionProjection: AttentionProjection = {
 function installFakeBridge() {
   const bridge: FreyaHostBridge = {
     isDesktop: true,
+    getCapabilitySettings: async () => buildCapabilityRegistry(),
+    setCapabilitySettings: async (preferences) => buildCapabilityRegistry(preferences),
     getRuntimeInfo: async () => ({ version: '0.1.0', electron: '44.5.0', platform: 'win32', arch: 'x64', userData: '', workspaceFile: '', dev: false }),
     loadWorkspace: async () => null,
     saveWorkspace: async () => true,

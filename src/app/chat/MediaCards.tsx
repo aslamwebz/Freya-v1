@@ -136,7 +136,7 @@ function MediaCard({ item, index, onOpen }: {
 
 export function MediaGrid({ items, onOpenBrowserUrl }: {
   readonly items: readonly MediaItem[]
-  readonly onOpenBrowserUrl?: (url: string) => void
+  readonly onOpenBrowserUrl?: (url: string, kind?: 'video' | 'image' | 'pdf' | 'document' | 'page') => void
 }) {
   const [openIndex, setOpenIndex] = useState<number | null>(null)
   if (items.length === 0) return null
@@ -149,7 +149,7 @@ export function MediaGrid({ items, onOpenBrowserUrl }: {
             key={`${item.kind}:${item.url}:${String(index)}`}
             item={item}
             index={index}
-            onOpen={setOpenIndex}
+            onOpen={(selected) => { const found = items[selected]; if (onOpenBrowserUrl && found) onOpenBrowserUrl(found.page || found.url, found.kind === 'document' ? 'document' : found.kind); else setOpenIndex(selected) }}
           />
         ))}
       </div>
@@ -180,7 +180,7 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
   readonly index: number
   readonly onIndex: (next: number) => void
   readonly onClose: () => void
-  readonly onOpenBrowserUrl?: (url: string) => void
+  readonly onOpenBrowserUrl?: (url: string, kind?: 'video' | 'image' | 'pdf' | 'document' | 'page') => void
 }) {
   const item = items[index] ?? items[0]!
   const many = items.length > 1
@@ -316,7 +316,7 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
               type="button"
               className="chats-overlay-open"
               aria-label="Open this page in Freya's browser"
-              onClick={() => onOpenBrowserUrl(item.page)}
+              onClick={() => onOpenBrowserUrl(item.page, item.kind === 'document' ? 'pdf' : item.kind)}
             >
               Open in browser
             </button>

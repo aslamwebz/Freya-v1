@@ -1,3 +1,6 @@
+import { CapabilitySettingsStore } from './capabilitySettings'
+import { readRuntimeCapabilityRegistry } from '../core/model/capability-runtime'
+import type { CapabilityPreferences } from '../core/capabilities'
 import { app, BrowserWindow, WebContentsView, ipcMain, screen, shell, safeStorage } from 'electron'
 import { join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
@@ -21,6 +24,10 @@ import { PresenceHost } from './presence/host'
 import { createBrowserExtensionHost, type BrowserExtensionHost } from './browserext'
 import { HostVoiceOutput, registerVoiceOutputIpc } from './voiceHost'
 import { HostVoiceInput } from './voiceInput'
+import type { EffectiveVoiceSettings } from './voiceCapabilities'
+import type { CapabilityReadiness } from '../core/capabilities'
+import type { VoiceSettings } from '../core/voice/settings'
+import { voiceCapabilityReadiness, effectiveVoiceSettings, gateVoiceInput, gateVoiceOutput } from './voiceCapabilities'
 import { LocalWhisperHost } from './localWhisper'
 import { LocalWakeHost } from './localWake'
 import { MicrophoneGate } from './microphoneGate'
@@ -39,7 +46,7 @@ import type { ProviderConfigInput } from './providerConfig'
 import type { ModelProvider } from '../core/model/provider'
 import type { GrantFact } from '../core/devicehands'
 import type { BrowserResult } from '../core/browser'
-import { normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
+import { normaliseBrowserDockRequest, normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
 import { EncryptedConversationStore } from '../core/conversation/encrypted-store'
 
 const HERE = __dirname
@@ -60,6 +67,7 @@ const EXPLICIT_ENV: NodeJS.ProcessEnv = { ...process.env }
 loadLocalEnv(join(ROOT, '.env'))
 
 let mainWindow: BrowserWindow | null = null
+let dockedBrowserFactory: ElectronFreyaWindowFactory | null = null
 /** Null until the app is ready; every handler that needs it is registered after. */
 let workspace: WorkspaceFile | null = null
 /**
@@ -67,6 +75,8 @@ let workspace: WorkspaceFile | null = null
  * created once the app is ready, reached from a window only through named IPC.
  */
 let providerStore: ProviderConfigStore | null = null
+let capabilityStore: CapabilitySettingsStore | null = null
+let capabilityPreferences: CapabilityPreferences = {}
 /** One Core per process. Survives renderer reloads; dies only with the app. */
 let coreHost: ElectronCoreHost | null = null
 /**
@@ -77,7 +87,10 @@ let coreHost: ElectronCoreHost | null = null
  * of voices the window reported or strand an utterance that was playing.
  */
 let voiceConfig: VoiceConfigStore | null = null
-const voicePreferences = () => voiceConfig?.current ?? DEFAULT_VOICE_SETTINGS
+const rawVoicePreferences = () => voiceConfig?.current ?? DEFAULT_VOICE_SETTINGS
+const voiceReadiness = (): CapabilityReadiness => voiceCapabilityReadiness({ platformAvailable: voiceOutput.platformAvailable, localInstalled: localWhisper.installed, nanoKeyPresent: !!process.env.NANOGPT_API_KEY?.trim(), remoteAudioEnabled: rawVoicePreferences().remoteAudioEnabled })
+const selectedVoice = (): EffectiveVoiceSettings => effectiveVoiceSettings(rawVoicePreferences(), capabilityPreferences, voiceReadiness())
+const voicePreferences = (): VoiceSettings => selectedVoice().settings
 const voiceOutput = new HostVoiceOutput({ settings: voicePreferences, key: () => process.env.NANOGPT_API_KEY })
 const localWhisper = new LocalWhisperHost(join(ROOT, '.local', 'whisper'))
 const localWake = new LocalWakeHost(ROOT,
@@ -176,7 +189,7 @@ function readDeviceHandsGrants(path: string): GrantFact[] {
 
 function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
   const localUnrestricted = localUnrestrictedMode()
-  if (!localUnrestricted && process.env.FREYA_DEVICE_HANDS !== '1') return undefined
+  if (!localUnrestricted && process.env.FREYA_PUBLIC_BROWSER === '0' && process.env.FREYA_DEVICE_HANDS !== '1') return undefined
   const userData = app.getPath('userData')
   const grants = localUnrestricted
     ? []
@@ -199,7 +212,7 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
   const authority = denyAllAuthority({
     enabled: () => true,
     activeGrant: (principalId, scope) =>
-      grants.find(
+      coreHost?.ownerBrowserGrant(principalId, scope) ?? grants.find(
         (grant) => grant.principalId === principalId && grant.scope === scope && grant.revokedAt === null,
       ) ?? null,
   })
@@ -217,6 +230,7 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
           allowedEnvNames: [],
         }
       : {
+          ownerPublicBrowser: process.env.FREYA_PUBLIC_BROWSER !== '0',
           allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
           deniedRoots: [join(userData, 'vault')],
           allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
@@ -250,19 +264,22 @@ function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
  */
 function buildDualBrowserSeam(extension: BrowserExtensionHost | null): DualBrowserActivation | null {
   const localUnrestricted = localUnrestrictedMode()
-  if (!localUnrestricted && process.env.FREYA_DEVICE_HANDS !== '1') return null
-  if (!localUnrestricted && process.env.FREYA_PUBLIC_BROWSER !== '1') return null
+  if (!localUnrestricted && process.env.FREYA_PUBLIC_BROWSER === '0') return null
 
   const allowedHosts = localUnrestricted
     ? []
     : splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS)
-  const adapter = createFreyaBrowserAdapter({
-    factory: new ElectronFreyaWindowFactory({
+  dockedBrowserFactory = new ElectronFreyaWindowFactory({
+      hostWindow: () => mainWindow,
+      onOpenUrl: (url) => mainWindow?.webContents.send('freya:browser:open-url', url),
       allowedHosts,
       localUnrestricted,
       allowPrivateHosts: localUnrestricted,
       allowProtectedFields: localUnrestricted,
-    }),
+    })
+  const adapter = createFreyaBrowserAdapter({
+    factory: dockedBrowserFactory,
+    poolSize: 12,
     publicAvailable: () => true,
     localUnrestricted,
   })
@@ -275,7 +292,7 @@ function buildDualBrowserSeam(extension: BrowserExtensionHost | null): DualBrows
     authority: {
       // Core's own latch is composed in by `coreHost`, exactly as it is for Device Hands.
       stopAllActive: () => false,
-      perform: (request) => requireCore().performDeviceHandsAction(request),
+      perform: (request) => request.principalId === 'owner:browser' ? requireCore().performOwnerBrowserAction(request) : requireCore().performDeviceHandsAction(request),
     },
     // The **same** hash-chained journal Device Hands already appends to. One writer, one chain.
     journal,
@@ -536,6 +553,15 @@ function requireProviderConfig(): ProviderConfigStore {
  */
 function currentHostEnv(): HostEnv {
   return {
+    MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
+    MINIMAX_BASE_URL: process.env.MINIMAX_BASE_URL,
+    MINIMAX_MODEL: process.env.MINIMAX_MODEL,
+    LOCAL_MODEL_BASE_URL: process.env.LOCAL_MODEL_BASE_URL,
+    LOCAL_MODEL_MODEL: process.env.LOCAL_MODEL_MODEL,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+    OPENAI_MODEL: process.env.OPENAI_MODEL,
+    FREYA_VISION_PROVIDERS: process.env.FREYA_VISION_PROVIDERS,
     NANOGPT_API_KEY: process.env.NANOGPT_API_KEY,
     NANOGPT_BASE_URL: process.env.NANOGPT_BASE_URL,
     NANOGPT_MODEL: process.env.NANOGPT_MODEL,
@@ -583,6 +609,8 @@ function currentHostEnv(): HostEnv {
 async function reEnvCore(): Promise<void> {
   if (!providerStore) return
   await providerStore.applyToEnv(process.env, EXPLICIT_ENV)
+  capabilityStore = new CapabilitySettingsStore(join(app.getPath('userData'), 'capabilities.json'))
+  capabilityPreferences = await capabilityStore.read()
   await coreHost?.restartWithEnv(currentHostEnv())
 }
 
@@ -1106,12 +1134,23 @@ function registerIpc(): void {
   // into Core. The raw key never appears in either direction: it goes into the
   // store and into `process.env`, and nowhere else.
   ipcMain.handle('freya:provider:read', () => requireProviderConfig().read())
+  const capabilityRegistry = () => readRuntimeCapabilityRegistry(currentHostEnv(), capabilityPreferences, { ...(coreHost?.capabilityReadiness() ?? {}), ...voiceReadiness() })
+  ipcMain.handle('freya:capabilities:read', (event) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('Capability settings are only available in the main window.')
+    return capabilityRegistry()
+  })
+  ipcMain.handle('freya:capabilities:write', async (event, input: unknown) => {
+    if (event.sender !== mainWindow?.webContents || !capabilityStore) throw new Error('Capability settings are unavailable.')
+    capabilityPreferences = await capabilityStore.write(input)
+    return capabilityRegistry()
+  })
   ipcMain.handle('freya:voice:settings:read', () => ({ ...voicePreferences() }))
   ipcMain.handle('freya:voice:settings:write', async (_event, input: unknown) => {
     if (!voiceConfig) throw new Error('Voice settings are not ready.')
     await requireCore().submit({ command: 'voice.mic.disable', requestId: 'voice-settings-change' })
     await voiceOutput.cancel()
     const saved = await voiceConfig.write(input)
+    if (capabilityStore) capabilityPreferences = await capabilityStore.write({ ...capabilityPreferences, stt: [saved.inputProvider === 'local-whisper' ? 'local' : 'nanogpt'], tts: [saved.outputProvider === 'platform' ? 'native' : 'nanogpt'] })
     localWhisper.stop()
     localWake.stop()
     return saved
@@ -1270,7 +1309,14 @@ function registerIpc(): void {
   // display projection and submit one closed-vocabulary request; it cannot reach
   // the BrowserWindow, adapter, extension session, journal or Device Hands runtime.
   ipcMain.handle('freya:browser:state', () => browserBridgeState())
-  ipcMain.handle('freya:browser:execute', async (_event, input: unknown) => {
+  ipcMain.handle('freya:browser:dock', (event, input: unknown) => {
+    if (event.sender !== mainWindow?.webContents) return false
+    const dock = normaliseBrowserDockRequest(input, mainWindow.getContentBounds())
+    if (!dock) return false
+    return dockedBrowserFactory?.dock(dock.sessionId, dock.bounds) ?? false
+  })
+  ipcMain.handle('freya:browser:execute', async (event, input: unknown) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('Browser requests are restricted to the main window.')
     const bounded = normaliseRendererBrowserRequest(input)
     if (!bounded.ok) throw new Error(bounded.reason)
     const seam = dualBrowser
@@ -1280,7 +1326,7 @@ function registerIpc(): void {
         'The dual-browser runtime is not enabled, so no page was opened or changed.',
       )
     }
-    return seam.execute(bounded.request)
+    return seam.execute(bounded.request, { origin: 'owner' })
   })
 
   ipcMain.handle('freya:core:voice', () => requireCore().voice())
@@ -1455,7 +1501,16 @@ app.whenReady().then(async () => {
     coreHost = new ElectronCoreHost(
       dataPath,
       {
-        NANOGPT_API_KEY: process.env.NANOGPT_API_KEY,
+        MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
+    MINIMAX_BASE_URL: process.env.MINIMAX_BASE_URL,
+    MINIMAX_MODEL: process.env.MINIMAX_MODEL,
+    LOCAL_MODEL_BASE_URL: process.env.LOCAL_MODEL_BASE_URL,
+    LOCAL_MODEL_MODEL: process.env.LOCAL_MODEL_MODEL,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+    OPENAI_MODEL: process.env.OPENAI_MODEL,
+    FREYA_VISION_PROVIDERS: process.env.FREYA_VISION_PROVIDERS,
+    NANOGPT_API_KEY: process.env.NANOGPT_API_KEY,
         NANOGPT_BASE_URL: process.env.NANOGPT_BASE_URL,
         NANOGPT_MODEL: process.env.NANOGPT_MODEL,
         FREYA_ALLOW_LIVE_MODEL: process.env.FREYA_ALLOW_LIVE_MODEL,
@@ -1529,8 +1584,9 @@ app.whenReady().then(async () => {
         ...(deviceHandsSeam ? { deviceHands: deviceHandsSeam } : {}),
         // Input uses the configured adapter and explicit remote-audio consent.
         // Output uses local system speech; neither credential reaches the window.
-        voiceTts: voiceOutput,
-        voiceStt: voiceInput,
+        capabilityPreferences: () => capabilityPreferences,
+        voiceTts: gateVoiceOutput(voiceOutput, selectedVoice),
+        voiceStt: gateVoiceInput(voiceInput, selectedVoice),
         voiceWake: buildLocalWakeGate(),
         voiceAttentionTimeoutMs: () => voicePreferences().attentionTimeoutMs,
       },

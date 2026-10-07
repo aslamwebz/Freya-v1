@@ -12,7 +12,8 @@ import { ModelGateway, type GatewayRecorder } from './model/gateway'
 import { emptyUsage } from './model/usage'
 import type { ModelProvider } from './model/provider'
 import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
-import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
+import { buildConfiguredModelProviders, modelCapabilityPreference, type CapabilityEnv } from './model/capability-runtime'
+import type { CapabilityPreferences } from './capabilities'
 import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
 import { createWebSearchTool, MindToolRegistry } from './mind/tools'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
@@ -389,7 +390,8 @@ export interface CoreOptions {
    * Production leaves this unset and opens the JSONL store from dataPath.
    */
   eventStore?: EventStore
-  env?: NanoGptEnv
+  env?: CapabilityEnv
+  capabilityPreferences?: () => CapabilityPreferences
   now?: () => Date
   newId?: () => string
   /**
@@ -584,6 +586,7 @@ export interface CoreOptions {
    */
   research?: {
     searchProvider: SearchProvider
+    eyeSearchProvider?: SearchProvider
     browserFactory: BrowserTargetFactory
     /** Test/embedding seam. Production uses the canonical encrypted Vault when available. */
     sessionStore?: SearchSessionStore
@@ -1667,6 +1670,15 @@ class FreyaCore implements Core {
 
     this.gateway = new ModelGateway({
       providers: this.buildProviders(),
+      ...(this.options.providers ? {} : { providerPreference: (capability) => {
+        const selectedCapability = capability === 'vision' ? 'vision' : capability === 'browser' ? 'browser' : 'chat'
+        const preferences = this.options.capabilityPreferences?.() ?? {}
+        const order = modelCapabilityPreference(this.options.env ?? {}, preferences, selectedCapability)
+        if (this.options.developerProvider === undefined || selectedCapability === 'vision') return order
+        const developerId = this.options.developerProvider === 'slow-echo' ? 'slow-echo' : 'fake'
+        // An explicit selection is never bypassed by a developer fixture.
+        return preferences[selectedCapability] === undefined ? [...order, developerId] : order.map((id) => id === 'loopback' ? developerId : id)
+      } }),
       recorder: this.fabricRecorder(),
       now: this.options.now,
       // A request appearing in or leaving the registry is a change in what this
@@ -1711,6 +1723,7 @@ class FreyaCore implements Core {
       const sessionStore = await this.buildResearchSessionStore()
       this.researchIntegration = new ResearchIntegration({
         searchProvider: this.options.research.searchProvider,
+        eyeSearchProvider: this.options.research.eyeSearchProvider,
         browserFactory: this.options.research.browserFactory,
         sessionStore,
         authority: this.service.ownerAuthority(),
@@ -1965,7 +1978,7 @@ class FreyaCore implements Core {
         const tools = [
           ...(this.researchIntegration
             ? [createWebSearchTool({
-              searchWeb: (query, vertical, signal) => this.researchIntegration!.searchWeb(query, vertical, signal),
+              searchWeb: (query, vertical, signal, site) => this.researchIntegration!.searchWeb(query, vertical, signal, site),
             })]
             : []),
           ...(this.dualBrowser
@@ -3602,8 +3615,8 @@ class FreyaCore implements Core {
   /**
    * The capability port Forge reads.
    *
-   * `isRegistered` is the same question Skill admission asks � does any registered
-   * Work capability need this Guard capability � so a package can only declare
+   * `isRegistered` is the same question Skill admission asks ? does any registered
+   * Work capability need this Guard capability ? so a package can only declare
    * something this Core could actually execute. `holds` is Guard's answer for the
    * owner principal, read fresh on every run.
    */
@@ -3629,7 +3642,7 @@ class FreyaCore implements Core {
    * be silently replaced by an ephemeral one, because that would report "nothing is
    * remembered" when the truth is "the file is damaged and Freya stopped trusting
    * it". So the runtime records a fault, the projection reports `durable: false`
-   * with the reason, and no body is adopted � which means a package Core cannot read
+   * with the reason, and no body is adopted ? which means a package Core cannot read
    * is a package that cannot run.
    */
 private async buildForge(): Promise<void> {
@@ -9883,10 +9896,8 @@ case 'forge.run': {
   /**
    * The provider set for a normal runtime.
    *
-   * NanoGPT and nothing else. If it is absent or disabled, there is no
-   * configured provider, and a cognition request is refused for want of one.
-   * That is the honest outcome: a refusal the user can see beats an echo of
-   * their own words presented as an answer.
+   * MiniMax is preferred, followed by the configured NanoGPT, local and OpenAI
+   * adapters. The Gateway applies the capability-specific saved order.
    *
    * The echo provider is opt-in and explicitly named, and it is listed last so
    * it never shadows a real provider when both are present.
@@ -9894,7 +9905,7 @@ case 'forge.run': {
   private buildProviders(): ModelProvider[] {
     if (this.options.providers) return [...this.options.providers]
     const env = this.options.env ?? {}
-    const providers: ModelProvider[] = [new NanoGptProvider({ config: readNanoGptConfig(env) })]
+    const providers = buildConfiguredModelProviders(env)
     if (this.options.developerProvider !== undefined) {
       providers.push(
         this.options.developerProvider === 'slow-echo'
@@ -10852,6 +10863,7 @@ function projectSearchSession(
 ): NonNullable<ResearchCommandOutcome['session']> {
   return {
     sessionId: session.sessionId,
+    ...(session.ownerText === undefined ? {} : { ownerText: session.ownerText }),
     state: session.state,
     intentVersion: session.intentVersion,
     intent: {
@@ -10879,6 +10891,12 @@ function projectSearchSession(
       url: result.url,
       snippet: result.snippet,
       sourceDomain: result.sourceDomain,
+      providerId: result.providerId,
+      retrievedAt: result.retrievedAt,
+      vertical: result.vertical,
+      mediaUrl: result.mediaUrl,
+      thumbnailUrl: result.thumbnailUrl,
+      pageUrl: result.pageUrl,
       mediaType: result.mediaType,
       confidence: result.confidence,
       collection: result.collection,

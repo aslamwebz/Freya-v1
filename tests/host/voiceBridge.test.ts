@@ -181,6 +181,13 @@ describe('a voice turn through the real host', () => {
 })
 
 describe('the host speech adapter', () => {
+  it('reports raw platform availability without reading recursive settings', () => {
+    const output = new HostVoiceOutput({ settings: () => { throw new Error('must not read settings') }, key: () => undefined })
+    expect(output.platformAvailable).toBe(false)
+    output.report({ available: true })
+    expect(output.platformAvailable).toBe(true)
+  })
+
   it('starts unavailable and refuses to speak', async () => {
     const output = new HostVoiceOutput()
     expect(output.availability).toBe('unavailable')

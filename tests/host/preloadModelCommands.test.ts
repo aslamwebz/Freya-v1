@@ -74,13 +74,15 @@ describe('the model commands through the real host with no credentials', () => {
     const catalog = await host.submit({ command: 'model.catalog.read', requestId: 'r1' })
     expect(catalog.ok).toBe(false)
     expect(catalog.model?.operation).toBe('refused')
-    expect(catalog.model?.reason).toMatch(/NANOGPT_API_KEY/)
+    expect(catalog.model?.reason).toMatch(/no configured provider/i)
+    expect(catalog.model?.reason).toMatch(/credential/i)
+    expect(catalog.model?.reason).toMatch(/model/i)
 
     const selected = await host.submit({ command: 'model.select', requestId: 'r2', payload: { model: 'openai/gpt-4.1-nano' } })
     expect(selected.ok).toBe(false)
     expect(selected.refusal?.reason).toMatch(/can serve model/)
 
-    expect(host.status().providers[0]?.status).toBe('unconfigured')
+    expect(host.status().providers.every((provider) => provider.status === 'unconfigured')).toBe(true)
     expect(host.status().activeProviderCalls).toBe(0)
     expect(host.status().sessionUsage.calls).toBe(0)
   })

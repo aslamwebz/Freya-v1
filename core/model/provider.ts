@@ -575,7 +575,7 @@ export interface ModelCatalogOptions {
 
 export interface ModelProvider {
   readonly id: string
-  readonly kind: 'fake' | 'nanogpt'
+  readonly kind: 'fake' | 'nanogpt' | 'minimax' | 'local' | 'openai'
   /** Whether this provider would spend real money or use a network. */
   readonly live: boolean
   /** Current readiness, for the status projection. */

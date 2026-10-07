@@ -4,6 +4,7 @@ export type ComposerMode = 'chat' | 'deep-research' | 'eye'
 
 export interface WorkspaceResearchView {
   mode: Exclude<ComposerMode, 'chat'>
+  ownerText?: string
   outcome: ResearchCommandOutcome
 }
 
@@ -21,7 +22,7 @@ export type EyePromptRoute =
  */
 export function routeEyePrompt(activeSessionId: string | null, text: string): EyePromptRoute {
   const value = text.trim()
-  if (activeSessionId === null) return { kind: 'create', text: value }
+  if (activeSessionId === null) return { kind: 'create', text }
 
   const newSearchPrefixes = [
     /^(?:please\s+)?(?:start|begin)\s+(?:a\s+)?new\s+(?:search|eye)(?:\s*[:,-]\s*|\s+for\s+|\s+)/i,
@@ -30,10 +31,10 @@ export function routeEyePrompt(activeSessionId: string | null, text: string): Ey
 
   for (const prefix of newSearchPrefixes) {
     const request = value.replace(prefix, '').trim()
-    if (request !== value && request.length > 0) return { kind: 'create', text: request }
+    if (request !== value && request.length > 0) return { kind: 'create', text }
   }
 
-  return { kind: 'follow-up', sessionId: activeSessionId, text: value }
+  return { kind: 'follow-up', sessionId: activeSessionId, text }
 }
 
 export const COMPOSER_MODES: readonly {

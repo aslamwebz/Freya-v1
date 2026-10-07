@@ -107,3 +107,18 @@ describe('SearxngSearchProvider video rows', () => {
     expect(get).not.toHaveBeenCalled()
   })
 })
+
+
+describe('SearXNG document and pagination intent', () => {
+  it('requests the bounded page number instead of refetching the first page', async () => {
+    const get = vi.fn(rowsTransport([]).get)
+    await providerWith([], get).search('  exact query  ', { ...opts(), offset: 2 })
+    const url = new URL(get.mock.calls[0]![0])
+    expect(url.searchParams.get('q')).toBe('  exact query  ')
+    expect(url.searchParams.get('pageno')).toBe('3')
+  })
+  it('does not claim ordinary web links as a document vertical', async () => {
+    const results = await providerWith([{ title: 'Article', url: 'https://example.org/article' }, { title: 'PDF', url: 'https://example.org/report.pdf' }]).search('reports', { ...opts(), vertical: 'documents' })
+    expect(results.map((row) => row.url)).toEqual(['https://example.org/report.pdf'])
+  })
+})

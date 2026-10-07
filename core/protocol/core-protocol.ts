@@ -351,7 +351,7 @@ export type ProviderStatusKind = 'disabled' | 'unconfigured' | 'configured' | 'f
 
 export interface ProviderStatus {
   id: string
-  kind: 'fake' | 'nanogpt'
+  kind: 'fake' | 'nanogpt' | 'minimax' | 'local' | 'openai'
   status: ProviderStatusKind
   /** Never a secret: a shape, not a value. */
   model: string | null
@@ -1255,6 +1255,7 @@ export interface ResearchCommandOutcome {
   session?: {
     sessionId: string
     state: 'active' | 'paused' | 'completed' | 'partial' | 'cancelled' | 'failed'
+    ownerText?: string
     intentVersion: number
     intent: {
       subject: string
@@ -1277,6 +1278,12 @@ export interface ResearchCommandOutcome {
       url: string
       snippet: string
       sourceDomain: string
+      providerId?: string
+      retrievedAt?: string
+      vertical?: 'web' | 'images' | 'videos' | 'documents' | 'audio' | 'pages'
+      mediaUrl?: string | null
+      thumbnailUrl?: string | null
+      pageUrl?: string | null
       mediaType: 'web' | 'image' | 'video' | 'audio' | 'document' | 'file'
       confidence: 'exact' | 'probable' | 'weak'
       collection: 'Videos Found' | 'Images Found' | 'Audio Found' | 'Files Found' | 'Sources'

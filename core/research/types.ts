@@ -6,9 +6,10 @@
  * about what Freya actually found. `web` is the default and is never inferred
  * from anything but the category that was asked for.
  */
-export type SearchVertical = 'web' | 'images' | 'videos' | 'documents'
+export type SearchVertical = 'web' | 'images' | 'videos' | 'documents' | 'audio' | 'pages'
 
 export interface SearchResult {
+  readonly providerId?: string
   title: string
   url: string
   snippet: string
@@ -42,6 +43,7 @@ export interface SearchResult {
 export interface SearchQueryOptions {
   readonly signal: AbortSignal
   readonly limit: number
+  readonly site?: string
   readonly offset?: number
   /**
    * Which vertical to ask for. Defaults to `web`.

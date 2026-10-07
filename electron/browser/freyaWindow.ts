@@ -1,4 +1,4 @@
-import { BrowserWindow, session as electronSession, type Session, type WebContents } from 'electron'
+import { BrowserWindow, WebContentsView, session as electronSession, type Session, type WebContents } from 'electron'
 import { PUBLIC_BROWSER_DENIED_PERMISSIONS, assertNonPersistentPartition, assertPublicBrowserUrl } from '../../core/browser'
 import { isPrivateOrLocalHost, utf8Bytes } from '../../core/browserext'
 import type { FieldDescriptor, FreyaBrowserPage, FreyaBrowserPageFactory } from './publicAdapter'
@@ -225,7 +225,10 @@ const SIGNATURE_SCRIPT = String.raw`(() => {
 /* ------------------------------------------------------------------ the page */
 
 export interface FreyaWindowOptions {
+  /** When supplied, pages are embedded in the main window, never popped out. */
+  readonly hostWindow?: () => BrowserWindow | null
   /** The owner's host allowlist. Empty means no host is allowlisted in strict mode. */
+  readonly onOpenUrl?: (url: string) => void
   readonly allowedHosts?: readonly string[]
   /** Development-only: remove browser permission friction. */
   readonly localUnrestricted?: boolean
@@ -266,6 +269,8 @@ function toFieldDescriptor(value: unknown): FieldDescriptor | null {
 
 class ElectronFreyaBrowserPage implements FreyaBrowserPage {
   private window?: BrowserWindow
+  private view?: WebContentsView
+  private attachedHost?: BrowserWindow
   private contents?: WebContents
   private ses?: Session
   private closed = false
@@ -292,7 +297,8 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
     this.title = null
   }
 
-  private readonly onFailedLoad = (_event: unknown, errorCode: number): void => {
+  private readonly onFailedLoad = (_event: unknown, errorCode: number, _description: string, _url: string, isMainFrame: boolean): void => {
+    if (!isMainFrame || errorCode === -3) return
     this.revision += 1
     this.title = null
     this.url = null
@@ -393,11 +399,7 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
       callback({ cancel: !this.requestAllowed(details.url, details.resourceType) })
     })
 
-    this.window = new BrowserWindow({
-      show: true,
-      width: 1100,
-      height: 800,
-      webPreferences: {
+    const preferences: Electron.WebPreferences = {
         session: ses,
         sandbox: true,
         contextIsolation: true,
@@ -410,10 +412,19 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
         safeDialogs: true,
         navigateOnDragDrop: false,
         spellcheck: false,
-      },
+    }
+    if (this.options.hostWindow) {
+      this.view = new WebContentsView({ webPreferences: preferences })
+      this.contents = this.view.webContents
+    } else {
+      this.window = new BrowserWindow({ show: true, width: 1100, height: 800, webPreferences: preferences })
+      this.contents = this.window.webContents
+    }
+    const contents = this.contents
+    contents.setWindowOpenHandler(({ url }) => {
+      if (this.allowedUrl(url)) this.options.onOpenUrl?.(url)
+      return { action: 'deny' }
     })
-    const contents = (this.contents = this.window.webContents)
-    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
     contents.on('will-navigate', (event, url) => {
       if (!this.allowedUrl(url)) {
         event.preventDefault()
@@ -421,14 +432,30 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
       }
       this.revision += 1
     })
-    contents.on('will-frame-navigate', this.prevent)
+    contents.on('will-frame-navigate', (event) => {
+      // The existing URL policy validates owner-clicked top-level navigation.
+      // Subframe navigation retains the existing denial policy.
+      if (!event.isMainFrame || !this.allowedUrl(event.url)) event.preventDefault()
+    })
     contents.on('will-attach-webview', this.prevent)
     contents.on('did-navigate', this.onDidNavigate)
     contents.on('did-navigate-in-page', this.onNavigateInPage)
     contents.on('did-fail-load', this.onFailedLoad)
     contents.on('did-fail-provisional-load', this.onFailedLoad)
     contents.on('render-process-gone', this.onRenderGone)
-    this.window.on('closed', this.onWindowClosed)
+    this.window?.on('closed', this.onWindowClosed)
+  }
+
+  setDock(bounds: Electron.Rectangle | null): void {
+    if (!this.view || this.closed) return
+    if (this.attachedHost && !this.attachedHost.isDestroyed()) this.attachedHost.contentView.removeChildView(this.view)
+    this.attachedHost = undefined
+    if (bounds === null) return
+    const host = this.options.hostWindow?.()
+    if (!host || host.isDestroyed()) return
+    host.contentView.addChildView(this.view)
+    this.view.setBounds(bounds)
+    this.attachedHost = host
   }
 
   /**
@@ -512,11 +539,11 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
   }
 
   async navigate(url: string): Promise<{ ok: boolean; finalUrl: string | null; code: string }> {
-    if (this.closed || this.window === undefined) return { ok: false, finalUrl: null, code: 'session-closed' }
+    if (this.closed || this.contents === undefined) return { ok: false, finalUrl: null, code: 'session-closed' }
     if (!this.allowedUrl(url)) return { ok: false, finalUrl: null, code: 'url-refused' }
     const startRevision = this.revision
     try {
-      await this.window.loadURL(url)
+      await this.contents.loadURL(url)
     } catch {
       return { ok: false, finalUrl: null, code: 'navigate-failed' }
     }
@@ -619,6 +646,7 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
 
   close(): Promise<void> {
     if (this.cleanup !== undefined) return this.cleanup
+    this.setDock(null)
     this.closed = true
     // Retiring the revision here is what makes a closed window's references unusable rather
     // than merely unreachable: a caller holding one is refused `page-stale` instead of
@@ -639,6 +667,7 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
       contents.removeAllListeners('render-process-gone')
       this.window?.removeListener('closed', this.onWindowClosed)
     }
+    if (this.view && !this.view.webContents.isDestroyed()) this.view.webContents.close()
     const ses = this.ses
     // Independent teardown steps: one failed Electron call must not skip the rest, and in
     // particular must not skip the storage clear.
@@ -692,7 +721,17 @@ export interface FreyaWindowFactoryOptions extends FreyaWindowOptions {
  * that would otherwise be invisible, because the partition name is deterministic.
  */
 export class ElectronFreyaWindowFactory implements FreyaBrowserPageFactory {
+  private readonly pages = new Map<string, ElectronFreyaBrowserPage>()
   constructor(private readonly options: FreyaWindowFactoryOptions = {}) {}
+
+  dock(sessionId: string | null, bounds: Electron.Rectangle | null): boolean {
+    for (const page of this.pages.values()) page.setDock(null)
+    if (sessionId === null || bounds === null) return true
+    const page = this.pages.get(sessionId)
+    if (!page) return false
+    page.setDock(bounds)
+    return true
+  }
 
   async create(sessionId: string, partition: string): Promise<FreyaBrowserPage> {
     const ses = this.options.sessionFor
@@ -702,6 +741,9 @@ export class ElectronFreyaWindowFactory implements FreyaBrowserPageFactory {
     await ses.clearCache().catch(() => undefined)
     const page = new ElectronFreyaBrowserPage(sessionId, partition, this.options)
     page.initialize(ses)
+    this.pages.set(sessionId, page)
+    const close = page.close.bind(page)
+    page.close = () => { this.pages.delete(sessionId); return close() }
     return page
   }
 }

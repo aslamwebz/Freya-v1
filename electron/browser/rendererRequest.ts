@@ -154,3 +154,24 @@ export function normaliseRendererBrowserRequest(value: unknown): BrowserRequestR
       return { ok: false, reason: 'that browser command is not renderer reachable' }
   }
 }
+
+
+export interface BrowserDockRequest {
+  sessionId: string | null
+  bounds: { x: number; y: number; width: number; height: number } | null
+}
+
+/** Clamp native views to this window; remote pages cannot request a view. */
+export function normaliseBrowserDockRequest(value: unknown, viewport: { width: number; height: number }): BrowserDockRequest | null {
+  const row = object(value)
+  if (!row) return null
+  if (row.sessionId === null && row.bounds === null) return { sessionId: null, bounds: null }
+  if (typeof row.sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(row.sessionId)) return null
+  const rect = object(row.bounds)
+  if (!rect || !['x', 'y', 'width', 'height'].every((key) => typeof rect[key] === 'number' && Number.isFinite(rect[key]))) return null
+  const x = Math.max(0, Math.min(viewport.width, Math.round(rect.x as number)))
+  const y = Math.max(0, Math.min(viewport.height, Math.round(rect.y as number)))
+  const width = Math.max(0, Math.min(viewport.width - x, Math.round(rect.width as number)))
+  const height = Math.max(0, Math.min(viewport.height - y, Math.round(rect.height as number)))
+  return { sessionId: row.sessionId, bounds: width > 0 && height > 0 ? { x, y, width, height } : null }
+}

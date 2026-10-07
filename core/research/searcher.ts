@@ -5,7 +5,7 @@ import { normalizeSourceUrl } from './url-policy'
 
 export function validateSearchQuery(query: string): string {
   if (typeof query !== 'string' || query.length > 512 || !query.trim()) throw new ResearchError('invalid_query')
-  return query.trim()
+  return query
 }
 
 export function boundedSearchLimit(limit = 10): number {
@@ -52,6 +52,7 @@ export function normalizeSearchResults(data: unknown, limit: number, retrievedAt
       snippet: typeof row.snippet === 'string' ? row.snippet.slice(0, 2048) : '',
       sourceDomain: new URL(url).hostname, rank: results.length + 1,
       publishedAt, retrievedAt,
+      ...(typeof row.providerId === 'string' && /^[a-z0-9_-]{1,64}$/.test(row.providerId) ? { providerId: row.providerId } : {}),
       // Narrowed rather than passed through, and **omitted when empty**.
       //
       // This is the single place every provider's rows cross, so anything it does
@@ -70,7 +71,7 @@ export function normalizeSearchResults(data: unknown, limit: number, retrievedAt
   return results
 }
 
-const VERTICALS: readonly SearchVertical[] = ['web', 'images', 'videos', 'documents']
+const VERTICALS: readonly SearchVertical[] = ['web', 'images', 'videos', 'documents', 'audio', 'pages']
 
 /** An unknown or absent vertical is `web`, which is what every provider meant before. */
 function verticalOf(value: unknown): SearchVertical {
@@ -121,7 +122,7 @@ export class Searcher {
     this.now = options.now ?? (() => new Date())
   }
 
-  async searchWeb(query: string, options: { signal?: AbortSignal; limit?: number; offset?: number; vertical?: SearchVertical } = {}): Promise<SearchResult[]> {
+  async searchWeb(query: string, options: { signal?: AbortSignal; limit?: number; offset?: number; site?: string; vertical?: SearchVertical } = {}): Promise<SearchResult[]> {
     const validated = validateSearchQuery(query)
     const limit = boundedSearchLimit(options.limit)
     const offset = boundedSearchOffset(options.offset)
@@ -142,8 +143,12 @@ export class Searcher {
         if (this.provider.supports !== undefined && !this.provider.supports(vertical)) {
           throw new ResearchError('unconfigured')
         }
-        const data = await this.provider.search(validated, { signal, limit, offset, vertical })
+        const site = options.site?.toLowerCase().replace(/^www\./, '')
+        if (site && !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(site)) throw new ResearchError('invalid_query')
+        const effectiveQuery = site && !validated.includes(`site:${site}`) ? `${validated} site:${site}` : validated
+        const data = await this.provider.search(effectiveQuery, { signal, limit, offset, vertical })
         return normalizeSearchResults(data, limit, this.now().toISOString())
+          .filter((row) => !site || row.sourceDomain === site || row.sourceDomain.endsWith(`.${site}`))
       })
     } catch (error) { throw safeResearchError(error, 'provider_error') }
   }

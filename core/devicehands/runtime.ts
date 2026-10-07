@@ -106,6 +106,8 @@ export interface DeviceHandsRuntime {
   loadPolicy(
     policy: unknown,
   ): Promise<{ readonly ok: boolean; readonly code: DeviceHandsRefusalCode | null; readonly reason: string }>
+  /** Host-only migration: add owner public reads, preserving every recorded policy field. */
+  enableOwnerPublicBrowser(policy: unknown): Promise<{ readonly ok: boolean; readonly code: DeviceHandsRefusalCode | null; readonly reason: string }>
   /** Record a grant Core minted. Bounded, narrowed, and journaled. */
   registerGrant(
     grant: unknown,
@@ -298,6 +300,31 @@ export function createDeviceHandsRuntime(options: DeviceHandsRuntimeOptions): De
       code: null,
       reason: `A policy with ${String(narrowed.allowedRoots.length)} root(s), ${String(narrowed.allowedHosts.length)} host(s) and ${String(narrowed.allowedCommands.length)} command(s) is in force, and its digest is on the record.`,
     }
+  }
+
+  async function enableOwnerPublicBrowser(candidate: unknown): Promise<{ ok: boolean; code: DeviceHandsRefusalCode | null; reason: string }> {
+    if (!ports.journalTrustworthy()) return { ok: false, code: 'journal-untrustworthy', reason: 'An untrusted journal cannot authorize a policy upgrade.' }
+    if (!opened) await open()
+    if (ports.stopAllActive() || state.stopped) return { ok: false, code: 'stop-all-latched', reason: 'STOP ALL prevents an owner browser policy upgrade.' }
+    const reading = normaliseSurfacePolicy(candidate)
+    if (!reading.ok) return reading
+    const narrowed = reading.policy
+    if (narrowed.ownerPublicBrowser !== true || narrowed.localUnrestricted === true) {
+      return { ok: false, code: 'policy-mismatch', reason: 'This migration can only enable owner public browsing on a strict profile.' }
+    }
+    // Older journals retain the policy digest. Removing only the new flag must
+    // reproduce it exactly: roots, hosts, commands, environment and transfer
+    // limits are all part of that digest and none can change during this upgrade.
+    const predecessor = normaliseSurfacePolicy({ ...narrowed, ownerPublicBrowser: false })
+    if (!predecessor.ok || state.policyDigest === null || predecessor.policy.digest !== state.policyDigest) {
+      return { ok: false, code: 'policy-mismatch', reason: 'Owner browsing cannot be enabled because another recorded policy field changed.' }
+    }
+    await append('hands.policy.owner-browser-enabled', {
+      previousPolicyDigest: predecessor.policy.digest, policyDigest: narrowed.digest, at: ports.now(),
+    })
+    policy = narrowed
+    ports.onChange()
+    return { ok: true, code: null, reason: 'Owner public navigation and reading were enabled; every other recorded policy field was preserved.' }
   }
 
   /* ------------------------------------------------------------------ grants */
@@ -842,6 +869,7 @@ export function createDeviceHandsRuntime(options: DeviceHandsRuntimeOptions): De
     projection: () => projectDeviceHandsState({ state, at: ports.now() }),
     recovery: () => recoveryReport(state),
     loadPolicy,
+    enableOwnerPublicBrowser,
     registerGrant,
     revokeGrant,
     requestApproval,

@@ -1,3 +1,4 @@
+import { listDigest } from './digest'
 import {
   DEVICE_HANDS_LIMITS,
   DEVICE_HANDS_EVENT_TYPES,
@@ -328,6 +329,17 @@ function applyEntry(
         return state
       }
       return { ...state, policyDigest }
+    }
+
+    case 'hands.policy.owner-browser-enabled': {
+      const previous = readText(payload, 'previousPolicyDigest')
+      const next = readText(payload, 'policyDigest')
+      if (previous === null || next === null || previous !== state.policyDigest
+        || next !== listDigest([previous, 'owner-public-browser'])) {
+        anomalies.push({ code: 'illegal-transition', eventType: typed, detail: 'An owner browser upgrade did not preserve its recorded predecessor policy.' })
+        return state
+      }
+      return { ...state, policyDigest: next }
     }
 
     /* ------------------------------------------------------------ grants */

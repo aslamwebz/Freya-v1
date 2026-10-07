@@ -1,3 +1,4 @@
+import { routeChatIntent } from '../research/chat-intent'
 import { validateModelAttachments, type ModelAttachment } from '../model/provider'
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
@@ -1099,12 +1100,15 @@ export class MindService {
     perTurnAllowance: number
   }): Promise<Cognition> {
     const initialToolRequest = initialToolRequestForOwnerText(input.ownerText, input.intents)
+    const modelCapability = input.intents.browserUse === true || initialToolRequest?.name === 'browser_read' || routeChatIntent(input.ownerText, { activeEyeSession: false }).kind === 'native_browser_task' ? 'browser' : 'chat'
 
     if (!this.toolLoopEnabled) {
       if (initialToolRequest !== null) {
         return {
           kind: 'failed',
-          reason: "Freya's own browser is not available for this turn, so it was not opened.",
+          reason: initialToolRequest.name === 'web_search'
+            ? 'Web search is not available for this turn, so no current sources were retrieved.'
+            : "Freya's own browser is not available for this turn, so it was not opened.",
           providerContacted: false,
         }
       }
@@ -1126,6 +1130,7 @@ export class MindService {
         // decision: the Governor still authors, the Gateway still refuses any
         // model it cannot serve, and a null here is the ordinary default.
         requestedModel: this.selectedModel(),
+        modelCapability,
         goalId: null,
       })
       if (outcome.status === 'denied') return { kind: 'denied', reason: outcome.reason }
@@ -1171,6 +1176,7 @@ export class MindService {
           grantId: input.grantId,
           turnId: input.turnId,
           selectedModel: this.selectedModel,
+          modelCapability,
           perTurnAllowance: input.perTurnAllowance,
           signal: controller.signal,
           initialToolRequest,

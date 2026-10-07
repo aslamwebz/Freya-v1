@@ -1,3 +1,4 @@
+import type { CapabilityId } from '../capabilities'
 import {
   flattenMessages,
   isModelRequestCancelled,
@@ -55,6 +56,7 @@ export interface GatewayPermit {
   grantId: string | null
   providerId: string
   maxOutputTokens: number
+  modelCapability?: 'chat' | 'browser'
   model: string | null
   /**
    * The compiled instruction set, when a Mind assembled one.
@@ -106,6 +108,7 @@ export interface GatewayRecorder {
 
 export interface ModelGatewayOptions {
   providers: readonly ModelProvider[]
+  providerPreference?: (capability: CapabilityId) => readonly string[]
   recorder: GatewayRecorder
   now?: () => Date
   /**
@@ -143,6 +146,7 @@ interface ActiveCall {
 }
 
 export class ModelGateway {
+  private readonly providerPreference: ModelGatewayOptions['providerPreference']
   private readonly providers = new Map<string, ModelProvider>()
   private readonly recorder: GatewayRecorder
   private readonly now: () => Date
@@ -181,6 +185,7 @@ export class ModelGateway {
   private sessionUsage: ModelUsage = emptyUsage()
 
   constructor(options: ModelGatewayOptions) {
+    this.providerPreference = options.providerPreference
     this.recorder = options.recorder
     this.now = options.now ?? (() => new Date())
     this.onActivityChange = options.onActivityChange ?? (() => {})
@@ -345,8 +350,10 @@ export class ModelGateway {
   }
 
   /** The provider a request should use: an explicit choice, else the first ready one. */
-  private resolve(requestedModel: string | null): ModelProvider | null {
-    for (const provider of this.providers.values()) {
+  private resolve(requestedModel: string | null, capability: CapabilityId = 'chat'): ModelProvider | null {
+    const preference = this.providerPreference?.(capability)
+    const candidates = preference ? preference.map((id) => this.providers.get(id)).filter((provider): provider is ModelProvider => provider !== undefined) : [...this.providers.values()]
+    for (const provider of candidates) {
       if (provider.status().status !== 'configured') continue
       if (requestedModel !== null && !providerCanServe(provider, requestedModel)) continue
       return provider
@@ -368,7 +375,9 @@ export class ModelGateway {
     | { ok: true; providerId: string; defaultModel: string | null; models: readonly ModelCatalogEntry[] }
     | { ok: false; reason: string }
   > {
-    const listable = [...this.providers.values()].filter(
+    const preference = this.providerPreference?.('chat')
+    const candidates = preference ? preference.map((id) => this.providers.get(id)).filter((provider): provider is ModelProvider => provider !== undefined) : [...this.providers.values()]
+    const listable = candidates.filter(
       (provider) => typeof provider.listModels === 'function',
     )
     if (listable.length === 0) {
@@ -411,11 +420,7 @@ export class ModelGateway {
    * moment it is chosen, rather than letting it fail later as a spent attempt.
    */
   canServeModel(model: string): boolean {
-    for (const provider of this.providers.values()) {
-      if (provider.status().status !== 'configured') continue
-      if (providerCanServe(provider, model)) return true
-    }
-    return false
+    return this.resolve(model) !== null
   }
 
   /**
@@ -443,7 +448,7 @@ export class ModelGateway {
       // nothing.
       this.assertContactable(call)
 
-      provider = this.resolve(permit.model)
+      provider = this.resolve(permit.model, permit.messages?.some((message) => message.attachments?.some((attachment) => attachment.type === 'image')) ? 'vision' : permit.modelCapability ?? 'chat')
       if (provider === null) {
         const reason =
           permit.model === null

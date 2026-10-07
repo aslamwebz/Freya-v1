@@ -38,3 +38,17 @@ describe('Core-owned initial Chat tool requests', () => {
     })
   })
 })
+
+
+describe('arbitrary intent-aware retrieval', () => {
+  it('separates an audio vertical and arbitrary domain from exact owner text', () => {
+    const text = '  find podcasts about climate on example.org  '
+    expect(initialToolRequestForOwnerText(text)).toEqual({ name: 'web_search', arguments: { query: text, type: 'audio', site: 'example.org' } })
+  })
+  it('does not assume a named video platform means a video request', () => {
+    expect(initialToolRequestForOwnerText('find articles from youtube.com')).toMatchObject({ arguments: { type: 'web', site: 'youtube.com' } })
+  })
+  it('seeds a general browser discovery before the model chooses a real result URL', () => {
+    expect(initialToolRequestForOwnerText('use your browser to find jazz concerts')).toMatchObject({ name: 'web_search', arguments: { type: 'web' } })
+  })
+})

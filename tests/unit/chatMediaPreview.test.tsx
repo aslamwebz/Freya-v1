@@ -196,7 +196,7 @@ describe('the hosted player view', () => {
     // empty in the meantime.
   })
 
-  it('offers an "Open in browser" fallback inside the modal', async () => {
+  it('opens the default dock directly when a browser workspace is provided', async () => {
     const onOpenBrowserUrl = vi.fn()
     installBridge()
     render(<MediaGrid items={[item({
@@ -209,8 +209,7 @@ describe('the hosted player view', () => {
     })]} onOpenBrowserUrl={onOpenBrowserUrl} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Preview Queue tutorial' }))
-    const openBtn = await screen.findByRole('button', { name: 'Open this page in Freya\'s browser' })
-    fireEvent.click(openBtn)
-    expect(onOpenBrowserUrl).toHaveBeenCalledWith('https://example.test/source')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(onOpenBrowserUrl).toHaveBeenCalledWith('https://example.test/source', 'video')
   })
 })

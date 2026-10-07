@@ -899,7 +899,7 @@ describe('the conversation service boundary', () => {
     const provider = new FakeModelProvider()
     const c = await started({ providers: [provider] })
     const conversationId = await newConversation(c)
-    await submit(c, conversationId, 'what is the weather like today in Oslo')
+    await submit(c, conversationId, 'explain why the sky is blue')
 
     // A title is cosmetic and must never cost a credit.
     expect(provider.calls).toBe(1)
@@ -907,7 +907,19 @@ describe('the conversation service boundary', () => {
     const outcome = listed.conversation as ConversationCommandOutcome
     expect(outcome.operation).toBe('listed')
     const conversations = (outcome as { conversations: { title: string }[] }).conversations
-    expect(conversations[0]?.title).toBe('what is the weather like today in Oslo')
+    expect(conversations[0]?.title).toBe('explain why the sky is blue')
+  })
+
+
+  it('refuses fresh weather without retrieval rather than presenting model output as current evidence', async () => {
+    const provider = new FakeModelProvider()
+    const c = await started({ providers: [provider] })
+    const conversationId = await newConversation(c)
+    const turn = await submit(c, conversationId, 'what is the weather like today in Oslo')
+    expect(turn.outcome).toBe('failed')
+    expect(turn.reason).toMatch(/web search.*not available/i)
+    expect(turn.providerContacted).toBe(false)
+    expect(provider.calls).toBe(0)
   })
 
   it('reports its persistence mode truthfully', async () => {

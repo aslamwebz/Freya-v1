@@ -55,6 +55,8 @@ const CATEGORY: Readonly<Record<SearchVertical, string>> = {
   // content type — asking for a vertical that does not exist would return an
   // error rather than the documents.
   documents: 'general',
+  audio: 'music',
+  pages: 'general',
 }
 
 /** SearXNG's JSON row, read defensively. Everything here is untrusted. */
@@ -97,12 +99,13 @@ export class SearxngSearchProvider implements SearchProvider {
     const vertical = options.vertical ?? 'web'
     if (!this.supports(vertical)) throw new ResearchError('unconfigured')
     const limit = boundedSearchLimit(options.limit)
-    void boundedSearchOffset(options.offset) // the daemon has no offset; bounded for parity
+    const page = boundedSearchOffset(options.offset) + 1
 
     try {
       return await withResearchAbort(options.signal, 20000, async (signal) => {
         const url = new URL(`${this.#base}/search`)
         url.searchParams.set('q', validated)
+        url.searchParams.set('pageno', String(page))
         url.searchParams.set('format', 'json')
         url.searchParams.set('categories', CATEGORY[vertical])
         url.searchParams.set('language', 'en')
@@ -184,6 +187,7 @@ function normalizeRows(payload: unknown, vertical: SearchVertical, limit: number
     const title = text(row.title, 512).trim()
     if (url === null || title === '') continue
     if (seen.has(url)) continue
+    if (vertical === 'documents' && !/\.(?:pdf|docx?|pptx?|xlsx?|odt|ods|odp|rtf|txt|csv|zip|json|xml)(?:$|[?#])/i.test(url)) continue
 
     // Engines disagree about which field names the poster. The images vertical uses
     // `img_src`/`thumbnail_src`; the video vertical puts the still in `thumbnail` and
@@ -210,6 +214,7 @@ function normalizeRows(payload: unknown, vertical: SearchVertical, limit: number
       rank: results.length + 1,
       publishedAt: normaliseDate(row.publishedDate ?? row.published_at),
       retrievedAt,
+      providerId: 'searxng',
       vertical,
       mediaUrl: mediaUrl ?? embed,
       thumbnailUrl,

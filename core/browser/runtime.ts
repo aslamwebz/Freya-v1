@@ -200,12 +200,17 @@ export interface DualBrowserRuntimeOptions {
   readonly limits?: Partial<Record<'maxSessions' | 'handoffTtlMs' | 'maxCommandMs', number>>
 }
 
+export interface BrowserExecutionContext {
+  /** Host-only call context. Never rebuilt from renderer request fields. */
+  readonly origin: 'owner'
+}
+
 export interface DualBrowserRuntime {
   /** Replay the record and reconcile. Idempotent. Enables nothing. */
   open(): Promise<BrowserRecoveryReport>
   /** Decide a target without acting on it. For an owner-facing preview of a route. */
   route(request: BrowserRequest): RouteReading
-  execute(request: BrowserRequest): Promise<BrowserResult>
+  execute(request: BrowserRequest, context?: BrowserExecutionContext): Promise<BrowserResult>
   /**
    * Record that a page tried to download something.
    *
@@ -275,6 +280,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
   let stopped = false
   let enabled = false
   let sequence = 0
+  let opening: Promise<BrowserRecoveryReport> | null = null
   let state: BrowserRuntimeState = foldBrowserState([])
   let ledger: HandoffLedgerState = foldHandoffs([])
   /**
@@ -412,6 +418,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     readonly actionKey: DeviceHandsActionKey
     readonly actionInput: Readonly<Record<string, unknown>>
     readonly deadlineMs: number
+    readonly executionPrincipal?: string
   }): Promise<GateOutcome> {
     const actionKey = BROWSER_COMMAND_ACTION[input.command]
     /* istanbul ignore next -- the total table makes this unreachable; it is here so that a
@@ -432,7 +439,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     try {
       const verdict = await options.authority.perform({
         actionId,
-        principalId,
+        principalId: input.executionPrincipal ?? principalId,
         scope: input.sessionId,
         actionKey,
         input: input.actionInput,
@@ -509,7 +516,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
 
   /* --------------------------------------------------------------- the command */
 
-  async function execute(request: BrowserRequest): Promise<BrowserResult> {
+  async function execute(request: BrowserRequest, context?: BrowserExecutionContext): Promise<BrowserResult> {
     const command = request.command
 
     // One way out for every refusal, so every refusal reaches the record before the caller hears
@@ -542,7 +549,8 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     await record('browser.dual.route.decided', routePayload)
     state = foldBrowserState([{ type: 'browser.dual.route.decided', payload: routePayload }], state)
 
-    return await settle(await dispatch(request, command, target, mode, escalation))
+    const executionPrincipal = context?.origin === 'owner' && target === 'public' ? 'owner:browser' : principalId
+    return await settle(await dispatch(request, command, target, mode, escalation, executionPrincipal))
   }
 
   async function dispatch(
@@ -551,6 +559,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     target: BrowserTarget,
     mode: BrowserMode,
     escalation: RouteEscalation | null,
+    executionPrincipal: string,
   ): Promise<BrowserResult> {
     switch (command) {
       case 'session.open':
@@ -560,11 +569,11 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
       case 'session.state':
         return { ok: true, command, target, escalation, data: sessionStateFor(request.sessionId ?? null) }
       case 'page.navigate':
-        return navigate(request, target, escalation)
+        return navigate(request, target, escalation, executionPrincipal)
       case 'page.read':
-        return readPage(request, target, escalation)
+        return readPage(request, target, escalation, executionPrincipal)
       case 'page.describe':
-        return describe(request, target, escalation)
+        return describe(request, target, escalation, executionPrincipal)
       case 'page.click':
         return click(request, target, mode, escalation)
       case 'page.type':
@@ -665,9 +674,9 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
 
   /* ----------------------------------------------------------- page.navigate */
 
-  async function navigate(request: BrowserRequest, target: BrowserTarget, escalation: RouteEscalation | null): Promise<BrowserResult> {
+  async function navigate(request: BrowserRequest, target: BrowserTarget, escalation: RouteEscalation | null, executionPrincipal: string): Promise<BrowserResult> {
     const sessionId = request.sessionId ?? ''
-    const address = assertPublicBrowserUrl(request.url, { allowedHosts, allowPrivateHosts })
+    const address = assertPublicBrowserUrl(request.url, { ...(executionPrincipal === 'owner:browser' ? {} : { allowedHosts }), allowPrivateHosts })
     if (!address.ok) return refusal('page.navigate', target, 'url-refused', address.reason)
 
     const result = await gated({
@@ -677,6 +686,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
       actionKey: 'browser.navigate',
       actionInput: { url: address.url },
       deadlineMs: limits.maxCommandMs,
+      executionPrincipal,
     })
     if (result.refused) return result.result
     const observation = result.observation
@@ -696,7 +706,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
 
   /* --------------------------------------------------------------- page.read */
 
-  async function readPage(request: BrowserRequest, target: BrowserTarget, escalation: RouteEscalation | null): Promise<BrowserResult> {
+  async function readPage(request: BrowserRequest, target: BrowserTarget, escalation: RouteEscalation | null, executionPrincipal: string): Promise<BrowserResult> {
     const sessionId = request.sessionId ?? ''
     const entry = state.sessions.get(sessionId)
     const url = entry?.url ?? null
@@ -710,6 +720,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
       actionKey: 'browser.read-text',
       actionInput: { url },
       deadlineMs: limits.maxCommandMs,
+      executionPrincipal,
     })
     if (result.refused) return result.result
     const observation = result.observation
@@ -727,7 +738,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
 
   /* ----------------------------------------------------------- page.describe */
 
-  async function describe(request: BrowserRequest, target: BrowserTarget, escalation: RouteEscalation | null): Promise<BrowserResult> {
+  async function describe(request: BrowserRequest, target: BrowserTarget, escalation: RouteEscalation | null, executionPrincipal: string): Promise<BrowserResult> {
     const sessionId = request.sessionId ?? ''
     const table = refs.get(sessionId)
     const entry = state.sessions.get(sessionId)
@@ -744,6 +755,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
       actionKey: 'browser.read-text',
       actionInput: { url },
       deadlineMs: limits.maxCommandMs,
+      executionPrincipal,
     })
     if (result.refused) return result.result
     const observation = result.observation
@@ -1053,16 +1065,32 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
   /* -------------------------------------------------------------- the object */
 
   return {
-    async open() {
-      const entries = await options.journal.replay()
-      const trustworthy = options.journal.trustworthy()
-      recorded = entries
-      state = foldBrowserState(entries)
-      ledger = settleUnfinished(foldHandoffs(entries))
-      // Enabling happens here and nowhere else, and it happens even when the record was
-      // empty: an honest recovery report on a first run is "never opened", not a refusal.
-      enabled = true
-      return browserRecoveryReport({ entries, trustworthy })
+    open() {
+      opening ??= (async () => {
+        const entries = await options.journal.replay()
+        const trustworthy = options.journal.trustworthy()
+        recorded = entries
+        state = foldBrowserState(entries)
+        ledger = settleUnfinished(foldHandoffs(entries))
+        const recovery = browserRecoveryReport({ entries, trustworthy })
+        for (const session of state.sessions.values()) {
+          const suffix = /^freya-(\d+)$/.exec(session.sessionId)
+          if (suffix) sequence = Math.max(sequence, Number(suffix[1]))
+        }
+        // A native page did not survive the process. Retire it without replaying
+        // navigation, and keep its historical loss visible in the recovery report.
+        if (trustworthy) {
+          for (const session of [...state.sessions.values()]) {
+            if (session.session !== 'open') continue
+            const payload = { sessionId: session.sessionId, target: session.target, at: nowIso() }
+            await record('browser.dual.session.closed', payload)
+            state = foldBrowserState([{ type: 'browser.dual.session.closed', payload }], state)
+          }
+        }
+        enabled = true
+        return recovery
+      })()
+      return opening
     },
 
     route(request) {

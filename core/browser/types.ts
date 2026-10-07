@@ -253,7 +253,7 @@ export function isBrowserEscalationReason(value: unknown): value is BrowserEscal
  */
 export const BROWSER_LIMITS = Object.freeze({
   /** Live Freya Browser sessions at once. One per owner-visible window. */
-  maxSessions: 2,
+  maxSessions: 12,
   /** Offered, unsettled handoffs retained at once. */
   maxOpenHandoffs: 8,
   /** How long an offered handoff stays acceptable, in milliseconds. */

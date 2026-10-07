@@ -786,6 +786,7 @@ export type DeviceHandsPayload = Readonly<Record<string, string | number | boole
 export const DEVICE_HANDS_EVENT_TYPES = [
   'hands.runtime.opened',
   'hands.policy.set',
+  'hands.policy.owner-browser-enabled',
   'hands.grant.registered',
   'hands.grant.revoked',
   'hands.approval.requested',
@@ -834,6 +835,7 @@ export const DEVICE_HANDS_PAYLOAD_KEYS: Readonly<Record<DeviceHandsEventType, re
   Object.freeze({
     'hands.runtime.opened': ['at', 'recoveredActions'],
     'hands.policy.set': ['policyDigest', 'rootCount', 'hostCount', 'commandCount', 'envCount', 'at'],
+    'hands.policy.owner-browser-enabled': ['previousPolicyDigest', 'policyDigest', 'at'],
     'hands.grant.registered': [
       'grantId',
       'principalId',

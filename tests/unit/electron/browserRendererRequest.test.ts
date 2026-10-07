@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEVICE_HANDS_LIMITS } from '../../../core/devicehands'
-import { normaliseRendererBrowserRequest } from '../../../electron/browser/rendererRequest'
+import { normaliseBrowserDockRequest, normaliseRendererBrowserRequest } from '../../../electron/browser/rendererRequest'
 
 describe('renderer browser request boundary', () => {
   it('accepts the closed browser vocabulary and strips fields the command does not own', () => {
@@ -77,5 +77,14 @@ describe('renderer browser request boundary', () => {
       },
     })
     if (reading.ok) expect('context' in reading.request).toBe(false)
+  })
+})
+
+
+describe('native browser dock bounds', () => {
+  it('clamps views inside the main content rectangle and rejects malformed numbers', () => {
+    expect(normaliseBrowserDockRequest({ sessionId: 'freya-0001', bounds: { x: -10, y: 20, width: 2000, height: 2000 } }, { width: 1000, height: 700 })).toEqual({ sessionId: 'freya-0001', bounds: { x: 0, y: 20, width: 1000, height: 680 } })
+    expect(normaliseBrowserDockRequest({ sessionId: 's1', bounds: { x: NaN, y: 0, width: 1, height: 1 } }, { width: 1000, height: 700 })).toBeNull()
+    expect(normaliseBrowserDockRequest({ sessionId: null, bounds: null }, { width: 1000, height: 700 })).toEqual({ sessionId: null, bounds: null })
   })
 })

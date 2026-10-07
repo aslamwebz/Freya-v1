@@ -363,6 +363,14 @@ describe('command surface', () => {
 })
 
 describe('providers', () => {
+  it('does not let an enabled developer echo override an explicit unavailable provider preference', async () => {
+    core = createCore(options({ providers: undefined, developerProvider: 'echo', env: {}, capabilityPreferences: () => ({ chat: ['local'] }) }))
+    await core.start()
+    const outcome = await ownerAuthority(core).request(call())
+    expect(outcome.status).toBe('failed')
+    expect(core.status().sessionUsage.calls).toBe(0)
+  })
+
   it('reports the echo provider honestly when a developer opts in', async () => {
     core = createCore(options({ providers: undefined, developerProvider: 'echo', env: {} }))
     await core.start()
@@ -394,14 +402,13 @@ describe('providers', () => {
     expect(JSON.stringify(core.status())).not.toContain('secret-value')
   })
 
-  it('registers no provider at all when nothing is configured', async () => {
-    // The production default with no credentials: NanoGPT, unconfigured, and
-    // no echo provider waiting behind it.
+  it('reports every production adapter unconfigured when credentials are absent', async () => {
+    // Every production adapter is visible but unavailable; no echo is registered.
     core = createCore(options({ providers: undefined, env: {} }))
     await core.start()
     const providers = core.status().providers
-    expect(providers.map((p) => p.id)).toEqual(['nanogpt'])
-    expect(providers[0]?.status).toBe('unconfigured')
+    expect(providers.map((p) => p.id)).toEqual(['minimax', 'nanogpt', 'local', 'openai'])
+    expect(providers.every((provider) => provider.status === 'unconfigured')).toBe(true)
     expect(providers.some((p) => p.id === 'fake')).toBe(false)
   })
 

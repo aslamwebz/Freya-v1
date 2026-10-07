@@ -5,11 +5,14 @@ import {
   ensureConversationAttached,
   visibleMessages,
 } from '../../platform/conversationClient'
+import { researchMirror } from '../../platform/researchClient'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import type { WorkspaceResearchView } from './modes'
 import { RichMessage } from './RichMessage'
 import { MediaGrid } from './MediaCards'
-import { BrowserWorkspace } from './BrowserWorkspace'
+import { DockedBrowser, type DockedTabOrigin } from './BrowserWorkspace'
+import { EyeSessionControls } from './EyeSessionControls'
+import { openResearchCitationInDockedBrowser } from './eyeHandoff'
 import { ActivityFeed } from './ActivityFeed'
 import './chat.css'
 
@@ -19,7 +22,15 @@ function timeLabel(value: string): string {
   return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 }
 
-function ResearchWorkspace({ view, onOpenLink }: { view: WorkspaceResearchView; onOpenLink: (url: string) => void }) {
+function ResearchWorkspace({
+  view,
+  onOpenCitation,
+  onChange,
+}: {
+  view: WorkspaceResearchView
+  onChange: (view: WorkspaceResearchView) => void
+  onOpenCitation: (url: string) => void
+}) {
   const outcome = view.outcome
 
   if (outcome.operation === 'refused') {
@@ -56,7 +67,7 @@ function ResearchWorkspace({ view, onOpenLink }: { view: WorkspaceResearchView; 
           <summary>Sources <b>{result.sources.length}</b></summary>
           <div className="chats-source-list">
             {result.sources.map((source) => (
-              <button key={source.sourceId} type="button" onClick={() => onOpenLink(source.url)}>
+              <button key={source.sourceId} type="button" onClick={() => onOpenCitation(source.url)}>
                 <span><b>{source.title}</b><small>{source.domain}</small></span><Glyph name="arrow" size={13} />
               </button>
             ))}
@@ -67,7 +78,7 @@ function ResearchWorkspace({ view, onOpenLink }: { view: WorkspaceResearchView; 
   }
 
   const session = outcome.session
-  if (!session) return <section className="chats-research-card"><b>Freya's Eye</b><p>No Eye session was returned.</p></section>
+  if (!session) return <section className="chats-research-card"><b>Freya's Eye</b><EyeSessionControls view={view} onChange={onChange} /><p>Choose a saved collection, or start a new search with Eye.</p></section>
   const collections = ['Videos Found', 'Images Found', 'Audio Found', 'Files Found', 'Sources'] as const
 
   return (
@@ -76,6 +87,7 @@ function ResearchWorkspace({ view, onOpenLink }: { view: WorkspaceResearchView; 
         <span><Glyph name="focus" size={17} /><b>Freya's Eye</b></span>
         <small data-state={session.state}>{session.state}</small>
       </header>
+      <EyeSessionControls view={view} onChange={onChange} />
       <div className="chats-eye-intent">
         <strong>{session.intent.subject}</strong>
         <span>{session.resultCount} / {session.intent.targetCount}</span>
@@ -101,12 +113,12 @@ function ResearchWorkspace({ view, onOpenLink }: { view: WorkspaceResearchView; 
                     type="button"
                     className="chats-eye-result-card"
                     data-media={result.mediaType}
-                    onClick={() => onOpenLink(result.url)}
+                    onClick={() => onOpenCitation(result.url)}
                   >
                     <span className="chats-eye-rank">{result.mediaType === 'video' ? '▶' : result.rank}</span>
                     <span>
                       <b>{result.title}</b>
-                      <small>{result.sourceDomain} · {result.confidence}</small>
+                      <small>{result.sourceDomain} · {result.confidence}{result.providerId ? ` · ${result.providerId}` : ''}</small>
                       <em>{result.snippet}</em>
                     </span>
                     <span className="chats-eye-open"><Glyph name="world" size={12} /> Open</span>
@@ -130,6 +142,7 @@ function ResearchWorkspace({ view, onOpenLink }: { view: WorkspaceResearchView; 
  */
 export function Chats({
   researchView,
+  onResearchViewChange,
   busy = false,
   browserOpen,
   browserRequestedUrl,
@@ -138,16 +151,18 @@ export function Chats({
   onBrowserClose,
 }: {
   researchView: WorkspaceResearchView | null
+  onResearchViewChange?: (view: WorkspaceResearchView) => void
   busy?: boolean
   browserOpen: boolean
   browserRequestedUrl: string | null
-  onBrowserOpenUrl: (url: string) => void
+  onBrowserOpenUrl: (url: string, origin?: DockedTabOrigin) => void
   onBrowserRequestedUrlHandled: () => void
   onBrowserClose: () => void
 }) {
   const mirror = conversationMirror()
   const projection = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
   const [notice, setNotice] = useState('')
+  const [browserPercent, setBrowserPercent] = useState(52)
   const logRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -185,7 +200,7 @@ export function Chats({
   }, [messages.length, generating])
 
   return (
-    <div className="chats" data-browser-open={browserOpen || undefined}>
+    <div className="chats" data-browser-open={browserOpen || undefined} style={browserOpen ? { gridTemplateColumns: `minmax(280px, ${100 - browserPercent}fr) 6px minmax(320px, ${browserPercent}fr)` } : undefined}>
       {/*
         Conversation history lives in the left rail. This workspace owns the
         transcript and, when opened, Freya's bounded browser controller.
@@ -196,6 +211,7 @@ export function Chats({
             <span className="chats-freya-sigil" aria-hidden="true"><i /><i /><b /></span>
             <span><small>{workspaceLabel}</small><b>{workspaceTitle}</b></span>
           </div>
+          {onResearchViewChange ? <button type="button" className="chats-eye-library" onClick={() => { void researchMirror().listSessions().then((outcome) => onResearchViewChange({ mode: 'eye', outcome })) }}>Saved Eye searches</button> : null}
           <span className="chats-workspace-state" data-busy={workspaceBusy || undefined}>
             <i aria-hidden="true" />{workspaceBusy ? 'Working' : 'Ready'}
           </span>
@@ -209,7 +225,7 @@ export function Chats({
               <h2>Ready when you are.</h2>
               <p>Start below. This conversation stays in the same Freya workspace while you move between tabs.</p>
             </div>
-          ) : messages.map((message) => (
+          ) : messages.map((message, messageIndex) => (
             <article key={message.messageId} className="chats-turn" data-role={message.role}>
               <span className="chats-turn-avatar" aria-hidden="true">
                 {message.role === 'user' ? 'A' : <Glyph name="core" size={15} />}
@@ -220,7 +236,7 @@ export function Chats({
                   {message.role === 'assistant'
                     ? <RichMessage
                         content={message.content}
-                        onOpenLink={onBrowserOpenUrl}
+                        onOpenLink={(url, provenance) => onBrowserOpenUrl(url, { kind: 'link', from: provenance?.kind === 'source' ? 'citation' : 'chat', ownerText: messages.slice(0, messageIndex).reverse().find((row) => row.role === 'user')?.content ?? '' })}
                         enableCodeCopy
                         enableToc
                         collapseAbove={2400}
@@ -235,13 +251,13 @@ export function Chats({
                       message Core stored, never recovered from the prose: a card needs
                       an address, and an address read out of a sentence is a guess. */}
                   {message.role === 'assistant' && message.media !== undefined && message.media.length > 0 ? (
-                    <MediaGrid items={message.media} onOpenBrowserUrl={onBrowserOpenUrl} />
+                    <MediaGrid items={message.media} onOpenBrowserUrl={(url, kind) => onBrowserOpenUrl(url, { kind: 'link', from: 'media', ownerText: messages.slice(0, messageIndex).reverse().find((row) => row.role === 'user')?.content ?? '', mediaKind: kind })} />
                   ) : null}
                 </div>
               </div>
             </article>
           ))}
-          {researchView ? <ResearchWorkspace view={researchView} onOpenLink={onBrowserOpenUrl} /> : null}
+          {researchView ? <ResearchWorkspace view={researchView} onChange={onResearchViewChange ?? (() => {})} onOpenCitation={(url) => openResearchCitationInDockedBrowser(researchView, url)} /> : null}
           {generating ? (
             <article className="chats-turn" data-role="assistant" aria-live="polite">
               <span className="chats-turn-avatar chats-turn-avatar-live" aria-hidden="true"><Glyph name="core" size={15} /></span>
@@ -260,9 +276,20 @@ export function Chats({
           </div>
         ) : null}
       </section>
+      {browserOpen ? <div className="chats-dock-divider" role="separator" aria-label="Resize browser" aria-orientation="vertical" tabIndex={0}
+        onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') setBrowserPercent((value) => Math.max(28, Math.min(72, value + (event.key === 'ArrowLeft' ? 2 : -2)))) }}
+        onPointerDown={(event) => {
+          const divider = event.currentTarget
+          divider.setPointerCapture(event.pointerId)
+          const container = divider.parentElement!
+          const move = (next: PointerEvent) => { const rect = container.getBoundingClientRect(); setBrowserPercent(Math.max(28, Math.min(72, 100 * (rect.right - next.clientX) / rect.width))) }
+          const finish = () => { divider.removeEventListener('pointermove', move); divider.removeEventListener('pointerup', finish); divider.removeEventListener('pointercancel', finish) }
+          divider.addEventListener('pointermove', move); divider.addEventListener('pointerup', finish); divider.addEventListener('pointercancel', finish)
+        }} /> : null}
       {browserOpen ? (
-        <BrowserWorkspace
+        <DockedBrowser
           requestedUrl={browserRequestedUrl}
+          requestedOrigin={{ kind: 'link', from: 'chat', ownerText: 'browser workspace' }}
           onRequestedUrlHandled={onBrowserRequestedUrlHandled}
           onClose={onBrowserClose}
         />

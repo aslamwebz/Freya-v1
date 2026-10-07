@@ -45,7 +45,7 @@ function configured(model: string): HostEnv {
 }
 
 function modelOf(h: ElectronCoreHost): string | null {
-  return h.status().providers[0]?.model ?? null
+  return h.status().providers.find((provider) => provider.id === 'nanogpt')?.model ?? null
 }
 
 function make(env: HostEnv, options: ConstructorParameters<typeof ElectronCoreHost>[2] = {}): ElectronCoreHost {
@@ -64,6 +64,18 @@ afterEach(async () => {
 })
 
 describe('a provider save after startup', () => {
+  it('keeps both providers visible while a NanoGPT save changes only its configured model', async () => {
+    const minimax = { MINIMAX_API_KEY: 'test-mini', MINIMAX_MODEL: 'MiniMax-M3' }
+    make({ ...configured('nano-before'), ...minimax })
+    await host!.start()
+    expect(host!.status().providers.find((provider) => provider.id === 'minimax')?.model).toBe('MiniMax-M3')
+    expect(modelOf(host!)).toBe('nano-before')
+    await host!.restartWithEnv({ ...configured('nano-after'), ...minimax })
+    expect(host!.status().providers.find((provider) => provider.id === 'minimax')?.model).toBe('MiniMax-M3')
+    expect(modelOf(host!)).toBe('nano-after')
+    expect(host!.status().sessionUsage.calls).toBe(0)
+  })
+
   it('swaps env and restarts without throwing when never started', async () => {
     make({ NANOGPT_MODEL: 'a' })
     await expect(host!.restartWithEnv({ NANOGPT_MODEL: 'b' })).resolves.toBeUndefined()
@@ -244,7 +256,7 @@ describe('a setting that cannot be applied leaves a recoverable state', () => {
     })
 
     expect(host!.status().lifecycle).toBe('ready')
-    const provider = host!.status().providers[0]
+    const provider = host!.status().providers.find((provider) => provider.id === 'nanogpt')
     expect(provider?.status).toBe('unconfigured')
     // Ready, and honest that it cannot be called — not a healthy-looking zero.
     expect(provider?.liveEnabled).toBe(false)
@@ -254,12 +266,12 @@ describe('a setting that cannot be applied leaves a recoverable state', () => {
     make(configured('good-model'))
     await host!.start()
     await host!.restartWithEnv({ ...configured('bad-model'), NANOGPT_BASE_URL: 'https://attacker.example/v1' })
-    expect(host!.status().providers[0]?.status).toBe('unconfigured')
+    expect(host!.status().providers.find((provider) => provider.id === 'nanogpt')?.status).toBe('unconfigured')
 
     await host!.restartWithEnv(configured('corrected-model'))
     expect(host!.status().lifecycle).toBe('ready')
     expect(modelOf(host!)).toBe('corrected-model')
-    expect(host!.status().providers[0]?.status).toBe('configured')
+    expect(host!.status().providers.find((provider) => provider.id === 'nanogpt')?.status).toBe('configured')
   })
 
   it('keeps serving status to windows across a rebuild', async () => {

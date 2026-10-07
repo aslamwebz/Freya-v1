@@ -142,6 +142,14 @@ const api = {
    * request shape. Every actual page action still goes through Device Hands inside
    * that runtime.
    */
+  getCapabilitySettings: () => ipcRenderer.invoke('freya:capabilities:read'),
+  setCapabilitySettings: (input: unknown) => ipcRenderer.invoke('freya:capabilities:write', input),
+  browserDock: (input: unknown): Promise<boolean> => ipcRenderer.invoke('freya:browser:dock', input),
+  onBrowserOpenUrl: (handler: (url: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, url: unknown) => { if (typeof url === 'string' && url.length <= 4096 && /^https?:\/\//i.test(url)) handler(url) }
+    ipcRenderer.on('freya:browser:open-url', listener)
+    return () => ipcRenderer.removeListener('freya:browser:open-url', listener)
+  },
   browserState: (): Promise<BrowserBridgeState> => ipcRenderer.invoke('freya:browser:state'),
   browserExecute: (input: BrowserRequest): Promise<BrowserResult> => {
     const bounded = normaliseRendererBrowserRequest(input)

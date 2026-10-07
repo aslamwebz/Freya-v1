@@ -91,11 +91,11 @@ describe('the composer never mutates owner text', () => {
     expect(request?.arguments['url']).not.toMatch(/use your browser/i)
   })
 
-  it('browserUse hint without an address is not a request, by design', () => {
+  it('browserUse without an address discovers a source without inventing a URL', () => {
     // No URL → no `browser_read`. A browser call with no address is the shape
     // of a bug, and the loop already has its own path for "the model wants to
     // browse". The hint is a true rather than a forged URL.
-    expect(initialToolRequestForOwnerText('what does the page say about pricing', { browserUse: true })).toBeNull()
+    expect(initialToolRequestForOwnerText('what does the page say about pricing', { browserUse: true })).toEqual({ name: 'web_search', arguments: { query: 'what does the page say about pricing', type: 'web' } })
   })
 
   it('an empty hint set is identical to no hint at all', () => {
@@ -117,12 +117,12 @@ describe('the composer never mutates owner text', () => {
     })
   })
 
-  it('the stored query is the trimmed text, never a wrapped variant', () => {
+  it('the stored query is the exact text, never a wrapped variant', () => {
     // A whitespace-wrapped input must end up trimmed in the arguments the Mind
     // hands to the tool. The renderer does not normalise; the seam does, and
     // the seam does not add prefixes.
     const request = initialToolRequestForOwnerText('  open the pricing page  ', { webSearch: true })
-    expect(request?.arguments['query']).toBe('open the pricing page')
+    expect(request?.arguments['query']).toBe('  open the pricing page  ')
   })
 })
 

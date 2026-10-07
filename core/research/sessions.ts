@@ -1,7 +1,8 @@
+import { extractSiteConstraint } from './chat-intent'
 import { randomUUID } from 'node:crypto'
 import { ResearchError, safeResearchError } from './errors'
 import type { Searcher } from './searcher'
-import type { SearchResult } from './types'
+import type { SearchResult, SearchVertical } from './types'
 
 export const SEARCH_SESSION_LIMITS = Object.freeze({
   targetResults: 100,
@@ -42,6 +43,7 @@ export interface SearchSessionResult extends SearchResult {
 
 export interface SearchSession {
   sessionId: string
+  ownerText?: string
   intent: SearchIntent
   intentVersion: number
   state: SearchSessionState
@@ -93,8 +95,9 @@ export interface ParsedSearchRequest {
 }
 
 export function parseSearchRequest(text: string): ParsedSearchRequest {
+  if (typeof text !== 'string' || text.length > 16384) throw new ResearchError('invalid_query')
   const raw = normalizeText(text, 4096)
-  let working = raw
+  let working = raw.replace(/^(?:please\s+)?(?:(?:start|begin)\s+(?:a\s+)?)?new\s+(?:search|eye)(?:\s*[:,-]\s*|\s+for\s+|\s+)/i, '')
   const countMatch = working.match(/\b(\d{1,3})\b/)
   const targetCount = clampTarget(countMatch ? Number(countMatch[1]) : 10)
   if (countMatch) working = working.replace(countMatch[0], ' ')
@@ -109,7 +112,7 @@ export function parseSearchRequest(text: string): ParsedSearchRequest {
     return ' '
   })
 
-  let site: string | null = null
+  let site: string | null = extractSiteConstraint(raw)
   const siteMatch = working.match(/\bon\s+(youtube|vimeo|tiktok|reddit)\b/i)
   if (siteMatch) {
     site = siteDomain(siteMatch[1]!)
@@ -149,7 +152,7 @@ export function patchFromFollowUp(text: string, current: SearchIntent): FollowUp
   const count = lower.match(/^(?:make\s+it|change(?:\s+it)?\s+to|only)\s+(\d{1,3})(?:\s+results?)?$/)
   if (count) return { patch: { targetCount: clampTarget(Number(count[1])) }, ambiguous: false }
 
-  const site = lower.match(/^only\s+(youtube|vimeo|tiktok|reddit)(?:\.com)?$/)
+  const site = lower.match(/^only\s+((?:[a-z0-9-]+\.)+[a-z]{2,}|youtube|vimeo|tiktok|reddit)$/)
   if (site) return { patch: { site: siteDomain(site[1]!) }, ambiguous: false }
 
   const media = lower.match(/^only\s+(videos?|images?|photos?|audio|podcasts?|pdfs?|documents?|files?|websites?|sites?)$/)
@@ -229,6 +232,7 @@ export class SearchSessionManager {
     const now = this.now().toISOString()
     const session: SearchSession = {
       sessionId: validateId(this.newId()),
+      ownerText: typeof request === 'string' ? request : intent.subject,
       intent,
       intentVersion: 1,
       state: 'active',
@@ -332,11 +336,13 @@ export class SearchSessionManager {
           signal,
           limit,
           offset: session.page,
+          vertical: verticalForMedia(session.intent.mediaType),
+          ...(session.intent.site ? { site: session.intent.site } : {}),
         })
         const merged = mergeResults(session, found)
         const state: SearchSessionState =
           merged.results.length >= merged.intent.targetCount ? 'completed'
-            : found.length < limit ? 'completed'
+            : found.length < limit ? 'partial'
               : merged.page >= SEARCH_SESSION_LIMITS.pages ? 'partial'
                 : 'active'
         session = { ...merged, state, updatedAt: this.now().toISOString(), lastError: null }
@@ -400,7 +406,7 @@ function mergeResults(session: SearchSession, found: readonly SearchResult[]): S
 
 function resultCompatible(result: Pick<SearchSessionResult, 'title' | 'snippet' | 'sourceDomain' | 'url' | 'mediaType' | 'confidence'>, intent: SearchIntent): boolean {
   const text = `${result.title} ${result.snippet} ${result.sourceDomain} ${result.url}`.toLowerCase()
-  if (intent.site && !result.sourceDomain.toLowerCase().endsWith(intent.site.toLowerCase())) return false
+  if (intent.site && !(result.sourceDomain.toLowerCase() === intent.site.toLowerCase() || result.sourceDomain.toLowerCase().endsWith(`.${intent.site.toLowerCase()}`))) return false
   if (intent.mediaType !== 'auto' && intent.mediaType !== 'web' && result.mediaType !== intent.mediaType && result.confidence === 'weak') return false
   for (const exclusion of intent.exclusions) {
     const token = significantWords(exclusion)
@@ -415,14 +421,16 @@ function resultCompatible(result: Pick<SearchSessionResult, 'title' | 'snippet' 
 
 function classifyResult(result: SearchResult, requested: SearchMediaType): { mediaType: Exclude<SearchMediaType, 'auto'>; confidence: SearchResultConfidence; collection: SearchCollectionName } {
   const url = result.url.toLowerCase()
-  const host = result.sourceDomain.toLowerCase()
   const text = `${result.title} ${result.snippet}`.toLowerCase()
   let mediaType: Exclude<SearchMediaType, 'auto'> = 'web'
   let strong = false
 
-  if (/\.(?:mp4|webm|mov|m4v)(?:$|[?#])/.test(url) || /youtube\.com|youtu\.be|vimeo\.com|tiktok\.com/.test(host)) { mediaType = 'video'; strong = true }
+  if (result.vertical === 'images' && (result.mediaUrl || result.thumbnailUrl)) { mediaType = 'image'; strong = true }
+  else if (result.vertical === 'videos') { mediaType = 'video'; strong = true }
+  else if (result.vertical === 'audio') { mediaType = 'audio'; strong = true }
+  else if (/\.(?:mp4|webm|mov|m4v)(?:$|[?#])/.test(url) || isVideoPage(url)) { mediaType = 'video'; strong = true }
   else if (/\.(?:png|jpe?g|gif|webp|avif)(?:$|[?#])/.test(url)) { mediaType = 'image'; strong = true }
-  else if (/\.(?:mp3|wav|m4a|ogg|flac)(?:$|[?#])/.test(url) || /soundcloud\.com|spotify\.com/.test(host)) { mediaType = 'audio'; strong = true }
+  else if (/\.(?:mp3|wav|m4a|ogg|flac)(?:$|[?#])/.test(url)) { mediaType = 'audio'; strong = true }
   else if (/\.(?:pdf|docx?|pptx?|xlsx?)(?:$|[?#])/.test(url)) { mediaType = 'document'; strong = true }
   else if (/\.(?:zip|tar|gz|7z|csv|json|xml)(?:$|[?#])/.test(url)) { mediaType = 'file'; strong = true }
   else if (/\b(video|watch|clip|footage)\b/.test(text)) mediaType = 'video'
@@ -439,6 +447,14 @@ function classifyResult(result: SearchResult, requested: SearchMediaType): { med
         : 'weak'
 
   return { mediaType, confidence, collection: collectionFor(mediaType) }
+}
+
+function isVideoPage(value: string): boolean {
+  try {
+    const url = new URL(value)
+    const host = url.hostname.replace(/^www\./, '')
+    return (host === 'youtube.com' && (url.pathname === '/watch' && url.searchParams.has('v') || /^\/(shorts|embed)\//.test(url.pathname))) || (host === 'youtu.be' && url.pathname.length > 1) || (host === 'vimeo.com' && /^\/\d+/.test(url.pathname)) || (host === 'tiktok.com' && /\/video\/\d+/.test(url.pathname))
+  } catch { return false }
 }
 
 function collectionFor(mediaType: Exclude<SearchMediaType, 'auto'>): SearchCollectionName {
@@ -502,6 +518,7 @@ function validateIntent(intent: SearchIntent): SearchIntent {
 export function validateSearchSession(session: SearchSession): SearchSession {
   if (!session || typeof session !== 'object') throw new ResearchError('invalid_response')
   const id = validateId(session.sessionId)
+  if (session.ownerText !== undefined && (typeof session.ownerText !== 'string' || session.ownerText.length > 16384)) throw new ResearchError('invalid_response')
   const intent = validateIntent(session.intent)
   if (!Number.isInteger(session.intentVersion) || session.intentVersion < 1 || session.intentVersion > 10000) throw new ResearchError('invalid_response')
   if (!['active', 'paused', 'completed', 'partial', 'cancelled', 'failed'].includes(session.state)) throw new ResearchError('invalid_response')
@@ -559,4 +576,12 @@ function cloneSession(session: SearchSession): SearchSession {
     },
     results: session.results.map((result) => ({ ...result })),
   }
+}
+
+function verticalForMedia(media: SearchMediaType): SearchVertical {
+  if (media === 'image') return 'images'
+  if (media === 'video') return 'videos'
+  if (media === 'audio') return 'audio'
+  if (media === 'document' || media === 'file') return 'documents'
+  return 'web'
 }

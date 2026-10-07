@@ -56,6 +56,7 @@ export interface ResearchIntegrationOptions {
    * a key in its environment still does not call anything until somebody asked.
    */
   searchProvider: SearchProvider
+  eyeSearchProvider?: SearchProvider
   /** The managed read-only DOM target. Production supplies the Electron one. */
   browserFactory: BrowserTargetFactory
   authority: OwnerAuthority
@@ -148,9 +149,10 @@ export class ResearchIntegration {
   constructor(private readonly options: ResearchIntegrationOptions) {
     this.searcher = new Searcher({ provider: options.searchProvider })
     this.browser = new ManagedBrowserService(options.browserFactory)
+    const eyeSearcher = options.eyeSearchProvider ? new Searcher({ provider: options.eyeSearchProvider }) : this.searcher
     this.sessions = new SearchSessionManager({
       searcher: {
-        searchWeb: (query, searchOptions) => this.guardedSearchWeb(query, searchOptions),
+        searchWeb: (query, searchOptions) => this.guardedSearchWeb(query, searchOptions, eyeSearcher),
       },
       ...(options.sessionStore ? { store: options.sessionStore } : {}),
     })
@@ -198,12 +200,13 @@ export class ResearchIntegration {
 
   private async guardedSearchWeb(
     query: string,
-    options: { signal?: AbortSignal; limit?: number; offset?: number; vertical?: SearchVertical } = {},
+    options: { signal?: AbortSignal; limit?: number; offset?: number; site?: string; vertical?: SearchVertical } = {},
+    searcher: Searcher = this.searcher,
   ) {
     if (this.options.stopped()) throw new Error('Core is stopped.')
     const verdict = this.options.guard.evaluate(this.options.principal, 'search.web')
     if (!verdict.allowed) throw new Error(verdict.reason)
-    return this.searcher.searchWeb(query, options)
+    return searcher.searchWeb(query, options)
   }
 
   /**
@@ -217,6 +220,7 @@ export class ResearchIntegration {
     query: string,
     verticalOrSignal?: SearchVertical | AbortSignal,
     signal?: AbortSignal,
+    site?: string,
   ): Promise<unknown[]> {
     // Called as `(query, signal)` before the vertical existed, and by the research
     // coordinator still. An AbortSignal in this position is the old two-argument call
@@ -226,7 +230,7 @@ export class ResearchIntegration {
       ? 'web'
       : verticalOrSignal
     const liveSignal = calledWithSignalOnly ? verticalOrSignal : signal
-    return this.guardedSearchWeb(query, { ...(liveSignal === undefined ? {} : { signal: liveSignal }), vertical })
+    return this.guardedSearchWeb(query, { ...(liveSignal === undefined ? {} : { signal: liveSignal }), ...(site ? { site } : {}), vertical })
   }
 
   /** One guarded page read. Creates and closes its own session. */

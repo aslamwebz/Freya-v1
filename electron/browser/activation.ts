@@ -1,3 +1,4 @@
+import type { BrowserExecutionContext } from '../../core/browser/runtime'
 import { randomUUID } from 'node:crypto'
 import type {
   BrowserAuthenticatedPort,
@@ -120,7 +121,7 @@ export interface DualBrowserActivation {
   recovery(): BrowserRecoveryReport
   projection(): BrowserProjection
   route(request: BrowserRequest): RouteReading
-  execute(request: BrowserRequest): Promise<BrowserResult>
+  execute(request: BrowserRequest, context?: BrowserExecutionContext): Promise<BrowserResult>
   dispose(): Promise<void>
 }
 
@@ -317,7 +318,7 @@ export function createDualBrowserActivation(options: DualBrowserActivationOption
       return runtime.route(request)
     },
 
-    execute(request) {
+    execute(request, context) {
       if (state !== 'active') {
         return Promise.resolve({
           ok: false,
@@ -328,7 +329,7 @@ export function createDualBrowserActivation(options: DualBrowserActivationOption
           escalation: null,
         })
       }
-      return runtime.execute(request)
+      return runtime.execute(request, context)
     },
 
     async dispose() {

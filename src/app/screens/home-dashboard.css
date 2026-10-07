@@ -3,7 +3,7 @@
    use minmax so the side cards cap at a comfortable size while the centre
    column (the orb) takes the slack and widens with the page. The board carries
    the backdrop so the centre canvas's `screen` blend has a backdrop. */
-.hd-viewport { position: relative; width: 100%; height: 100dvh; overflow: hidden; background: #030911; }
+.hd-viewport { position: relative; width: 100%; height: 100dvh; overflow: hidden; background: #05080b; }
 .hd-frame { position: absolute; inset: 0; }
 .hd-dashboard { --hd-rail-w: 216px; --hd-rail-gutter: 22px; --hd-main-gutter: 20px; }
 /* One source for the rail's width. The rail, the board and the Home widget
@@ -157,9 +157,9 @@
 .chats-history-title { display: flex; align-items: center; gap: 12px; height: 44px; flex: 1; min-width: 0; padding: 0 12px; border: 0; border-radius: 9px; background: none; color: #c4dcec; font-size: 13.5px; font-weight: 500; }
 .chats-history-title svg { width: 20px; color: #9db6c9; transition: opacity 140ms ease; }
 .chats-history-title:hover { color: #e6f4ff; background: rgba(255, 255, 255, .045); }
-.chats-history .chats-new { display: inline-flex; align-items: center; gap: 4px; height: 28px; margin-right: 8px; padding: 0 12px; border: 1px solid #59e0ff45; border-radius: 999px; background: none; color: #8ee6ff; font-size: 11px; }
-.chats-history .chats-new:hover { color: #eafcff; border-color: #59e0ff8c; background: #59e0ff14; }
-.chats-history .chats-new:disabled { opacity: .5; cursor: not-allowed; }
+.chats-history .chats-new { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-right: 8px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #9fb4c7; font-size: 11px; }
+.chats-history .chats-new:hover { color: #e6f4ff; background: rgba(255, 255, 255, .045); }
+.chats-history .chats-new:disabled { opacity: .35; cursor: not-allowed; }
 .chats-history-list { display: grid; gap: 2px; margin: 0; padding: 4px 0 6px; list-style: none; max-height: 264px; overflow-y: auto; scrollbar-width: none; }
 .chats-history-list::-webkit-scrollbar { display: none; }
 .chats-history-list li { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 2px; }
@@ -347,27 +347,38 @@
 .hd-dock { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(960px, 60vw); min-height: 54px; }
 
 /* The composer follows the conversation.
-   The dock is one global bar, but the browser takes the right of the window, so
-   a centred composer would sit across the divider. It is measured from the same
-   two numbers the workspace builds its grid from - `--chats-thread` for the
-   column's share, and the main region's own insets for its width - so the input
-   always lands under the conversation it belongs to. */
+    The dock is one global bar, but the browser takes the right of the window, so
+    a centred composer would sit across the divider. It is measured from the same
+    two numbers the workspace builds its grid from - `--chats-thread` for the
+    column's share, and the main region's own insets for its width - so the input
+    always lands under the conversation it belongs to. */
 .hd-dashboard[data-browser] .hd-dock {
   left: calc(var(--hd-rail-w) + var(--hd-rail-gutter));
   transform: none;
   width: calc((100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter) - 6px) * var(--chats-thread, 48) / 100);
 }
-/* min-height, not height: the composer field grows to 132px as the draft wraps,
-   and a fixed 54px row clipped it. */
-.hd-dock form { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 5px 12px 5px 7px; border: 1px solid #b3e0fc; border-radius: 28px; background: linear-gradient(170deg, #425d7480, #07131bf5 35%, #0b1825f5 74%, #36566fca); box-shadow: inset 0 2px 4px #b9dfffaa, inset 0 -2px 4px #acddffaa, 0 0 9px #84a9ff87, 0 0 27px #65c9ff27, 0 8px 24px #0008; }
+
+/*
+   Two-row composer: textarea on top, controls + send on the bottom. The whole
+   form wears the original glass pill — single border, cyan glow, soft inset
+   highlights — so it keeps the look the rest of the shell was tuned for; the
+   page underneath it gets the darker Comet-style canvas.
+   max-height on the textarea is the upper bound for the auto-grow, after which
+   the field's own scrollbar appears so the dock itself never grows.
+*/
+.hd-dock-form { display: grid; grid-template-rows: auto auto; gap: 6px; min-height: 54px; padding: 5px 12px 5px 7px; border: 1px solid #b3e0fc; border-radius: 28px; background: linear-gradient(170deg, #425d7480, #07131bf5 35%, #0b1825f5 74%, #36566fca); box-shadow: inset 0 2px 4px #b9dfffaa, inset 0 -2px 4px #acddffaa, 0 0 9px #84a9ff87, 0 0 27px #65c9ff27, 0 8px 24px #0008; }
+.hd-dock-controls { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.hd-dock-controls .hd-tools { flex: 1; min-width: 0; }
 .hd-mic { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border: 2px solid #9bffeb !important; border-radius: 50%; color: #edf7ff !important; background: radial-gradient(circle, #143445, #183252 60%, #142436) !important; box-shadow: 0 0 9px #86c9ff, 0 0 16px #5aefd286, inset 0 0 10px #45ffdd44; }
 .hd-mic[aria-pressed='true'] { border-color: #ffd98a !important; box-shadow: 0 0 12px #8bf1ff, 0 0 22px #7fe3c4aa; }
 .hd-input { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
 /* The composer field is a textarea, so it needs its own rules. Targeting `input`
-   here left every one of these declarations matching nothing and the field fell
-   back to the UA default box. */
+    here left every one of these declarations matching nothing and the field fell
+    back to the UA default box. `field-sizing: content` (where available) lets
+    the field auto-grow up to the cap; older engines still rely on
+    `max-height + overflow-y: auto` and a small JS resize hook elsewhere. */
 .hd-dashboard .hd-input textarea {
-  display: block; width: 100%; max-height: 132px; overflow-y: auto;
+  display: block; width: 100%; min-height: 22px; max-height: 160px; overflow-y: auto;
   color: #edf6ff; border: 0; outline: none; background: none; resize: none;
   font: inherit; font-size: 15px; line-height: 20px; padding: 4px 0;
 }
@@ -399,6 +410,20 @@
 .hd-dashboard .hd-menu .hd-model-pick { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hd-dashboard .hd-menu .hd-model-pick[aria-pressed='true'] { background: #12324a99; color: #fff; }
 .hd-send { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(#3f6f8c, #1c3346) !important; box-shadow: inset 0 1px 2px #cdeaff33, 0 0 12px #4fd8ff33; }
+
+/* Thinking-level row, only rendered for models that support it. Sits inside the
+   model menu under the model list, so it never claims a permanent slot in the
+   chat bar. All supported levels are listed; none is hidden behind another menu. */
+.hd-thinking-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px solid #1c2530; }
+.hd-thinking-label { color: #7f97ad; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; margin-right: 4px; }
+.hd-thinking-pick { padding: 3px 9px; border: 1px solid #1c2530; border-radius: 999px; background: transparent; color: #c2d3e3; font-size: 11px; cursor: pointer; text-transform: capitalize; }
+.hd-thinking-pick:hover { color: #fff; border-color: #2f3d4d; background: #0e1620; }
+.hd-thinking-pick[aria-pressed='true'] { color: #d6f0ff; border-color: #2f4956; background: #11212d; }
+.hd-menu-foot { display: flex; justify-content: flex-end; margin-top: 6px; padding-top: 6px; border-top: 1px solid #1c2530; }
+.hd-menu-refresh { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 0; border-radius: 6px; background: transparent; color: #8aa6bd; font-size: 10px; cursor: pointer; }
+.hd-menu-refresh:hover { color: #e6f4ff; background: #0e1620; }
+.hd-menu-refresh:disabled { opacity: .4; cursor: not-allowed; }
+.hd-menu-refresh-icon { display: inline-block; font-size: 12px; line-height: 1; }
 .hd-send:disabled { opacity: .55; }
 /* One control for the whole turn: the orb spins from submit until Core answers,
    and it doubles as the stop button so cancelling never needs a second target. */

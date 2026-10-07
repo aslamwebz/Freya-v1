@@ -1,8 +1,10 @@
 /* Chats — the conversation, the browser beside it, and nothing drawn around
    either. The workspace fills the window on its own screen: the app's top bar,
    rail and gutters are all gone there, so the transcript and the page it is
-   reading are the whole surface. Borders and glass cards went with them; the
-   split is the only division left. */
+   reading are the whole surface. Comet-style: the canvas is near-black, the
+   assistant's text sits directly on it (no card, no border, no glow — white text
+   is already legible against the dark), and only the owner's messages wear a
+   bubble so the two sides are still readable at a glance. */
 /* `--chats-thread` is the conversation column's share of the window, published by
    the shell (HomeDashboard) because the global composer reads the same number to
    sit over that column. The 6px middle track is the drag handle, so the gap goes
@@ -65,6 +67,8 @@
 /* The bottom strip stays clear: the global composer floats over the window's
    lower edge, and the transcript scrolls underneath it rather than into it. */
 .chats-thread { padding:0 0 92px; gap:0; display:grid; grid-template-rows:auto minmax(0,1fr) auto; }
+.chats-thread,
+.chats-log { background: transparent; }
 .chats-workspace-head { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:64px; padding:9px 18px; }
 .chats-workspace-identity { display:flex; align-items:center; gap:12px; min-width:0; }
 .chats-workspace-identity > span:last-child { display:grid; gap:1px; min-width:0; }
@@ -87,18 +91,25 @@
 .chats-log { padding:26px clamp(18px,3vw,44px) 20px; display:flex; flex-direction:column; align-items:stretch; gap:16px; }
 .chats-turn { display:flex; align-items:flex-start; gap:10px; width:min(78%,850px); }
 .chats-turn[data-role='user'] { flex-direction:row-reverse; align-self:flex-end; }
-.chats-turn-avatar { display:grid; place-items:center; width:29px; height:29px; flex:none; margin-top:18px; border-radius:50%; border:1px solid #6d9ab46c; background:#102436c4; color:#98eaff; font-size:11px; }
-.chats-turn[data-role='user'] .chats-turn-avatar { color:#e4eff8; border-color:#6485a05c; background:#203044c7; }
+.chats-turn-avatar { display:grid; place-items:center; width:29px; height:29px; flex:none; margin-top:18px; border-radius:50%; border:0; background:transparent; color:#99def3; font-size:11px; }
+.chats-turn[data-role='user'] .chats-turn-avatar { color:#e4eff8; border:1px solid #2c3a4b; background:#0e1822; }
 .chats-turn-avatar-live { box-shadow:0 0 14px #69dcff40,inset 0 0 10px #55ceef17; }
 .chats-turn-content { display:grid; min-width:0; gap:5px; }
 .chats-turn-content > header { display:flex; align-items:center; gap:8px; min-height:14px; }
 .chats-turn[data-role='user'] .chats-turn-content > header { justify-content:flex-end; }
-.chats-turn-content > header b { color:#99def3; font-size:10px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; }
+.chats-turn-content > header b { color:#8fa9bd; font-size:10px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; }
 .chats-turn[data-role='user'] .chats-turn-content > header b { color:#b7c9d8; }
 .chats-turn-content time,.chats-live-label { color:#617e95; font-size:9px; }
 .chats-live-label { text-transform:uppercase; letter-spacing:.08em; }
-.chats-bubble { min-width:0; padding:11px 14px; border:1px solid #4b769155; border-radius:4px 15px 15px 15px; background:linear-gradient(135deg,#10283aa7,#091827a6); color:#dbe9f5; font-size:13px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; box-shadow:inset 0 1px 0 #b6eaff0b; }
-.chats-turn[data-role='user'] .chats-bubble { border-color:#5cbbe16b; border-radius:15px 4px 15px 15px; background:linear-gradient(145deg,#13354bbb,#102a3cbf); color:#eaf5fb; }
+/*
+   Comet shows its answers directly on the dark canvas — no card, no border, no
+   shadow. We do the same: the assistant bubble has no fill or stroke, only
+   white-ish text. The owner's bubble stays a bubble so the two sides of the
+   transcript are still distinguishable without any decoration on the assistant.
+*/
+.chats-bubble { min-width:0; padding:6px 0; border:0; border-radius:0; background:transparent; color:#eaf2fb; font-size:14px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; box-shadow:none; }
+.chats-turn[data-role='user'] .chats-bubble { padding:10px 14px; border:1px solid #2c3a4b; border-radius:14px; background:#0f1822; color:#f1f6fb; }
+.chats-turn[data-role='user'] { width:min(72%,720px); }
 .chats-thinking { display:inline-flex; align-items:center; width:max-content; gap:5px; min-height:18px; padding-right:18px; }
 .chats-thinking i { width:5px; height:5px; border-radius:50%; background:#84e8ff; box-shadow:0 0 7px #63ddff66; animation:chats-thinking 1.2s ease-in-out infinite; }
 .chats-thinking i:nth-child(2){animation-delay:.14s}.chats-thinking i:nth-child(3){animation-delay:.28s}

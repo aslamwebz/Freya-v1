@@ -74,14 +74,19 @@ export function ChatHistory({ onOpen, collapsed = false, current = false }: {
   return (
     <div className="chats-history" data-collapsed={!open || undefined}>
       <header className="chats-history-head">
-        {/* Entering Chats from another workspace is a New Chat action. History
-            reuse only happens on a conversation row below. Once already in Chat,
-            the heading goes back to being the disclosure control for that history. */}
-        <button type="button" className="chats-history-title" aria-expanded={collapsed ? undefined : open}
+        {/*
+          The heading is a navigation control, not a "new chat" button.
+          Clicking it from any other workspace opens the Chat index (the list
+          of saved conversations); clicking it from the Chat screen toggles the
+          list's disclosure. New conversations are started with the bare `+`
+          button beside it — that is the only path that creates one, so a click
+          on the title can never quietly eat the conversation the owner was in.
+        */}
+        <button type="button" className="chats-history-title" aria-expanded={current ? open : undefined}
           aria-current={current ? 'page' : undefined}
-          aria-label={!current ? 'Start a new chat' : collapsed ? 'Start a new chat' : (open ? 'Hide the conversation list' : 'Show the conversation list')}
+          aria-label={!current ? 'Open Chats' : (open ? 'Hide the conversation list' : 'Show the conversation list')}
           onClick={() => {
-            if (!current || collapsed) { void startNew(); return }
+            if (!current) { onOpen?.(); return }
             setOpen((value) => !value)
           }}>
           <Glyph name="chat" size={20} style={open && !collapsed ? undefined : { opacity: 0.75 }} />
@@ -95,8 +100,7 @@ export function ChatHistory({ onOpen, collapsed = false, current = false }: {
           title={busy ? 'Freya is answering — stop the response before starting a new conversation' : 'Start a new conversation'}
           onClick={() => { void startNew() }}
         >
-          <Glyph name="plus" size={12} />
-          <span>New</span>
+          <Glyph name="plus" size={14} />
         </button>
       </header>
 

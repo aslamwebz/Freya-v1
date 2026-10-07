@@ -14,8 +14,10 @@ import { Glyph } from '../../ui-v2/primitives/Glyph'
  * so a keystroke in the search re-renders this component and nothing else. The
  * board, the panels and the centre are untouched while the person types.
  *
- * The catalogue is still a live Core read (never hard-coded, never cached), and
- * a selection is still confirmed by Core: the chip updates at once, then follows
+ * The catalogue is fetched exactly once per session and cached for the rest of
+ * the run: opening the menu does not reload providers, typing in the search box
+ * does not reload providers, and only the explicit Refresh control re-reads it.
+ * A selection is still confirmed by Core: the chip updates at once, then follows
  * Core's own `selected` — or reverts, in Core's words, if Core refuses it.
  */
 
@@ -24,6 +26,7 @@ const entryKey = (entry: ModelEntry) => entry.providerId ? `${entry.providerId}:
 const providerLabel = (entry: ModelEntry) => isProviderId(entry.providerId) ? describeProvider(entry.providerId) : entry.providerId ?? entry.ownedBy ?? ''
 
 const FAVORITES_KEY = 'freya.favoriteModels'
+const THINKING_LEVEL_KEY = 'freya.thinkingLevel'
 
 /** The model's own name: the id without any provider prefix ("openai/gpt-4o" → "gpt-4o"). */
 export function modelName(id: string): string {
@@ -44,6 +47,34 @@ function readFavorites(): readonly string[] {
 }
 
 /**
+ * Hardcoded reasoning-effort support by model family.
+ *
+ * Core's catalog doesn't report thinking levels today, so the picker is driven
+ * by a curated table. Matching is a case-insensitive substring check against
+ * the *model id*, so a future model that lands in one of these families picks
+ * up the same levels with no edit. When Core starts reporting this natively,
+ * this map is the fallback for older builds.
+ */
+const THINKING_FAMILIES: ReadonlyArray<{ family: string; levels: readonly string[] }> = [
+  { family: 'gpt-5', levels: ['minimal', 'low', 'medium', 'high'] },
+  { family: 'o1', levels: ['low', 'medium', 'high'] },
+  { family: 'o3', levels: ['low', 'medium', 'high'] },
+  { family: 'o4', levels: ['low', 'medium', 'high'] },
+  { family: 'claude', levels: ['low', 'medium', 'high'] },
+  { family: 'deepseek-r1', levels: ['low', 'medium', 'high'] },
+  { family: 'qwq', levels: ['low', 'medium', 'high'] },
+  { family: 'gemini-2.5', levels: ['minimal', 'low', 'medium', 'high'] },
+]
+function thinkingLevelsFor(modelId: string | null): readonly string[] | null {
+  if (!modelId) return null
+  const lower = modelId.toLowerCase()
+  for (const entry of THINKING_FAMILIES) {
+    if (lower.includes(entry.family)) return entry.levels
+  }
+  return null
+}
+
+/**
  * The provider's configured default, remembered across mounts.
  *
  * The catalogue is a network read and is not fetched while Freya sits idle, so the
@@ -51,19 +82,32 @@ function readFavorites(): readonly string[] {
  * the last successful read, never a hard-coded name.
  */
 let catalogDefault: string | null = null
+/**
+ * Session-wide catalogue cache. Shared across every mount of `ModelSelector` so
+ * opening the menu does not reload providers on every click; the cache is only
+ * rewritten by an explicit Refresh or a successful first read.
+ */
+let cachedCatalog: readonly ModelEntry[] | null = null
 function setCatalogDefault(id: string | null): void {
   catalogDefault = id
 }
 
 export function ModelSelector({ defaultModel }: { defaultModel: string | null }) {
   const [open, setOpen] = useState(false)
-  const [models, setModels] = useState<readonly ModelEntry[]>([])
+  const [models, setModels] = useState<readonly ModelEntry[]>(cachedCatalog ?? [])
   const [selected, setSelected] = useState<string | null>(null)
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [reportedDefault, setReportedDefault] = useState(catalogDefault)
   const [query, setQuery] = useState('')
   const [favorites, setFavorites] = useState<readonly string[]>(readFavorites)
+  const [thinkingLevel, setThinkingLevel] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    try {
+      const raw = window.localStorage.getItem(THINKING_LEVEL_KEY)
+      return typeof raw === 'string' && raw.length > 0 ? raw : null
+    } catch { return null }
+  })
   const [note, setNote] = useState('')
 
   /**
@@ -89,26 +133,41 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
     void hostBridge()?.coreStatus().then(apply).catch(() => {})
     return () => { live = false; detach() }
   }, [])
-  const toggle = () => {
-    const next = !open
-    setOpen(next)
-    if (!next) return
-    setNote('')
-    setQuery('')
+
+  /**
+   * Run a catalogue read and cache the outcome. Used by both the first open
+   * (cache miss) and the explicit Refresh control.
+   */
+  const fetchCatalog = (): void => {
     setLoading(true)
     void readModelCatalog().then(outcome => {
       if (outcome.operation === 'catalog') {
-        if (outcome.models) setModels(outcome.models)
+        cachedCatalog = outcome.models ?? []
+        setModels(cachedCatalog)
         setSelected(outcome.selected ?? null)
         setSelectedProvider(outcome.selectedProviderId ?? null)
         setNote(outcome.reason ?? '')
         setCatalogDefault(outcome.defaultModel ?? null)
         setReportedDefault(outcome.defaultModel ?? null)
       } else {
+        cachedCatalog = []
         setModels([])
         setNote(outcome.reason ?? 'The model catalogue is unavailable.')
       }
-    }).catch(() => setNote('The model catalogue could not be read.')).finally(() => setLoading(false))
+    }).catch(() => {
+      setNote('The model catalogue could not be read.')
+    }).finally(() => setLoading(false))
+  }
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    if (!next) return
+    setNote('')
+    setQuery('')
+    // Only fetch on a cache miss. Subsequent opens reuse the cached catalogue
+    // so providers are not reloaded every time the menu is shown.
+    if (cachedCatalog === null) fetchCatalog()
   }
 
   const choose = (entry: ModelEntry) => {
@@ -133,6 +192,11 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
     })
   }
 
+  const pickThinkingLevel = (level: string) => {
+    setThinkingLevel(level)
+    try { window.localStorage.setItem(THINKING_LEVEL_KEY, level) } catch { /* storage is optional */ }
+  }
+
   // What a turn would actually run right now: the owner's selection if there is
   // one, otherwise the provider's own default. Only when Core has told us neither
   // is there genuinely nothing to name.
@@ -152,6 +216,9 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
   })
   const pinned = [...models.filter(isFavorite), ...missingFavorites]
   const shown = [...pinned, ...matches.filter(entry => !isFavorite(entry))]
+  // Thinking levels only appear for models that support them. When they do, all
+  // supported levels are listed — the picker never hides a level behind a menu.
+  const thinkingLevels = thinkingLevelsFor(selectedId)
 
   return (
     <div className="hd-select">
@@ -171,6 +238,27 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
             <button type="button" className="hd-model-pick" disabled={entry.unavailable} title={entry.unavailable ? 'This saved favorite is unavailable in the current provider catalogue.' : undefined} aria-pressed={entry.id === selectedId && (!selectedProvider || entry.providerId === selectedProvider)} onClick={() => choose(entry)}>{modelName(entry.id)} <small>{providerLabel(entry)}{entry.unavailable ? ' · unavailable' : ''}</small></button>
           </div>
         ))}
+        {thinkingLevels ? (
+          <div className="hd-thinking-row" role="group" aria-label="Thinking level">
+            <small className="hd-thinking-label">Thinking</small>
+            {thinkingLevels.map(level => (
+              <button
+                key={level}
+                type="button"
+                className="hd-thinking-pick"
+                aria-pressed={thinkingLevel === level}
+                onClick={() => pickThinkingLevel(level)}
+              >
+                {level}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <div className="hd-menu-foot">
+          <button type="button" className="hd-menu-refresh" onClick={() => fetchCatalog()} disabled={loading}>
+            <span aria-hidden="true" className="hd-menu-refresh-icon">↻</span> Refresh catalogue
+          </button>
+        </div>
       </div>}
     </div>
   )

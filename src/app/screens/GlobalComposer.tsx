@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { ModelSelector } from './ModelSelector'
-import { ThinkingSelector } from './ThinkingSelector'
 import { ModeSelector } from './ModeSelector'
 import type { ComposerMode } from '../chat/modes'
 import type { VoiceView } from '../voice/useVoiceDock'
@@ -188,11 +187,18 @@ export function GlobalComposer({
       : `${current} ${voiceTranscript.text}`)
   }, [voiceTranscript])
 
+  /**
+   * Auto-grow the textarea up to the CSS cap, then let the field's own
+   * scrollbar take over so the dock's controls row never moves. The cap lives
+   * in CSS (`max-height: 160px`); once the natural content height crosses it,
+   * `overflow-y: auto` on the field draws the scrollbar and the height stops
+   * growing.
+   */
   useEffect(() => {
     const field = textAreaRef.current
     if (!field) return
-    field.style.height = '0px'
-    field.style.height = `${Math.min(field.scrollHeight, 132)}px`
+    field.style.height = 'auto'
+    field.style.height = `${field.scrollHeight}px`
   }, [text])
 
   // A turn is in flight from the moment the draft is submitted until Core reports
@@ -214,11 +220,14 @@ export function GlobalComposer({
     // the user's text and corrupted the stored message; that class is closed
     // by passing the text through unchanged and reporting the directives
     // separately.
+    //
+    // The draft is deliberately *not* cleared on a successful send. The owner
+    // can keep iterating on it, or wipe it with the platform's clear shortcut,
+    // and an interrupted turn never silently consumes the words it was sent.
     onNotice?.('')
     setSending(true)
     try {
-      const accepted = await onSend(value, mode, { webSearch: wantWeb, browserUse: wantBrowser })
-      if (accepted) setText('')
+      await onSend(value, mode, { webSearch: wantWeb, browserUse: wantBrowser })
     } finally {
       setSending(false)
     }
@@ -258,8 +267,14 @@ export function GlobalComposer({
 
   return <footer className="hd-dock" data-state={voice.capturing ? 'listening' : generating ? 'responding' : 'idle'}>
     <AttachmentTray />
-    <form aria-label="Freya composer" onSubmit={event => { event.preventDefault(); void submit() }}>
-      <VoiceDockButton voice={voice} onPress={onVoicePress} onRelease={onVoiceRelease} />
+    {/*
+      The dock is now a two-row stack with no dividers between the rows. The
+      textarea owns the top row and grows up to a cap before its own scrollbar
+      appears, so a long draft never grows the bar taller than a screen of
+      messages. The controls row beneath it stays fixed regardless of how tall
+      the textarea gets, so the send control never moves while you type.
+    */}
+    <form aria-label="Freya composer" onSubmit={event => { event.preventDefault(); void submit() }} className="hd-dock-form">
       <label className="hd-input">
         <span className="hd-sr-only">Ask Freya</span>
         <textarea
@@ -277,54 +292,56 @@ export function GlobalComposer({
         />
         {nearLimit ? <small className="hd-input-count" aria-live="polite">{text.length} / {maxMessageCharacters}</small> : null}
       </label>
-      <div className="hd-tools">
-        <button
-          type="button"
-          className="hd-tool"
-          aria-label="Attach a file"
-          disabled={attaching}
-          onClick={() => { void attach() }}
-        ><Glyph name="attach" size={18} /></button>
-        <ModeSelector mode={mode} onChange={setMode} />
-        {/* Toggle state survives sending; press again to turn a capability off. */}
-        <button
-          type="button"
-          className="hd-tool hd-tool-search hd-intent-toggle"
-          role="switch"
-          aria-checked={wantWeb}
-          aria-label="Web search"
-          title={wantWeb ? 'Web search is on. Click to turn off.' : 'Web search is off. Click to turn on.'}
-          onClick={() => setWantWeb((value) => !value)}
-        >
-          <span>Web search</span>
-          <span className="hd-switch-track" aria-hidden="true"><span className="hd-switch-thumb" /></span>
-          <span className="hd-switch-state" aria-hidden="true">{wantWeb ? 'On' : 'Off'}</span>
-        </button>
-        <button
-          type="button"
-          className="hd-tool hd-tool-browser hd-intent-toggle"
-          role="switch"
-          aria-checked={wantBrowser}
-          aria-label="Browser"
-          title={wantBrowser ? 'Browser use is on. Click to turn off.' : 'Browser use is off. Click to turn on.'}
-          onClick={() => setWantBrowser((value) => !value)}
-        >
-          <span>Browser</span>
-          <span className="hd-switch-track" aria-hidden="true"><span className="hd-switch-thumb" /></span>
-          <span className="hd-switch-state" aria-hidden="true">{wantBrowser ? 'On' : 'Off'}</span>
-        </button>
-        <ModelSelector defaultModel={defaultModel} />
-        <ThinkingSelector />
+      <div className="hd-dock-controls">
+        <VoiceDockButton voice={voice} onPress={onVoicePress} onRelease={onVoiceRelease} />
+        <div className="hd-tools">
+          <button
+            type="button"
+            className="hd-tool"
+            aria-label="Attach a file"
+            disabled={attaching}
+            onClick={() => { void attach() }}
+          ><Glyph name="attach" size={18} /></button>
+          <ModeSelector mode={mode} onChange={setMode} />
+          {/* Toggle state survives sending; press again to turn a capability off. */}
+          <button
+            type="button"
+            className="hd-tool hd-tool-search hd-intent-toggle"
+            role="switch"
+            aria-checked={wantWeb}
+            aria-label="Web search"
+            title={wantWeb ? 'Web search is on. Click to turn off.' : 'Web search is off. Click to turn on.'}
+            onClick={() => setWantWeb((value) => !value)}
+          >
+            <span>Web search</span>
+            <span className="hd-switch-track" aria-hidden="true"><span className="hd-switch-thumb" /></span>
+            <span className="hd-switch-state" aria-hidden="true">{wantWeb ? 'On' : 'Off'}</span>
+          </button>
+          <button
+            type="button"
+            className="hd-tool hd-tool-browser hd-intent-toggle"
+            role="switch"
+            aria-checked={wantBrowser}
+            aria-label="Browser"
+            title={wantBrowser ? 'Browser use is on. Click to turn off.' : 'Browser use is off. Click to turn on.'}
+            onClick={() => setWantBrowser((value) => !value)}
+          >
+            <span>Browser</span>
+            <span className="hd-switch-track" aria-hidden="true"><span className="hd-switch-thumb" /></span>
+            <span className="hd-switch-state" aria-hidden="true">{wantBrowser ? 'On' : 'Off'}</span>
+          </button>
+          <ModelSelector defaultModel={defaultModel} />
+        </div>
+        {inFlight
+          ? <button className="hd-send hd-send-busy" type="button"
+              aria-label={generating ? 'Stop response' : 'Sending message'}
+              title={generating ? 'Stop this response' : 'Sending'}
+              disabled={!generating}
+              onClick={onStopResponse}>
+            <span className="hd-send-orb" aria-hidden="true" />
+          </button>
+          : <button className="hd-send" type="submit" aria-label="Send message" disabled={!text.trim()}><Glyph name="send" size={20} /></button>}
       </div>
-      {inFlight
-        ? <button className="hd-send hd-send-busy" type="button"
-            aria-label={generating ? 'Stop response' : 'Sending message'}
-            title={generating ? 'Stop this response' : 'Sending'}
-            disabled={!generating}
-            onClick={onStopResponse}>
-          <span className="hd-send-orb" aria-hidden="true" />
-        </button>
-        : <button className="hd-send" type="submit" aria-label="Send message" disabled={!text.trim()}><Glyph name="send" size={20} /></button>}
       <span className="hd-sr-only" role="status" aria-live="polite">
         {generating ? 'Freya is responding.' : sending ? 'Sending your message.' : ''}
       </span>

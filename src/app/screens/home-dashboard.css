@@ -451,3 +451,13 @@
 }
 
 .hd-model-pick small { color: #7f9bb3; margin-left: 8px; font-size: 10px; }
+
+/* Explicit on/off switches for the composer's persistent capabilities. */
+.hd-dashboard .hd-intent-toggle { gap: 6px; }
+.hd-switch-track { position: relative; display: inline-block; flex: none; width: 28px; height: 16px; border-radius: 8px; background: #344d60; box-shadow: inset 0 0 0 1px #648297; }
+.hd-switch-thumb { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #b8cbd8; transition: transform 120ms ease; }
+.hd-switch-state { min-width: 18px; font-weight: 600; text-align: left; }
+.hd-dashboard .hd-intent-toggle[aria-checked='true'] { color: #b8f6ff; border-color: #69dcef91; background: #10364aa8; }
+.hd-intent-toggle[aria-checked='true'] .hd-switch-track { background: #67dce5; box-shadow: none; }
+.hd-intent-toggle[aria-checked='true'] .hd-switch-thumb { transform: translateX(12px); background: #082533; }
+@media (prefers-reduced-motion: reduce) { .hd-switch-thumb { transition: none; } }

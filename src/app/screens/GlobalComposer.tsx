@@ -279,23 +279,29 @@ export function GlobalComposer({
         {/* Toggle state survives sending; press again to turn a capability off. */}
         <button
           type="button"
-          className="hd-tool hd-tool-search"
-          aria-pressed={wantWeb}
-          aria-label={wantWeb ? 'Turn off web search' : 'Turn on web search'}
+          className="hd-tool hd-tool-search hd-intent-toggle"
+          role="switch"
+          aria-checked={wantWeb}
+          aria-label="Web search"
           title={wantWeb ? 'Web search is on. Click to turn off.' : 'Web search is off. Click to turn on.'}
           onClick={() => setWantWeb((value) => !value)}
         >
-          <Glyph name="search" size={16} />
+          <span>Web search</span>
+          <span className="hd-switch-track" aria-hidden="true"><span className="hd-switch-thumb" /></span>
+          <span className="hd-switch-state" aria-hidden="true">{wantWeb ? 'On' : 'Off'}</span>
         </button>
         <button
           type="button"
-          className="hd-tool hd-tool-browser"
-          aria-pressed={wantBrowser}
-          aria-label={wantBrowser ? 'Turn off browser use' : 'Turn on browser use'}
+          className="hd-tool hd-tool-browser hd-intent-toggle"
+          role="switch"
+          aria-checked={wantBrowser}
+          aria-label="Browser"
           title={wantBrowser ? 'Browser use is on. Click to turn off.' : 'Browser use is off. Click to turn on.'}
           onClick={() => setWantBrowser((value) => !value)}
         >
-          <Glyph name="world" size={17} />
+          <span>Browser</span>
+          <span className="hd-switch-track" aria-hidden="true"><span className="hd-switch-thumb" /></span>
+          <span className="hd-switch-state" aria-hidden="true">{wantBrowser ? 'On' : 'Off'}</span>
         </button>
         <ModelSelector defaultModel={defaultModel} />
         <ThinkingSelector />

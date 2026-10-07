@@ -185,8 +185,12 @@ function normalizeRows(payload: unknown, vertical: SearchVertical, limit: number
     if (url === null || title === '') continue
     if (seen.has(url)) continue
 
+    // Engines disagree about which field names the poster. The images vertical uses
+    // `img_src`/`thumbnail_src`; the video vertical puts the still in `thumbnail` and
+    // leaves both others empty — a video card without it is a card with nothing to draw,
+    // so all three spellings are read rather than assuming one.
     const mediaUrl = vertical === 'images' ? media(row.img_src) : null
-    const thumbnailUrl = media(row.thumbnail_src) ?? media(row.img_src)
+    const thumbnailUrl = media(row.thumbnail_src) ?? media(row.img_src) ?? media(row.thumbnail)
     // A video row's `iframe` is the embeddable player; some engines put it in
     // `iframe_src` instead. Neither is a citation.
     const embed = vertical === 'videos' ? media(row.iframe_src) ?? media(row.iframe) : null
@@ -238,7 +242,11 @@ function readMetadata(row: Row, vertical: SearchVertical): Readonly<Record<strin
     else if (typeof value === 'number' && Number.isFinite(value)) out[key] = String(value)
   }
   if (vertical === 'videos') {
-    take('duration', 32)
+    // The engines report a video's runtime as `length` (or a bare seconds count);
+    // `duration` is kept first for an engine that names it that way.
+    const runtime = row['duration'] ?? row['length']
+    if (typeof runtime === 'string' && runtime.trim() !== '') out['duration'] = runtime.trim().slice(0, 32)
+    else if (typeof runtime === 'number' && Number.isFinite(runtime)) out['duration'] = String(runtime)
     take('author', 200)
     take('viewCount', 16)
     take('publishedDate', 64)

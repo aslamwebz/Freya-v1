@@ -152,19 +152,19 @@
 /* Chat history: the conversations, listed directly under the Chats group head
    as a quieter second level — same row shape as the places above, text aligned
    with their labels. */
-.chats-history { display: grid; gap: 2px; align-content: start; margin-top: 2px; }
-.chats-history-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 0; }
+.chats-history { display: grid; gap: 4px; align-content: start; margin-top: 6px; }
+.chats-history-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0; }
 .chats-history-title { display: flex; align-items: center; gap: 12px; height: 44px; flex: 1; min-width: 0; padding: 0 12px; border: 0; border-radius: 9px; background: none; color: #c4dcec; font-size: 13.5px; font-weight: 500; }
 .chats-history-title svg { width: 20px; color: #9db6c9; transition: opacity 140ms ease; }
 .chats-history-title:hover { color: #e6f4ff; background: rgba(255, 255, 255, .045); }
-.chats-history .chats-new { display: inline-flex; align-items: center; gap: 4px; height: 26px; margin-right: 6px; padding: 0 10px; border: 1px solid #59e0ff45; border-radius: 999px; background: none; color: #8ee6ff; font-size: 11px; }
+.chats-history .chats-new { display: inline-flex; align-items: center; gap: 4px; height: 28px; margin-right: 8px; padding: 0 12px; border: 1px solid #59e0ff45; border-radius: 999px; background: none; color: #8ee6ff; font-size: 11px; }
 .chats-history .chats-new:hover { color: #eafcff; border-color: #59e0ff8c; background: #59e0ff14; }
 .chats-history .chats-new:disabled { opacity: .5; cursor: not-allowed; }
-.chats-history-list { display: grid; gap: 1px; margin: 0; padding: 2px 0 4px; list-style: none; max-height: 264px; overflow-y: auto; scrollbar-width: none; }
+.chats-history-list { display: grid; gap: 2px; margin: 0; padding: 4px 0 6px; list-style: none; max-height: 264px; overflow-y: auto; scrollbar-width: none; }
 .chats-history-list::-webkit-scrollbar { display: none; }
 .chats-history-list li { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 2px; }
 .chats-history-item {
-  display: flex; align-items: center; width: 100%; height: 36px; padding: 0 10px 0 54px;
+  display: flex; align-items: center; width: 100%; height: 36px; padding: 0 8px 0 54px;
   text-align: left; border: 0; border-radius: 8px; color: #a9c2d4; background: none; font-size: 12.5px;
 }
 .chats-history-item:hover { color: #e6f4ff; background: rgba(255, 255, 255, .045); }
@@ -178,7 +178,7 @@
 .chats-history-copy { display: grid; min-width: 0; gap: 1px; }
 .chats-history-copy b { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chats-history-dot { flex: none; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: #59e0ff; box-shadow: 0 0 8px #59e0ff; animation: hd-pill-pulse 1.8s ease-in-out infinite; }
-.chats-history-empty { margin: 1px 0 3px 54px; font-size: 11px; line-height: 1.45; color: #6d8aa2; }
+.chats-history-empty { margin: 6px 0 6px 54px; font-size: 11px; line-height: 1.45; color: #6d8aa2; }
 
 /* ---- the rail's foot: status and the account ---- */
 .hd-rail-foot { flex-shrink: 0; display: grid; gap: 8px; padding: 12px 10px 12px; border-top: 1px solid #8db7d326; }

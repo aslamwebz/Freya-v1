@@ -48,7 +48,8 @@
     "test:chat-acceptance": "vitest run tests/live/chat-acceptance.test.ts",
     "test:chat-browser": "npm run build:chat-browser-acceptance && electron dist-electron/acceptance-native-browser.cjs",
     "build:chat-browser-acceptance": "node scripts/build-chat-browser-acceptance.mjs",
-    "test:chat-live-all": "npm run test:chat-acceptance && npm run test:chat-browser"
+    "test:chat-live-all": "npm run test:chat-acceptance && npm run test:chat-browser",
+    "test:chat-onscreen": "node scripts/chat-onscreen-acceptance.mjs"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1",

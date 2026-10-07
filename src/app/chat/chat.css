@@ -626,7 +626,7 @@
 
 .chats-browser { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
 .chats-browser-native { flex:1; min-height:160px; position:relative; overflow:hidden; background:#081720; }
-.chats-browser-address { display:flex; align-items:center; gap:5px; }
+.chats-browser-address { display:flex; align-items:center; gap:5px; padding:10px 14px 8px; }
 .chats-browser-address input { flex:1; min-width:0; }
 .chats-browser-tabs { display:flex; gap:5px; overflow-x:auto; flex-shrink:0; }
 .chats-browser-tab { display:flex; align-items:center; min-width:110px; max-width:230px; }

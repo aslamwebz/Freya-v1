@@ -104,7 +104,7 @@ export function ChatHistory({ onOpen, collapsed = false, current = false }: {
         <p className="chats-history-empty">
           {projection === null
             ? 'Connecting to Freya Core…'
-            : 'No conversations yet. The first one you start will be listed here.'}
+            : 'No conversations yet.'}
         </p>
       ) : (
         <ul className="chats-history-list">

@@ -902,7 +902,16 @@ function toSource(row: unknown, rank: number, retrievedAt: string): ToolSource |
   const mediaUrl = optionalHttpUrl(record['mediaUrl'])
   const thumbnailUrl = optionalHttpUrl(record['thumbnailUrl'])
   const vertical = typeof record['vertical'] === 'string' ? record['vertical'] : undefined
-  const duration = typeof record['duration'] === 'string' ? record['duration'] : null
+  // Runtime as the provider stated it — never derived from the title or the URL.
+  // SearXNG reports a video's length as `metadata.duration`, so that is read before
+  // assuming the row has no runtime to print.
+  const metadata = typeof record['metadata'] === 'object' && record['metadata'] !== null
+    ? record['metadata'] as Record<string, unknown>
+    : undefined
+  const statedDuration = [record['duration'], metadata?.duration].find(
+    (value): value is string => typeof value === 'string' && value.trim() !== '',
+  )
+  const duration = statedDuration ?? null
 
   return {
     title: sanitiseUntrustedText(title, MIND_TOOL_LIMITS.maxTitleChars),

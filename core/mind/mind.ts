@@ -1539,13 +1539,21 @@ private async finishTurn(
 }
 
 /**
- * Place a turn's shared Context block immediately before the owner's question.
+ * Place a turn's shared Context block in front of the conversation history.
  *
  * Position is a truthfulness decision, not a formatting one. The compiler's last
  * message is always the current user message and it stays last, so the material a
  * question refers to never arrives *after* the reference — and the question is
  * still the final thing a provider reads, which is what keeps the person's own
  * words at the end of the packet rather than a file's.
+ *
+ * The block goes *before the history* rather than beside the question because it
+ * is standing material, and the owner's recency window is theirs: the first call
+ * of a conversation has no history, so there the block lands immediately before
+ * the question exactly as it always did, but a follow-up such as "what did I just
+ * say?" must not find a shared-context paragraph sitting in the position the
+ * answer to "what I just said" is read from. Measured on the live endpoint: a
+ * block spliced next to the question is answered as if the owner had said it.
  *
  * A null block returns the compiler's array untouched, so a turn with nothing
  * shared produces exactly the packet it produced before Context existed.
@@ -1555,9 +1563,10 @@ function withTurnContext(
   block: ModelMessage | null,
 ): readonly ModelMessage[] {
   if (block === null) return messages
-  const last = messages[messages.length - 1]
-  if (last === undefined) return [...messages, block]
-  return [...messages.slice(0, -1), block, last]
+  // After the compiler's own framing system message, if it has one; otherwise first.
+  const anchor = messages.findIndex((message) => message.role === 'system')
+  if (anchor === -1) return [block, ...messages]
+  return [...messages.slice(0, anchor + 1), block, ...messages.slice(anchor + 1)]
 }
 
 function terminalEventFor(outcome: MindTurnOutcome) {

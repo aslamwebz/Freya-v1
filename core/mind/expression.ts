@@ -171,19 +171,28 @@ export function buildExpressionForTurn(input: ExpressionTurnInput): ExpressionTu
 }
 
 /**
- * Splice the expression block into the packet, immediately before the owner's
- * question.
+ * Splice the expression block into the packet, in front of the conversation
+ * history.
  *
  * Position is a truthfulness decision: the block is style guidance, not shared data,
  * and it must not arrive after the question it guides. The question stays last.
  * A null block returns the array untouched.
+ *
+ * It goes before the history rather than beside the question because it is standing
+ * guidance, and the owner's recency window is theirs. On a conversation's first turn
+ * — no history yet — the block lands immediately before the question, exactly as it
+ * always did. On a follow-up, a block sitting next to the question is attributed to
+ * the owner: measured on the live endpoint, "what did I just say?" was answered with
+ * the contents of the style block instead of the conversation's first turn.
  */
 export function withExpressionBlock(
   messages: readonly ModelMessage[],
   block: string | null,
 ): readonly ModelMessage[] {
   if (block === null) return messages
-  const last = messages[messages.length - 1]
-  if (last === undefined) return [...messages, { role: 'user', content: block }]
-  return [...messages.slice(0, -1), { role: 'user', content: block }, last]
+  // After the compiler's own framing system message, if it has one; otherwise first.
+  const anchor = messages.findIndex((message) => message.role === 'system')
+  const framed = { role: 'user' as const, content: block }
+  if (anchor === -1) return [framed, ...messages]
+  return [...messages.slice(0, anchor + 1), framed, ...messages.slice(anchor + 1)]
 }

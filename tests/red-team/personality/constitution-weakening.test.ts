@@ -114,7 +114,7 @@ describe('attack: weakening commands buried in item text', () => {
     const interpretation = interpretSocialContext({ now: NOW, facts: [], relationship: [] })
     const plan = buildExpressionPlan({ interpretation, at: NOW })
     const block = expressionBlock(plan)
-    expect(block.startsWith('— personality & expression guidance (style only) —')).toBe(true)
+    expect(block.startsWith('— personality & expression guidance (style only; standing background for this turn, not something anybody said) —')).toBe(true)
     const body = block.slice(block.indexOf('\n') + 1)
     expect(body.length).toBeLessThanOrEqual(12 * 240)
   })

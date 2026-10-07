@@ -1,4 +1,5 @@
 import { MEDIA_LIMITS, type MediaItem } from '../../media/types'
+import { safeVideoEmbed } from '../../media/collect'
 import {
   ConversationStoreError,
   type ConversationStore,
@@ -424,6 +425,17 @@ function decodeMediaItem(value: unknown): MediaItem | null {
     bytes: typeof record['bytes'] === 'number' && Number.isInteger(record['bytes']) ? record['bytes'] : null,
     pages: typeof record['pages'] === 'number' && Number.isInteger(record['pages']) ? record['pages'] : null,
     playable: record['playable'] === true,
+    // The still the card is drawn from, and the hosted player the preview modal
+    // plays — both restricted exactly as the collector restricted them when the
+    // message was stored: a poster must be an ordinary web address, and an embed
+    // must name a player host the in-modal allowlist already serves. A row from a
+    // future format that carries neither still round-trips; it just stays honest.
+    ...(typeof record['thumbnailUrl'] === 'string' && isPlainWebUrl(record['thumbnailUrl'])
+      ? { thumbnailUrl: record['thumbnailUrl'] }
+      : {}),
+    ...(typeof record['embedUrl'] === 'string' && safeVideoEmbed(record['embedUrl']) !== null
+      ? { embedUrl: record['embedUrl'] }
+      : {}),
   }
 }
 

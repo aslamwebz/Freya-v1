@@ -166,9 +166,7 @@ export function GlobalComposer({
   const [sending, setSending] = useState(false)
   const [attaching, setAttaching] = useState(false)
   const [mode, setMode] = useState<ComposerMode>('chat')
-  // Two intents the user can pin to the next message. Either or both, free.
-  // Held only between presses; Send clears them and they take effect for the
-  // one message they were held for.
+  // Independent toggles apply to subsequent messages until the owner turns them off.
   const [wantWeb, setWantWeb] = useState(false)
   const [wantBrowser, setWantBrowser] = useState(false)
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -206,19 +204,13 @@ export function GlobalComposer({
     // the user's text and corrupted the stored message; that class is closed
     // by passing the text through unchanged and reporting the directives
     // separately.
-    const fire = () => {
-      setWantWeb(false)
-      setWantBrowser(false)
-    }
     setVoiceNotice('')
     setSending(true)
     try {
       const accepted = await onSend(value, mode, { webSearch: wantWeb, browserUse: wantBrowser })
       if (accepted) setText('')
-      fire()
     } finally {
       setSending(false)
-      if (!text) fire()
     }
   }
 
@@ -284,14 +276,13 @@ export function GlobalComposer({
           onClick={() => { void attach() }}
         ><Glyph name="attach" size={18} /></button>
         <ModeSelector mode={mode} onChange={setMode} />
-        {/* Two intent buttons. Pressed state means the wrapper is applied at
-            Send, then cleared. Pressing the same one again drops the wrapper. */}
+        {/* Toggle state survives sending; press again to turn a capability off. */}
         <button
           type="button"
           className="hd-tool hd-tool-search"
           aria-pressed={wantWeb}
-          aria-label={wantWeb ? 'Web search is on for the next message' : 'Add web search to the next message'}
-          title={wantWeb ? 'Click to drop the search directive' : 'Add web search to the next message'}
+          aria-label={wantWeb ? 'Turn off web search' : 'Turn on web search'}
+          title={wantWeb ? 'Web search is on. Click to turn off.' : 'Web search is off. Click to turn on.'}
           onClick={() => setWantWeb((value) => !value)}
         >
           <Glyph name="search" size={16} />
@@ -300,8 +291,8 @@ export function GlobalComposer({
           type="button"
           className="hd-tool hd-tool-browser"
           aria-pressed={wantBrowser}
-          aria-label={wantBrowser ? 'Browser use is on for the next message' : 'Add browser use to the next message'}
-          title={wantBrowser ? 'Click to drop the browser directive' : 'Add browser use to the next message'}
+          aria-label={wantBrowser ? 'Turn off browser use' : 'Turn on browser use'}
+          title={wantBrowser ? 'Browser use is on. Click to turn off.' : 'Browser use is off. Click to turn on.'}
           onClick={() => setWantBrowser((value) => !value)}
         >
           <Glyph name="world" size={17} />

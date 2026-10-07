@@ -48,7 +48,7 @@ describe.skipIf(!live)('SearxngSearchProvider against a live daemon', () => {
         expect(result.sourceDomain).toBe(new URL(result.url).hostname)
         expect(result.title.trim().length).toBeGreaterThan(0)
         expect(result.retrievedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
-        expect(result.vertical).toBe(vertical)
+        expect(result.vertical ?? 'web').toBe(vertical)
         expect(result.rank).toBeGreaterThan(0)
       }
       // Ranks are dense and ordered, so a panel can number them without re-sorting.

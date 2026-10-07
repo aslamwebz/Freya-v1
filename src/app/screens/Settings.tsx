@@ -361,7 +361,7 @@ export function CapabilityPanel() {
   }
   return (
     <div className="st-capabilities">
-      <header><b>Capabilities</b><small>MiniMax is preferred. Readiness means an adapter is configured; it does not guarantee network availability.</small></header>
+      <header><b>Capabilities</b><small>Web search defaults to SearXNG. Readiness means an adapter is configured; it does not guarantee network availability.</small></header>
       <ul>{CAPABILITY_IDS.map((capability) => {
         const selection = registry[capability]
         const description = describeCapability(capability)
@@ -371,7 +371,7 @@ export function CapabilityPanel() {
           <label className="st-field"><span>Preferred provider</span><select aria-label={`${description.name} preferred provider`} value={selection.providers[0]} disabled={busy} onChange={(event) => {
             const provider = PROVIDER_IDS.find((id) => id === event.target.value)
             if (provider) void save(capability, [provider, ...selection.providers.filter((id) => id !== provider)])
-          }}>{PROVIDER_IDS.map((id) => <option key={id} value={id}>{describeProvider(id)}</option>)}</select></label>
+          }}>{(capability === 'search' ? ['searxng' as const, ...PROVIDER_IDS.filter((id) => id !== 'searxng')] : PROVIDER_IDS).map((id) => <option key={id} value={id}>{describeProvider(id)}</option>)}</select></label>
           <ol className="st-capability-providers">{selection.providers.map((provider, index) => <li key={provider} data-active={provider === selection.available || undefined}>
             <span>{describeProvider(provider)}</span><small>{provider === selection.available ? 'configured' : `position ${index + 1}`}</small>
             <button type="button" disabled={busy || index === 0} aria-label={`Move ${describeProvider(provider)} up for ${description.name}`} onClick={() => {

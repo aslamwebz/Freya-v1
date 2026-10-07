@@ -80,13 +80,13 @@ export interface CapabilityRegistry {
   imageGen: CapabilitySelection
 }
 
-/** MiniMax defaults, followed by real adapter alternatives.
+/** Capability defaults, followed by real adapter alternatives.
  * Search/Eye select retrieval backends; browser selects the assistance model.
  * Voice and image readiness requires its own installed adapter.
  */
 export const DEFAULT_CAPABILITY_SELECTION: Readonly<Record<CapabilityId, readonly ProviderId[]>> = Object.freeze({
   chat: ['minimax', 'nanogpt', 'local'],
-  search: ['minimax', 'searxng', 'brave'],
+  search: ['searxng', 'brave', 'minimax'],
   browser: ['minimax'],
   eye: ['minimax', 'searxng', 'brave'],
   vision: ['minimax', 'nanogpt'],

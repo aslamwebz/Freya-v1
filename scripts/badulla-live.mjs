@@ -39,7 +39,7 @@ function acceptanceSettings() {
   if (!credential) {
     try {
       credential = /^NANOGPT_API_KEY=(.+)$/m.exec(readFileSync(join(ROOT, '.env'), 'utf8'))?.[1]?.trim() ?? ''
-    } catch {}
+    } catch { /* Optional local credentials file is absent. */ }
   }
   const read = (k, fb = '') => fromFile[k] ?? process.env[k] ?? fb
   return {
@@ -185,7 +185,7 @@ async function main() {
     else say('[badulla] window left open (--keep-open). Close it by hand.')
   } catch (err) {
     say('[badulla] FAIL ' + (err && err.stack ? err.stack : err))
-    try { await shot(page, '99-fail') } catch {}
+    try { await shot(page, '99-fail') } catch { /* The page may already be closed. */ }
     if (!KEEP_OPEN) await app.close()
     process.exit(1)
   }

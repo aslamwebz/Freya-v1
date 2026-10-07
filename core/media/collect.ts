@@ -78,8 +78,13 @@ function cardSafeUrl(value: unknown): string | null {
  * Hosted players are the one deliberate exception to "renderer gets data bytes".
  * They stay inside the preview modal and are restricted to well-known video
  * player origins; an arbitrary search-result URL can never become an iframe.
+ *
+ * Exported because it is also the last gate on the way *out* of durable storage:
+ * the Vault conversation store re-checks every media item it hands a projection,
+ * and an embed that outlived this function's copy of the code must still name a
+ * player host the modal would have allowed in the first place.
  */
-function safeVideoEmbed(value: string | null): string | null {
+export function safeVideoEmbed(value: string | null): string | null {
   if (value === null) return null
   try {
     const parsed = new URL(value)
@@ -96,6 +101,46 @@ function safeVideoEmbed(value: string | null): string | null {
   } catch {
     return null
   }
+}
+
+/** The video id of a watch/short URL on a host the embed allowlist already names. */
+function playerVideoId(address: string): { host: 'youtube' | 'vimeo' | 'dailymotion'; id: string } | null {
+  let id = /(?:youtube\.com\/(?:watch\?[^#]*?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{8,})/i.exec(address)?.[1]
+  if (id !== undefined) return { host: 'youtube', id }
+  id = /vimeo\.com\/(?:video\/)?(\d{6,})/i.exec(address)?.[1]
+  if (id !== undefined) return { host: 'vimeo', id }
+  id = /dailymotion\.com\/(?:video\/|embed\/video\/)([A-Za-z0-9_-]{5,})/i.exec(address)?.[1]
+  if (id !== undefined) return { host: 'dailymotion', id }
+  return null
+}
+
+/**
+ * The canonical embed for a known player host, derived from the watch URL.
+ *
+ * This is a deterministic rewrite of an address the provider returned — the video
+ * id is read out of a URL the source itself supplied, and the embed host is one the
+ * in-modal allowlist already names — not a metadata value invented for a card.
+ * Providers whose rows give the watch page but no `iframe` field (the common case
+ * for the largest video index) would otherwise never embed, and every result would
+ * fall back to a poster and an "unavailable" note.
+ */
+function canonicalVideoEmbed(address: string): string | null {
+  const player = playerVideoId(address)
+  if (player === null) return null
+  if (player.host === 'youtube') return `https://www.youtube.com/embed/${player.id}`
+  if (player.host === 'vimeo') return `https://player.vimeo.com/video/${player.id}`
+  return `https://www.dailymotion.com/embed/video/${player.id}`
+}
+
+/**
+ * The still a known player host serves for a video id, used when the search provider
+ * named no thumbnail of its own. Like the embed above, it is an address derived from
+ * a URL the provider returned, and it still travels the same fetch-and-sniff path as
+ * every other poster: if the bytes are not an image, the card simply does not draw.
+ */
+function canonicalVideoPoster(address: string): string | null {
+  const player = playerVideoId(address)
+  return player !== null && player.host === 'youtube' ? `https://i.ytimg.com/vi/${player.id}/hqdefault.jpg` : null
 }
 
 /** A source is only worth a card if it names media that exists. */
@@ -119,11 +164,15 @@ function toItem(source: ToolSource): MediaItem | null {
   } else if (vertical === 'videos') {
     kind = 'video'
     const direct = media !== null && looksPlayable(media) ? media : null
-    embedUrl = direct === null ? safeVideoEmbed(media) : null
+    // An embed comes from the provider's own player field when it named one, or from
+    // the canonical player for a watch URL on an already-allowlisted host.
+    embedUrl = direct === null
+      ? (safeVideoEmbed(media) ?? canonicalVideoEmbed(media ?? '') ?? canonicalVideoEmbed(page))
+      : null
     // The human-openable result page stays the canonical video address when the
     // provider supplied an iframe. The iframe itself is kept separately.
     mediaUrl = direct ?? page
-    thumbnailUrl = thumbnail
+    thumbnailUrl = thumbnail ?? canonicalVideoPoster(media ?? '') ?? canonicalVideoPoster(page)
   } else if (vertical === 'documents') {
     kind = 'document'
     // Document indexes commonly return the PDF as the result URL itself.
@@ -175,9 +224,30 @@ export function mediaFromObservations(observations: readonly ToolObservation[]):
 
   for (const observation of observations) {
     if (observation.kind !== 'ok') continue
+    if (process.env.FREYA_MEDIA_TRACE === '1') {
+      for (const source of observation.sources) {
+        const traced = {
+          title: source.title.slice(0, 40),
+          url: safePlace(source.url),
+          vertical: source.vertical ?? null,
+          statedMedia: safePlace(source.mediaUrl ?? undefined),
+          statedPoster: safePlace(source.thumbnailUrl ?? undefined),
+        }
+        console.error(`[media.collect] source ${JSON.stringify(traced)}`)
+      }
+    }
     for (const source of observation.sources) {
       if (items.length >= MEDIA_LIMITS.cardsPerAnswer) return items
       const item = toItem(source)
+      if (process.env.FREYA_MEDIA_TRACE === '1') {
+        console.error(`[media.collect] item ${item === null ? 'DROPPED' : JSON.stringify({
+          kind: item.kind,
+          host: item.host,
+          hasPoster: item.thumbnailUrl !== undefined,
+          hasEmbed: item.embedUrl !== undefined,
+          duration: item.duration,
+        })}`)
+      }
       if (item === null) continue
       if (seen.has(item.url)) continue
       seen.add(item.url)
@@ -186,4 +256,14 @@ export function mediaFromObservations(observations: readonly ToolObservation[]):
   }
 
   return items
+}
+/** Never trace a model-supplied string: only whether a bounded http url was there. */
+function safePlace(value: string | undefined): string | null {
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = new URL(value)
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.hostname.slice(0, 60) : null
+  } catch {
+    return null
+  }
 }

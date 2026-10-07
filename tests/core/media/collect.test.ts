@@ -231,3 +231,68 @@ describe('collecting cards from what a search returned', () => {
     ])])
     expect(items).toEqual([])
   })
+
+describe('deriving in-Chat players for known video hosts', () => {
+  it('builds the canonical embed for a YouTube watch URL the provider gave no iframe for', () => {
+    // The largest video index answers with the watch page and no embed field. The
+    // derivation below is a deterministic rewrite of that address, onto a host the
+    // allowlist already names — not a player invented out of nothing.
+    const items = mediaFromObservations([ok([
+      source({
+        url: 'https://www.youtube.com/watch?v=D5tr7r2_i7E',
+        thumbnailUrl: 'https://th.bing.com/th/id/OVP.poster',
+        vertical: 'videos',
+      }),
+    ])])
+    expect(items[0]).toMatchObject({
+      kind: 'video',
+      url: 'https://www.youtube.com/watch?v=D5tr7r2_i7E',
+      embedUrl: 'https://www.youtube.com/embed/D5tr7r2_i7E',
+      playable: false,
+    })
+  })
+
+  it('uses the canonical YouTube still when the provider named no thumbnail', () => {
+    // A video with no poster and no embed would be dropped entirely. The canonical
+    // still is derived from the id the watch URL carries, and it is fetched and
+    // byte-validated like any other poster before it is drawn.
+    const items = mediaFromObservations([ok([
+      source({
+        url: 'https://www.youtube.com/watch?v=tgJEBN6HFag',
+        mediaUrl: undefined,
+        thumbnailUrl: undefined,
+        vertical: 'videos',
+      }),
+    ])])
+    expect(items[0]?.kind).toBe('video')
+    expect(items[0]?.thumbnailUrl).toBe('https://i.ytimg.com/vi/tgJEBN6HFag/hqdefault.jpg')
+    expect(items[0]?.embedUrl).toBe('https://www.youtube.com/embed/tgJEBN6HFag')
+  })
+
+  it('still refuses embeds for hosts outside the allowlist, however the URL is shaped', () => {
+    const items = mediaFromObservations([ok([
+      source({
+        url: 'https://tube.example.org/videos/watch/42',
+        thumbnailUrl: 'https://tube.example.org/thumbnails/poster.webp',
+        vertical: 'videos',
+      }),
+    ])])
+    expect(items[0]?.kind).toBe('video')
+    expect(items[0]?.embedUrl).toBeUndefined()
+    // And the card itself still exists: a video with a poster and no player is a
+    // truthful result, not a dropped one.
+    expect(items[0]?.url).toBe('https://tube.example.org/videos/watch/42')
+  })
+
+  it('does not derive anything from a shortened host it cannot verify', () => {
+    const items = mediaFromObservations([ok([
+      source({
+        url: 'https://example.org/v/abc123456',
+        vertical: 'videos',
+      }),
+    ])])
+    // No thumbnail anywhere: nothing drawable, so nothing is shown rather than
+    // a card pointing at a URL nobody fetched.
+    expect(items).toEqual([])
+  })
+})

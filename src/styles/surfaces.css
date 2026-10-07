@@ -426,6 +426,12 @@
   user-select: text;
 }
 
+.chat-turn > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
 .chat-turn b {
   font: var(--label);
   letter-spacing: 0.12em;
@@ -434,8 +440,38 @@
   padding-top: 2px;
 }
 
+.chat-turn[data-role='assistant'] b,
 .chat-turn[data-role='freya'] b {
   color: var(--gold-hi);
+}
+
+/* User-side plain text. The same field-of-tone `var(--ink-2)` as the rest of the
+   conversation, so a long paste reads as the same paragraph everywhere. */
+.chat-turn-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+
+/* Thinking row. Three small dots, no static sentence. */
+.chat-thinking {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.chat-thinking::before,
+.chat-thinking::after { content: ''; }
+.chat-thinking > i { width: 5px; height: 5px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 6px var(--gold-line-strong); animation: chat-thinking-pulse 1.2s ease-in-out infinite; }
+.chat-thinking > i:nth-child(2) { animation-delay: .14s; }
+.chat-thinking > i:nth-child(3) { animation-delay: .28s; }
+@keyframes chat-thinking-pulse {
+  0%, 100% { opacity: .35; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-2px); }
 }
 
 .chat-boundary {

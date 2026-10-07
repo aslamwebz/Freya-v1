@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { conversationMirror, ensureConversationAttached } from '../../platform/conversationClient'
 import { ChatView } from '../chat/ChatView'
 
@@ -39,6 +39,21 @@ export function Chat() {
   const onStop = () => {
     if (activeTurn) void mirror.cancelTurn(activeTurn.turnId)
   }
+  const onCreateConversation = useCallback(() => {
+    void mirror.create()
+    setNotice('')
+  }, [mirror])
+  const onOpenConversation = useCallback((conversationId: string) => {
+    void mirror.read(conversationId)
+  }, [mirror])
 
-  return <ChatView projection={projection} notice={notice} onStop={onStop} />
+  return (
+    <ChatView
+      projection={projection}
+      notice={notice}
+      onStop={onStop}
+      onOpenConversation={onOpenConversation}
+      onCreateConversation={onCreateConversation}
+    />
+  )
 }

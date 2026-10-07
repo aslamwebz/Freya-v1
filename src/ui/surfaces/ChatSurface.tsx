@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShell } from '../store'
 import {
   conversationList,
@@ -11,6 +11,11 @@ import { readModelCatalog, selectModel } from '../../platform/modelClient'
 import type { ModelView } from '../../../core/protocol/core-protocol'
 import type { ConversationProjection, VoiceProjection } from '../../../core/protocol/conversation'
 import { MicButton } from './MicButton'
+import { RichMessage } from '../../app/chat/RichMessage'
+import { MediaGrid } from '../../app/chat/MediaCards'
+import { ActivityFeed } from '../../app/chat/ActivityFeed'
+import '../../app/chat/chat.css'
+import '../../app/chat/media.css'
 
 /**
  * Chat — a real conversation with a real Freya behind it.
@@ -184,8 +189,51 @@ export function ChatSurface() {
 
   const composerDisabled = sending || generating || stopped
 
+  // Keyboard shortcuts scoped to this surface.
+  // - Esc cancels a running turn (the model is already paying for it; cancel is honest).
+  // - Ctrl/Cmd + L focuses the composer; the browser's location-bar shortcut is
+  //   "Ctrl+L" too, so this is the conventional pairing.
+  // - ↑ on an empty composer recalls the last user message — a habit the
+  //   terminal-trained half of the audience has, and a one-line addition.
+  const composerElRef = useRef<HTMLTextAreaElement | null>(null)
+  const rootElRef = useRef<HTMLDivElement | null>(null)
+  const lastUserTextRef = useRef<string | null>(null)
+  useEffect(() => {
+    for (const message of messages) {
+      if (message.role === 'user') lastUserTextRef.current = message.content
+    }
+  }, [messages])
+  useEffect(() => {
+    const root = rootElRef.current
+    if (!root) return
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const insideRoot = target !== null && root.contains(target)
+      if (event.key === 'Escape' && generating && activeTurn && insideRoot) {
+        event.preventDefault()
+        void mirror.cancelTurn(activeTurn.turnId)
+        return
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l' && insideRoot) {
+        event.preventDefault()
+        composerElRef.current?.focus()
+        return
+      }
+      if (event.key === 'ArrowUp' && insideRoot) {
+        const isComposer = target?.tagName === 'TEXTAREA'
+        const empty = isComposer && (target as HTMLTextAreaElement).value.length === 0
+        if (isComposer && empty && lastUserTextRef.current) {
+          event.preventDefault()
+          setDraft(lastUserTextRef.current)
+        }
+      }
+    }
+    root.addEventListener('keydown', onKey)
+    return () => root.removeEventListener('keydown', onKey)
+  }, [activeTurn?.turnId, generating, mirror])
+
   return (
-    <div className="chat">
+    <div className="chat" ref={rootElRef}>
       <div className="chat-side">
         <button
           type="button"
@@ -276,25 +324,43 @@ export function ChatSurface() {
             </div>
           ) : (
             messages.map((message) => (
-              <p key={message.messageId} className="chat-turn" data-role={message.role}>
-                <b>{message.role === 'user' ? 'You' : 'Freya'}</b>
-                {/* Plain text. Model output is untrusted content and is rendered
-                    as characters, never as markup — there is no path here from
-                    an answer to an element, a link or a script. */}
-                <span>{message.content}</span>
-              </p>
+              <article key={message.messageId} className="chat-turn" data-role={message.role}>
+                <header><b>{message.role === 'user' ? 'You' : 'Freya'}</b></header>
+                {/* Markdown rendered through `RichMessage`. Model output is untrusted
+                    content and is rendered through the deliberately-small markdown
+                    reader in `app/chat/RichMessage.tsx` — no `dangerouslySetInnerHTML`,
+                    no HTML tag interpretation, every token becomes ordinary React
+                    text. The reader closes its token set to code, strong/emphasis
+                    and explicit http(s) links; HTML tags arrive as text. */}
+                {message.role === 'assistant'
+                  ? <RichMessage
+                      content={message.content}
+                      enableCodeCopy
+                      enableToc
+                      collapseAbove={2400}
+                      provenance={
+                        message.media && message.media.length > 0
+                          ? { retrieved: message.media.length }
+                          : undefined
+                      }
+                    />
+                  : <p className="chat-turn-text">{message.content}</p>}
+                {message.role === 'assistant' && message.media && message.media.length > 0 ? (
+                  <MediaGrid items={message.media} />
+                ) : null}
+              </article>
             ))
           )}
 
           {generating ? (
-            <p className="chat-turn" data-role="freya" data-state="generating">
-              <b>Freya</b>
-              <span>
-                {activeTurn?.providerExecuting
-                  ? 'Thinking.'
-                  : 'Getting ready to think.'}
-              </span>
-            </p>
+            <article className="chat-turn" data-role="assistant" data-state="generating" aria-live="polite">
+              <header><b>Freya</b></header>
+              <p className="chat-thinking" aria-label={activeTurn?.providerExecuting ? 'Thinking' : 'Getting ready to think'}>
+                <i /><i /><i />
+                <span>{activeTurn?.providerExecuting ? 'Thinking.' : 'Getting ready to think.'}</span>
+              </p>
+              <ActivityFeed active={generating} />
+            </article>
           ) : null}
 
           {stopped ? (
@@ -330,6 +396,7 @@ export function ChatSurface() {
           <textarea
             className="chat-input"
             value={draft}
+            ref={composerElRef}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               // Enter sends, Shift+Enter is a newline — the convention everywhere

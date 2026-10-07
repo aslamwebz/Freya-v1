@@ -383,6 +383,56 @@
 .chats-rich-link:not(:disabled) { cursor:pointer; }
 .chats-rich-link:disabled { color:#86a8b9; text-decoration-style:dotted; cursor:not-allowed; }
 
+/* Provenance — retrieved / observed / inferred distinction.
+   The numbers are Core's, not invented. When Core has none, this row
+   does not render at all. */
+.chats-provenance { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:4px; }
+.chats-provenance span { display:inline-flex; align-items:center; gap:4px; padding:1px 7px; border:1px solid currentColor; border-radius:999px; font-size:9px; letter-spacing:.06em; opacity:.92; }
+.chats-provenance span b { color:inherit; font:600 10px/1 'Cascadia Code', ui-monospace, monospace; }
+.chats-provenance span small { font-size:9px; text-transform:uppercase; }
+.chats-provenance span[data-tone='retrieved'] { color:#8dfbe8; border-color:#5fdabc54; }
+.chats-provenance span[data-tone='observed']  { color:#a4d6ff; border-color:#5cb8e654; }
+.chats-provenance span[data-tone='inferred']  { color:#e9c892; border-color:#d6a85b50; }
+
+/* Contents — visible only when the markdown has two or more headings and
+   the parent opted in via `enableToc`. The summary is a state row, the list
+   is the navigation; every entry is a real button so it lands on a real
+   focusable control. */
+.chats-toc { margin-bottom:6px; border:1px solid #557c9538; border-radius:8px; background:#0b1a2bb0; overflow:hidden; }
+.chats-toc > summary { display:flex; align-items:center; gap:7px; padding:6px 10px; cursor:pointer; list-style:none; color:#b8d0df; font-size:10px; }
+.chats-toc > summary::-webkit-details-marker { display:none; }
+.chats-toc > summary::before { content:'›'; color:#6ddcf4; font:15px/1 Georgia, serif; transition:transform .14s ease; }
+.chats-toc[open] > summary::before { transform:rotate(90deg); }
+.chats-toc > summary b { font-size:9px; letter-spacing:.18em; text-transform:uppercase; color:#cfeaf7; font-weight:600; }
+.chats-toc > summary small { margin-left:auto; color:#7896a4; font-size:9px; }
+.chats-toc-list { list-style:none; margin:0; padding:0 4px 4px; display:grid; gap:1px; }
+.chats-toc-list button { width:100%; text-align:left; background:transparent; border:0; padding:5px 10px; color:#b9cede; font:inherit; font-size:11px; border-radius:5px; }
+.chats-toc-list button:hover { background:#11304a5c; color:#e6f1f8; }
+.chats-toc-list li[data-level='2'] button { padding-left:22px; }
+.chats-toc-list li[data-level='3'] button { padding-left:34px; }
+
+/* Code copy button. */
+.chats-code { position:relative; }
+.chats-code figcaption { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.chats-code-lang { font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:#81a9bf; }
+.chats-code-copy { padding:1px 7px; border:1px solid #557c954f; border-radius:5px; background:#0d2132a8; color:#9fc3d4; font-size:9px; letter-spacing:.04em; cursor:pointer; }
+.chats-code-copy:hover { color:#e3f0f8; border-color:#6ec8e898; }
+.chats-code-copy[data-copied] { color:#88f0c5; border-color:#5fdabc66; }
+
+/* Long-answer collapse toggle. */
+.chats-rich-toggle {
+  align-self:flex-start;
+  margin-top:4px;
+  padding:3px 9px;
+  border:1px solid #557c9554;
+  border-radius:6px;
+  background:#0d2132b0;
+  color:#9fc3d4;
+  font-size:10px;
+  cursor:pointer;
+}
+.chats-rich-toggle:hover { color:#e3f0f8; border-color:#6ec8e898; }
+
 
 /* Chat-owned browser controller. The web page itself stays in the isolated Electron
    browser window; this panel exposes only the Phase 51 projection and bounded actions. */

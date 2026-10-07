@@ -10,6 +10,7 @@ import type { WorkspaceResearchView } from './modes'
 import { RichMessage } from './RichMessage'
 import { MediaGrid } from './MediaCards'
 import { BrowserWorkspace } from './BrowserWorkspace'
+import { ActivityFeed } from './ActivityFeed'
 import './chat.css'
 
 function timeLabel(value: string): string {
@@ -217,7 +218,18 @@ export function Chats({
                 <header><b>{message.role === 'user' ? 'You' : 'Freya'}</b><time>{timeLabel(message.createdAt)}</time></header>
                 <div className="chats-bubble">
                   {message.role === 'assistant'
-                    ? <RichMessage content={message.content} onOpenLink={onBrowserOpenUrl} />
+                    ? <RichMessage
+                        content={message.content}
+                        onOpenLink={onBrowserOpenUrl}
+                        enableCodeCopy
+                        enableToc
+                        collapseAbove={2400}
+                        provenance={
+                          message.media !== undefined && message.media.length > 0
+                            ? { retrieved: message.media.length }
+                            : undefined
+                        }
+                      />
                     : <p className="chats-user-text">{message.content}</p>}
                   {/* What the lookups behind this answer returned. Drawn from the
                       message Core stored, never recovered from the prose: a card needs
@@ -236,6 +248,7 @@ export function Chats({
               <div className="chats-turn-content">
                 <header><b>Freya</b><span className="chats-live-label">{projection?.activeTurn?.providerExecuting ? 'thinking' : 'preparing'}</span></header>
                 <div className="chats-bubble chats-thinking"><i /><i /><i /></div>
+                <ActivityFeed active={generating} />
               </div>
             </article>
           ) : null}

@@ -73,7 +73,24 @@ function tableDivider(line: string): boolean {
  * syntax stays visible as text rather than being guessed into markup.
  */
 export function parseRichBlocks(content: string): Block[] {
+  // Strip a chain-of-thought block before anything else parses. Some models
+  // emit `<think>…</think>` (or unclosed) and the owner never asked to read
+  // the reasoning; leaving it in the answer turns a one-line reply into a
+  // wall of hidden blocks under a "Show more" toggle.
   const lines = content.replace(/\r\n?/g, '\n').split('\n')
+  const trimmed: string[] = []
+  let inThink = false
+  for (const line of lines) {
+    const open = /<think>\b/.test(line)
+    const close = /<\/think>/.test(line)
+    if (open && close) {
+      trimmed.push(line.replace(/<think>[\s\S]*?<\/think>/g, '').trim())
+      continue
+    }
+    if (open) { inThink = true; continue }
+    if (close) { inThink = false; continue }
+    if (!inThink) trimmed.push(line)
+  }
   const blocks: Block[] = []
   let paragraph: string[] = []
 
@@ -83,8 +100,8 @@ export function parseRichBlocks(content: string): Block[] {
     paragraph = []
   }
 
-  for (let index = 0; index < lines.length;) {
-    const line = lines[index] ?? ''
+  for (let index = 0; index < trimmed.length;) {
+    const line = trimmed[index] ?? ''
     const fence = line.match(FENCE)
     if (fence) {
       flushParagraph()

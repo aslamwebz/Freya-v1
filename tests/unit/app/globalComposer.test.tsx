@@ -56,7 +56,7 @@ describe('GlobalComposer', () => {
     expect(input().value).toBe('do not lose me')
   })
 
-  it('clears the draft only after Core accepts the send', async () => {
+  it('keeps the accepted draft available for further editing', async () => {
     const onSend = vi.fn(async () => true)
 
     render(
@@ -78,8 +78,8 @@ describe('GlobalComposer', () => {
     fireEvent.change(input(), { target: { value: 'hello freya' } })
     fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
 
-    await waitFor(() => expect(input().value).toBe(''))
-    expect(onSend).toHaveBeenCalledWith('hello freya', 'chat', { webSearch: false, browserUse: false })
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello freya', 'chat', { webSearch: false, browserUse: false }))
+    expect(input().value).toBe('hello freya')
   })
 
   it('sends the selected Freya mode with the draft', async () => {

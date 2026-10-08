@@ -1,4 +1,6 @@
 // Drive the live Freya Electron app via the CDP endpoint exposed by `npm run dev:kilo`.
+// These globals are used inside callbacks evaluated in the renderer.
+/* global document, getComputedStyle */
 // Uses the already-installed `playwright-core` (devDep) and `chromium.connectOverCDP`.
 //
 // Proves the 11 verification steps from the task:

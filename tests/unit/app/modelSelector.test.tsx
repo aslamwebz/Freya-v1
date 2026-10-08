@@ -38,12 +38,15 @@ describe('App Mode model picker', () => {
     fireEvent.click(screen.getByRole('button', { name: 'claude NanoGPT' }))
     await waitFor(() => expect(api.selectModel).toHaveBeenCalledWith('anthropic/claude', 'nanogpt'))
   })
-  it('keeps saved favorites visible and unavailable when their provider discovery fails', async () => {
+  it('keeps saved favorites visible and unavailable when refreshed provider discovery fails', async () => {
     localStorage.setItem('freya.favoriteModels', JSON.stringify(['nanogpt:anthropic/claude']))
     api.readModelCatalog.mockResolvedValue({ operation: 'catalog', models: [{ id: 'MiniMax-M3', ownedBy: 'minimax', providerId: 'minimax' }], reason: 'Model discovery unavailable for: nanogpt.' })
     render(<><ThinkingSelector /><ModelSelector defaultModel={null} /></>)
     expect(api.readModelCatalog).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Choose model' }))
+    // Reopening uses the session cache; explicit Refresh performs discovery.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh catalogue' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh catalogue' }))
     const favorite = await screen.findByRole('button', { name: 'claude NanoGPT · unavailable' })
     expect(favorite).toBeDisabled()
     await screen.findByText('Model discovery unavailable for: nanogpt.')
@@ -54,6 +57,8 @@ describe('App Mode model picker', () => {
   it('distinguishes identical model names from separate providers and persists scoped favorites', async () => {
     render(<ModelSelector defaultModel={null} />)
     fireEvent.click(screen.getByRole('button', { name: 'Choose model' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh catalogue' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh catalogue' }))
     await screen.findByRole('button', { name: 'small Local small model' })
     fireEvent.click(screen.getByRole('button', { name: 'Add small (Local small model) to favorites' }))
     fireEvent.change(screen.getByLabelText('Search models'), { target: { value: 'OpenAI' } })

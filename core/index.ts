@@ -6,6 +6,7 @@ import { RuntimeDiagnostics, defaultDiagnosticsPath } from './runtime/diagnostic
 import { EventFabric } from './events/fabric'
 import type { EventStore } from './events/store'
 import { JsonlEventStore } from './events/jsonl-store'
+import { JournalRepairError } from './events/atomic-journal-replacement'
 import type { AnyCoreEvent } from './events/envelope'
 import { initialCoreState, reduceCoreState, type CoreState } from './state'
 import { projectCoreStatus } from './projections/core-status'
@@ -1657,6 +1658,7 @@ class FreyaCore implements Core {
 
     let store: EventStore
     let fallbackReason: string | null = null
+    let failedJournalRepair = false
     const recoveryFaults: string[] = []
     const closeFailedStore = async (failedStore: EventStore): Promise<void> => {
       try { await failedStore.close() } catch (error) {
@@ -1681,6 +1683,7 @@ class FreyaCore implements Core {
       // operator and the UI can both see that nothing written this session
       // will survive a restart.
       fallbackReason = `event store unavailable: ${describe(error)}`
+      failedJournalRepair = error instanceof JournalRepairError
       this.diagnostics.recordError('core.event-store', 'event_store_open_failed', error, 'durable event store could not be opened', { dataPath: this.options.dataPath })
       store = new EphemeralEventStore()
       this.persistence = {
@@ -1815,6 +1818,13 @@ class FreyaCore implements Core {
       }
     }
 
+    if (failedJournalRepair) {
+      // Storage fallback keeps the shell operational; it must not turn an
+      // unfinished integrity repair into permission to contact providers.
+      this.integrity = { integrity: 'corrupt', reason: 'known journal repair could not be made durable',
+        line: null, eventsRead: 0, bytesDiscarded: 0 }
+    }
+
     this.guard = this.buildGuard()
 
     // The encrypted Vault is opened **once**, here, before any durable store is built.
@@ -1931,7 +1941,7 @@ class FreyaCore implements Core {
       this.notify()
     })
 
-    if (knownJournalRepair !== null) {
+    if (knownJournalRepair !== null && !knownJournalRepair.recorded) {
       try {
         await this.fabric.append(
           'core.integrity_repaired',
@@ -9952,6 +9962,9 @@ case 'forge.run': {
    * deciding what they are allowed to say.
    */
   private cognitionAvailability(): { available: boolean; reason: string | null } {
+    if (this.integrity.integrity === 'corrupt') {
+      return { available: false, reason: 'journal-not-trustworthy' }
+    }
     if (this.state.stopAll.active) {
       return { available: false, reason: 'Freya is stopped. Every model request is refused.' }
     }

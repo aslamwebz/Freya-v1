@@ -424,7 +424,8 @@ describe('known Freya-authored journal compatibility repair', () => {
     await writeFile(
       file,
       prefix +
-        line(3, 'core.started', { version: '0.1.0', storeKind: 'jsonl', recoveredSequence: 2 }) +
+        line(3, 'core.started', { version: '0.1.0', storeKind: 'jsonl', recoveredSequence: 2 },
+          { eventId: 'later-start', occurredAt: new Date(1_700_000_010_000).toISOString() }) +
         line(4, 'core.integrity_fault', {
           reason:
             'The event log is corrupt: line 3 is a complete event that does not validate (payload does not match the shape of cognition.requested).',
@@ -433,10 +434,10 @@ describe('known Freya-authored journal compatibility repair', () => {
           trustedPrefixEvents: 2,
           trustedPrefixBytes: 0,
           damagedBytes: 100,
-        }) +
+        }, { eventId: 'later-fault', occurredAt: new Date(1_700_000_011_000).toISOString() }) +
         line(5, 'core.degraded', {
           reason: 'the event journal was found corrupt; see the preceding integrity fault',
-        }),
+        }, { eventId: 'later-degraded', occurredAt: new Date(1_700_000_012_000).toISOString() }),
     )
 
     const status = (await start()).status()
@@ -447,8 +448,9 @@ describe('known Freya-authored journal compatibility repair', () => {
     const raw = await readFile(file, 'utf8')
     expect(raw).toContain('"requestId":"turn-old-profile:1"')
     expect(raw).toContain('core.integrity_repaired')
-    expect(raw).not.toContain('core.integrity_fault')
-    expect(raw).not.toContain('core.degraded')
+    // Resolved health no longer gates Core; its original evidence still exists.
+    expect(raw).toContain('core.integrity_fault')
+    expect(raw).toContain('core.degraded')
   })
 
   it('still exposes status reads when unknown corruption keeps Core degraded', async () => {

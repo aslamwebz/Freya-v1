@@ -41,3 +41,35 @@ visible. Diagnostics currently have no rotation or power-loss flush guarantee.
 Focused regressions cover fallback startup/runtime writes, recovered STOP ALL,
 concurrent reads, later read failures, fault retention, unrelated Chat operation,
 corrupt-history admission, shutdown, diagnostic privacy and App Mode gating.
+
+## Known-defect recovery with newer history
+
+A recognized quarantine can now be reconciled with a newer active journal.
+Recovery validates both complete histories, requires the same trusted prefix,
+and retains the recovered older tail followed by every newer event. Event IDs,
+timestamps, payloads and causal IDs remain unchanged. Newer envelope sequences
+receive an offset; their original sequence values remain in a uniquely named
+`pre-known-repair` archive, whose companion note records that offset. The
+original quarantine is retained.
+
+Recovery refuses overlapping identities, interleaved branch times, unknown
+damage, additional suffix faults and any unresolved fault in the common prefix.
+It synchronizes the complete candidate and its `core.integrity_repaired` marker
+to a temporary file before replacing the active file atomically. The marker is
+therefore replayed on the first repaired startup, rather than added afterward.
+A failed archive, synchronization, verification read or replacement keeps
+cognition refused while local inspection remains operational. Chat availability
+reports that same trust blocker.
+
+The resolved journal warning leaves current health, while its original fault
+and degraded events remain in the audit history. Unrelated health faults remain
+visible. Replaying the combined journal restores state without repeating model
+calls or other external effects.
+
+Run recovery with all instances using that profile stopped. The expected-byte
+check catches changes during preparation, but it is not a store ownership lock;
+another writer between that check and replacement is still unsafe. Store-level
+ownership, universal write validation, short-write handling, live-read regression
+detection and the general truncation-before-fault crash window remain separate
+hardening work. This change fixes the recognized-repair deadlock and makes its
+replacement and acknowledgment durable; it does not waive journal trust checks.

@@ -16,7 +16,7 @@ import type { ConversationPersistenceMode } from '../conversation/store'
 
 /** One rendered message. The full content, because this is the transcript. */
 import type { MediaItem } from '../media/types'
-import type { ToolSource, ChartSpec } from '../mind/tools'
+import type { ToolSource, ChartSpec, CanvasSpec } from '../mind/tools'
 export interface ConversationMessageView {
   messageId: string
   role: 'user' | 'assistant'
@@ -47,6 +47,13 @@ export interface ConversationMessageView {
    * read numbers out of prose would be drawing from a guess, not a measurement.
    */
   charts?: readonly ChartSpec[]
+  /**
+   * Long-form artifact the model opened beside this answer, if any.
+   *
+   * The renderer opens a side panel for it. Absent on a turn that did not call
+   * the canvas tool.
+   */
+  canvas?: CanvasSpec
 }
 
 export interface ConversationSummaryView {

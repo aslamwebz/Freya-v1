@@ -11,6 +11,7 @@ import { researchMirror } from '../../platform/researchClient'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import type { WorkspaceResearchView } from './modes'
 import { AssistantMessageView } from './AssistantMessageView'
+import { CanvasPanel } from './CanvasPanel'
 import { MediaGrid } from './MediaCards'
 import { DockedBrowser, type DockedTabOrigin } from './BrowserWorkspace'
 import { EyeSessionControls } from './EyeSessionControls'
@@ -208,6 +209,7 @@ export function Chats({
   const [fault, setFault] = useState<string | null>(null)
   const [issueOpen, setIssueOpen] = useState(false)
   const logRef = useRef<HTMLDivElement | null>(null)
+  const [dismissedCanvasId, setDismissedCanvasId] = useState<string | null>(null)
 
   useEffect(() => {
     void ensureConversationAttached().then((attached) => {
@@ -247,6 +249,23 @@ export function Chats({
   const generating = projection?.activeTurn != null
   const workspaceBusy = generating || busy
   const activeConversation = conversations.find((conversation) => conversation.conversationId === projection?.activeConversationId) ?? null
+  // The most recent assistant message that has a canvas. We open it
+  // automatically so a turn that "made X" is one click away from "see X",
+  // and the user dismisses it explicitly when they want the chat full width.
+  const latestCanvas = (() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i]
+      if (message === undefined || message.role !== 'assistant') continue
+      if (message.messageId === dismissedCanvasId) return null
+      if (message.canvas !== undefined) return message.canvas
+    }
+    return null
+  })()
+  // When a new canvas arrives, the user has not dismissed it yet.
+  useEffect(() => {
+    if (latestCanvas === null) return
+    setDismissedCanvasId(null)
+  }, [latestCanvas?.title, latestCanvas?.content.length])
   const workspaceLabel = researchView?.mode === 'eye' ? 'FREYA · EYE' : researchView?.mode === 'deep-research' ? 'FREYA · DEEP RESEARCH' : 'FREYA · CHAT'
   const workspaceTitle = researchView?.mode === 'eye'
     ? (researchView.outcome.session?.intent.subject ?? "Freya's Eye")
@@ -277,7 +296,7 @@ export function Chats({
   }, [messages.length, generating, problemKey])
 
   return (
-    <div className="chats" data-browser-open={browserOpen || undefined}>
+    <div className="chats" data-browser-open={browserOpen || undefined} data-canvas-open={(latestCanvas !== null) || undefined}>
       {/*
         Conversation history lives in the left rail. This workspace owns the
         transcript and, when opened, Freya's bounded browser controller.
@@ -383,6 +402,20 @@ export function Chats({
           requestedOrigin={{ kind: 'link', from: 'chat', ownerText: 'browser workspace' }}
           onRequestedUrlHandled={onBrowserRequestedUrlHandled}
           onClose={onBrowserClose}
+        />
+      ) : null}
+      {latestCanvas !== null ? (
+        <CanvasPanel
+          canvas={latestCanvas}
+          onClose={() => {
+            for (let i = messages.length - 1; i >= 0; i -= 1) {
+              const message = messages[i]
+              if (message?.canvas !== undefined) {
+                setDismissedCanvasId(message.messageId)
+                return
+              }
+            }
+          }}
         />
       ) : null}
     </div>

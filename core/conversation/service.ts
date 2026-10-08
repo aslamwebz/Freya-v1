@@ -1,6 +1,6 @@
 import type { ModelAttachment } from '../model/provider'
 import type { MediaItem } from '../media/types'
-import type { ToolSource, ChartSpec } from '../mind/tools'
+import type { ToolSource, ChartSpec, CanvasSpec } from '../mind/tools'
 import type { TurnIntentHints } from '../mind/tool-intent'
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
@@ -470,6 +470,7 @@ function toMessageView(message: {
   media?: readonly MediaItem[]
   sources?: readonly ToolSource[]
   charts?: readonly ChartSpec[]
+  canvas?: CanvasSpec
 }): ConversationMessageView {
   return {
     messageId: message.messageId,
@@ -483,6 +484,7 @@ function toMessageView(message: {
     ...(message.media === undefined || message.media.length === 0 ? {} : { media: message.media }),
     ...(message.sources === undefined || message.sources.length === 0 ? {} : { sources: message.sources }),
     ...(message.charts === undefined || message.charts.length === 0 ? {} : { charts: message.charts }),
+    ...(message.canvas === undefined ? {} : { canvas: message.canvas }),
   }
 }
 

@@ -19,7 +19,7 @@ import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
 import { buildConfiguredModelProviders, modelCapabilityPreference, type CapabilityEnv } from './model/capability-runtime'
 import type { CapabilityPreferences } from './capabilities'
 import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
-import { createWebSearchTool, createChartTool, MindToolRegistry } from './mind/tools'
+import { createWebSearchTool, createChartTool, createCanvasTool, MindToolRegistry } from './mind/tools'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
 import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
 import type { ReferenceKnowledge } from './mind/context-compiler'
@@ -2183,6 +2183,9 @@ class FreyaCore implements Core {
           // that the renderer draws. Always available alongside the other tools so a
           // turn that does not look anything up can still produce a chart.
           createChartTool(),
+          // The canvas tool returns a long-form artifact the renderer opens in a
+          // side panel. Always available, for the same reason as the chart tool.
+          createCanvasTool(),
           ...(this.dualBrowser
             ? [createBrowserTaskTool({ browser: this.dualBrowser })]
             : []),

@@ -29,7 +29,7 @@
  * Conversation Service, not in a type the renderer can satisfy with a string.
  */
 import type { MediaItem } from '../media/types'
-import type { ToolSource, ChartSpec } from '../mind/tools'
+import type { ToolSource, ChartSpec, CanvasSpec } from '../mind/tools'
 export type MessageRole = 'user' | 'assistant'
 
 export interface ConversationMessage {
@@ -68,6 +68,14 @@ export interface ConversationMessage {
    * Absent on a turn that did not call the chart tool.
    */
   charts?: readonly ChartSpec[]
+  /**
+   * Long-form artifact the model opened beside this answer, if any.
+   *
+   * The chat says "I made X" in one or two sentences; this carries the body
+   * (a document or a program) so the renderer can open a side panel. Absent
+   * on a turn that did not call the canvas tool.
+   */
+  canvas?: CanvasSpec
 }
 
 export interface Conversation {

@@ -94,6 +94,12 @@ export const MIND_TOOL_LIMITS = Object.freeze({
   /** Characters kept from one chart point's label. */
   maxChartLabelChars: 40,
 
+  /** Characters kept from one canvas document or program. */
+  maxCanvasChars: 64_000,
+
+  /** Characters kept from one canvas title. */
+  maxCanvasTitleChars: 160,
+
   /** Characters kept from one result's snippet. */
   maxSnippetChars: 240,
 
@@ -276,6 +282,12 @@ export type ToolObservation =
        * not make a chart.
        */
       readonly chart?: ChartSpec
+      /**
+       * A typed long-form artifact (document or program), when the tool that
+       * ran was the canvas opener. Like chart, it lives beside the prose so
+       * the chat can say "I made X" without repeating the body.
+       */
+      readonly canvas?: CanvasSpec
     }
   | {
       readonly kind: 'denied'
@@ -314,6 +326,25 @@ export interface ChartSpec {
   /** Free-text unit, e.g. "USD billion", "%", "million units". */
   readonly unit: string
   readonly points: readonly ChartPoint[]
+}
+
+/**
+ * A long-form artifact the model produced for this answer.
+ *
+ * Lives beside the prose rather than inside it because a chart, a report or a
+ * web page is not a paragraph: it is a typed payload the renderer can draw or
+ * open in a side panel. The chat says "I made X" and the canvas carries the
+ * thing, so the transcript stays short and the long content is editable
+ * rather than trapped in a single message bubble.
+ */
+export type CanvasKind = 'document' | 'code'
+export type CanvasLanguage = 'markdown' | 'html' | 'javascript' | 'python' | 'css' | 'json' | 'text'
+export interface CanvasSpec {
+  readonly title: string
+  readonly kind: CanvasKind
+  readonly language: CanvasLanguage
+  /** The full content of the document or program. Bounded. */
+  readonly content: string
 }
 
 /** What one tool step did, for the turn's own metadata. Never content. */
@@ -386,6 +417,12 @@ export interface MindTool {
      * the prose.
      */
     readonly chart?: ChartSpec
+    /**
+     * A typed long-form artifact (document or program), when the tool that ran
+     * is the canvas opener. The chat says "I made X" in the prose; the canvas
+     * carries the body.
+     */
+    readonly canvas?: CanvasSpec
   }>
 }
 
@@ -517,6 +554,7 @@ export class MindToolRegistry {
           sources: boundSources(raw.sources),
           provenance: boundProvenance(raw.provenance),
           ...(raw.chart === undefined ? {} : { chart: boundChart(raw.chart) }),
+          ...(raw.canvas === undefined ? {} : { canvas: boundCanvas(raw.canvas) }),
         },
         executed: true,
       }
@@ -1028,6 +1066,87 @@ function boundChart(raw: ChartSpec): ChartSpec {
     unit: sanitiseUntrustedText(String(raw.unit), MIND_TOOL_LIMITS.maxChartUnitChars),
     points,
   }
+}
+
+/**
+ * Bound a canvas returned by a tool: the content is text-bounded, the title is
+ * text-bounded, the kind is closed (document | code), and the language is
+ * closed to a small set the renderer can handle honestly. A canvas that
+ * exceeds the cap is truncated, with a "…" marker at the end, because a
+ * document half-served is worse than one clearly cut.
+ */
+function boundCanvas(raw: CanvasSpec): CanvasSpec {
+  const content = sanitiseUntrustedText(String(raw.content), MIND_TOOL_LIMITS.maxCanvasChars)
+  return {
+    title: sanitiseUntrustedText(String(raw.title), MIND_TOOL_LIMITS.maxCanvasTitleChars),
+    kind: raw.kind === 'code' ? 'code' : 'document',
+    language: readCanvasLanguage(raw.language),
+    content,
+  }
+}
+
+function readCanvasLanguage(value: unknown): CanvasLanguage {
+  if (typeof value !== 'string') return 'text'
+  const asked = value.trim().toLowerCase()
+  if (asked === 'markdown' || asked === 'md') return 'markdown'
+  if (asked === 'html' || asked === 'htm') return 'html'
+  if (asked === 'javascript' || asked === 'js') return 'javascript'
+  if (asked === 'python' || asked === 'py') return 'python'
+  if (asked === 'css') return 'css'
+  if (asked === 'json') return 'json'
+  return 'text'
+}
+
+/**
+ * The canvas opener.
+ *
+ * A long-form artifact (a report, a plan, a landing page, a small web app) is
+ * not a paragraph. The chat says "I made X" in one or two sentences; the
+ * canvas carries the thing, editable in a side panel. The model passes the
+ * whole content here so the renderer never has to re-parse prose to find a
+ * document body.
+ *
+ * Capability: `search.web`. Same gate as the chart tool: the owner is the only
+ * principal that holds it, and a canvas is a visible artifact produced
+ * alongside an answer.
+ */
+export function createCanvasTool(): MindTool {
+  return {
+    name: 'open_canvas',
+    description:
+      'Open a side canvas beside the chat with something you made, for the person to read, edit and copy. '
+      + 'Use it whenever the answer is a long document, a small web page, a program, or anything longer than '
+      + 'a short paragraph. The chat itself should say in one or two sentences what you made, then refer to '
+      + 'the canvas. Pass the whole body as `content`.',
+    capability: 'search.web',
+    parameters: [
+      { name: 'title', description: 'A short title, e.g. "Q3 sales report" or "Bakery landing page".', required: true },
+      { name: 'kind', description: '`document` for writing; `code` for a program or web page.', required: true },
+      { name: 'language', description: 'The content language: `markdown`, `html`, `javascript`, `python`, `css`, `json` or `text`.', required: true },
+      { name: 'content', description: 'The full body of the document or program.', required: true },
+    ],
+    async run(request) {
+      const title = request.arguments['title'] ?? ''
+      if (title.trim().length === 0) throw new Error('the canvas title was empty')
+      const kind = readCanvasKind(request.arguments['kind'])
+      const language = readCanvasLanguage(request.arguments['language'])
+      const content = request.arguments['content'] ?? ''
+      if (content.trim().length === 0) throw new Error('the canvas content was empty')
+      const canvas = boundCanvas({ title, kind, language, content })
+      return {
+        summary: `Opened a ${kind} canvas "${canvas.title}" (${canvas.content.length} characters).`,
+        sources: [],
+        canvas,
+      }
+    },
+  }
+}
+
+function readCanvasKind(value: unknown): CanvasKind {
+  if (typeof value !== 'string') return 'document'
+  const asked = value.trim().toLowerCase()
+  if (asked === 'code' || asked === 'program' || asked === 'app' || asked === 'page' || asked === 'web' || asked === 'html' || asked === 'javascript' || asked === 'python' || asked === 'css' || asked === 'json') return 'code'
+  return 'document'
 }
 
 

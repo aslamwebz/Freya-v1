@@ -37,7 +37,7 @@ import { initialToolRequestForOwnerText, type TurnIntentHints } from './tool-int
 import { MIND_TOOL_LIMITS, renderToolFooter, type MindToolRegistry, type ToolObservation } from './tools'
 import { mediaFromObservations } from '../media/collect'
 import type { MediaItem } from '../media/types'
-import type { ToolSource, ChartSpec } from './tools'
+import type { ToolSource, ChartSpec, CanvasSpec } from './tools'
 
 /**
  * The Mind.
@@ -561,6 +561,24 @@ function chartsField(observations: readonly ToolObservation[]): { charts?: reado
   return collected.length === 0 ? {} : { charts: collected }
 }
 
+/**
+ * The long-form artifact the model opened beside this turn, if any.
+ *
+ * Only one canvas per turn is kept — the chat says "I made X" and the canvas
+ * carries the thing, so a turn that opened more than one is the kind of
+ * answer that does not know what it is. The renderer opens a side panel for
+ * the latest one, so the chat and the panel stay in sync.
+ */
+function canvasField(observations: readonly ToolObservation[]): { canvas?: CanvasSpec } {
+  let latest: CanvasSpec | null = null
+  for (const observation of observations) {
+    if (observation.kind !== 'ok') continue
+    if (observation.canvas === undefined) continue
+    latest = observation.canvas
+  }
+  return latest === null ? {} : { canvas: latest }
+}
+
 export class MindService {
   private readonly fabric: EventFabric
   private readonly store: ConversationStore
@@ -1051,6 +1069,7 @@ export class MindService {
         ...mediaField(cognition.steps.map((iteration) => iteration.observation)),
         ...sourcesField(cognition.steps.map((iteration) => iteration.observation), 100),
         ...chartsField(cognition.steps.map((iteration) => iteration.observation)),
+        ...canvasField(cognition.steps.map((iteration) => iteration.observation)),
       }
       try {
         await this.store.appendMessage(assistantMessage)
@@ -1340,6 +1359,7 @@ export class MindService {
       ...mediaField(cognition.steps.map((iteration) => iteration.observation)),
       ...sourcesField(cognition.steps.map((iteration) => iteration.observation), 100),
       ...chartsField(cognition.steps.map((iteration) => iteration.observation)),
+      ...canvasField(cognition.steps.map((iteration) => iteration.observation)),
     }
 
     try {

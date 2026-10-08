@@ -55,6 +55,10 @@ export type InitialToolRequest =
       readonly arguments: Readonly<Record<string, string>>
     }
   | {
+      readonly name: 'browser_tabs'
+      readonly arguments: Readonly<Record<string, string>>
+    }
+  | {
       readonly name: 'web_search'
       readonly arguments: Readonly<Record<string, string>>
     }
@@ -66,7 +70,22 @@ const EXPLICIT_BROWSER =
   /\b(?:use|open|launch|start|drive|pilot|operate|control)\b[^.!?]{0,36}\b(?:your|freya'?s|the)\s+(?:own\s+)?browser\b|\byour\s+own\s+browser\b|\bin\s+(?:your|freya'?s|the)\s+(?:own\s+)?browser\b|\bbrowse\s+to\b/
 
 const HTTP_URL = /https?:\/\/[^\s<>(){}"']+/iu
+const WEB_ADDRESS = /(?:https?:\/\/)?(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s,;]*)?/giu
 function cleanUrl(raw: string): string { return raw.replace(/[.,!?;:]+$/u, '') }
+function browserAddresses(text: string): readonly string[] {
+  const out: string[] = []
+  for (const match of text.matchAll(WEB_ADDRESS)) {
+    const raw = cleanUrl(match[0])
+    const candidate = /^https?:\/\//iu.test(raw) ? raw : `https://${raw}`
+    try {
+      const parsed = new URL(candidate)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue
+      const normalized = parsed.toString()
+      if (!out.includes(normalized)) out.push(normalized)
+    } catch { /* Ignore prose that only resembles a web address. */ }
+  }
+  return out
+}
 
 /**
  * Resolve the owner's own text and any composer-held hints into an initial tool call.
@@ -75,11 +94,11 @@ function cleanUrl(raw: string): string { return raw.replace(/[.,!?;:]+$/u, '') }
  * prepending a directive onto the owner's words — is gone: the stored user
  * message is the text alone, and the hint is policy the Mind reads here.
  *
- * `browserUse` alone does **not** produce an initial tool request unless the
- * owner's text contains an `http(s)` address. Without a URL there is nothing
- * safe to navigate to, and an empty `browser_read` is a tool call with no
- * address, which is the shape of a bug. The button then falls through to the
- * text-derived routes, exactly as a turn without the button does.
+ * `browserUse` honours concrete web addresses in the owner's text. A list of
+ * domains or URLs becomes one bounded `browser_tabs` open request, so the model
+ * cannot silently replace an explicit Browser-mode action with web search. If
+ * the owner supplied no address at all, the hint does not invent one and the
+ * model may decide what to do next.
  *
  * `webSearch` produces a `web_search` request for the exact text. The vertical
  * falls through to the text-derived detection when the owner's words name one,
@@ -103,22 +122,11 @@ export function initialToolRequestForOwnerText(
   if (hints?.webSearch === true) return search()
 
   if (hints?.browserUse === true) {
-    // Browser use without an address is a turn the model has to fill in from the
-    // model's own answer; the loop's normal path gets us there. If the owner
-    // did supply an address, we honour it as an initial tool call — same as the
-    // old text-prefixed branch did, but with the text unchanged.
-    const match = HTTP_URL.exec(value)
-    if (match === null) return search()
-    const candidate = cleanUrl(match[0])
-    try {
-      const parsed = new URL(candidate)
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
-      return {
-        name: 'browser_read',
-        arguments: Object.freeze({ url: parsed.toString() }),
-      }
-    } catch {
-      return null
+    const addresses = browserAddresses(value)
+    if (addresses.length === 0) return null
+    return {
+      name: 'browser_tabs',
+      arguments: Object.freeze({ op: 'open', urls: addresses.join('\n') }),
     }
   }
 

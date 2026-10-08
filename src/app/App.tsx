@@ -98,7 +98,7 @@ export function App({
   }, [])
 
   const slotsByScreen: Readonly<Record<string, ScreenSlots>> = {
-    mind: Mind(),
+    mind: Mind({ snapshot }),
     world: World(),
     life: Life(),
     workforce: Workforce(),

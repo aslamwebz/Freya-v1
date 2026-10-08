@@ -21,10 +21,15 @@ import type { UiSnapshot } from '../../../src/ui-v2/state/contract'
  * honest floor for them: it catches a screen that throws on render without
  * pretending to verify its design.
  *
- * Settings is not one of those. It reads a live snapshot, so it is mounted against
- * the state a window is actually in when no Core is attached — every resource
- * `unavailable` — which is the case most likely to throw, since it is the branch
- * that renders reasons instead of data.
+ * Mind is no longer one of those. It reads a live projection, so it is mounted
+ * against the state a window is actually in when no Core is attached — every
+ * resource `unavailable` — which is the case most likely to throw, since it is
+ * the branch that renders reasons instead of data. A screen that only ever
+ * renders its happy path cannot be smoke-tested this way, and this is the path
+ * a real desktop window spends most of its life on.
+ *
+ * Settings is not one of those either. It reads a live snapshot, so it is
+ * mounted the same way.
  */
 
 afterEach(cleanup)
@@ -34,7 +39,6 @@ function Slots({ slots }: { slots: ScreenSlots }) {
 }
 
 const SCREENS: readonly (readonly [string, () => ScreenSlots])[] = [
-  ['Mind', Mind],
   ['World', World],
   ['Life', Life],
   ['Workforce', Workforce],
@@ -53,6 +57,7 @@ const NO_CORE = {
   workforce: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
   activity: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
   attention: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
+  mind: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
   provider: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' },
 } as unknown as UiSnapshot
 
@@ -63,6 +68,14 @@ describe('app tab screens', () => {
       expect((container.textContent ?? '').trim().length).toBeGreaterThan(0)
     })
   }
+
+  it('mounts Mind with content when no Core is reachable', () => {
+    const { container } = render(<Slots slots={Mind({ snapshot: NO_CORE })} />)
+    const text = (container.textContent ?? '').trim()
+    expect(text.length).toBeGreaterThan(0)
+    // It says so rather than showing a healthy-looking zero.
+    expect(container.querySelector('.m-provenance')?.getAttribute('data-state')).toBe('unavailable')
+  })
 
   it('mounts Settings with content when no Core is reachable', () => {
     const preferences = new PreferencesStore()

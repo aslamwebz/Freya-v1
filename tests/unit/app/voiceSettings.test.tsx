@@ -89,7 +89,7 @@ describe('the microphone switch', () => {
     fireEvent.click(screen.getByRole('button', { name: /voice/i }))
     const row = screen.getByRole('checkbox', { name: /microphone/i }) as HTMLInputElement
     expect(row.checked).toBe(false)
-    expect(screen.getByText(/Freya cannot hear anything until you turn this on/i)).toBeTruthy()
+    expect(screen.getByText(/Freya cannot listen until you turn this on/i)).toBeTruthy()
   })
 
   it('says it is on, and says that only a press opens the device', () => {
@@ -98,7 +98,7 @@ describe('the microphone switch', () => {
     fireEvent.click(screen.getByRole('button', { name: /voice/i }))
     const row = screen.getByRole('checkbox', { name: /microphone/i }) as HTMLInputElement
     expect(row.checked).toBe(true)
-    expect(screen.getByText(/Push-to-talk records only while pressed/i)).toBeTruthy()
+    expect(screen.getByText(/Freya only listens between a press and its release/i)).toBeTruthy()
   })
 })
 

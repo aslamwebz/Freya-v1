@@ -1,9 +1,35 @@
-import type { ActivityRow, AttentionView, CoreView, HomeView, MissionView, ProviderView, Resource, UiAdapter, UiSnapshot, WorkforceView } from './contract'
+import type {
+  ActivityRow,
+  AttentionView,
+  CoreView,
+  HomeView,
+  MindAttentionCounts,
+  MindMissionView,
+  MindOverviewView,
+  MindProviderView,
+  MindSelfView,
+  MindThreadView,
+  MindView,
+  MissionView,
+  ProviderView,
+  Resource,
+  UiAdapter,
+  UiSnapshot,
+  WorkforceView,
+} from './contract'
 import { coreMirror } from '../../platform/coreClient'
 import { missionMirror } from '../../platform/missionClient'
 import { workforceMirror } from '../../platform/workforceClient'
 import { attentionMirror } from '../../platform/attentionClient'
+import { brainMirror } from '../../platform/brainClient'
+import { workMirror } from '../../platform/workClient'
+import { personalityMirror } from '../../platform/personalityClient'
+import { contextMirror } from '../../platform/contextClient'
+import { consciousnessMirror } from '../../platform/consciousnessClient'
+import { worldMirror } from '../../platform/worldClient'
+import { selfMirror } from '../../platform/selfClient'
 import { hostBridge, type ProviderConfigView } from '../../platform/host'
+import { ABSENT_CONSCIOUS_CONTEXT_PROJECTION } from '../../../core/protocol/consciousness'
 import { checkProviderBaseUrl } from '../../../core/model/provider-endpoint'
 
 /**
@@ -46,6 +72,56 @@ function lifecycleWords(lifecycle: string): string {
 
 function countPhrase(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`
+}
+
+/**
+ * The run statuses that are not live and not finished.
+ *
+ * A local closed list rather than an import from `core/work/types`, and the
+ * reason is the one every other rule in this file gives: the renderer's
+ * vocabulary should not have to know the domain's state machine to render it.
+ * Core has already told us which runs occupy the engine through `live`; this
+ * list only decides which of the *historical* ones are still worth calling
+ * "in progress".
+ */
+const OPEN_RUN_STATUSES: readonly string[] = ['queued', 'waiting', 'paused']
+
+/**
+ * The one mode word, derived in one place from facts Core already reports.
+ *
+ * Ordered by how much the condition matters, so that two surfaces reading it
+ * cannot disagree. A latched STOP ALL outranks a Core that is not reachable,
+ * which outranks a faulted one, which outranks real work — because a person
+ * reading a dashboard has to see the panic button before anything else.
+ */
+function mindMode(core: CoreView): { mode: MindOverviewView['mode']; detail: string } {
+  if (core.stopped) {
+    return {
+      mode: 'stopped',
+      detail: 'STOP ALL is latched. Core refuses new cognition until the owner resumes.',
+    }
+  }
+  if (!core.operational) {
+    return {
+      mode: 'unavailable',
+      detail: `Core is not serving commands (${core.lifecycle}). Nothing here is live.`,
+    }
+  }
+  if (core.faultCount > 0 || core.integrity !== 'ok') {
+    return {
+      mode: 'uncertain',
+      detail: core.faultCount > 0
+        ? `${countPhrase(core.faultCount, 'fault')} recorded, so this projection may be incomplete.`
+        : `The journal reads ${core.integrity}; folded state may be incomplete.`,
+    }
+  }
+  if (core.activeRequests > 0) {
+    return {
+      mode: 'working',
+      detail: `${countPhrase(core.activeRequests, 'provider request')} executing right now.`,
+    }
+  }
+  return { mode: 'idle', detail: 'Nothing is executing. Core is up and listening.' }
 }
 
 /**
@@ -115,11 +191,15 @@ export function createLiveAdapter(): LiveAdapter {
   const noCore = <T,>(): Resource<T> => ({ status: 'unavailable', reason: NO_CORE_REASON })
   const absent: UiSnapshot = {
     home: noCore(), core: noCore(), mission: noCore(),
-    workforce: noCore(), activity: noCore(), attention: noCore(), provider: noCore(),
+    workforce: noCore(), activity: noCore(), attention: noCore(),
+    mind: noCore(), provider: noCore(),
   }
 
   let snapshot: UiSnapshot = available
-    ? { home: LOADING, core: LOADING, mission: LOADING, workforce: LOADING, activity: LOADING, attention: LOADING, provider: LOADING }
+    ? {
+        home: LOADING, core: LOADING, mission: LOADING, workforce: LOADING,
+        activity: LOADING, attention: LOADING, mind: LOADING, provider: LOADING,
+      }
     : absent
   const listeners = new Set<() => void>()
 
@@ -171,10 +251,36 @@ export function createLiveAdapter(): LiveAdapter {
         diagnosticsPath: status.diagnostics.path,
         diagnosticsWriteFailures: status.diagnostics.writeFailures,
         faults: status.faults,
+        // `unknown` is not `deny_all`: a Core that has not finished booting has
+        // no answer, and reporting "denying everything" there would claim a
+        // stop latch that may well not be set.
+        governorStatus: status.governor.status,
+        grantsActive: status.governor.grantsActive,
         sessionUsage: status.sessionUsage,
         durableUsage: status.durableUsage,
       },
     }
+  }
+
+  /**
+   * The provider rows the Mind may print.
+   *
+   * A shape and a state, never a credential: `detail` is the provider's own
+   * sentence, `model` is the name it would serve, and there is no field here a
+   * key could occupy. Reported because "which provider would answer, and is it
+   * allowed to" is an operator question, not because a window may choose one.
+   */
+  const coreViewProviders = (): readonly MindProviderView[] => {
+    const status = coreMirror().status
+    if (!status) return []
+    return status.providers.map((provider) => ({
+      id: provider.id,
+      kind: provider.kind,
+      status: provider.status,
+      model: provider.model,
+      liveEnabled: provider.liveEnabled,
+      detail: provider.detail,
+    }))
   }
 
   const missionView = (): Resource<MissionView> => {
@@ -260,6 +366,433 @@ export function createLiveAdapter(): LiveAdapter {
   }
 
   /**
+   * The Mind projection.
+   *
+   * Built from the mirrors Core already publishes, and from nowhere else. Three
+   * rules, the same three every other view in this file is written around:
+   *
+   * 1. **Report only what a projection carries.** Every field below is copied
+   *    out of a Core projection. Nothing is inferred, smoothed, defaulted into
+   *    a trait, or back-filled from the preview fixtures.
+   * 2. **Absence is a state, not a gap.** A section Core has not built arrives
+   *    as `unavailable` with Core's own reason, named in `absentSections`, so a
+   *    surface can say "not projected" rather than drawing an empty list that
+   *    reads as "nothing there".
+   * 3. **No hidden reasoning crosses.** There is no thought, no monologue, no
+   *    prompt and no model output anywhere in this shape. What a window sees is
+   *    Core's own account of itself: what it is doing, what it is holding, what
+   *    it could not settle, and which subsystem said so.
+   *
+   * It is *not* gated on the conscious context. A Core that has not reported
+   * one still has a lifecycle, a Brain, a Work engine and a workforce, and a
+   * Mind that showed nothing until Phase 20's snapshot arrived would be a Mind
+   * that lied about how little it knows.
+   */
+  const mindAttentionView = (): MindView['attention'] => {
+    const projection = attention.projection
+    if (!projection) {
+      return {
+        health: 'unavailable',
+        reason: 'Core has not reported an Attention domain yet',
+        focus: 'unknown',
+        counts: null,
+        inboxCount: 0,
+        lastDecision: null,
+      }
+    }
+    if (projection.health !== 'ready') {
+      return {
+        health: 'unavailable',
+        reason: projection.reason ?? 'the Attention domain is not reporting',
+        focus: projection.focus,
+        counts: null,
+        inboxCount: 0,
+        lastDecision: null,
+      }
+    }
+    const counts: MindAttentionCounts = {
+      ingested: projection.counts.ingested,
+      decisions: projection.counts.decisions,
+      doNothing: projection.counts.doNothing,
+      remembered: projection.counts.remembered,
+      cued: projection.counts.cued,
+      spoke: projection.counts.spoke,
+      interrupted: projection.counts.interrupted,
+      budgetExceeded: projection.counts.budgetExceeded,
+    }
+    const last = projection.lastDecision
+    return {
+      health: 'ready',
+      reason: null,
+      // Core's own closed `FocusState`. Never a percentage: there is no
+      // denominator anywhere in the codebase for one.
+      focus: projection.focus,
+      counts,
+      // Metadata only. The event's text stays in Core and comes back only from
+      // an explicit `attention.inbox.read`, which no standing feed performs.
+      inboxCount: projection.inbox.length,
+      lastDecision: last === null
+        ? null
+        : {
+            source: last.source,
+            kind: last.kind,
+            outcome: last.outcome,
+            importance: last.importance,
+            urgency: last.urgency,
+            reason: last.reason,
+            decidedAt: last.decidedAt,
+          },
+    }
+  }
+
+  const mindSelfView = (): MindSelfView => {
+    const brain = brainMirror().projection
+    const conscious = consciousnessMirror().projection ?? ABSENT_CONSCIOUS_CONTEXT_PROJECTION
+    const world = worldMirror().projection
+    const self = selfMirror()
+
+    const claims = brain?.identity?.claims ?? []
+    const capabilities = brain?.self?.capabilities ?? []
+    const limitations = brain?.self?.limitations ?? []
+
+    const worldView = world === null
+      ? null
+      : world.health !== 'ready'
+        ? {
+            health: 'unavailable' as const,
+            reason: world.reason ?? 'Core has not reported a world model yet',
+            entities: 0,
+            edges: 0,
+            evidenceRecords: 0,
+            withdrawn: 0,
+            conflicts: 0,
+            beliefs: 0,
+            uncertainties: 0,
+            withheld: 0,
+            durable: world.persistence.durable,
+          }
+        : {
+            health: 'ready' as const,
+            reason: null,
+            entities: world.counts.entities,
+            edges: world.counts.edges,
+            evidenceRecords: world.counts.evidenceRecords,
+            withdrawn: world.counts.withdrawnRecords,
+            conflicts: world.counts.conflicts,
+            beliefs: world.counts.beliefs,
+            uncertainties: world.uncertainties.total,
+            withheld: world.counts.withheld,
+            durable: world.persistence.durable,
+          }
+
+    const model = self.self
+    const worldSelf = model === null
+      ? null
+      : {
+          source: 'world.self.status.read',
+          assignedCapabilities: model.assignedCapabilities.items.map((item) => ({
+            capability: item.capability,
+            held: item.held,
+          })),
+          knownSkills: model.knownSkills.items.map((item) => ({
+            name: item.name,
+            status: item.status,
+            verification: item.verification,
+          })),
+          models: model.modelIdentity.items.map((item) => ({
+            providerId: item.providerId,
+            kind: item.kind,
+            live: item.live,
+          })),
+          workerClaims: model.workerClaims.items.map((item) => ({
+            workerId: item.workerId,
+            claimKind: item.claimKind,
+            decision: item.decision,
+          })),
+          separation: { ...model.separation },
+          readAt: self.readAt,
+        }
+
+    return {
+      // Core's own fixed statements about itself, mirrored through whichever
+      // projection reported them first. Never a temperament reading and never
+      // a trait percentage.
+      name: conscious.self.name ?? brain?.identity?.name ?? null,
+      role: conscious.self.role ?? brain?.identity?.role ?? null,
+      purpose: conscious.self.purpose ?? brain?.identity?.purpose ?? null,
+      claimCount: conscious.self.claimCount > 0 ? conscious.self.claimCount : claims.length,
+      complete: brain?.self?.complete ?? conscious.self.complete,
+      claims: claims.map((claim) => ({ claimId: claim.claimId, statement: claim.statement })),
+      capabilities: capabilities.map((capability) => ({
+        capability: capability.capability,
+        state: capability.state,
+        cannot: [...capability.cannot],
+      })),
+      limitations: limitations.map((limitation) => ({
+        limitationId: limitation.limitationId,
+        statement: limitation.statement,
+      })),
+      durable: brain?.durable === true,
+      reason: brain?.reason ?? null,
+      world: worldView,
+      worldSelf,
+    }
+  }
+
+  const mindMissionsView = (): { rows: readonly MindMissionView[]; total: number; hidden: number } => {
+    const projection = missions.projection
+    if (!projection) return { rows: [], total: 0, hidden: 0 }
+    return {
+      rows: projection.missions.map((mission) => ({
+        id: mission.missionId,
+        status: mission.status,
+        priority: mission.priority,
+        needsAttention: mission.needsAttention,
+        awaitingOwner: mission.awaitingOwner,
+        totalRuns: mission.counts.total,
+        verifiedRuns: mission.counts.verified,
+        nextDecision: mission.nextAction?.decision ?? null,
+        nextReason: mission.nextAction?.reason ?? null,
+        blockers: [...mission.blockers],
+      })),
+      total: projection.missionsTotal,
+      hidden: projection.missionsHidden,
+    }
+  }
+
+  const mindThreadsView = (): readonly MindThreadView[] => {
+    const threads: MindThreadView[] = []
+    const work = workMirror().projection
+    if (work && work.health === 'ready') {
+      for (const run of work.runs) {
+        // `live` is the engine's own process fact. A run the journal says was
+        // executing when the process died is not one, and Core has already
+        // settled it as failed rather than leaving it looking busy.
+        if (run.live !== true && !OPEN_RUN_STATUSES.includes(run.status)) continue
+        threads.push({
+          id: run.runId,
+          kind: 'run',
+          status: run.status,
+          detail: run.limitHit !== null
+            ? `a ceiling was hit: ${run.limitHit}`
+            : run.waitingOn !== null
+              ? `waiting on ${run.waitingOn}`
+              : null,
+          live: run.live === true,
+        })
+      }
+      for (const approval of work.approvals) {
+        if (approval.status !== 'pending') continue
+        threads.push({
+          id: approval.approvalId,
+          kind: 'approval',
+          status: approval.status,
+          detail: `${approval.capability} · risk ${approval.risk}`,
+          // Durable state, not a process fact: an approval nobody has answered
+          // is waiting, not executing.
+          live: false,
+        })
+      }
+    }
+    const mission = missions.projection
+    if (mission) {
+      for (const row of mission.missions) {
+        if (row.status !== 'active') continue
+        threads.push({
+          id: row.missionId,
+          kind: 'mission',
+          status: row.status,
+          detail: row.needsAttention ? 'needs attention' : null,
+          live: false,
+        })
+      }
+    }
+    const workforce = workforceMirror().projection
+    if (workforce && workforce.health === 'ready') {
+      for (const worker of workforce.workers) {
+        const active = worker.concurrency?.active ?? 0
+        if (active <= 0) continue
+        threads.push({
+          id: worker.workerId,
+          kind: 'worker',
+          status: worker.state,
+          detail: worker.assignment?.label ?? null,
+          live: active > 0,
+        })
+      }
+    }
+    // Deterministic order, so two windows render the same list in the same
+    // order and a test can assert on one.
+    return threads.sort((left, right) =>
+      left.kind === right.kind
+        ? left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+        : left.kind < right.kind ? -1 : 1,
+    )
+  }
+
+  const mindOwnerView = (): MindView['owner'] => {
+    const personality = personalityMirror().projection
+    const context = contextMirror().projection
+    return {
+      personalityHealth: personality === null
+        ? 'unavailable'
+        : personality.health === 'ready' ? 'ready' : 'unavailable',
+      personalityReason: personality === null
+        ? 'Core has not reported a Personality projection yet'
+        : personality.reason,
+      // The safe, checkable dimensions Core computed for this moment. Null when
+      // Core has not interpreted it — never a default mood.
+      continuity: personality?.interpretation?.continuity ?? null,
+      formality: personality?.interpretation?.formality ?? null,
+      // Freya's standing temperament. Closed vocabularies at both ends, so a
+      // row here is a word Core chose rather than a trait this UI measured.
+      temperament: (personality?.temperament?.dimensions ?? []).map((row) => ({
+        dimension: row.dimension,
+        level: row.level,
+      })),
+      relationshipItems: personality?.counts.items ?? 0,
+      admittedItems: personality?.interpretation?.admittedItems ?? personality?.counts.admitted ?? 0,
+      cuesAdmitted: personality?.counts.cuesAdmitted ?? 0,
+      // A durability answer from a domain that is not reporting is a default,
+      // not a measurement: "no store exists" is not the fact "a store exists
+      // and would not survive a restart". Null says not projected, which is
+      // what the surface renders as an em dash.
+      relationshipDurable: personality?.health === 'ready' ? (personality.persistence.durable ?? null) : null,
+      contextHealth: context === null
+        ? 'unavailable'
+        : context.health === 'ready' ? 'ready' : 'unavailable',
+      contextReason: context === null
+        ? 'Core has not reported a Context projection yet'
+        : context.reason,
+      // Metadata and counts. No item's content, label or uri crosses, and
+      // nothing here is a record of what the owner shared. The scope is Core's
+      // own word for where the live items sit, taken from those items — the
+      // window's Context projection carries no active-scope field, so nothing
+      // is inferred into one.
+      contextItems: context?.counts.items ?? 0,
+      contextCurrent: context?.counts.current ?? 0,
+      contextScopes: [...new Set(
+        (context?.items ?? [])
+          .filter((item) => item.state === 'current' && item.scope !== null)
+          .map((item) => item.scope!.label),
+      )],
+      contextUnresolvedReferences: context?.counts.unresolvedReferences ?? 0,
+      // Same rule as relationship durability: an unreported domain has no
+      // measurement to pass on, so it projects nothing rather than a default.
+      contextDurable: context?.health === 'ready' ? (context.persistence?.durable ?? null) : null,
+    }
+  }
+
+  const mindView = (): Resource<MindView> => {
+    const coreResource = coreView()
+    if (coreResource.status !== 'ready' && coreResource.status !== 'stale') return coreResource
+    const core = (coreResource as { readonly data: CoreView }).data
+    const mode = mindMode(core)
+    const conscious = consciousnessMirror().projection ?? ABSENT_CONSCIOUS_CONTEXT_PROJECTION
+
+    const providers: readonly MindProviderView[] = coreViewProviders()
+    const missions = mindMissionsView()
+
+    return {
+      status: 'ready',
+      source: 'live',
+      data: {
+        overview: {
+          lifecycle: core.lifecycle,
+          operational: core.operational,
+          stopped: core.stopped,
+          governorStatus: core.governorStatus,
+          grantsActive: core.grantsActive,
+          activeProviderCalls: core.activeRequests,
+          journalIntegrity: core.integrity,
+          persistenceMode: core.persistenceMode,
+          persistenceReason: core.persistenceReason,
+          faults: core.faults,
+          sequence: core.sequence,
+          mode: mode.mode,
+          modeDetail: mode.detail,
+          providers,
+          sessionCalls: core.sessionUsage?.calls ?? 0,
+          sessionInputTokens: core.sessionUsage?.inputTokens ?? null,
+          sessionOutputTokens: core.sessionUsage?.outputTokens ?? null,
+          sessionUnknownUsageCalls: core.sessionUsage?.unknownUsageCalls ?? 0,
+        },
+        threads: mindThreadsView(),
+        attention: mindAttentionView(),
+        self: mindSelfView(),
+        missions: missions.rows,
+        missionsTotal: missions.total,
+        missionsHidden: missions.hidden,
+        owner: mindOwnerView(),
+        // A closed code and a subject, never a sentence about what Freya is
+        // worried about. An inference wearing the same clothes as a fact is the
+        // one thing this list must never be.
+        uncertainties: conscious.uncertainty.items.map((item) => ({
+          code: item.code,
+          subjectKind: item.subjectKind,
+          subjectId: item.subjectId,
+          since: item.since,
+        })),
+        uncertaintiesOmitted: conscious.uncertainty.omitted,
+        nextActions: conscious.nextActions.items.map((item) => ({
+          scope: item.scope,
+          subjectId: item.subjectId,
+          action: item.action,
+        })),
+        recentChanges: conscious.recentChanges.items.map((item) => ({
+          id: item.id,
+          kind: item.kind,
+          sequence: item.sequence,
+          at: item.at,
+          tone: item.tone,
+        })),
+        waiting: {
+          pendingApprovals: conscious.waiting.pendingApprovals,
+          waitingRuns: conscious.waiting.waitingRuns.map((run) => ({
+            runId: run.runId,
+            status: run.status,
+            waitingSince: run.waitingSince,
+          })),
+          blockedAgents: conscious.waiting.blockedAgents.map((agent) => ({
+            workerId: agent.workerId,
+            status: agent.status,
+          })),
+          unfulfilledPresenceRequests: conscious.waiting.unfulfilledPresenceRequests.length,
+        },
+        provenance: {
+          basis: conscious.provenance.basis,
+          freshness: conscious.provenance.freshness,
+          asOf: conscious.provenance.asOf,
+          sources: conscious.provenance.sources.map((source) => ({
+            domain: source.domain,
+            basis: source.basis,
+            freshness: source.freshness,
+            durable: source.durable,
+            note: source.note,
+          })),
+        },
+        consciousHealth: conscious.health,
+        consciousReason: conscious.reason,
+        absentSections: [
+          ['self', conscious.self.state === 'absent'],
+          ['posture', conscious.posture.state === 'absent'],
+          ['focus', conscious.focus.state === 'absent'],
+          ['attention', conscious.attention.state === 'absent'],
+          ['waiting', conscious.waiting.state === 'absent'],
+          ['agents', conscious.agents.state === 'absent'],
+          ['practice', conscious.practice.state === 'absent'],
+          ['world', conscious.world.state === 'absent'],
+          ['life', conscious.life.state === 'absent'],
+          ['continuity', conscious.continuity.state === 'absent'],
+          ['recent changes', conscious.recentChanges.state === 'absent'],
+          ['uncertainty', conscious.uncertainty.state === 'absent'],
+          ['next actions', conscious.nextActions.state === 'absent'],
+        ].filter((row): row is [string, true] => row[1] === true).map(([name]) => name),
+      },
+    }
+  }
+
+  /**
    * Home is assembled only from what the domains actually reported.
    *
    * The composite is the one place a UI is most tempted to stitch several partial
@@ -335,6 +868,7 @@ export function createLiveAdapter(): LiveAdapter {
       workforce: workforceView(),
       activity: activityView(),
       attention: attentionView(),
+      mind: mindView(),
       provider: providerResource,
     }
     // A new object each pass would re-render every subscriber on every Core push, so
@@ -342,9 +876,33 @@ export function createLiveAdapter(): LiveAdapter {
     if (shallowEqual(next, snapshot)) return
     snapshot = next
     for (const listener of [...listeners]) listener()
+    // The one-shot self read rides the transition Core already publishes, so a
+    // Core that becomes operational a moment after the window attached still
+    // gets its compartments filled — exactly once, and never on a timer.
+    if (available) void readSelfModel()
   }
 
   const disposers: (() => void)[] = []
+
+  /**
+   * The self model has no push channel, by Core's own design — see
+   * `selfClient`. So it is read once, and the Mind says when it was read rather
+   * than implying the reading is current.
+   *
+   * The read waits for a Core that reports itself operational, because an
+   * attach that races boot would otherwise ask a Core that is not up yet and
+   * leave the compartment permanently blank on a machine where Core comes up a
+   * second later. That is a bounded wait on a transition Core already
+   * publishes, not a poll: exactly one read happens per window.
+   */
+  let selfReadSettled = false
+  const readSelfModel = async (): Promise<void> => {
+    if (selfReadSettled) return
+    const status = coreMirror().status
+    if (status === null || !status.operational) return
+    selfReadSettled = true
+    await selfMirror().read()
+  }
 
   return {
     getSnapshot: () => snapshot,
@@ -368,10 +926,29 @@ export function createLiveAdapter(): LiveAdapter {
       disposers.push(workforce.subscribe(derive))
       disposers.push(await attention.attach())
       disposers.push(attention.subscribe(derive))
+      // The Mind's own lanes: the unified conscious context, the world summary,
+      // and the Brain and Work projections the Mind composes its threads and
+      // self model from. Each is a read plus a follow and nothing else.
+      disposers.push(await consciousnessMirror().attach())
+      disposers.push(consciousnessMirror().subscribe(derive))
+      disposers.push(await worldMirror().attach())
+      disposers.push(worldMirror().subscribe(derive))
+      disposers.push(await brainMirror().attach())
+      disposers.push(brainMirror().subscribe(derive))
+      disposers.push(await workMirror().attach())
+      disposers.push(workMirror().subscribe(derive))
+      disposers.push(await personalityMirror().attach())
+      disposers.push(personalityMirror().subscribe(derive))
+      disposers.push(await contextMirror().attach())
+      disposers.push(contextMirror().subscribe(derive))
+      disposers.push(selfMirror().subscribe(derive))
       derive()
       // The provider is a read, not a subscription: one backstop read per attach, and
       // the Settings surface re-reads it directly when a save lands.
-      if (available) void refreshProvider()
+      if (available) {
+        void refreshProvider()
+        void readSelfModel()
+      }
       return () => {
         for (const dispose of disposers.splice(0)) dispose()
       }

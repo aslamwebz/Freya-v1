@@ -316,6 +316,7 @@ export function Chats({
                         onOpenLink={(url, provenance) => onBrowserOpenUrl(url, { kind: 'link', from: provenance?.kind === 'source' ? 'citation' : 'chat', ownerText: messages.slice(0, messageIndex).reverse().find((row) => row.role === 'user')?.content ?? '' })}
                         retrieved={message.media?.length ?? 0}
                         mediaCount={message.media?.length ?? 0}
+                        sources={message.sources}
                       >
                       </AssistantMessageView>
                     : <p className="chats-user-text">{message.content}</p>}

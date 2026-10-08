@@ -16,6 +16,7 @@ import type { ConversationPersistenceMode } from '../conversation/store'
 
 /** One rendered message. The full content, because this is the transcript. */
 import type { MediaItem } from '../media/types'
+import type { ToolSource } from '../mind/tools'
 export interface ConversationMessageView {
   messageId: string
   role: 'user' | 'assistant'
@@ -30,6 +31,14 @@ export interface ConversationMessageView {
    * reader must not treat "absent" as "empty" without saying which it means.
    */
   media?: readonly MediaItem[]
+  /**
+   * Web search sources behind this answer, as typed rows.
+   *
+   * The renderer splits this into "matched" (cited in the answer prose) and
+   * "related" (the rest of what the search returned) at draw time. Absent when
+   * the turn did not call the web search tool.
+   */
+  sources?: readonly ToolSource[]
 }
 
 export interface ConversationSummaryView {

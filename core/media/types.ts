@@ -13,11 +13,15 @@
  *  - `video` — something to play, *shown as a still*. A video card in a transcript
  *    that starts downloading and decoding the moment it renders is a card that costs
  *    bandwidth nobody asked for, in a surface nobody is reading yet.
+ *  - `audio` — something to listen to. Cards show a still only; the bytes are
+ *    fetched when the person asks, never while a transcript scrolls.
  *  - `document` — something to open. Not drawn inline at all: a document's first page
  *    is only a picture if the whole file has been fetched and rasterised, which is a
  *    cost worth paying when someone asks for it and not while a transcript scrolls.
+ *  - `page` — a web page found during a search. Rendered as a labelled card with
+ *    a one-line preview; the page itself opens in the docked browser on click.
  */
-export type MediaKind = 'image' | 'video' | 'document'
+export type MediaKind = 'image' | 'video' | 'audio' | 'document' | 'page'
 
 export interface MediaItem {
   readonly kind: MediaKind

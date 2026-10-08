@@ -25,6 +25,33 @@ export interface AssistantParts {
   /** Sources the footer listed, as `{ rank, title, url }` triples. Empty
    *  when the turn had no successful lookups. */
   readonly sources: readonly { rank: number; title: string; url: string }[]
+  /** The typed sources the Mind attached to this turn. When present, the
+   *  renderer prefers these over the footer-derived `sources` (which can
+   *  drift if the model omits or reorders a line). */
+  readonly typedSources?: readonly TypedSource[]
+  /** Ranks cited in the answer body, in the order they appear. Used to
+   *  split the typed sources into matched and related at render time. */
+  readonly citedRanks: readonly number[]
+  /** Sources the model actually cited in the answer body, derived from
+   *  `typedSources` by intersecting with `citedRanks`. */
+  readonly matchedSources: readonly TypedSource[]
+  /** Sources the search returned that the model did not cite, in the
+   *  order the search returned them. */
+  readonly relatedSources: readonly TypedSource[]
+}
+
+/** A typed web source, mirrored from the Core `ToolSource`. */
+export interface TypedSource {
+  readonly title: string
+  readonly url: string
+  readonly sourceDomain: string
+  readonly snippet: string
+  readonly rank: number
+  readonly retrievedAt: string | null
+  readonly mediaUrl?: string | null
+  readonly thumbnailUrl?: string | null
+  readonly vertical?: string
+  readonly duration?: string | null
 }
 
 const THINK_RE = /<think>([\s\S]*?)(?:<\/think>|$)/i
@@ -36,7 +63,10 @@ const SOURCE_LINE = /^\[(\d+)\]\s+(.+?)\s+—\s+(\S+)\s*$/
 // Same shape, but as an inline run inside a paragraph.
 const SOURCE_INLINE = /\[(\d+)\]\s+(.+?)\s+—\s+(https?:\/\/\S+)/g
 
-export function splitAssistantContent(content: string): AssistantParts {
+export function splitAssistantContent(
+  content: string,
+  typedSources?: readonly TypedSource[],
+): AssistantParts {
   let working = content
 
   // 1. Pull the <think>…</think> block, if present, out of the head.
@@ -107,5 +137,29 @@ export function splitAssistantContent(content: string): AssistantParts {
   let body = working.replace(/\n{3,}/g, '\n\n').trim()
   body = body.replace(/^[ \t]*—[ \t]*\n+/, '')
 
-  return { thinking, body, steps, sources }
+  // 4. Split the typed sources into "matched" (cited in the answer body) and
+  //    "related" (the rest of what the search returned). The rank marks in the
+  //    body are the model's contract: whatever it wrote `[N]` for, it intended
+  //    to cite; everything else came back from the search but did not make the
+  //    cut. Cited ranks are de-duplicated and ordered by first appearance so
+  //    the matched list reflects the answer, not the search order.
+  const citedRanksSet = new Set<number>()
+  const rankRe = /\[(\d+)\]/g
+  let m: RegExpExecArray | null
+  while ((m = rankRe.exec(body)) !== null) {
+    const n = Number(m[1] ?? '0')
+    if (Number.isFinite(n) && n > 0) citedRanksSet.add(n)
+  }
+  const citedRanks: number[] = [...citedRanksSet]
+  const matchedSources: TypedSource[] = []
+  const relatedSources: TypedSource[] = []
+  if (typedSources !== undefined) {
+    const matchedSet = new Set(citedRanks)
+    for (const source of typedSources) {
+      if (matchedSet.has(source.rank)) matchedSources.push(source)
+      else relatedSources.push(source)
+    }
+  }
+
+  return { thinking, body, steps, sources, typedSources, citedRanks, matchedSources, relatedSources }
 }

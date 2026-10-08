@@ -29,6 +29,7 @@
  * Conversation Service, not in a type the renderer can satisfy with a string.
  */
 import type { MediaItem } from '../media/types'
+import type { ToolSource } from '../mind/tools'
 export type MessageRole = 'user' | 'assistant'
 
 export interface ConversationMessage {
@@ -47,6 +48,17 @@ export interface ConversationMessage {
    * fabrication. Absent on a turn that looked nothing up, which is most turns.
    */
   media?: readonly MediaItem[]
+  /**
+   * Web search results behind this answer, as typed sources.
+   *
+   * Distinguished from `media` because the renderer treats them differently: media
+   * becomes cards, sources become citations. Both travel beside the prose for the
+   * same reason — the journal keeps the literal model text for audit, but the
+   * renderer never re-parses the prose to find structure. The renderer splits this
+   * list into "matched" (cited in the answer body) and "related" (the rest of what
+   * the search returned) at render time.
+   */
+  sources?: readonly ToolSource[]
 }
 
 export interface Conversation {

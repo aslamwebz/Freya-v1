@@ -31,3 +31,7 @@ artifacts/acceptance.env
 
 # Installed local speech binaries and models.
 .local/
+
+.kilo/live-test/
+.kilo/live-test/**
+

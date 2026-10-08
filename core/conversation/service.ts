@@ -1,5 +1,6 @@
 import type { ModelAttachment } from '../model/provider'
 import type { MediaItem } from '../media/types'
+import type { ToolSource } from '../mind/tools'
 import type { TurnIntentHints } from '../mind/tool-intent'
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
@@ -467,6 +468,7 @@ function toMessageView(message: {
   createdAt: string
   turnId: string
   media?: readonly MediaItem[]
+  sources?: readonly ToolSource[]
 }): ConversationMessageView {
   return {
     messageId: message.messageId,
@@ -478,6 +480,7 @@ function toMessageView(message: {
     // "no lookup found anything" and "a lookup found an empty list" stay distinct all
     // the way to the renderer.
     ...(message.media === undefined || message.media.length === 0 ? {} : { media: message.media }),
+    ...(message.sources === undefined || message.sources.length === 0 ? {} : { sources: message.sources }),
   }
 }
 

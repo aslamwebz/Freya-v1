@@ -789,3 +789,16 @@
 .f-assistant-steps > summary::marker { content:''; }
 .f-assistant-steps > ul { margin:6px 0 0; padding-left:18px; }
 .f-assistant-steps li { margin:2px 0; }
+
+.f-assistant-related { color:#7c93a8; font-size:11px; }
+.f-assistant-related > summary {
+  cursor:pointer; list-style:none; user-select:none;
+  display:inline-flex; align-items:center; gap:6px;
+  padding:3px 10px; border-radius:999px;
+  background:rgba(28,38,50,0.45);
+  border:1px solid #1f2c3b55;
+  color:#a4b9cc;
+}
+.f-assistant-related > summary::-webkit-details-marker { display:none; }
+.f-assistant-related > summary::marker { content:''; }
+.f-assistant-related-list { margin-top:8px; max-height:240px; overflow:auto; }

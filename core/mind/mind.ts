@@ -37,6 +37,7 @@ import { initialToolRequestForOwnerText, type TurnIntentHints } from './tool-int
 import { MIND_TOOL_LIMITS, renderToolFooter, type MindToolRegistry, type ToolObservation } from './tools'
 import { mediaFromObservations } from '../media/collect'
 import type { MediaItem } from '../media/types'
+import type { ToolSource } from './tools'
 
 /**
  * The Mind.
@@ -513,6 +514,32 @@ export interface OwnerMessageEvent {
 function mediaField(observations: readonly ToolObservation[]): { media?: readonly MediaItem[] } {
   const media = mediaFromObservations(observations)
   return media.length === 0 ? {} : { media }
+}
+
+/**
+ * The web search sources behind this turn, as typed rows beside the prose.
+ *
+ * Every observation the tools returned contributes its `sources`; the list is
+ * flattened, de-duplicated by URL, and capped so an unusually rich search does
+ * not blow up the journal. The renderer splits it at draw time into "matched"
+ * (cited in the answer prose) and "related" (the rest of what came back).
+ *
+ * Returns an empty object — not an empty list — when nothing was found, so the
+ * field's absence stays distinct from "found an empty list".
+ */
+function sourcesField(observations: readonly ToolObservation[], cap: number): { sources?: readonly ToolSource[] } {
+  const seen = new Set<string>()
+  const collected: ToolSource[] = []
+  for (const observation of observations) {
+    if (observation.kind !== 'ok') continue
+    for (const source of observation.sources) {
+      if (collected.length >= cap) return { sources: collected }
+      if (seen.has(source.url)) continue
+      seen.add(source.url)
+      collected.push(source)
+    }
+  }
+  return collected.length === 0 ? {} : { sources: collected }
 }
 
 export class MindService {
@@ -1003,6 +1030,7 @@ export class MindService {
         // What the lookups really returned, kept as typed items beside the prose. The
         // answer is the model's account of the search; this is the search.
         ...mediaField(cognition.steps.map((iteration) => iteration.observation)),
+        ...sourcesField(cognition.steps.map((iteration) => iteration.observation), 100),
       }
       try {
         await this.store.appendMessage(assistantMessage)
@@ -1290,6 +1318,7 @@ export class MindService {
       turnId: turn.turnId,
       // A cut-off answer still looked things up, and the cards it earned are still real.
       ...mediaField(cognition.steps.map((iteration) => iteration.observation)),
+      ...sourcesField(cognition.steps.map((iteration) => iteration.observation), 100),
     }
 
     try {

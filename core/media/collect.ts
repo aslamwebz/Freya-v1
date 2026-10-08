@@ -29,12 +29,15 @@ function kindFor(vertical: string | undefined, mediaUrl: string): MediaItem['kin
   if (vertical === 'images') return 'image'
   if (vertical === 'videos') return 'video'
   if (vertical === 'documents') return 'document'
+  if (vertical === 'audio') return 'audio'
+  if (vertical === 'pages') return 'page'
   // No vertical recorded: infer only from what the address itself claims, and only
   // for the extensions that are unambiguous. Anything else stays out, because a card
   // of the wrong kind is worse than no card.
   const path = safePath(mediaUrl)
   if (/\.(png|jpe?g|gif|webp|avif)$/i.test(path)) return 'image'
   if (/\.(mp4|webm|ogv|mov|m4v)$/i.test(path)) return 'video'
+  if (/\.(mp3|m4a|ogg|wav|flac)$/i.test(path)) return 'audio'
   if (/\.pdf$/i.test(path)) return 'document'
   return null
 }

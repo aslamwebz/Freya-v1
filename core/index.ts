@@ -635,6 +635,14 @@ export interface CoreOptions {
   /** Tightens the transcription deadline. Cannot raise it past the hard limit. */
   voiceTranscriptionTimeoutMs?: number
   voiceAttentionTimeoutMs?: () => number
+  /** Whether voice-submitted answers are read aloud after they are stored. */
+  voiceAutoSpeak?: boolean
+  /** Let deterministic Attention speak/interrupt decisions use Voice output. */
+  voiceProactiveAlerts?: boolean
+  /** Initial output mute from the persisted TTS provider preference. */
+  voiceMuted?: boolean
+  /** Bounded follow-up window after the wake phrase is heard. */
+  voiceFollowUpWindowMs?: number
   /** Overrides the conversation context budget. For tests. */
   contextBudget?: ContextBudget
   /**
@@ -2217,6 +2225,10 @@ class FreyaCore implements Core {
       captureSupported: this.options.voiceCaptureSupported ?? true,
       transcriptionTimeoutMs: this.options.voiceTranscriptionTimeoutMs,
       attentionTimeoutMs: this.options.voiceAttentionTimeoutMs,
+      autoSpeak: this.options.voiceAutoSpeak,
+      proactiveAlerts: this.options.voiceProactiveAlerts,
+      initialMuted: this.options.voiceMuted,
+      followUpWindowMs: this.options.voiceFollowUpWindowMs,
       interruptTurn: async () => {
         const active = (await this.conversations.projection()).activeTurn
         if (active) {
@@ -10097,6 +10109,7 @@ case 'forge.run': {
         autoSubmit: false,
         autoSpeak: false,
         attention: {
+          active: false,
           state: 'standby',
           wakePhrase: 'Freya',
           attentiveUntil: null,

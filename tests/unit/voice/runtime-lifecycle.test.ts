@@ -56,7 +56,7 @@ it('cancels a pending recognizer and suppresses its late transcript on disposal'
 it('ignores standby activity for interruption, interrupts active attention, and expires hands-free', async () => {
   let now = 0
   const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
-  const projection = absentVoiceProjection({ micEnabled: true, permission: 'granted', attention: { active: false } })
+  const projection = absentVoiceProjection({ micEnabled: true, permission: 'granted', attention: { active: false, state: 'standby', wakePhrase: 'Freya', attentiveUntil: null, followUpWindowMs: 45_000 } })
   projection.transcription.available = true
   projection.wake.armed = true
   projection.wake.maxArmedMs = 900_000
@@ -69,7 +69,7 @@ it('ignores standby activity for interruption, interrupts active attention, and 
   const options = vi.mocked(openMicrophone).mock.calls.at(-1)![0]
   options.onSpeechStart?.()
   expect(mirror.interruptSpeaking).not.toHaveBeenCalled()
-  projection.attention = { active: true }
+  projection.attention = { active: true, state: 'attentive', wakePhrase: 'Freya', attentiveUntil: new Date(Date.now() + 45_000).toISOString(), followUpWindowMs: 45_000 }
   options.onSpeechStart?.()
   expect(mirror.interruptSpeaking).toHaveBeenCalledOnce()
   now = projection.wake.maxArmedMs + 1
@@ -93,7 +93,7 @@ it('refreshes confirmed standby without starting a transcription capture, then p
   await runtime.armWake()
   expect(start).not.toHaveBeenCalled()
   expect(vi.mocked(openMicrophone).mock.calls.at(-1)![0].standby).toBe(true)
-  projection.attention = { active: true }
+  projection.attention = { active: true, state: 'attentive', wakePhrase: 'Freya', attentiveUntil: new Date(Date.now() + 45_000).toISOString(), followUpWindowMs: 45_000 }
   await (runtime as unknown as { pump(): Promise<void> }).pump()
   expect(start).toHaveBeenCalledOnce()
   await runtime.dispose()

@@ -24,7 +24,7 @@ afterEach(async () => {
 describe('VoiceConfigStore', () => {
   it('defaults to a separate NanoGPT voice configuration without enabling remote audio', async () => {
     const store = new VoiceConfigStore(path)
-    const value = await store.read()
+    const value = await store.readLegacy()
 
     expect(value).toEqual(DEFAULT_VOICE_CONFIG)
     expect(value.sttProvider).toBe('nanogpt')
@@ -37,7 +37,7 @@ describe('VoiceConfigStore', () => {
 
   it('persists only voice preferences and never a NanoGPT credential', async () => {
     const store = new VoiceConfigStore(path)
-    const saved = await store.write({
+    const saved = await store.writeLegacy({
       sttProvider: 'nanogpt',
       sttModel: 'Whisper-Large-V3',
       remoteSttEnabled: true,
@@ -57,7 +57,7 @@ describe('VoiceConfigStore', () => {
 
   it('translates the stored Voice choice into the narrow STT runtime config', async () => {
     const store = new VoiceConfigStore(path)
-    const saved = await store.write({
+    const saved = await store.writeLegacy({
       sttProvider: 'nanogpt',
       sttModel: 'Whisper-Large-V3',
       remoteSttEnabled: true,
@@ -73,6 +73,6 @@ describe('VoiceConfigStore', () => {
     const { writeFile } = await import('node:fs/promises')
     await writeFile(path, '{ definitely not json', 'utf8')
     const store = new VoiceConfigStore(path)
-    expect(await store.read()).toEqual(DEFAULT_VOICE_CONFIG)
+    expect(await store.readLegacy()).toEqual(DEFAULT_VOICE_CONFIG)
   })
 })

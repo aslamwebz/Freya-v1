@@ -62,12 +62,6 @@ export class MicrophoneError extends Error {
   }
 }
 
-/** Owner activation allows the initial device prompt; the probe retains no audio. */
-export async function requestMicrophonePermission(): Promise<void> {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-  releaseStream(stream)
-}
-
 /**
  * Ask the operating system for microphone access and release the probe
  * immediately. Core must already have opened its short-lived permission window;

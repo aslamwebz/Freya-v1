@@ -116,6 +116,14 @@ export interface VoiceServiceOptions {
   transcriptionTimeoutMs?: number
   attentionTimeoutMs?: () => number
   interruptTurn?: () => Promise<void>
+  /** Read completed voice turns aloud after they are stored. */
+  autoSpeak?: boolean
+  /** Bounded follow-up window after the wake phrase. */
+  followUpWindowMs?: number
+  /** Allow deterministic Attention speak/interrupt decisions to reach TTS. */
+  proactiveAlerts?: boolean
+  /** Initial persisted output mute. */
+  initialMuted?: boolean
 
   now?: () => Date
   newId?: () => string
@@ -228,7 +236,17 @@ export class VoiceService {
     this.timeoutMs = Math.max(1, Math.min(options.transcriptionTimeoutMs ?? VOICE_LIMITS.transcriptionTimeoutMs, VOICE_LIMITS.transcriptionTimeoutMs))
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => randomUUID())
-    this.attention = new VoiceAttention(() => this.now().getTime(), options.attentionTimeoutMs)
+    this.autoSpeak = options.autoSpeak ?? false
+    this.proactiveAlerts = options.proactiveAlerts ?? false
+    this.muted = options.initialMuted ?? false
+    this.attention = new VoiceAttention(
+      () => this.now().getTime(),
+      options.attentionTimeoutMs ?? (() => options.followUpWindowMs ?? DEFAULT_FOLLOW_UP_WINDOW_MS),
+    )
+    this.voiceAttention = new VoiceAttentionSession(
+      Math.max(5_000, Math.min(options.followUpWindowMs ?? DEFAULT_FOLLOW_UP_WINDOW_MS, 5 * 60_000)),
+      this.now,
+    )
     this.interruptTurn = options.interruptTurn
     // Derived, never assigned from outside: a build with no capture path starts
     // in `unsupported` and no command can talk it out of it.
@@ -666,7 +684,7 @@ export class VoiceService {
     }
 
     let bounded = clipText(text, VOICE_LIMITS.maxTranscriptCharacters)
-    if (bounded.length > 0 && this.wakeArmedAt !== null) {
+    if (bounded.length > 0 && this.wakeArmedAt !== null && session.activation !== 'wake') {
       const alreadyActive = this.attention.active
       const decision = this.attention.receive(bounded)
       if (decision.kind !== 'turn') {
@@ -684,7 +702,6 @@ export class VoiceService {
       await this.cancelSpeaking('the owner addressed Freya')
       bounded = decision.text
     }
-    const finalAt = this.now().toISOString()
     this.abort = null
 
     // A wake capture is still a completed capture. Record only bounded metadata
@@ -797,6 +814,7 @@ export class VoiceService {
 
     if (addressed.kind === 'standby') {
       this.voiceAttention.standby()
+      this.attention.close()
       await this.speakCue('standby-ack')
       this.publish()
       return {
@@ -1366,10 +1384,10 @@ export class VoiceService {
   /* ---------------------------------------------------------- projection */
 
   projection(): VoiceProjection {
+    const attentionActive = this.attention.active || this.voiceAttention.isAttentive()
     return {
       state: this.state,
       micEnabled: this.micEnabled,
-      attention: { active: this.attention.active },
       permission: this.permission,
       permissionRequestOpen:
         this.permissionRequestUntilMs !== null && this.now().getTime() < this.permissionRequestUntilMs,
@@ -1408,10 +1426,11 @@ export class VoiceService {
       autoSubmit: this.autoSubmit,
       autoSpeak: this.autoSpeak,
       attention: {
-        state: this.voiceAttention.state,
+        active: attentionActive,
+        state: attentionActive ? 'attentive' : 'standby',
         wakePhrase: DEFAULT_WAKE_PHRASE,
-        attentiveUntil: this.voiceAttention.attentiveUntil,
-        followUpWindowMs: this.voiceAttention.windowMs,
+        attentiveUntil: this.voiceAttention.attentiveUntil ?? this.attention.attentiveUntil,
+        followUpWindowMs: Math.max(this.voiceAttention.windowMs, this.attention.windowMs),
       },
       wake: {
         armed: this.wakeArmedAt !== null,

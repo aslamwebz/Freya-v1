@@ -155,7 +155,6 @@ export interface ConversationProjection {
  * host-side matter and does not cross.
  */
 export interface VoiceProjection {
-  attention?: { active: boolean }
   /** The machine's actual position. Never inferred by the renderer. */
   state: VoiceStateView
   /** Whether the owner has turned the microphone on. False from construction. */
@@ -213,6 +212,7 @@ export interface VoiceProjection {
    * standby; the follow-up window only exists after the wake phrase was heard.
    */
   attention: {
+    active: boolean
     state: 'standby' | 'attentive'
     wakePhrase: 'Freya'
     attentiveUntil: string | null
@@ -229,7 +229,7 @@ export interface VoiceProjection {
      * speech-activity gate and no wake-phrase model, and the type is where that
      * fact is written down.
      */
-    kind: 'speech-activity' | 'keyword'
+    kind: 'speech-activity' | 'keyword' | 'wake-phrase'
     detail: string
     maxArmedMs: number
   }

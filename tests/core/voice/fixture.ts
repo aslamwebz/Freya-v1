@@ -54,6 +54,7 @@ export function absentVoiceProjection(overrides: Partial<VoiceProjection> = {}):
     autoSubmit: false,
     autoSpeak: false,
     attention: {
+      active: false,
       state: 'standby',
       wakePhrase: 'Freya',
       attentiveUntil: null,

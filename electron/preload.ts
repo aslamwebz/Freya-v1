@@ -47,6 +47,7 @@ import { checkProviderBaseUrl } from '../core/model/provider-endpoint'
 import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
 import { normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
 import { normaliseSemanticBrowserRequest } from './browser/semanticRequest'
+import type { VoiceConfig, VoiceConfigPatch } from './voiceConfig'
 
 export interface RuntimeInfo {
   version: string

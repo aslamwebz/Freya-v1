@@ -13,6 +13,7 @@ import type { ConversationProjection, VoiceProjection } from '../../core/protoco
 import type { VoiceTranscriptFragment } from '../../core/voice/types'
 import type { VoiceOutputInstruction } from '../../electron/voiceHost'
 import type { VoiceSettings } from '../../core/voice/settings'
+import type { VoiceConfig, VoiceConfigPatch } from '../../electron/voiceConfig'
 import type { BrainProjection } from '../../core/brain/brain'
 import type { WorkProjection } from '../../core/work/projection'
 import type { MissionProjection } from '../../core/missions/types'

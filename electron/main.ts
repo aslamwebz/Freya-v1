@@ -31,7 +31,7 @@ import { voiceCapabilityReadiness, effectiveVoiceSettings, gateVoiceInput, gateV
 import { LocalWhisperHost } from './localWhisper'
 import { LocalWakeHost } from './localWake'
 import { MicrophoneGate } from './microphoneGate'
-import { VoiceConfigStore } from './voiceConfig'
+import { DEFAULT_VOICE_CONFIG, VOICE_FOLLOW_UP_WINDOW_MS, VoiceConfigStore, type VoiceConfigPatch } from './voiceConfig'
 import { DEFAULT_VOICE_SETTINGS } from '../core/voice/settings'
 import { buildLocalWakeGate } from '../core/voice/wake'
 import {
@@ -79,8 +79,6 @@ let workspace: WorkspaceFile | null = null
  * created once the app is ready, reached from a window only through named IPC.
  */
 let providerStore: ProviderConfigStore | null = null
-/** Voice preferences are non-secret and live beside provider.json. */
-let voiceConfigStore: VoiceConfigStore | null = null
 let capabilityStore: CapabilitySettingsStore | null = null
 let capabilityPreferences: CapabilityPreferences = {}
 /** One Core per process. Survives renderer reloads; dies only with the app. */
@@ -94,6 +92,7 @@ let coreHost: ElectronCoreHost | null = null
  */
 let voiceConfig: VoiceConfigStore | null = null
 const rawVoicePreferences = () => voiceConfig?.current ?? DEFAULT_VOICE_SETTINGS
+const legacyVoicePreferences = () => voiceConfig?.legacyCurrent ?? DEFAULT_VOICE_CONFIG
 const voiceReadiness = (): CapabilityReadiness => voiceCapabilityReadiness({ platformAvailable: voiceOutput.platformAvailable, localInstalled: localWhisper.installed, nanoKeyPresent: !!process.env.NANOGPT_API_KEY?.trim(), remoteAudioEnabled: rawVoicePreferences().remoteAudioEnabled })
 const selectedVoice = (): EffectiveVoiceSettings => effectiveVoiceSettings(rawVoicePreferences(), capabilityPreferences, voiceReadiness())
 const voicePreferences = (): VoiceSettings => selectedVoice().settings
@@ -746,8 +745,8 @@ function requireProviderConfig(): ProviderConfigStore {
 }
 
 function requireVoiceConfig(): VoiceConfigStore {
-  if (!voiceConfigStore) throw new Error('voice config used before the app was ready')
-  return voiceConfigStore
+  if (!voiceConfig) throw new Error('voice config used before the app was ready')
+  return voiceConfig
 }
 
 /**
@@ -817,9 +816,6 @@ function currentHostEnv(): HostEnv {
 async function reEnvCore(): Promise<void> {
   if (!providerStore) return
   await providerStore.applyToEnv(process.env, EXPLICIT_ENV)
-  if (voiceConfigStore !== null) {
-    voiceInput.configure(sttRuntimeConfig(await voiceConfigStore.read()))
-  }
   await coreHost?.restartWithEnv(currentHostEnv())
 }
 
@@ -1400,10 +1396,9 @@ function registerIpc(): void {
     return saved
   })
 
-  ipcMain.handle('freya:voice-config:read', () => requireVoiceConfig().read())
+  ipcMain.handle('freya:voice-config:read', () => requireVoiceConfig().readLegacy())
   ipcMain.handle('freya:voice-config:write', async (_event, input: VoiceConfigPatch) => {
-    const saved = await requireVoiceConfig().write(input)
-    voiceInput.configure(sttRuntimeConfig(saved))
+    const saved = await requireVoiceConfig().writeLegacy(input)
 
     const host = coreHost
     if (host !== null) {
@@ -1732,7 +1727,6 @@ app.whenReady().then(async () => {
   // Created beside the workspace, and created before Core so the stored provider
   // values can be applied to the process environment Core is then built from.
   providerStore = new ProviderConfigStore(join(app.getPath('userData'), 'provider.json'))
-  voiceConfigStore = new VoiceConfigStore(join(app.getPath('userData'), 'voice.json'))
   // A credential saved through the Settings surface must be usable on the next
   // launch, so it is applied here — before Core reads `process.env.NANOGPT_*`.
   // A real launch environment still wins; the `.env` file does not.
@@ -1916,6 +1910,10 @@ app.whenReady().then(async () => {
         voiceStt: gateVoiceInput(voiceInput, selectedVoice),
         voiceWake: buildLocalWakeGate(),
         voiceAttentionTimeoutMs: () => voicePreferences().attentionTimeoutMs,
+        voiceAutoSpeak: legacyVoicePreferences().autoSpeak,
+        voiceProactiveAlerts: legacyVoicePreferences().proactiveAlerts,
+        voiceMuted: legacyVoicePreferences().ttsProvider === 'off',
+        voiceFollowUpWindowMs: VOICE_FOLLOW_UP_WINDOW_MS,
       },
     )
     registerIpc()

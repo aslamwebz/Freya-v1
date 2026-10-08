@@ -79,13 +79,10 @@ let workspace: WorkspaceFile | null = null
  * created once the app is ready, reached from a window only through named IPC.
  */
 let providerStore: ProviderConfigStore | null = null
-<<<<<<< HEAD
 /** Voice preferences are non-secret and live beside provider.json. */
 let voiceConfigStore: VoiceConfigStore | null = null
-=======
 let capabilityStore: CapabilitySettingsStore | null = null
 let capabilityPreferences: CapabilityPreferences = {}
->>>>>>> recovered/freya-main
 /** One Core per process. Survives renderer reloads; dies only with the app. */
 let coreHost: ElectronCoreHost | null = null
 /**

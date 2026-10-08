@@ -108,7 +108,7 @@ describe('credential isolation across the boundary', () => {
    * a bridge handing the untrusted half a secret, and this test is where that
    * change has to be argued with.
    */
-  const forbidden = /NANOGPT_API_KEY|BRAVE_SEARCH_API_KEY|process\.env/
+  const forbidden = /NANOGPT_API_KEY|BRAVE_SEARCH_API_KEY|OPENAI_API_KEY|process\.env/
 
   it('the preload bridge names no credential and reads no environment', async () => {
     const source = await readFile(join(import.meta.dirname, '..', '..', 'electron', 'preload.ts'), 'utf8')

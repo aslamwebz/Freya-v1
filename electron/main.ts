@@ -67,6 +67,8 @@ let workspace: WorkspaceFile | null = null
  * created once the app is ready, reached from a window only through named IPC.
  */
 let providerStore: ProviderConfigStore | null = null
+/** Voice preferences are non-secret and live beside provider.json. */
+let voiceConfigStore: VoiceConfigStore | null = null
 /** One Core per process. Survives renderer reloads; dies only with the app. */
 let coreHost: ElectronCoreHost | null = null
 /**
@@ -525,6 +527,11 @@ function requireProviderConfig(): ProviderConfigStore {
   return providerStore
 }
 
+function requireVoiceConfig(): VoiceConfigStore {
+  if (!voiceConfigStore) throw new Error('voice config used before the app was ready')
+  return voiceConfigStore
+}
+
 /**
  * The host environment, rebuilt from the current process environment.
  *
@@ -583,6 +590,9 @@ function currentHostEnv(): HostEnv {
 async function reEnvCore(): Promise<void> {
   if (!providerStore) return
   await providerStore.applyToEnv(process.env, EXPLICIT_ENV)
+  if (voiceConfigStore !== null) {
+    voiceInput.configure(sttRuntimeConfig(await voiceConfigStore.read()))
+  }
   await coreHost?.restartWithEnv(currentHostEnv())
 }
 
@@ -1139,6 +1149,45 @@ function registerIpc(): void {
     return saved
   })
 
+  ipcMain.handle('freya:voice-config:read', () => requireVoiceConfig().read())
+  ipcMain.handle('freya:voice-config:write', async (_event, input: VoiceConfigPatch) => {
+    const saved = await requireVoiceConfig().write(input)
+    voiceInput.configure(sttRuntimeConfig(saved))
+
+    const host = coreHost
+    if (host !== null) {
+      await host.submit({
+        command: 'voice.auto-speak.set',
+        requestId: `voice-config-auto-speak-${Date.now()}`,
+        payload: { enabled: saved.autoSpeak },
+      })
+      await host.submit({
+        command: 'voice.proactive-alerts.set',
+        requestId: `voice-config-proactive-${Date.now()}`,
+        payload: { enabled: saved.proactiveAlerts },
+      })
+      await host.submit({
+        command: 'voice.mute.set',
+        requestId: `voice-config-tts-${Date.now()}`,
+        payload: { muted: saved.ttsProvider === 'off' },
+      })
+      if (saved.ttsVoiceId !== null) {
+        await host.submit({
+          command: 'voice.tts.voice.select',
+          requestId: `voice-config-voice-${Date.now()}`,
+          payload: { voiceId: saved.ttsVoiceId },
+        })
+      }
+      if (saved.wakeProvider === 'off') {
+        await host.submit({
+          command: 'voice.wake.disarm',
+          requestId: `voice-config-wake-${Date.now()}`,
+        })
+      }
+    }
+    return saved
+  })
+
   ipcMain.handle('freya:workspace:load', () => requireWorkspace().load())
   // The whole privileged act of "attach a file": a dialog in this process, a
   // bounded read behind it, and a typed outcome in front of it.
@@ -1338,6 +1387,7 @@ app.whenReady().then(async () => {
   // Created beside the workspace, and created before Core so the stored provider
   // values can be applied to the process environment Core is then built from.
   providerStore = new ProviderConfigStore(join(app.getPath('userData'), 'provider.json'))
+  voiceConfigStore = new VoiceConfigStore(join(app.getPath('userData'), 'voice.json'))
   // A credential saved through the Settings surface must be usable on the next
   // launch, so it is applied here — before Core reads `process.env.NANOGPT_*`.
   // A real launch environment still wins; the `.env` file does not.
@@ -1680,10 +1730,11 @@ app.on('before-quit', (event) => {
  *   - the browser raised it as a direct result of the user pressing the
  *     microphone control, which is the only code path that calls `getUserMedia`.
  *
- * That is what explicit push-to-talk means at this layer: no ambient recording,
- * no always-on stream, and no way for a window to hold a microphone open between
- * captures. A request at any other time, or for anything other than audio, is
- * refused.
+ * Push-to-talk remains capture-scoped. Hands-free is the one explicit ambient
+ * exception: while the owner has armed it, a local Web Audio meter may keep an
+ * audio stream open for bounded wake detection. No audio leaves that stream until
+ * local speech activity produces one bounded wake clip for Core to transcribe.
+ * A request at any other time, or for anything other than audio, is refused.
  *
  * ## Why there are two handlers
  *
@@ -1725,9 +1776,10 @@ app.on('web-contents-created', (_event, contents) => {
  *
  * Set from **Core's answer**, never from a renderer claim. The renderer opens and
  * closes the device itself — that is where the Web Audio API is — but the host
- * only relaxes the permission gate once the trusted half has agreed a capture is
- * running *and* that the owner turned the microphone on, so a compromised window
- * cannot open a stream by asking nicely and cannot hold one open by asking again.
+ * only relaxes the permission gate once the trusted half has agreed either a
+ * bounded capture is running or the owner explicitly armed hands-free, and the
+ * microphone is enabled. Disarming hands-free or STOP ALL closes that ambient
+ * permission again immediately.
  */
 
 const microphoneGate = new MicrophoneGate()
@@ -1752,6 +1804,7 @@ function trackVoiceCapture(envelope: CoreCommandEnvelope, _result: { ok: boolean
     case 'voice.capture.cancel':
     case 'voice.mic.enable':
     case 'voice.mic.disable':
+    case 'voice.permission.request':
     case 'voice.permission.report':
     case 'voice.tts.cancel':
     case 'voice.wake.arm':

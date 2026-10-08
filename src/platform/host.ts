@@ -173,6 +173,15 @@ export interface FreyaHostBridge {
   providerConfig(): Promise<ProviderConfigView>
   saveProviderConfig(input: ProviderConfigPatch): Promise<ProviderConfigView>
 
+  /**
+   * Voice has its own configuration, independent of the Chat model selector.
+   *
+   * No key crosses here. NanoGPT STT reuses the main-process NanoGPT credential;
+   * this surface chooses only voice provider/model/privacy/output preferences.
+   */
+  voiceConfig(): Promise<VoiceConfig>
+  saveVoiceConfig(input: VoiceConfigPatch): Promise<VoiceConfig>
+
   coreSubmit(command: CoreCommandName, payload?: unknown): Promise<CoreCommandResult>
   coreStatus(): Promise<CoreStatus>
   /** Returns a disposer, so a React effect can clean up. */

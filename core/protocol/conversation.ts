@@ -162,6 +162,8 @@ export interface VoiceProjection {
   micEnabled: boolean
   /** What the operating system last reported. `unknown` until it reports at all. */
   permission: 'unknown' | 'granted' | 'denied' | 'revoked'
+  /** True only inside Core's short-lived permission acquisition window. */
+  permissionRequestOpen: boolean
   capturing: boolean
   sessionId: string | null
   /**
@@ -204,6 +206,18 @@ export interface VoiceProjection {
    * and nothing else. Turning voice on does not turn this on.
    */
   autoSubmit: boolean
+  /** Whether a stored answer should be read after a voice-submitted turn. */
+  autoSpeak: boolean
+  /**
+   * Conversational attention is process-local. A restart always returns to
+   * standby; the follow-up window only exists after the wake phrase was heard.
+   */
+  attention: {
+    state: 'standby' | 'attentive'
+    wakePhrase: 'Freya'
+    attentiveUntil: string | null
+    followUpWindowMs: number
+  }
   wake: {
     armed: boolean
     available: boolean
@@ -294,4 +308,6 @@ export type VoiceCommandOutcome =
   | { operation: 'voice-selected'; voiceId: string }
   | { operation: 'voices'; voices: readonly { voiceId: string; label: string; language: string | null; isDefault: boolean | null }[] }
   | { operation: 'auto-submit'; enabled: boolean }
+  | { operation: 'auto-speak'; enabled: boolean }
+  | { operation: 'proactive-alerts'; enabled: boolean }
   | { operation: 'refused'; reason: string }

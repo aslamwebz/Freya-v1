@@ -641,11 +641,10 @@ export interface CoreHostOptions {
   /**
    * The desktop speech output adapter, forwarded straight into Core.
    *
-   * Note the asymmetry with speech *input*: production passes this and passes no
-   * `voiceStt`, because the platform gives us a speech engine and does not give
-   * us a local recogniser. That is not a gap to be papered over with a hosted
-   * service — it is the honest state of this build, and Core reports it as
-   * `configuration-required` and discards recordings rather than sending them.
+   * Speech input is a separate seam. Production may supply a hosted adapter,
+   * but that adapter remains main-process-only and owns its explicit opt-in and
+   * credential boundary. With an unavailable adapter Core still reports
+   * `configuration-required` and discards recordings.
    */
   voiceTts?: VoiceTtsAdapter
   /** A speech-to-text adapter. Unset in production; see `voiceTts`. */
@@ -655,6 +654,14 @@ export interface CoreHostOptions {
   voiceAttentionTimeoutMs?: () => number
   /** Whether the platform offers a capture path at all. */
   voiceCaptureSupported?: boolean
+  /** Read voice-submitted answers aloud after they are stored. */
+  voiceAutoSpeak?: boolean
+  /** Let deterministic Attention speak/interrupt decisions use Voice output. */
+  voiceProactiveAlerts?: boolean
+  /** Initial output mute from the persisted TTS provider preference. */
+  voiceMuted?: boolean
+  /** Bounded follow-up window after the wake phrase is heard. */
+  voiceFollowUpWindowMs?: number
   /**
    * Replaces the production research stack wholesale. For tests.
    *
@@ -1184,9 +1191,8 @@ export class ElectronCoreHost implements CoreHost {
         // above: the adapter reaches Core, not a window, and there is no renderer
         // name for it. A window never sends text to be spoken — Core reads the words
         // out of its own conversation store and this adapter forwards them to the
-        // platform. Deliberately absent: a speech *input* adapter. This host supplies
-        // none, so Core reports transcription as `configuration-required` and
-        // discards recordings rather than reaching anywhere for a recogniser.
+        // platform. Speech input is forwarded through its own adapter seam; an
+        // unavailable/disabled adapter remains a refusal, not a hidden fallback.
         ...(this.options.voiceTts ? { voiceTts: this.options.voiceTts } : {}),
         ...(this.options.voiceStt ? { voiceStt: this.options.voiceStt } : {}),
         ...(this.options.voiceWake ? { voiceWake: this.options.voiceWake } : {}),
@@ -1194,6 +1200,18 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.voiceCaptureSupported === undefined
           ? {}
           : { voiceCaptureSupported: this.options.voiceCaptureSupported }),
+        ...(this.options.voiceAutoSpeak === undefined
+          ? {}
+          : { voiceAutoSpeak: this.options.voiceAutoSpeak }),
+        ...(this.options.voiceProactiveAlerts === undefined
+          ? {}
+          : { voiceProactiveAlerts: this.options.voiceProactiveAlerts }),
+        ...(this.options.voiceMuted === undefined
+          ? {}
+          : { voiceMuted: this.options.voiceMuted }),
+        ...(this.options.voiceFollowUpWindowMs === undefined
+          ? {}
+          : { voiceFollowUpWindowMs: this.options.voiceFollowUpWindowMs }),
       })
       await core.start()
       if (this.stopRequested) {

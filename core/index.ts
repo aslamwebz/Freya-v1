@@ -2225,6 +2225,11 @@ class FreyaCore implements Core {
       now: this.options.now,
       newId: this.options.newId,
       onChange: () => this.publishAttention(),
+      onDecision: (decision) => {
+        if (decision.outcome === 'speak' || decision.outcome === 'interrupt') {
+          void this.voiceService.announceAttention(decision.kind, decision.outcome)
+        }
+      },
       focus: () => this.attentionFocus(),
       stopAll: () => this.state.stopAll.active,
       getState: () => this.state.attention,
@@ -7382,6 +7387,21 @@ state: {
           return { requestId, ok: true, status: this.status(), voice: { operation: 'state', state: this.voice().state } }
         }
 
+        case 'voice.permission.request': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const opened = this.voiceService.requestPermissionWindow()
+          return opened.ok
+            ? { requestId, ok: true, status: this.status(), voice: { operation: 'state', state: this.voice().state } }
+            : {
+                requestId,
+                ok: false,
+                refusal: { reason: opened.reason },
+                status: this.status(),
+                voice: { operation: 'refused', reason: opened.reason },
+              }
+        }
+
         case 'voice.permission.report': {
           const outcome = readString(envelope.payload, 'outcome')
           if (outcome !== 'granted' && outcome !== 'denied' && outcome !== 'revoked') {
@@ -7477,6 +7497,33 @@ state: {
           }
           await this.voiceService.setAutoSubmit(enabled)
           return { requestId, ok: true, status: this.status(), voice: { operation: 'auto-submit', enabled } }
+        }
+
+        case 'voice.auto-speak.set': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const enabled = readRaw(envelope.payload, 'enabled')
+          if (typeof enabled !== 'boolean') {
+            return { requestId, ok: false, refusal: { reason: 'auto-speak is a true or false setting' } }
+          }
+          await this.voiceService.setAutoSpeak(enabled)
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'auto-speak', enabled } }
+        }
+
+        case 'voice.proactive-alerts.set': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const enabled = readRaw(envelope.payload, 'enabled')
+          if (typeof enabled !== 'boolean') {
+            return { requestId, ok: false, refusal: { reason: 'proactive alerts is a true or false setting' } }
+          }
+          await this.voiceService.setProactiveAlerts(enabled)
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            voice: { operation: 'proactive-alerts', enabled },
+          }
         }
 
         case 'voice.tts.speak': {
@@ -9768,6 +9815,7 @@ case 'forge.run': {
         state: 'unsupported',
         micEnabled: false,
         permission: 'unknown',
+        permissionRequestOpen: false,
         capturing: false,
         sessionId: null,
         interim: '',
@@ -9781,6 +9829,13 @@ case 'forge.run': {
         muted: false,
         selectedVoiceId: null,
         autoSubmit: false,
+        autoSpeak: false,
+        attention: {
+          state: 'standby',
+          wakePhrase: 'Freya',
+          attentiveUntil: null,
+          followUpWindowMs: 45_000,
+        },
         wake: {
           armed: false,
           available: false,

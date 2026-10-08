@@ -530,6 +530,8 @@ export type CoreCommandName =
   | 'voice.mic.enable'
   /** Turn the microphone off and release any open capture. */
   | 'voice.mic.disable'
+  /** Open one short-lived window in which the OS permission prompt may be asked. */
+  | 'voice.permission.request'
   /** What the OS said. Never a request, and never a grant. */
   | 'voice.permission.report'
   | 'voice.capture.start'
@@ -539,6 +541,10 @@ export type CoreCommandName =
   | 'voice.capture.cancel'
   /** Whether a confirmed transcript enters the conversation path unprompted. */
   | 'voice.submit.set'
+  /** Whether a successful voice turn should read its stored answer aloud. */
+  | 'voice.auto-speak.set'
+  /** Whether deterministic Attention speak/interrupt decisions may use TTS. */
+  | 'voice.proactive-alerts.set'
   /** Read a stored turn aloud. The payload is a turn id and nothing else. */
   | 'voice.tts.speak'
   /** Finish at a boundary and drop the queue. */

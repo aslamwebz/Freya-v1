@@ -159,6 +159,13 @@ const api = {
     return ipcRenderer.invoke('freya:provider:write', bounded.payload)
   },
 
+  voiceConfig: (): Promise<VoiceConfig> => ipcRenderer.invoke('freya:voice-config:read'),
+  saveVoiceConfig: (input: unknown): Promise<VoiceConfig> => {
+    const bounded = rendererVoiceConfigPayload(input)
+    if (!bounded.ok) return Promise.reject(new Error(bounded.reason))
+    return ipcRenderer.invoke('freya:voice-config:write', bounded.payload)
+  },
+
   /**
    * A dumb relay. The host asks once, as the window is closing, and the
    * renderer answers by saving through the function above — the host has no way
@@ -772,12 +779,14 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'voice.status.read',
   'voice.mic.enable',
   'voice.mic.disable',
+  'voice.permission.request',
   'voice.permission.report',
   'voice.capture.start',
   'voice.transcript.interim',
   'voice.capture.end',
   'voice.capture.cancel',
   'voice.submit.set',
+  'voice.auto-speak.set',
   'voice.tts.speak',
   'voice.tts.stop',
   'voice.tts.cancel',
@@ -1122,6 +1131,74 @@ const MAX_PROVIDER_KEY_CHARS = 4_096
  * settings save. `apiKey` may be an explicit empty string — that is how a stored
  * credential is cleared — but it is never part of what comes back.
  */
+function rendererVoiceConfigPayload(
+  raw: unknown,
+): { ok: true; payload: VoiceConfigPatch } | { ok: false; reason: string } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, reason: 'voice configuration is invalid' }
+  }
+  const record = raw as Record<string, unknown>
+  const payload: VoiceConfigPatch = {}
+
+  if (record.sttProvider !== undefined) {
+    if (record.sttProvider !== 'off' && record.sttProvider !== 'nanogpt') {
+      return { ok: false, reason: 'voice STT provider is invalid' }
+    }
+    payload.sttProvider = record.sttProvider
+  }
+  if (record.sttModel !== undefined) {
+    if (
+      typeof record.sttModel !== 'string' ||
+      record.sttModel.length === 0 ||
+      record.sttModel.length > 160 ||
+      !/^[A-Za-z0-9._:/-]+$/.test(record.sttModel)
+    ) {
+      return { ok: false, reason: 'voice STT model is invalid' }
+    }
+    payload.sttModel = record.sttModel
+  }
+  if (record.remoteSttEnabled !== undefined) {
+    if (typeof record.remoteSttEnabled !== 'boolean') {
+      return { ok: false, reason: 'remote voice consent is invalid' }
+    }
+    payload.remoteSttEnabled = record.remoteSttEnabled
+  }
+  if (record.ttsProvider !== undefined) {
+    if (record.ttsProvider !== 'off' && record.ttsProvider !== 'platform') {
+      return { ok: false, reason: 'voice TTS provider is invalid' }
+    }
+    payload.ttsProvider = record.ttsProvider
+  }
+  if (record.ttsVoiceId !== undefined) {
+    if (
+      record.ttsVoiceId !== null &&
+      (typeof record.ttsVoiceId !== 'string' || record.ttsVoiceId.length === 0 || record.ttsVoiceId.length > 200)
+    ) {
+      return { ok: false, reason: 'voice id is invalid' }
+    }
+    payload.ttsVoiceId = record.ttsVoiceId
+  }
+  if (record.wakeProvider !== undefined) {
+    if (record.wakeProvider !== 'off' && record.wakeProvider !== 'selected-stt') {
+      return { ok: false, reason: 'wake provider is invalid' }
+    }
+    payload.wakeProvider = record.wakeProvider
+  }
+  if (record.autoSpeak !== undefined) {
+    if (typeof record.autoSpeak !== 'boolean') {
+      return { ok: false, reason: 'auto-speak setting is invalid' }
+    }
+    payload.autoSpeak = record.autoSpeak
+  }
+  if (record.proactiveAlerts !== undefined) {
+    if (typeof record.proactiveAlerts !== 'boolean') {
+      return { ok: false, reason: 'proactive voice alert setting is invalid' }
+    }
+    payload.proactiveAlerts = record.proactiveAlerts
+  }
+  return { ok: true, payload }
+}
+
 function rendererProviderPayload(
   raw: unknown,
 ): { ok: true; payload: ProviderConfigInput } | { ok: false; reason: string } {
@@ -1330,6 +1407,7 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     case 'security.resume':
     case 'conversation.list':
     case 'voice.status.read':
+    case 'voice.permission.request':
     case 'voice.capture.start':
     case 'voice.capture.cancel':
     case 'voice.tts.stop':
@@ -1378,10 +1456,14 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     }
 
     case 'voice.submit.set':
+    case 'voice.auto-speak.set':
     case 'voice.mute.set': {
       // Booleans only. A truthy string here would be a window that believes it
       // turned auto-submit on while Core read something else.
-      const key = command === 'voice.submit.set' ? 'enabled' : 'muted'
+      const key =
+        command === 'voice.mute.set'
+          ? 'muted'
+          : 'enabled'
       const value = record?.[key]
       if (typeof value !== 'boolean') {
         return { ok: false, reason: `${key} is a true or false setting` }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useShell } from './store'
 import { startShell } from './boot'
 import { CommandBar } from './shell/CommandBar'
@@ -12,16 +12,12 @@ import {
   SystemPanel,
   WorkPanel,
 } from './dashboard/Panels'
-import { Presence } from '../presence/Presence'
-import { DesignLab } from '../presence/DesignLab'
 import { PresenceStatesConnected } from './dashboard/PresenceStates'
-import { voiceEnvelope } from '../presence/voiceEnvelope'
-import type { PresenceHandle } from '../presence/PresenceView'
+import { LiveOrb } from '../app/presence/LiveOrb'
 import { ChatBar } from './shell/ChatBar'
 import { SurfaceLayer } from './surfaces/SurfaceLayer'
 import { toggleSurface } from './surfaceActions'
 import { FreyaMark } from './icons'
-import { loadLabState, onLabChange } from '../presence/labState'
 
 export function App() {
   const [ready, setReady] = useState(false)
@@ -29,14 +25,8 @@ export function App() {
   // runtime says otherwise the shell assumes a shipped build, so the development
   // controls cannot flash on screen in a production window.
   const dev = useShell((state) => state.runtime.dev)
-  const ringCanvas = useRef<HTMLCanvasElement | null>(null)
-  const [background, setBackground] = useState(() => loadLabState().bg)
-
-  useEffect(() => onLabChange((lab) => setBackground(lab.bg)), [])
+  const background = 'space'
   const [failure, setFailure] = useState<string | null>(null)
-  // The stage handle, lifted: the design lab now lives at the top of the
-  // workspace and still has to be able to drive the presence.
-  const [presenceHandle, setPresenceHandle] = useState<PresenceHandle | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -63,15 +53,11 @@ export function App() {
 
   return (
     <div className="app" data-ready={ready}>
-      <canvas ref={ringCanvas} className="presence-rings" aria-hidden="true" />
       <div className="atmosphere" data-bg={background} aria-hidden="true" />
       <div className="atmosphere-veil" aria-hidden="true" />
 
-      {/* Presence is anchored to the application viewport, not to a dashboard
-          grid column. The systems rail and side panels may reflow around it,
-          but Freya's visual centre must not move when they do. */}
       <div className="presence-overlay">
-        <Presence ringCanvas={ringCanvas} onReady={setPresenceHandle} />
+        <LiveOrb state="calm" energy={0} />
       </div>
 
       <div className="shell">
@@ -104,11 +90,6 @@ export function App() {
               locks, not the only one. */}
           {dev ? (
             <div className="center-top" data-dev-tools="true">
-              <DesignLab
-                handle={presenceHandle}
-                onSimulateUser={() => voiceEnvelope.simulateUser()}
-                onSimulateReply={() => voiceEnvelope.simulateReply()}
-              />
               <PresenceStatesConnected />
             </div>
           ) : null}

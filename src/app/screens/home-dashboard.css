@@ -1,4 +1,4 @@
-/* Reference 01, laid out Athena-style: the board fills the window (no fixed
+/* Reference 01 layout: the board fills the window (no fixed
    canvas, no scaling). The sidebar is a fixed rail; the three content columns
    use minmax so the side cards cap at a comfortable size while the centre
    column (the orb) takes the slack and widens with the page. The board carries

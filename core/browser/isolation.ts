@@ -201,6 +201,37 @@ export type PublicUrlReading =
  * The returned `url` is the *normalised* href, never the string that was passed in, so a
  * caller that reads a stale field cannot act on a different address than the one checked.
  */
+/**
+ * Is this string an address the Freya Browser could actually open?
+ *
+ * The narrow question, deliberately separated from {@link assertPublicBrowserUrl}: policy
+ * decides *whether Freya should go there*, this decides *whether there is a place to go*.
+ * Both are needed, and conflating them produces the two worst outcomes — a policy check
+ * answering "yes" for an empty string, and a navigability check answering "no" for an address
+ * the owner is entitled to open.
+ *
+ * `''`, `'null'`, `'undefined'` and `'about:blank'` are all non-navigable, and all four have
+ * reached a browser tab at some point. That is not hypothetical: an observation that carried
+ * no address used to be folded into state as the empty string, which then became a tab with
+ * no URL and an empty browser panel.
+ */
+export function isNavigableBrowserUrl(candidate: unknown): candidate is string {
+  if (typeof candidate !== 'string') return false
+  const trimmed = candidate.trim()
+  if (trimmed === '') return false
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return false
+  }
+  if (!PUBLIC_BROWSER_ALLOWED_SCHEMES.includes(parsed.protocol)) return false
+  if (parsed.hostname === '') return false
+  // Userinfo is a credential handed to the page as a header. It is never navigable.
+  if (parsed.username !== '' || parsed.password !== '') return false
+  return true
+}
+
 export function assertPublicBrowserUrl(
   candidate: unknown,
   options: PublicUrlOptions = {},

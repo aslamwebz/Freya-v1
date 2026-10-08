@@ -2,7 +2,7 @@
   "name": "freya",
   "version": "0.1.0",
   "private": true,
-  "description": "Freya — a voice-first personal intelligence environment. Durable Core with an event journal, Guard, cognition Governor and a typed desktop host.",
+  "description": "Freya \u2014 a voice-first personal intelligence environment. Durable Core with an event journal, Guard, cognition Governor and a typed desktop host.",
   "main": "dist-electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -10,6 +10,10 @@
     "build:renderer": "vite build",
     "build:main": "node scripts/build-electron.mjs",
     "build": "npm run build:renderer && npm run build:main",
+    "build:desktop": "npm run build:renderer && npm run build:main",
+    "install:shortcut": "node scripts/install-shortcut.mjs",
+    "freya": "node bin/freya.mjs",
+    "freya:mcp": "node bin/freya-mcp.mjs",
     "start": "npm run build && node scripts/launch.mjs 2",
     "start:display2": "npm run build && node scripts/launch.mjs 2",
     "electron:dev": "node scripts/build-electron.mjs && electron . --dev",
@@ -60,7 +64,9 @@
     "test:full": "vitest run",
     "verify:full": "npm run typecheck && npm run lint && npm run test:full && npm run build",
     "test:chat:watch": "node scripts/test-scope.mjs chat --watch",
-    "test:legacy-ui": "vitest run tests/unit/ui-v2"
+    "test:legacy-ui": "vitest run tests/unit/ui-v2",
+    "build:browser-service-acceptance": "node scripts/build-browser-service-acceptance.mjs",
+    "test:browser-service": "node scripts/build-browser-service-acceptance.mjs && electron dist-electron/acceptance-browser-service.cjs"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1",

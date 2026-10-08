@@ -8,6 +8,7 @@ import type {
 } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { BrowserRequest, BrowserResult } from '../core/browser'
+import type { SemanticBrowserResult } from '../core/browser/service'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
 import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
@@ -45,6 +46,7 @@ import { voiceSettingsPatch } from '../core/voice/settings'
 import { checkProviderBaseUrl } from '../core/model/provider-endpoint'
 import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
 import { normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
+import { normaliseSemanticBrowserRequest } from './browser/semanticRequest'
 
 export interface RuntimeInfo {
   version: string
@@ -155,6 +157,47 @@ const api = {
     const bounded = normaliseRendererBrowserRequest(input)
     if (!bounded.ok) return Promise.reject(new Error(bounded.reason))
     return ipcRenderer.invoke('freya:browser:execute', bounded.request)
+  },
+
+  /**
+   * One Semantic Browser Protocol operation.
+   *
+   * Normalised here *and* in the main process, on purpose. The preload check gives the
+   * renderer an immediate refusal rather than a round trip; the main process check is the one
+   * that counts, because a renderer that is not this preload is not stopped by this preload.
+   *
+   * The normaliser refuses a request with no element reference, a reference that is not in
+   * the `rN` shape, or no snapshot revision — so an act cannot be expressed without saying
+   * which instant it was decided from.
+   */
+  browserCommand: (input: unknown): Promise<SemanticBrowserResult> => {
+    const bounded = normaliseSemanticBrowserRequest(input)
+    if (!bounded.ok) {
+      return Promise.resolve({
+        ok: false,
+        op: 'tabs',
+        code: 'request-malformed',
+        reason: bounded.reason,
+        data: {},
+      })
+    }
+    return ipcRenderer.invoke('freya:browser:command', bounded.request)
+  },
+
+  /**
+   * The browser state, pushed rather than polled.
+   *
+   * Every navigation, load, failure and close arrives here. A workspace that listens needs no
+   * timer, which is the point: the previous build re-read the whole projection every 800 ms
+   * whether or not anything had changed, and the cost of that grows with the tab count.
+   */
+  onBrowserEvent: (handler: (state: BrowserBridgeState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      if (typeof value !== 'object' || value === null) return
+      handler(value as BrowserBridgeState)
+    }
+    ipcRenderer.on('freya:browser:event', listener)
+    return () => ipcRenderer.removeListener('freya:browser:event', listener)
   },
 
   /**

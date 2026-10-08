@@ -5,19 +5,23 @@ import {
   type BrowserProjection,
   type BrowserRequest,
 } from '../../core/browser'
+import type { BrowserServiceState } from '../../core/browser/service'
 import { DEVICE_HANDS_LIMITS } from '../../core/devicehands'
 
-export interface BrowserBridgeState {
-  readonly available: boolean
-  readonly active: boolean
-  readonly reason: string | null
-  readonly publicAvailable: boolean
+/**
+ * What the window reads about the browser.
+ *
+ * This is the Browser Service's projection, widened with the Phase 51 counters an older
+ * consumer of this channel still reads. Two vocabularies on one object is a transitional
+ * arrangement and is labelled as such: the fields a renderer should branch on are
+ * `runtimeStatus` and `reason`, and the counters are here only so nothing has to break.
+ */
+export interface BrowserBridgeState extends BrowserServiceState {
   readonly extensionPaired: boolean
   readonly extensionLive: boolean
-  readonly journalTrustworthy: boolean
   readonly summary: string
-  readonly sessions: BrowserProjection['sessions']
-  readonly handoffs: readonly { readonly handoffId: string; readonly state: string }[]
+  /** Phase 51's own folded session rows. Transitional; the service's `sessions` supersede them. */
+  readonly phase51: BrowserProjection['sessions']
   readonly described: number
   readonly staleRefs: number
   readonly mediaObserved: number

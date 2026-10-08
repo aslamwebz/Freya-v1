@@ -1,273 +1,166 @@
 /**
- * Docked browser tab model.
+ * The browser tab strip's model.
  *
- * The default browser surface lives beside Chat. Each loaded tab owns a distinct,
- * isolated native page which remains alive while switching or hiding the dock.
- * This store tracks the selected page, provenance and per-tab navigation history.
+ * ## Why the renderer holds tabs at all
  *
- * The store is intentionally framework-free: it carries a `subscribe` so a React
- * shell can mirror it, and the shell is the only place that ever calls the host
- * bridge. Keeping the tab bookkeeping separate from the React component is what
- * lets the seams in `eyeHandoff.ts` (which need to open a tab) reach the model
- * without having to render anything first.
+ * It does not hold *pages*. The Browser Service owns the pages, their lifecycle and their
+ * sessions; the renderer's job is to mirror that into something a strip can draw and to send
+ * intents back. Every field here is a mirror of a service fact, and `sync` is the only place
+ * a mirror is written — which is what keeps the two from drifting into "the strip says tab 2
+ * is loading while the view behind it shows tab 4".
+ *
+ * ## The invariant this store exists to hold
+ *
+ * **A tab's `status` is never inferred.** It is copied from the service, which derives it from
+ * the lifecycle machine in `core/browser/service/lifecycle.ts`. In particular a tab is `ready`
+ * only when the service says a page is loaded at a navigable URL, so the empty-panel bug —
+ * a tab that looked live, had no URL, and rendered blank — is not reachable from this side.
+ * A renderer cannot fix that with a placeholder, and this store does not pretend to.
+ *
+ * ## Framework-free on purpose
+ *
+ * It carries a `subscribe` so a React shell can mirror it, and the shell is the only thing
+ * that ever calls the host bridge. That is what lets the seams in `eyeHandoff.ts` reach the
+ * model without rendering anything first.
  */
 
-export type DockedTabOrigin =
-  | { readonly kind: 'manual'; }
-  | {
-      readonly kind: 'link'
-      readonly from: 'chat' | 'eye' | 'media' | 'citation'
-      readonly ownerText: string
-      readonly mediaKind?: 'video' | 'image' | 'pdf' | 'document' | 'page' | 'audio'
-    }
-  | { readonly kind: 'handoff'; readonly fromSession: string }
+import type {
+  BrowserTabOrigin,
+  BrowserTabState,
+  BrowserTabLifecycle,
+  SemanticElement,
+} from '../../../core/browser/service'
+import { tabOriginLabel as coreOriginLabel, tabDisplayTitle } from '../../../core/browser/service'
+
+/** Re-exported so a caller does not import the core type and the store type separately. */
+export type DockedTabOrigin = BrowserTabOrigin
+export type DockedTabStatus = BrowserTabLifecycle
 
 export interface DockedTab {
   readonly id: string
-  readonly title: string
+  /** The Browser Service's tab id. Stable for the life of the tab. */
+  readonly sessionId: string
+  /** The address the tab is meant to be on. Null while creating, failed or closed. */
   readonly url: string | null
-  /** The URL the embedded window is currently displaying for this tab. */
-  readonly sessionId?: string
+  /** Where the page actually landed. Null unless a page is on screen. */
   readonly liveUrl: string | null
-  /** History of URLs the user has visited in this tab. Most-recent last. */
-  readonly history: readonly string[]
-  readonly cursor: number
+  readonly title: string
+  readonly status: DockedTabStatus
   readonly revision: number
-  readonly page: 'absent' | 'loading' | 'ready' | 'failed' | 'closed'
+  readonly loading: boolean
+  readonly canGoBack: boolean
+  readonly canGoForward: boolean
+  readonly createdBy: 'freya' | 'user'
   readonly origin: DockedTabOrigin
+  readonly active: boolean
+  /** A code, never a page string. */
+  readonly error: string | null
   readonly openedAt: number
 }
 
 export interface DockedBrowserSnapshot {
   readonly tabs: readonly DockedTab[]
   readonly activeId: string | null
+  readonly status: DockedTabStatus
 }
 
 export type DockedBrowserEvent =
   | { readonly kind: 'tab.opened'; readonly tab: DockedTab }
   | { readonly kind: 'tab.closed'; readonly tabId: string }
-  | { readonly kind: 'tab.activated'; readonly selectedId: string; readonly previousId: string | null }
-  | { readonly kind: 'tab.navigated'; readonly tabId: string; readonly url: string; readonly title: string; readonly revision: number }
-  | { readonly kind: 'tab.failed'; readonly tabId: string; readonly revision: number; readonly reason: string }
-  | { readonly kind: 'tab.replaced'; readonly tabId: string; readonly url: string; readonly title: string; readonly revision: number }
-  | { readonly kind: 'history.push'; readonly tabId: string; readonly url: string; readonly cursor: number }
-  | { readonly kind: 'history.move'; readonly tabId: string; readonly cursor: number }
+  | { readonly kind: 'tab.activated'; readonly selectedId: string | null; readonly previousId: string | null }
+  | { readonly kind: 'tab.synced'; readonly tabId: string }
+  | { readonly kind: 'reset' }
 
 export interface DockedBrowserDeps {
   readonly now?: () => number
-  readonly newId?: () => string
-}
-
-const PAGE_STATE_VALUES = ['absent', 'loading', 'ready', 'failed', 'closed'] as const
-type PageState = (typeof PAGE_STATE_VALUES)[number]
-
-function defaultTitle(url: string | null): string {
-  if (url === null) return 'New tab'
-  try {
-    const parsed = new URL(url)
-    return parsed.hostname.replace(/^www\./, '') || url
-  } catch {
-    return url.length > 32 ? `${url.slice(0, 32)}…` : url
-  }
-}
-
-function normaliseUrl(value: string): string | null {
-  const trimmed = value.trim()
-  if (!trimmed) return null
-  if (/^https?:\/\//i.test(trimmed)) return trimmed
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) return null
-  const looksLikeHost = /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}/i.test(trimmed) && !/\s/.test(trimmed)
-  if (looksLikeHost) return `https://${trimmed}`
-  return null
-}
-
-function clampCursor(cursor: number, historyLength: number): number {
-  if (historyLength === 0) return -1
-  if (cursor < 0) return 0
-  if (cursor >= historyLength) return historyLength - 1
-  return cursor
-}
-
-export interface OpenTabInput {
-  readonly url?: string | null
-  readonly title?: string | null
-  readonly origin?: DockedTabOrigin
-  readonly activate?: boolean
-}
-
-export interface DockedBrowserStore {
-  getSnapshot(): DockedBrowserSnapshot
-  subscribe(listener: (snapshot: DockedBrowserSnapshot) => void): () => void
-  openTab(input?: OpenTabInput): DockedTab
-  closeTab(tabId: string): boolean
-  activateTab(tabId: string): boolean
-  recordNavigation(tabId: string, params: { readonly url: string; readonly title?: string; readonly revision: number }): boolean
-  recordFailure(tabId: string, params: { readonly revision: number; readonly reason: string }): boolean
-  recordPageReplaced(tabId: string, params: { readonly url: string; readonly title?: string; readonly revision: number }): boolean
-  recordHistory(tabId: string, params: { readonly url: string; readonly cursor: number }): boolean
-  recordHistoryMove(tabId: string, params: { readonly cursor: number }): boolean
-  /** Convenience for callers that have a tab id from somewhere else. */
-  findTab(tabId: string): DockedTab | null
-  activeTab(): DockedTab | null
-  bindSession(tabId: string, sessionId: string): boolean
-  reset(): void
-}
-
-function freshTabId(newId: () => string): string {
-  return `tab-${newId().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 12)}`
 }
 
 export function createDockedBrowserStore(deps: DockedBrowserDeps = {}): DockedBrowserStore {
   const now = deps.now ?? (() => Date.now())
-  const newId = deps.newId ?? (() => `d${Math.random().toString(36).slice(2, 12)}`)
   let tabs: DockedTab[] = []
   let activeId: string | null = null
   const listeners = new Set<(snapshot: DockedBrowserSnapshot) => void>()
+  let snapshot: DockedBrowserSnapshot = Object.freeze({ tabs: Object.freeze([]), activeId: null, status: 'creating' })
 
-  let snapshot: DockedBrowserSnapshot = Object.freeze({ tabs: Object.freeze([]), activeId: null })
-  const snapshotView = (): DockedBrowserSnapshot => snapshot
-
-  const publish = (): void => {
-    snapshot = Object.freeze({ tabs: Object.freeze(tabs.map(clone)), activeId })
-    const view = snapshot
-    for (const listener of [...listeners]) listener(view)
+  function publish(): void {
+    const active = tabs.find((tab) => tab.id === activeId) ?? null
+    snapshot = Object.freeze({
+      tabs: Object.freeze(tabs.slice()),
+      activeId,
+      // The strip shows one lifecycle word for the whole workspace, taken from the front tab.
+      // With no tab there is nothing creating and nothing failed: the workspace is simply
+      // empty, which is a state of its own and is the reason `no-tab` is not `creating`.
+      status: active?.status ?? 'creating',
+    })
+    for (const listener of [...listeners]) {
+      try {
+        listener(snapshot)
+      } catch {
+        // A shell that throws on a render must not stop the store from publishing.
+      }
+    }
   }
 
-  const clone = (tab: DockedTab): DockedTab => ({ ...tab, history: Object.freeze([...tab.history]) })
-
-  function openTab(input: OpenTabInput = {}): DockedTab {
-    const url = typeof input.url === 'string' ? normaliseUrl(input.url) : null
-    const title = input.title ?? defaultTitle(url)
-    const id = freshTabId(newId)
-    const history = url === null ? [] : [url]
-    const tab: DockedTab = {
-      id,
-      title,
-      url,
-      liveUrl: null,
-      history: Object.freeze(history),
-      cursor: history.length === 0 ? -1 : 0,
-      revision: 0,
-      page: url === null ? 'absent' : 'loading',
-      origin: input.origin ?? { kind: 'manual' },
+  function toTab(state: BrowserTabState): DockedTab {
+    return Object.freeze({
+      id: state.tabId,
+      sessionId: state.sessionId,
+      url: state.url,
+      liveUrl: state.liveUrl,
+      title: tabDisplayTitle(state),
+      status: state.status,
+      revision: state.revision,
+      loading: state.loading,
+      canGoBack: state.canGoBack,
+      canGoForward: state.canGoForward,
+      createdBy: state.createdBy,
+      origin: state.origin,
+      active: state.active,
+      error: state.error,
       openedAt: now(),
-    }
-    tabs = [...tabs, tab]
-    if (input.activate !== false) activeId = id
-    publish()
-    return tab
-  }
-
-  function closeTab(tabId: string): boolean {
-    const index = tabs.findIndex((tab) => tab.id === tabId)
-    if (index === -1) return false
-    const next = tabs.slice()
-    next.splice(index, 1)
-    tabs = next
-    if (activeId === tabId) {
-      activeId = next[index]?.id ?? next[index - 1]?.id ?? null
-    }
-    publish()
-    return true
-  }
-
-  function activateTab(tabId: string): boolean {
-    const exists = tabs.some((tab) => tab.id === tabId)
-    if (!exists) return false
-    if (activeId === tabId) return true
-    activeId = tabId
-    publish()
-    return true
-  }
-
-  function patch(tabId: string, mutate: (tab: DockedTab) => DockedTab): boolean {
-    const index = tabs.findIndex((tab) => tab.id === tabId)
-    if (index === -1) return false
-    const updated = mutate(tabs[index]!)
-    const next = tabs.slice()
-    next[index] = updated
-    tabs = next
-    publish()
-    return true
+    })
   }
 
   return {
-    getSnapshot: snapshotView,
+    getSnapshot: () => snapshot,
 
     subscribe(listener) {
       listeners.add(listener)
-      listener(snapshotView())
+      listener(snapshot)
       return () => {
         listeners.delete(listener)
       }
     },
 
-    openTab,
-    closeTab,
-    activateTab,
-
-    findTab(tabId) {
-      return tabs.find((tab) => tab.id === tabId) ?? null
+    /**
+     * Mirror the service's tab list.
+     *
+     * Add, update, remove — keyed on `tabId`, which is stable across every navigation. That
+     * is what stops "opening another tab overwrites the previous one": there is nothing to
+     * overwrite, because a tab is looked up by an id and a navigation does not change it.
+     */
+    sync(states: readonly BrowserTabState[], frontTabId: string | null): DockedBrowserSnapshot {
+      const seen = new Set<string>()
+      tabs = states.map((state) => {
+        seen.add(state.tabId)
+        return toTab(state)
+      })
+      activeId = frontTabId !== null && seen.has(frontTabId) ? frontTabId : (tabs.find((tab) => tab.active)?.id ?? tabs[0]?.id ?? null)
+      publish()
+      return snapshot
     },
 
+    /** The front tab, or null. Never "the newest one". */
     activeTab() {
       return tabs.find((tab) => tab.id === activeId) ?? null
     },
 
-    bindSession(tabId, sessionId) {
-      return patch(tabId, (tab) => ({ ...tab, sessionId }))
+    findTab(tabId: string) {
+      return tabs.find((tab) => tab.id === tabId) ?? null
     },
 
-    recordNavigation(tabId, params) {
-      return patch(tabId, (tab) => ({
-        ...tab,
-        url: params.url,
-        liveUrl: params.url,
-        title: params.title ?? tab.title,
-        revision: params.revision,
-        page: 'ready',
-      }))
-    },
-
-    recordFailure(tabId, params) {
-      return patch(tabId, (tab) => ({
-        ...tab,
-        revision: params.revision,
-        page: 'failed',
-      }))
-    },
-
-    recordPageReplaced(tabId, params) {
-      return patch(tabId, (tab) => {
-        const nextHistory = tab.history[tab.cursor] === params.url ? tab.history : Object.freeze([...tab.history.slice(0, tab.cursor + 1), params.url].slice(-64))
-        const cursor = nextHistory.length - 1
-        return {
-          ...tab,
-          url: params.url,
-          title: params.title ?? tab.title,
-          liveUrl: params.url,
-          revision: params.revision,
-          history: nextHistory,
-          cursor,
-          page: 'ready',
-        }
-      })
-    },
-
-    recordHistory(tabId, params) {
-      return patch(tabId, (tab) => ({
-        ...tab,
-        history: Object.freeze([...tab.history.slice(0, tab.cursor + 1), params.url].slice(-64)),
-        cursor: clampCursor(params.cursor, tab.history.length + 1),
-      }))
-    },
-
-    recordHistoryMove(tabId, params) {
-      return patch(tabId, (tab) => ({
-        ...tab,
-        cursor: clampCursor(params.cursor, tab.history.length),
-        url: tab.history[clampCursor(params.cursor, tab.history.length)] ?? tab.url,
-      }))
+    tabs() {
+      return snapshot.tabs
     },
 
     reset() {
@@ -278,54 +171,53 @@ export function createDockedBrowserStore(deps: DockedBrowserDeps = {}): DockedBr
   }
 }
 
-/**
- * The kind of source that opened a tab.
- *
- * Surfaced as `data-origin` on the tab badge so the eye can see what is a manual
- * navigation, a citation, a media preview, or a deliberate handoff from the
- * authenticated browser. It is for display only — the host bridge does not see it.
- */
+export interface DockedBrowserStore {
+  getSnapshot(): DockedBrowserSnapshot
+  subscribe(listener: (snapshot: DockedBrowserSnapshot) => void): () => void
+  sync(states: readonly BrowserTabState[], frontTabId: string | null): DockedBrowserSnapshot
+  activeTab(): DockedTab | null
+  findTab(tabId: string): DockedTab | null
+  tabs(): readonly DockedTab[]
+  reset(): void
+}
+
+/** One word of provenance for the tab badge. Display only. */
 export function tabOriginLabel(origin: DockedTabOrigin): string {
-  switch (origin.kind) {
-    case 'manual':
-      return 'manual'
-    case 'link':
-      return `from ${origin.from}`
-    case 'handoff':
-      return 'handoff'
-  }
+  return coreOriginLabel(origin)
 }
 
-export function canGoBack(tab: DockedTab): boolean {
-  return tab.cursor > 0
-}
-
-export function canGoForward(tab: DockedTab): boolean {
-  return tab.cursor >= 0 && tab.cursor < tab.history.length - 1
-}
-
-export function currentHistoryUrl(tab: DockedTab): string | null {
-  if (tab.cursor < 0 || tab.cursor >= tab.history.length) return null
-  return tab.history[tab.cursor] ?? null
-}
-
-export function backUrl(tab: DockedTab): string | null {
-  if (tab.cursor <= 0) return null
-  return tab.history[tab.cursor - 1] ?? null
-}
-
-export function forwardUrl(tab: DockedTab): string | null {
-  if (tab.cursor < 0) return null
-  if (tab.cursor >= tab.history.length - 1) return null
-  return tab.history[tab.cursor + 1] ?? null
-}
-
-export const PAGE_STATES: readonly PageState[] = PAGE_STATE_VALUES
-
-export function isPageState(value: unknown): value is PageState {
-  return typeof value === 'string' && (PAGE_STATE_VALUES as readonly string[]).includes(value)
-}
-
+/** Turn whatever the owner typed into an address, or into a search. */
 export function normalizeOpenInputUrl(value: string): string | null {
-  return normaliseUrl(value)
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (/^https?:\/\//i.test(trimmed)) return trimmed
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) return null
+  const looksLikeHost = /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}/i.test(trimmed) && !/\s/.test(trimmed)
+  if (looksLikeHost) return `https://${trimmed}`
+  return null
+}
+
+/**
+ * What a bare phrase in the address bar becomes.
+ *
+ * A search, because a person who types "contact us sri lanka" into a browser address bar
+ * wants a page, and being handed a refusal would be correct but useless.
+ */
+export function addressAsQuery(value: string): string {
+  return `https://duckduckgo.com/?q=${encodeURIComponent(value.trim().slice(0, 200))}`
+}
+
+export type { SemanticElement }
+
+let shared: DockedBrowserStore | null = null
+
+/**
+ * The one store the app's browser workspace uses.
+ *
+ * Module-level on purpose: the split-pane divider, a citation opener and the dock itself all
+ * need the same tab list, and three stores would be three truths.
+ */
+export function sharedDockedBrowserStore(): DockedBrowserStore {
+  if (shared === null) shared = createDockedBrowserStore()
+  return shared
 }

@@ -41,9 +41,7 @@ export function handEyeResultToDockedBrowser(
     ownerText: request.ownerText,
     ...(request.kind === 'pdf' || request.kind === 'document' ? { mediaKind: request.kind } : {}),
   }
-  const sessionTag = request.sessionId ? ` · ${request.sessionId.slice(0, 6)}` : ''
-  const label = `${request.kind}${sessionTag}`
-  openUrlInDockedBrowser(store, request.url, { origin, title: label })
+  void openUrlInDockedBrowser(store, request.url, { origin })
 }
 
 /**

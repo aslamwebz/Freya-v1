@@ -659,3 +659,42 @@
 .chats-eye-library { margin-left: auto; background: transparent; color: inherit; border: 1px solid var(--border); padding: 6px 9px; border-radius: 6px; cursor: pointer; font-size: 11px; }
 
 .chats-browser-document { border: 0; height: 100%; width: 100%; background: white; }
+
+/* Browser workspace: one visual language per lifecycle state.
+
+   Each of the five "no page is showing" states gets its own tint, because they are five
+   different facts and a person should be able to tell them apart at a glance without
+   reading. A single empty panel for all of them is the failure this styling exists to
+   make impossible to reintroduce quietly. */
+.chats-browser-empty[data-state='tab-creating'] { color:#8fb0c4; }
+.chats-browser-empty[data-state='tab-creating'] b { color:#d6ecf7; }
+.chats-browser-empty[data-state='tab-navigating'] { color:#7fb6c9; }
+.chats-browser-empty[data-state='tab-navigating'] b { color:#bfe6f5; }
+.chats-browser-empty[data-state='tab-failed'] { color:#d3a09a; }
+.chats-browser-empty[data-state='tab-failed'] b { color:#f3c4bd; }
+.chats-browser-empty[data-state='runtime-unavailable'] { color:#a89bbd; }
+.chats-browser-empty[data-state='runtime-unavailable'] b { color:#ddcff0; }
+.chats-browser-empty[data-state='journal-untrusted'] { color:#d2b283; }
+.chats-browser-empty[data-state='journal-untrusted'] b { color:#f4dcb0; }
+.chats-browser-empty[data-state='no-tab'] { color:#7693a6; }
+
+/* A loading tab gets a quiet pulse on its chip so a ten-tab strip still reads at a glance. */
+.chats-browser-tab[data-status='navigating'] button { color:#a8d9ea; }
+.chats-browser-tab[data-status='navigating']::after {
+  content:''; position:absolute; left:8px; right:8px; bottom:0; height:1px;
+  background:linear-gradient(90deg,transparent,#65dcee,transparent); animation:chats-browser-load 1.1s linear infinite;
+}
+.chats-browser-tab[data-status='failed'] button { color:#e6a9a1; }
+.chats-browser-tab[data-status='creating'] button { color:#8fa8b8; font-style:italic; }
+/* Attribution is visible on the chip: a tab Freya opened is not a tab the owner opened. */
+.chats-browser-tab[data-created-by='freya'] small { color:#c4a4ffcc; }
+.chats-browser-tab[data-created-by='user'] small { color:#8fd6e8cc; }
+@keyframes chats-browser-load { from { transform:translateX(-40%); } to { transform:translateX(40%); } }
+@media (prefers-reduced-motion: reduce) { .chats-browser-tab[data-status='navigating']::after { animation:none; } }
+
+.chats-browser-snapshot {
+  position:absolute; inset:auto 0 0 0; max-height:42%; overflow:auto; margin:0;
+  padding:9px 11px; border-top:1px solid #63839940; background:#07131eee; color:#a9c6d6;
+  font:400 9px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap;
+  word-break:break-word; pointer-events:auto;
+}

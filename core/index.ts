@@ -21,6 +21,7 @@ import type { CapabilityPreferences } from './capabilities'
 import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
 import { createWebSearchTool, MindToolRegistry } from './mind/tools'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
+import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
 import type { ReferenceKnowledge } from './mind/context-compiler'
 import { Brain, buildIdentityRoot, buildSelfDefinition, type BrainProjection } from './brain/brain'
 import { ResearchIntegration } from './research/coreIntegration'
@@ -608,6 +609,15 @@ export interface CoreOptions {
    * to place in front of a model-driven loop.
    */
   readonly dualBrowser?: BrowserTaskPort
+  /**
+   * The Browser Service, for the multi-tab tool.
+   *
+   * Held separately from `dualBrowser` because the two doors are different: the reader tool
+   * wants the routed command vocabulary and nothing else, and the tab tool wants the surface
+   * that owns tab identity. Neither is a widened version of the other, and a single fat port
+   * would let the reader tool see tab state it has no business inferring from.
+   */
+  readonly browserTabs?: BrowserTabsPort
   /** A speech-to-text engine. Absent means none is configured. */
   voiceStt?: VoiceSttAdapter  /** A speech output engine. Absent means none is configured. */
   voiceTts?: VoiceTtsAdapter
@@ -1428,6 +1438,8 @@ class FreyaCore implements Core {
    * either without the other.
    */
   private dualBrowser: BrowserTaskPort | null = null
+  /** The Browser Service port for the multi-tab tool. Null until the host mounts it. */
+  private browserTabs: BrowserTabsPort | null = null
   /**
    * Research admission.
    *
@@ -1888,6 +1900,7 @@ class FreyaCore implements Core {
     // this is the only place that knows whether the host activated one. Absent,
     // the turn never offers a browser tool at all.
     this.dualBrowser = this.options.dualBrowser ?? null
+    this.browserTabs = this.options.browserTabs ?? null
     if (this.options.research) {
       const sessionStore = await this.buildResearchSessionStore()
       this.researchIntegration = new ResearchIntegration({
@@ -2160,6 +2173,12 @@ class FreyaCore implements Core {
             : []),
           ...(this.dualBrowser
             ? [createBrowserTaskTool({ browser: this.dualBrowser })]
+            : []),
+          // The tab tool needs the service, not the routed runtime: tabs are a thing the
+          // service owns and the routed vocabulary has no word for. Registered only when a
+          // service is actually mounted, so a build without one does not advertise it.
+          ...(this.browserTabs
+            ? [createBrowserTabsTool({ browser: this.browserTabs })]
             : []),
         ]
         if (tools.length === 0) return null

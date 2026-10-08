@@ -6,7 +6,7 @@ import type {
   GrantFact,
 } from '../devicehands'
 import { BROWSER_LIMITS, BROWSER_COMMAND_ACTION, type BrowserCommand, type BrowserMode, type BrowserRefusalCode, type BrowserTarget, type BrowserEventType } from './types'
-import { assertPublicBrowserUrl, publicBrowserPartition } from './isolation'
+import { assertPublicBrowserUrl, isNavigableBrowserUrl, publicBrowserPartition } from './isolation'
 import { browserDeleteReason } from '../safety/no-delete'
 import { RefTable, describePage, type PageElement, type PageSnapshot } from './refs'
 import { routeBrowserIntent, type AuthenticatedContext, type AuthNeedObservation, type BrowserIntent, type RouteEscalation, type RouteReading, type RoutingContext } from './routing'
@@ -14,6 +14,7 @@ import { createHandoffEnvelope, foldHandoffs, settleUnfinished, verifyHandoffEnv
 import { MediaOfferLog, normaliseMediaOffer, type MediaOffer } from './media'
 import { browserProjection, foldBrowserState, liveSessionCount, openHandoffCount, pageIdFor, type BrowserProjection, type BrowserRuntimeState } from './state'
 import { browserRecoveryReport, type BrowserRecoveryReport } from './recovery'
+import { adoptObservedRevision, runGatedBrowserAction } from './gate'
 
 /**
  * The dual-browser runtime.
@@ -203,6 +204,14 @@ export interface DualBrowserRuntimeOptions {
 export interface BrowserExecutionContext {
   /** Host-only call context. Never rebuilt from renderer request fields. */
   readonly origin: 'owner'
+  /**
+   * Who asked for a session, recorded at open.
+   *
+   * Not bookkeeping: a tab Freya opened for itself and a tab a person opened by typing an
+   * address are recovered differently, because reloading the second one out from under them
+   * is a different act from the first. Host-supplied, never taken from a renderer request.
+   */
+  readonly createdBy?: 'freya' | 'user'
 }
 
 export interface DualBrowserRuntime {
@@ -230,24 +239,6 @@ export interface DualBrowserRuntime {
 }
 
 /* -------------------------------------------------------------------- helpers */
-
-function readObservation(value: unknown): BrowserObservation | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-  const record = value as Record<string, unknown>
-  const revision = record.revision
-  if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 0) return null
-  const url = record.url
-  if (url !== null && typeof url !== 'string') return null
-  return {
-    revision,
-    url: typeof url === 'string' ? url : null,
-    ...(typeof record.title === 'string' ? { title: record.title } : {}),
-    ...(record.elements === undefined ? {} : { elements: record.elements }),
-    ...(typeof record.text === 'string' ? { text: record.text } : {}),
-    ...(typeof record.changed === 'boolean' ? { changed: record.changed } : {}),
-    ...(typeof record.fieldValue === 'string' ? { fieldValue: record.fieldValue } : {}),
-  }
-}
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
@@ -411,6 +402,27 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
    * `passed` verdict, and `abandon` in `finally` so a refused or failed action cannot leave
    * an observation lying around for a later action id to find.
    */
+  /**
+   * The ports the shared gate walk needs.
+   *
+   * Assembled once and shared with `./gate`, so the Phase 51 runtime and the Browser Service
+   * in `./service` walk the same ten gates against the same adapter and record into the same
+   * journal. Written as a value rather than a spread at each call site so a second gate chain
+   * cannot be introduced by accident: there is one object, and it is this one.
+   */
+  const gateDeps = {
+    adapter: options.adapter,
+    authority: options.authority,
+    record,
+    fold: (type: BrowserEventType, payload: BrowserPayload): void => {
+      state = foldBrowserState([{ type, payload }], state)
+    },
+    newId,
+    nowIso,
+    clock,
+    principalId,
+  }
+
   async function gated(input: {
     readonly sessionId: string
     readonly target: BrowserTarget
@@ -420,75 +432,25 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     readonly deadlineMs: number
     readonly executionPrincipal?: string
   }): Promise<GateOutcome> {
-    const actionKey = BROWSER_COMMAND_ACTION[input.command]
     /* istanbul ignore next -- the total table makes this unreachable; it is here so that a
        future command mapped to null cannot silently skip the authority. */
-    if (actionKey === null) {
+    if (BROWSER_COMMAND_ACTION[input.command] === null) {
       return { refused: true, result: refusal(input.command, input.target, 'authority-refused', 'That command is not an action this build routes through Device Hands.') }
     }
 
-    const actionId = newId()
-    const at = nowIso()
-    const deadlineAt = new Date(clock() + input.deadlineMs).toISOString()
-    options.adapter.begin(input.sessionId, actionId, {
-      sessionId: input.sessionId,
-      target: input.target,
-      command: input.command,
-      deadlineAt,
-    })
-    try {
-      const verdict = await options.authority.perform({
-        actionId,
-        principalId: input.executionPrincipal ?? principalId,
-        scope: input.sessionId,
-        actionKey,
-        input: input.actionInput,
-        at,
-        deadlineAt,
-      })
-      if (!verdict.performed) {
-        // A gate refused. That is Device Hands' answer and this layer has no second opinion.
-        return {
-          refused: true,
-          result: refusal(
-            input.command,
-            input.target,
-            'authority-refused',
-            `Device Hands refused this action (${verdict.code ?? verdict.verdict}): ${verdict.reason}`,
-          ),
-        }
+    const outcome = await runGatedBrowserAction(gateDeps, { ...input, target: input.target })
+    if (outcome.refused) {
+      return {
+        refused: true,
+        result: refusal(
+          input.command,
+          input.target,
+          outcome.code === 'authority-refused' ? 'authority-refused' : 'adapter-failed',
+          outcome.reason,
+        ),
       }
-      if (verdict.verdict !== 'passed') {
-        // The gate held and the page did not do it. Two different facts, and collapsing them
-        // would put "Core would not let me" in the audit for a page that simply did not move.
-        return {
-          refused: true,
-          result: refusal(
-            input.command,
-            input.target,
-            'adapter-failed',
-            `Device Hands authorised this action but the browser did not carry it out (${verdict.code ?? verdict.verdict}): ${verdict.reason}`,
-          ),
-        }
-      }
-      const observation = readObservation(options.adapter.takeObserved(actionId))
-      if (observation === null) {
-        // `passed` with nothing to report is a contradiction. Reporting it as a failure
-        // is the safe reading: nothing is claimed that was not observed.
-        return {
-          refused: true,
-          result: refusal(
-            input.command,
-            input.target,
-            'adapter-failed',
-            'The browser action was authorised but reported nothing about the page, so nothing is claimed about what happened.',
-          ),
-        }
-      }
-      return { refused: false, observation }
-    } finally {
-      options.adapter.abandon(actionId)
     }
+    return { refused: false, observation: outcome.observation }
   }
 
   /**
@@ -499,19 +461,27 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
    * navigation, because a click or a keystroke can replace the page too — and a projection that
    * only tracked navigation would keep serving a URL the window has already left.
    */
-  function adoptRevision(sessionId: string, observation: BrowserObservation): number {
+  function adoptRevision(sessionId: string, observation: BrowserObservation): number | null {
     const table = refs.get(sessionId)
     const entry = state.sessions.get(sessionId)
-    if (table === undefined || entry === undefined) return observation.revision
-    const previous = table.currentRevision
-    table.retire(observation.revision)
-    if (observation.revision > previous) {
-      const at = nowIso()
-      const url = (observation.url ?? '').slice(0, limits.maxUrlChars)
-      void record('browser.dual.page.replaced', { sessionId, revision: observation.revision, url, at })
-      state = foldBrowserState([{ type: 'browser.dual.page.replaced', payload: { sessionId, revision: observation.revision, url, at } }], state)
-    }
-    return table.currentRevision
+    if (table === undefined || entry === undefined) return null
+    // The revision this session is *at* is read before anything moves it. Retiring first
+    // would advance the very counter the adoption is compared against, and the observation
+    // would then look like it had already been applied.
+    const previousRevision = table.currentRevision
+    const adopted = adoptObservedRevision(
+      {
+        sessionId,
+        observation,
+        currentRevision: previousRevision,
+        maxUrlChars: limits.maxUrlChars,
+        navigable: isNavigableBrowserUrl,
+      },
+      { record, fold: gateDeps.fold, nowIso },
+    )
+    if (!adopted.ok) return null
+    table.retire(adopted.revision)
+    return adopted.revision
   }
 
   /* --------------------------------------------------------------- the command */
@@ -550,7 +520,10 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     state = foldBrowserState([{ type: 'browser.dual.route.decided', payload: routePayload }], state)
 
     const executionPrincipal = context?.origin === 'owner' && target === 'public' ? 'owner:browser' : principalId
-    return await settle(await dispatch(request, command, target, mode, escalation, executionPrincipal))
+    // The principal decides who may act; the attribution decides who asked. Both are host
+    // facts. Neither is read off the request.
+    const executionCreatedBy = context?.origin === 'owner' ? (context.createdBy ?? 'user') : 'freya'
+    return await settle(await dispatch(request, command, target, mode, escalation, executionPrincipal, executionCreatedBy))
   }
 
   async function dispatch(
@@ -560,10 +533,11 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     mode: BrowserMode,
     escalation: RouteEscalation | null,
     executionPrincipal: string,
+    executionCreatedBy: 'freya' | 'user' = 'freya',
   ): Promise<BrowserResult> {
     switch (command) {
       case 'session.open':
-        return openSession(target, escalation)
+        return openSession(target, escalation, executionCreatedBy)
       case 'session.close':
         return closeSession(request, target, escalation)
       case 'session.state':
@@ -596,7 +570,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
 
   /* ------------------------------------------------------------- session.open */
 
-  async function openSession(target: BrowserTarget, escalation: RouteEscalation | null): Promise<BrowserResult> {
+  async function openSession(target: BrowserTarget, escalation: RouteEscalation | null, createdBy: 'freya' | 'user'): Promise<BrowserResult> {
     if (target !== 'public') {
       return refusal('session.open', target, 'target-unavailable', 'A Freya Browser session is opened in the Freya Browser.')
     }
@@ -616,8 +590,8 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
 
     refs.set(sessionId, new RefTable(pageIdFor(sessionId)))
     media.set(sessionId, new MediaOfferLog())
-    await record('browser.dual.session.opened', { sessionId, target, at: nowIso() })
-    state = foldBrowserState([{ type: 'browser.dual.session.opened', payload: { sessionId, target, at: nowIso() } }], state)
+    await record('browser.dual.session.opened', { sessionId, target, createdBy, at: nowIso() })
+    state = foldBrowserState([{ type: 'browser.dual.session.opened', payload: { sessionId, target, createdBy, at: nowIso() } }], state)
 
     return {
       ok: true,
@@ -690,10 +664,13 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     })
     if (result.refused) return result.result
     const observation = result.observation
-    if (observation.url === null) {
-      return refusal('page.navigate', target, 'adapter-failed', 'The Freya Browser navigated but did not report where it ended up, so the page is not claimed as loaded.')
-    }
     const revision = adoptRevision(sessionId, observation)
+    // The window said it navigated and did not say where it ended up, or said something Freya
+    // could not navigate to. Either way there is no page to claim, and the session keeps its
+    // previous state rather than advancing to a revision that describes an empty address.
+    if (revision === null) {
+      return refusal('page.navigate', target, 'adapter-failed', 'The Freya Browser navigated but did not report a navigable address, so the page is not claimed as loaded.')
+    }
     lastObservation = readAuthNeed(observation, address.url)
     return {
       ok: true,
@@ -725,6 +702,9 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     if (result.refused) return result.result
     const observation = result.observation
     const revision = adoptRevision(sessionId, observation)
+    if (revision === null) {
+      return refusal('page.read', target, 'adapter-failed', 'The Freya Browser read the page but reported no navigable address, so nothing is claimed about what was read.')
+    }
     const text = observation.text ?? ''
     lastObservation = readAuthNeed(observation, url)
     return {
@@ -760,6 +740,12 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
     if (result.refused) return result.result
     const observation = result.observation
     const revision = adoptRevision(sessionId, observation)
+    // A description is only meaningful about a page that has an address. If the observation
+    // carried none, the session stays where it was and the caller is told the page is not
+    // there, rather than being handed a reference table for a page nobody can name.
+    if (revision === null) {
+      return refusal('page.describe', target, 'adapter-failed', 'The Freya Browser reported no navigable address, so there is no page to describe.')
+    }
 
     const described = describePage(
       { elements: observation.elements, text: observation.text ?? '' },
@@ -798,6 +784,11 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
         title: snapshot.title,
         elements: describeElements(adopted),
         truncated: snapshot.truncated,
+        // The page's own words, bounded. `page.read` still reports a byte count and nothing
+        // else, and the journal still records `readBytes` and never the text: this is the one
+        // reading command whose job is to describe a page, so the prose belongs in it. The
+        // Browser Service builds a semantic snapshot from exactly this and nothing else.
+        text: described.text,
       },
     }
   }
@@ -895,6 +886,10 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
   async function click(request: BrowserRequest, target: BrowserTarget, mode: 'read' | 'act', escalation: RouteEscalation | null): Promise<BrowserResult> {
     const result = await actOn(request, target, mode, 'page.click')
     if (result.refused) return result.result
+    // The clicked happened: it was authorised and the adapter observed it. The window did not say
+    // where it ended up, so the revision is held rather than advanced to one that describes
+    // nothing — which leaves every existing reference stale instead of silently re-pointing
+    // them at a page nobody has read.
     const revision = adoptRevision(request.sessionId ?? '', result.observation)
     return { ok: true, command: 'page.click', target, escalation, data: { clicked: true, revision, url: result.observation.url } }
   }
@@ -902,6 +897,10 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
   async function type(request: BrowserRequest, target: BrowserTarget, mode: 'read' | 'act', escalation: RouteEscalation | null): Promise<BrowserResult> {
     const result = await actOn(request, target, mode, 'page.type')
     if (result.refused) return result.result
+    // The typed happened: it was authorised and the adapter observed it. The window did not say
+    // where it ended up, so the revision is held rather than advanced to one that describes
+    // nothing — which leaves every existing reference stale instead of silently re-pointing
+    // them at a page nobody has read.
     const revision = adoptRevision(request.sessionId ?? '', result.observation)
     return { ok: true, command: 'page.type', target, escalation, data: { typed: true, revision, url: result.observation.url } }
   }

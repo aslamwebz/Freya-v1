@@ -41,6 +41,7 @@ import type { ModelProvider } from '../core/model/provider'
 import type { DeviceHandsActionKey, GrantFact } from '../core/devicehands'
 import type { BrowserTargetFactory } from '../core/research/browser'
 import type { BrowserTaskPort } from '../core/mind/browser-tool'
+import type { BrowserTabsPort } from '../core/mind/browser-tabs-tool'
 import { randomUUID } from 'node:crypto'
 import {
   createDeviceHandsActivation,
@@ -819,6 +820,14 @@ export class ElectronCoreHost implements CoreHost {
    * receive an honest refusal rather than a tool that was never offered.
    */
   private dualBrowserRuntime: BrowserTaskPort | null = null
+  /**
+   * The Browser Service port for Core's multi-tab tool.
+   *
+   * Null until `attachBrowserTabs` runs, which happens after the dual-browser activation has
+   * succeeded and the service has been mounted. A null here is the honest "there is no tab
+   * tool" rather than a refusal invented by this file.
+   */
+  private browserTabsPort: BrowserTabsPort | null = null
 
   /**
    * Hand Core the browser seam, once a Freya Browser has actually activated.
@@ -829,6 +838,18 @@ export class ElectronCoreHost implements CoreHost {
    */
   attachDualBrowser(runtime: BrowserTaskPort): void {
     this.dualBrowserRuntime = runtime
+  }
+
+  /**
+   * Hand Core the Browser Service, for the multi-tab tool.
+   *
+   * Separate from {@link attachDualBrowser} on purpose. That one is the routed command
+   * vocabulary; this one is the surface that owns tab identity, references and revisions.
+   * Keeping them apart is what lets the reader tool stay a reader, with no way to infer what a
+   * browser is doing without asking it.
+   */
+  attachBrowserTabs(port: BrowserTabsPort): void {
+    this.browserTabsPort = port
   }
 
   constructor(
@@ -1178,6 +1199,10 @@ export class ElectronCoreHost implements CoreHost {
             return runtime.execute(request)
           },
         },
+        // The tab tool, only once a service exists. A Core built before the browser mounted
+        // has no `browserTabs` at all, so the tool is simply not in its registry — which is a
+        // truer answer than advertising a tool that could only ever refuse.
+        ...(this.browserTabsPort === null ? {} : { browserTabs: this.browserTabsPort }),
         // Bytes in, and nowhere else. Core does not persist it, journal it, log it
         // or put it in a projection, so there is nothing for it to leak through.
         ...(this.options.conversationKey

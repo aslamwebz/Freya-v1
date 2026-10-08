@@ -1,7 +1,7 @@
 import { CapabilitySettingsStore } from './capabilitySettings'
 import { readRuntimeCapabilityRegistry } from '../core/model/capability-runtime'
 import type { CapabilityPreferences } from '../core/capabilities'
-import { app, BrowserWindow, WebContentsView, ipcMain, screen, shell, safeStorage } from 'electron'
+import { app, BrowserWindow, WebContentsView, ipcMain, screen, shell, safeStorage, Notification } from 'electron'
 import { join, resolve } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
@@ -40,6 +40,7 @@ import {
   ElectronFreyaWindowFactory,
   type DualBrowserActivation,
 } from './browser'
+import { startControl, type ControlHandle } from './control'
 import { installSingleInstanceGuard } from './startup/singleInstance'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ProviderConfigInput } from './providerConfig'
@@ -47,6 +48,9 @@ import type { ModelProvider } from '../core/model/provider'
 import type { GrantFact } from '../core/devicehands'
 import type { BrowserResult } from '../core/browser'
 import { normaliseBrowserDockRequest, normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
+import { createEmbeddedBrowserSurface } from './browser/embeddedSurface'
+import { normaliseSemanticBrowserRequest } from './browser/semanticRequest'
+import { clampSurfaceBounds, createBrowserService, type BrowserService } from '../core/browser/service'
 import { EncryptedConversationStore } from '../core/conversation/encrypted-store'
 
 const HERE = __dirname
@@ -117,6 +121,34 @@ let browserExtensionHost: BrowserExtensionHost | null = null
  * all. That is the same rule Phase 43 followed when it refused to be `active` without Phase 42.
  */
 let dualBrowser: DualBrowserActivation | null = null
+/**
+ * The control plane: the named-pipe / Unix-socket server that gives external tools
+ * (CLI, MCP, scripts) a narrow view of Core and the Browser Service. One owner,
+ * one pipe, no second process. Started after Core, stopped before Core, so the
+ * channel and the journal are owned by the same lifetime.
+ */
+let controlHandle: ControlHandle | null = null
+/**
+ * The Browser Service: tabs, orchestration and the Semantic Browser Protocol.
+ *
+ * Built **after** the activation succeeds and not before, because the service's whole point is
+ * to be a vocabulary over that activation. Before it, there is nothing to speak about.
+ *
+ * Its surface is the embedded one: one real `WebContentsView` per tab, created here and
+ * placed by the renderer through a bounds message. The service knows nothing about
+ * `BrowserWindow`, and a Browser Relay surface would be a different object implementing the
+ * same port with no change to anything above it.
+ */
+let browserService: BrowserService | null = null
+/**
+ * The last state pushed to the window, as a string, so an unchanged push is skipped.
+ *
+ * The surface reports title updates, loading transitions and navigations. Serialising every
+ * one of them to compare is far cheaper than serialising them across a process boundary to
+ * be discarded there, and a renderer that redraws on an identical object is a renderer that
+ * rebuilds its tab strip for nothing.
+ */
+let lastPushedBrowserState = ''
 /**
  * The Freya Browser's adapter, created before Device Hands so the effects can resolve it lazily.
  *
@@ -305,20 +337,142 @@ function buildDualBrowserSeam(extension: BrowserExtensionHost | null): DualBrows
   })
 }
 
+/**
+ * Assemble the Browser Service over the activation and the embedded surface.
+ *
+ * The activation has already succeeded by the time this runs, which is the only ordering that
+ * makes sense: the service is a vocabulary over that activation, so there is nothing for it
+ * to say before it exists.
+ *
+ * Two details are worth stating because each was the previous build's failure mode:
+ *
+ *   - **State is pushed, not polled.** The surface reports navigations, loads, failures and
+ *     title changes; the service re-publishes; the window is sent the result. The workspace
+ *     no longer re-reads the whole projection on a timer, which matters more the more tabs
+ *     are open and not at all when there are none.
+ *   - **The window has no easier path in.** A tab opened from the renderer is created
+ *     through the service like any other, so it gets the same lifecycle, the same URL policy
+ *     and the same journal entry as a tab Freya opened for itself.
+ */
+function mountBrowserService(seam: DualBrowserActivation): void {
+  const factory = dockedBrowserFactory
+  if (factory === null) {
+    console.warn('[freya] the browser service did not mount: no embedded page factory')
+    return
+  }
+  const surface = createEmbeddedBrowserSurface({
+    create: async (sessionId, partition) => await factory.create(sessionId, partition),
+    // The factory docks exactly one view and undocks the rest, so "the front tab" is a fact
+    // about the placement rather than something this file has to track itself.
+    place: (sessionId, bounds) => factory.dock(sessionId, bounds),
+    partitionFor: (sessionId) => `freya-public-${sessionId}`,
+    canEmbed: () => mainWindow !== null && !mainWindow.isDestroyed(),
+  })
+  const journal = coreHost?.deviceHandsJournal() ?? null
+  browserService = createBrowserService({
+    surface,
+    commands: {
+      execute: (request, context) => seam.execute(request, context),
+      active: () => seam.active(),
+    },
+    allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
+    allowPrivateHosts: localUnrestrictedMode(),
+    ...(journal === null
+      ? {}
+      : {
+          // The journal is opened over `DeviceHandsEventType`, so a browser event type is a
+          // cast at this boundary rather than a widened union. The cast is honest: the Phase
+          // 51 activation appends its own event types to the same file through exactly this
+          // journal, and the file validates each payload against its own table on the way in.
+          record: async (type, payload) => {
+            await journal.append(type as Parameters<typeof journal.append>[0], payload)
+          },
+        }),
+    clockMs: () => Date.now(),
+  })
+
+  const status = seam.status()
+  const recovery = seam.recovery()
+  // The list of what *could* be reopened, and is not.
+  //
+  // A page does not survive its process, so reopening one means navigating to it — and a
+  // navigation to a site that has changed in the meantime is a side effect on somebody's
+  // account that nobody asked for. So the list is reported, bounded to the code ceiling, and
+  // left for whoever asks. Claiming a restore that has not happened would be the dishonest
+  // half of recovery, and creating empty tabs for the lost sessions would be the other half:
+  // a chip with no page behind it is the very shape this whole change exists to remove.
+  const restorable = recovery.sessionsLost
+    .filter((lost): lost is { readonly sessionId: string; readonly url: string } => typeof lost.url === 'string' && lost.url !== '')
+    .slice(0, 32)
+    .map((lost) => ({ sessionId: lost.sessionId, url: lost.url }))
+  browserService.trust(status.journalTrustworthy, {
+    trustworthy: recovery.trustworthy,
+    sessionsLost: recovery.sessionsLost.length,
+    referencesRetired: recovery.referencesRetired,
+    restored: 0,
+    skipped: recovery.sessionsLost.length - restorable.length + recovery.handoffsUncertain.length,
+    restorable,
+    summary: recovery.summary,
+  })
+
+  browserService.subscribe((state) => {
+    // A window that has gone away gets nothing: sending to a destroyed webContents throws,
+    // and a browser must not be able to take the app down on the way out.
+    const window = mainWindow
+    if (window === null || window.isDestroyed() || window.webContents.isDestroyed()) return
+    const serialised = JSON.stringify(state)
+    if (serialised === lastPushedBrowserState) return
+    lastPushedBrowserState = serialised
+    window.webContents.send('freya:browser:event', state)
+  })
+  console.log('[freya] the browser service is mounted on the embedded surface')
+}
+
+/**
+ * The state the window reads.
+ *
+ * When the Browser Service is mounted this is **its** projection and nothing else: the Phase
+ * 51 fields are folded in so an older consumer of this channel keeps working, but the fields
+ * a renderer should branch on are `runtimeStatus` and `reason`. A runtime with no tabs and a
+ * runtime that cannot open one are both `available: false` in the old shape, and telling them
+ * apart was the whole of Part 3.
+ */
 function browserBridgeState(): BrowserBridgeState {
+  const service = browserService
+  if (service !== null) {
+    const projected = service.state()
+    const seam = dualBrowser
+    const phase51 = seam === null ? null : seam.projection()
+    return {
+      ...projected,
+      extensionPaired: seam?.status().extensionPaired ?? false,
+      extensionLive: seam?.status().extensionLive ?? false,
+      described: phase51?.described ?? 0,
+      staleRefs: phase51?.staleRefs ?? 0,
+      mediaObserved: phase51?.mediaObserved ?? 0,
+      refusals: phase51?.refusals ?? 0,
+      summary: projected.reason ?? `${String(projected.tabCount)} tab(s); the Freya Browser is available.`,
+      phase51: phase51?.sessions ?? [],
+    }
+  }
   const seam = dualBrowser
   if (seam === null) {
     return {
       available: false,
       active: false,
-      reason: 'The dual-browser runtime is not enabled in this build.',
+      reason: 'The Freya Browser is not enabled in this build, so no page can be opened.',
       publicAvailable: false,
+      journalTrustworthy: false,
+      runtimeStatus: 'surfaceUnavailable',
+      activeTabId: null,
+      tabs: [],
+      tabCount: 0,
+      recovery: null,
       extensionPaired: false,
       extensionLive: false,
-      journalTrustworthy: false,
-      summary: 'dual-browser runtime unavailable',
+      summary: 'the browser is not available in this build',
       sessions: [],
-      handoffs: [],
+      phase51: [],
       described: 0,
       staleRefs: 0,
       mediaObserved: 0,
@@ -326,23 +480,30 @@ function browserBridgeState(): BrowserBridgeState {
     }
   }
 
+  // The activation exists but the service does not. That is a real and different state from
+  // either "no browser" or "browser ready": something in the mount failed, and the owner is
+  // owed that rather than a blank workspace.
   const status = seam.status()
-  const projection = seam.projection()
   return {
-    available: seam.active(),
-    active: seam.active(),
-    reason: seam.active() ? null : status.summary,
+    available: false,
+    active: false,
+    reason: status.summary,
     publicAvailable: status.publicAvailable,
+    journalTrustworthy: status.journalTrustworthy,
+    runtimeStatus: !status.journalTrustworthy ? 'journalUntrusted' : seam.active() ? 'starting' : 'disabled',
+    activeTabId: null,
+    tabs: [],
+    tabCount: 0,
+    recovery: null,
     extensionPaired: status.extensionPaired,
     extensionLive: status.extensionLive,
-    journalTrustworthy: status.journalTrustworthy,
     summary: status.summary,
-    sessions: projection.sessions,
-    handoffs: [...projection.handoffs.entries()].map(([handoffId, state]) => ({ handoffId, state })),
-    described: projection.described,
-    staleRefs: projection.staleRefs,
-    mediaObserved: projection.mediaObserved,
-    refusals: projection.refusals,
+    sessions: [],
+    phase51: seam.projection().sessions,
+    described: 0,
+    staleRefs: 0,
+    mediaObserved: 0,
+    refusals: 0,
   }
 }
 
@@ -705,6 +866,17 @@ function collectWorkspaceAndThen(finish: () => void): void {
  * app from quitting — a user who asked to quit gets to quit.
  */
 function shutdownCoreAndThen(finish: () => void): void {
+  // Close the control plane first. An external tool that races a quit and
+  // arrives while the journal is being torn down would otherwise get a pipe
+  // that points at a Core which is no longer answering. Failing closed is the
+  // honest failure mode here.
+  const handle = controlHandle
+  controlHandle = null
+  if (handle !== null) {
+    void handle.stop().catch((error: unknown) => {
+      console.error('[freya] the control plane failed to stop cleanly', error)
+    })
+  }
   localWhisper.stop()
   localWake.stop()
   if (attentionTimer !== null) {
@@ -1323,8 +1495,37 @@ function registerIpc(): void {
       if (requireCore().voice()?.wake.armed) localWake.reset()
     }
     const result = requireCore().submit(envelope)
+    // Surface a small set of turn events on the control plane so external
+    // tools (opencode, the CLI, an MCP host) can wait without polling. The
+    // publisher is a no-op when no control server is running, so this is free
+    // in environments that have not opted into the control plane.
+    void result.then((settled) => {
+      if (!settled.ok) return
+      const handle = controlHandle
+      if (handle === null) return
+      if (envelope.command === 'conversation.turn.submit') {
+        const payload = envelope.payload as { conversationId?: unknown } | undefined
+        if (typeof payload?.conversationId === 'string') {
+          handle.publish({
+            jsonrpc: '2.0',
+            method: 'event',
+            params: { topic: 'conversation.response', payload: { conversationId: payload.conversationId, ok: true }, at: new Date().toISOString() },
+          })
+        }
+      } else if (envelope.command === 'conversation.create') {
+        const outcome = settled as unknown as { conversation?: { conversationId?: string } }
+        const id = outcome?.conversation?.conversationId
+        if (typeof id === 'string') {
+          handle.publish({
+            jsonrpc: '2.0',
+            method: 'event',
+            params: { topic: 'conversation.created', payload: { conversationId: id }, at: new Date().toISOString() },
+          })
+        }
+      }
+    })
     // The microphone gate follows Core's verdict rather than the request, so a
-    // refused capture never opens the device and a refusal cannot leave the gate
+    // refused capture never opens the gate, and a refusal cannot leave the gate
     // latched open for whatever asks next.
     void result.then((settled) => {
       trackVoiceCapture(envelope, settled)
@@ -1351,9 +1552,43 @@ function registerIpc(): void {
   ipcMain.handle('freya:browser:state', () => browserBridgeState())
   ipcMain.handle('freya:browser:dock', (event, input: unknown) => {
     if (event.sender !== mainWindow?.webContents) return false
-    const dock = normaliseBrowserDockRequest(input, mainWindow.getContentBounds())
+    const window = mainWindow
+    if (window === null || window.isDestroyed()) return false
+    // Bounds are re-derived from the window's own content rect on every message rather than
+    // trusted from the renderer. A renderer that asks for a rect outside the window gets a
+    // rect clamped into it, which is what stops a compromised page from parking a native view
+    // over the rest of the application chrome.
+    const dock = normaliseBrowserDockRequest(input, window.getContentBounds())
     if (!dock) return false
+    if (browserService !== null) {
+      const bounds = clampSurfaceBounds(dock.bounds, window.getContentBounds())
+      // A zero-area rect is the honest way to say "hidden": a native view given one is neither
+      // painted nor hit-testable, which a `visible: false` toggle is not on every Electron
+      // version. A surface with no native view answers false and the workspace shows its own
+      // chrome instead.
+      return browserService.dock(dock.sessionId, dock.sessionId === null ? null : bounds)
+    }
     return dockedBrowserFactory?.dock(dock.sessionId, dock.bounds) ?? false
+  })
+  ipcMain.handle('freya:browser:command', async (event, input: unknown) => {
+    if (event.sender !== mainWindow?.webContents) {
+      throw new Error('Browser commands are restricted to the main window.')
+    }
+    const service = browserService
+    if (service === null) {
+      return {
+        ok: false,
+        op: 'tabs',
+        code: 'subsystem-disabled',
+        reason: 'The Freya Browser is not available in this build, so no tab was opened or changed.',
+        data: {},
+      }
+    }
+    const bounded = normaliseSemanticBrowserRequest(input)
+    if (!bounded.ok) {
+      return { ok: false, op: 'tabs', code: 'request-malformed', reason: bounded.reason, data: {} }
+    }
+    return await service.run(bounded.request)
   })
   ipcMain.handle('freya:browser:execute', async (event, input: unknown) => {
     if (event.sender !== mainWindow?.webContents) throw new Error('Browser requests are restricted to the main window.')
@@ -1728,10 +1963,16 @@ app.whenReady().then(async () => {
             return
           }
           dualBrowser = dualBrowserSeam
+          mountBrowserService(dualBrowserSeam)
           // Hand Core the seam. Until this runs a turn asking for a browser is
           // refused honestly; after it, the tool reaches the real Freya Browser
           // through Device Hands, on the native/public port.
           coreHost?.attachDualBrowser(dualBrowserSeam.runtime)
+          // And the tab tool, once the service exists. It is a different door on purpose: the
+          // reader tool keeps the routed command vocabulary and no way to see tab state.
+          if (browserService !== null) {
+            coreHost?.attachBrowserTabs({ run: async (request) => await browserService!.run(request) })
+          }
           console.log(`[freya] ${result.reason}`)
         })
         .catch((error: unknown) => {
@@ -1742,6 +1983,46 @@ app.whenReady().then(async () => {
 
     mainWindow = createWindow()
     startPresenceFor(mainWindow)
+
+    // The external control plane. Started after the window so any first peer
+    // that connects can immediately focus the existing instance; stopped
+    // before Core in `shutdownCoreAndThen` so the channel and the journal
+    // never disagree about who is alive.
+    if (controlHandle === null) {
+      try {
+        const { ControlService } = await import('./control/service')
+        const service = new ControlService({
+          coreHost: requireCore(),
+          getBrowserService: () => browserService,
+          getMainWindow: () => mainWindow,
+          focusWindow: () => {
+            const win = mainWindow
+            if (win === null || win.isDestroyed()) return false
+            if (win.isMinimized()) win.restore()
+            win.show()
+            win.focus()
+            return true
+          },
+          stopAllActive: () => requireCore().status().stopAll.active,
+          hostPrincipalId: () => 'owner',
+          notify: async (text: string) => {
+            if (Notification.isSupported()) {
+              new Notification({ title: 'Freya', body: text, silent: true }).show()
+            }
+          },
+        })
+        controlHandle = await startControl({
+          userDataDir: app.getPath('userData'),
+          service,
+          enabled: true,
+          log: (line) => console.log(line),
+        })
+        console.log(`[freya] control plane ready at ${controlHandle.endpoint}`)
+      } catch (error) {
+        console.error('[freya] the control plane failed to start; external tools will be unable to reach this Freya instance', error)
+        controlHandle = null
+      }
+    }
 
     // Wire the presence host to Core projections. The presence host receives
     // the same projections as the main window, but it only forwards them to

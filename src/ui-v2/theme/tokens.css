@@ -9,7 +9,7 @@
   color: var(--f-ink); font-family: var(--f-font);
 }
 .freya-v2[data-theme='abyss'] {
-  --f-bg: #03070f;
+  --f-bg: #000000;
   --f-panel: #081420;
   --f-panel-raised: #1d3346;
   --f-ink: #e8f1fb;
@@ -61,7 +61,7 @@
   color-scheme: light;
 }
 .freya-v2[data-theme='vessel'] {
-  --f-bg: #101214;
+  --f-bg: #000000;
   --f-panel: #191d21;
   --f-panel-raised: #2b3238;
   --f-ink: #eef1f2;

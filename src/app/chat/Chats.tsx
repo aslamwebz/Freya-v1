@@ -10,7 +10,7 @@ import { coreMirror, ensureActivityAttached } from '../../platform/coreClient'
 import { researchMirror } from '../../platform/researchClient'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import type { WorkspaceResearchView } from './modes'
-import { RichMessage } from './RichMessage'
+import { AssistantMessageView } from './AssistantMessageView'
 import { MediaGrid } from './MediaCards'
 import { DockedBrowser, type DockedTabOrigin } from './BrowserWorkspace'
 import { EyeSessionControls } from './EyeSessionControls'
@@ -311,18 +311,13 @@ export function Chats({
                 <header><b>{message.role === 'user' ? 'You' : 'Freya'}</b><time>{timeLabel(message.createdAt)}</time></header>
                 <div className="chats-bubble">
                   {message.role === 'assistant'
-                    ? <RichMessage
+                    ? <AssistantMessageView
                         content={message.content}
                         onOpenLink={(url, provenance) => onBrowserOpenUrl(url, { kind: 'link', from: provenance?.kind === 'source' ? 'citation' : 'chat', ownerText: messages.slice(0, messageIndex).reverse().find((row) => row.role === 'user')?.content ?? '' })}
-                        enableCodeCopy
-                        enableToc
-                        collapseAbove={2400}
-                        provenance={
-                          message.media !== undefined && message.media.length > 0
-                            ? { retrieved: message.media.length }
-                            : undefined
-                        }
-                      />
+                        retrieved={message.media?.length ?? 0}
+                        mediaCount={message.media?.length ?? 0}
+                      >
+                      </AssistantMessageView>
                     : <p className="chats-user-text">{message.content}</p>}
                   {/* What the lookups behind this answer returned. Drawn from the
                       message Core stored, never recovered from the prose: a card needs

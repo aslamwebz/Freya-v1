@@ -7,9 +7,9 @@
  */
 
 /* The shell owns the viewport; nothing above it should scroll or add margins. */
-html, body { margin: 0; height: 100%; }
-body { overflow: hidden; }
-#root { height: 100%; }
+html, body { margin: 0; height: 100%; background: #000; }
+body { overflow: hidden; background-color: #000; }
+#root { height: 100%; background: #000; }
 
 .freya-app {
   --a-rail: 208px;
@@ -29,16 +29,16 @@ body { overflow: hidden; }
   font-family: var(--f-font);
 }
 
-/* Background: obsidian ground with a faint horizon glow. */
+/* Background: pure black. The horizon glow and star field are gone — the chat
+   surface is the only thing on the page, and a black ground makes its cards
+   and bubbles read clearly. */
 .a-bg {
   position: fixed;
   inset: 0;
   z-index: 0;
-  background:
-    radial-gradient(120% 80% at 50% 120%, color-mix(in srgb, var(--f-action) 10%, transparent), transparent 60%),
-    radial-gradient(90% 60% at 50% -10%, color-mix(in srgb, var(--f-cognition) 8%, transparent), transparent 55%),
-    var(--f-bg);
+  background: #000;
 }
+.a-atmos { display: none; }
 .a-atmos { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
 .a-atmos .a-stars {
   position: absolute; inset: 0;

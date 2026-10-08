@@ -11,7 +11,7 @@ import { readModelCatalog, selectModel } from '../../platform/modelClient'
 import type { ModelView } from '../../../core/protocol/core-protocol'
 import type { ConversationProjection, VoiceProjection } from '../../../core/protocol/conversation'
 import { MicButton } from './MicButton'
-import { RichMessage } from '../../app/chat/RichMessage'
+import { AssistantMessageView } from '../../app/chat/AssistantMessageView'
 import { MediaGrid } from '../../app/chat/MediaCards'
 import { ActivityFeed } from '../../app/chat/ActivityFeed'
 import '../../app/chat/chat.css'
@@ -333,17 +333,12 @@ export function ChatSurface() {
                     text. The reader closes its token set to code, strong/emphasis
                     and explicit http(s) links; HTML tags arrive as text. */}
                 {message.role === 'assistant'
-                  ? <RichMessage
+                  ? <AssistantMessageView
                       content={message.content}
-                      enableCodeCopy
-                      enableToc
-                      collapseAbove={2400}
-                      provenance={
-                        message.media && message.media.length > 0
-                          ? { retrieved: message.media.length }
-                          : undefined
-                      }
-                    />
+                      retrieved={message.media?.length ?? 0}
+                      mediaCount={message.media?.length ?? 0}
+                    >
+                    </AssistantMessageView>
                   : <p className="chat-turn-text">{message.content}</p>}
                 {message.role === 'assistant' && message.media && message.media.length > 0 ? (
                   <MediaGrid items={message.media} />

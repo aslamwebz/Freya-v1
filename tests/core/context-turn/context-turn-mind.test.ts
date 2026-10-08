@@ -314,3 +314,26 @@ describe('a broken Context source costs the owner nothing', () => {
     expect(blockOf(second)?.content).toMatch(/is unresolved: the matching context item was revoked/)
   })
 })
+
+describe('the shared Context block stays out of the owner\'s recency window', () => {
+  it('stands in front of the history on a follow-up turn, not beside the question', async () => {
+    // Reproduces the live failure of the old adjacency: on a follow-up turn the
+    // block sat next to "what did I just say?" and the model answered from the
+    // block instead of from the conversation.
+    const store = scopedStore()
+    admitOrThrow(store, fileSpec())
+    const { mind, authority } = await harness(bindTurnContext(store))
+
+    await mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 't1', text: 'first turn' })
+    await mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 't2', text: 'what did I just say?' })
+    const messages = authority.recorded[1]?.messages ?? []
+
+    // The question is still the last thing the provider reads.
+    expect(messages.at(-1)).toEqual({ role: 'user', content: 'what did I just say?' })
+    // The block is before the history, so the previous turns sit between it and
+    // the question — the recency window is the owner's.
+    expect(blockOf(messages)?.role).toBe('user')
+    expect(messages[1]?.content).toContain('the licence renewal is on Friday')
+    expect(messages[2]?.content).toBe('first turn')
+  })
+})

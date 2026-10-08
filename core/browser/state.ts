@@ -6,6 +6,7 @@ import type {
   BrowserTarget,
 } from './types'
 import { BROWSER_LIMITS } from './types'
+import { isNavigableBrowserUrl } from './isolation'
 
 /**
  * Truthful session and page state.
@@ -35,6 +36,7 @@ import { BROWSER_LIMITS } from './types'
 export interface SessionState {
   readonly sessionId: string
   readonly target: BrowserTarget
+  readonly createdBy: 'freya' | 'user'
   readonly partition: string
   readonly session: BrowserSessionState
   readonly page: BrowserPageState
@@ -134,9 +136,13 @@ export function foldBrowserState(
         // second open; the fold refuses to be talked into one.
         const existing = sessions.get(sessionId)
         if (existing !== undefined && existing.session === 'open') continue
+        const createdBy = entryText(payload, 'createdBy')
         sessions.set(sessionId, {
           sessionId,
           target,
+          // Freya or the owner. Recorded at open so recovery can rebuild a tab list that knows
+          // which pages belonged to the person and which were opened on Freya's own initiative.
+          createdBy: createdBy === 'user' ? 'user' : 'freya',
           partition: entryText(payload, 'target') === 'public' ? `freya-public-${sessionId}` : '',
           session: 'open',
           page: 'absent',
@@ -157,11 +163,19 @@ export function foldBrowserState(
         if (current === undefined || current.session !== 'open') continue
         const revision = entryNumber(payload, 'revision')
         if (revision === null || revision <= current.revision) continue
+        // An address is required, and this is the second place that says so — the first being
+        // `adoptObservedRevision`, which refuses to *write* the entry. This fold refuses to
+        // believe one, so a record that reached disk through any other path still cannot turn
+        // a session into `ready` with nothing at it. `url` used to be `entryText(payload,
+        // 'url')`, which meant the empty string: a `ready` session with no URL, adopted by a
+        // renderer as a tab, drawn as an empty browser panel.
+        const url = entryText(payload, 'url').trim()
+        if (url === '' || !isNavigableBrowserUrl(url)) continue
         sessions.set(sessionId, {
           ...current,
           page: 'ready',
           revision,
-          url: entryText(payload, 'url'),
+          url,
           title: null,
           lastObservedAt: entryText(payload, 'at'),
           failureCode: null,
@@ -204,6 +218,13 @@ export function foldBrowserState(
       }
       case 'browser.dual.page.described':
         described += 1
+        continue
+      case 'browser.dual.page.scrolled':
+      case 'browser.dual.page.selected':
+      case 'browser.dual.session.focused':
+        // Facts about what happened to a live page, not state transitions. Counted and
+        // otherwise ignored: a scroll does not change which page is loaded, and a selection
+        // does not change which revision its references belong to.
         continue
       case 'browser.dual.ref.stale':
         staleRefs += 1
@@ -279,6 +300,7 @@ export interface BrowserProjection {
     readonly revision: number
     readonly url: string | null
     readonly observed: boolean
+    readonly createdBy: 'freya' | 'user'
     readonly failureCode: string | null
   }[]
   readonly handoffs: ReadonlyMap<string, BrowserHandoffState>
@@ -304,6 +326,7 @@ export function browserProjection(state: BrowserRuntimeState): BrowserProjection
             revision: entry.revision,
             url: entry.url,
             observed: entry.lastObservedAt !== null,
+            createdBy: entry.createdBy,
             failureCode: entry.failureCode,
           }),
         ),

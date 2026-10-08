@@ -253,9 +253,87 @@ describe('VaultConversationStore', () => {
     })
     await store.recordTurnStart(turn())
 
-    expect(await store.recoverInterruptedTurns('2026-10-05T12:05:00.000Z')).toEqual(['t1'])
+    expect(await store.recoverInterruptedTurns('2026-10-05T12:05:00.000Z')).toEqual([{ turnId: 't1', conversationId: 'c1' }])
     const record = await store.readConversation('c1')
     expect(record?.messages).toHaveLength(1)
     expect(record?.turns[0]).toMatchObject({ outcome: 'interrupted', assistantMessageId: null })
+  })
+})
+
+describe('video previews survive durable storage', () => {
+  it('round-trips a video item with its poster and its allowlisted embed', async () => {
+    // The production bug this pins: the media column encoded every field but the
+    // reconstruction whitelist knew only the original nine, so a video lost its
+    // poster and its hosted player on every read — and a video answer drew no
+    // cards at all in the transcript that gave it life.
+    const store = new VaultConversationStore(harnessVault())
+    await store.putConversation({
+      conversationId: 'c-videos',
+      title: 'A video chat',
+      createdAt: '2026-10-07T00:00:00.000Z',
+      updatedAt: '2026-10-07T00:00:00.000Z',
+    })
+    await store.appendMessage({
+      messageId: 'v1',
+      conversationId: 'c-videos',
+      role: 'assistant',
+      content: 'videos about queues',
+      createdAt: '2026-10-07T00:00:01.000Z',
+      turnId: 't-videos',
+      media: [{
+        kind: 'video',
+        url: 'https://www.youtube.com/watch?v=D5tr7r2_i7E',
+        thumbnailUrl: 'https://th.bing.com/th/id/OVP.poster?w=354&h=199',
+        embedUrl: 'https://www.youtube.com/embed/D5tr7r2_i7E',
+        page: 'https://www.youtube.com/watch?v=D5tr7r2_i7E',
+        title: 'Queues in Laravel',
+        host: 'www.youtube.com',
+        duration: '12:18',
+        bytes: null,
+        pages: null,
+        playable: false,
+      }],
+    })
+
+    const read = await store.readConversation('c-videos')
+    const item = read?.messages.find((message) => message.messageId === 'v1')?.media?.[0]
+    expect(item?.thumbnailUrl).toBe('https://th.bing.com/th/id/OVP.poster?w=354&h=199')
+    expect(item?.embedUrl).toBe('https://www.youtube.com/embed/D5tr7r2_i7E')
+    expect(item?.duration).toBe('12:18')
+  })
+
+  it('keeps an item whose poster is absent from a future format, but never one with a rogue embed', async () => {
+    const store = new VaultConversationStore(harnessVault())
+    await store.putConversation({
+      conversationId: 'c-rogue',
+      title: 'A hostile restore',
+      createdAt: '2026-10-07T00:00:00.000Z',
+      updatedAt: '2026-10-07T00:00:00.000Z',
+    })
+    await store.appendMessage({
+      messageId: 'r1',
+      conversationId: 'c-rogue',
+      role: 'assistant',
+      content: 'a restored item',
+      createdAt: '2026-10-07T00:00:01.000Z',
+      turnId: 't-rogue',
+      media: [{
+        kind: 'video',
+        url: 'https://example.org/watch/42',
+        embedUrl: 'https://evil.example/embed/42',
+        page: 'https://example.org/watch/42',
+        title: 'A result',
+        host: 'example.org',
+        duration: null,
+        bytes: null,
+        pages: null,
+        playable: false,
+      }],
+    })
+    const read = await store.readConversation('c-rogue')
+    const item = read?.messages.find((message) => message.messageId === 'r1')?.media?.[0]
+    // The item survives — an arbitrary poster or embed is dropped, not the card.
+    expect(item?.kind).toBe('video')
+    expect(item?.embedUrl).toBeUndefined()
   })
 })

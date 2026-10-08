@@ -36,3 +36,6 @@ export {
   type DualBrowserActivationStatus,
   type Phase51Authority,
 } from './activation'
+
+export * from './embeddedSurface'
+export * from './semanticRequest'

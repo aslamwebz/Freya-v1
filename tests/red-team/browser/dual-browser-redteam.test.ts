@@ -137,7 +137,8 @@ describe('source audits', () => {
     // A preload would be a way for the renderer to be given something, and this window has
     // nothing to be given: there is no such option at all.
     expect(source).not.toContain('preload:')
-    expect(source).toContain("setWindowOpenHandler(() => ({ action: 'deny' }))")
+    expect(source).toContain("return { action: 'deny' }")
+    expect(source).toContain("if (this.allowedUrl(url)) this.options.onOpenUrl?.(url)")
     expect(source).toContain('event.preventDefault()')
   })
 

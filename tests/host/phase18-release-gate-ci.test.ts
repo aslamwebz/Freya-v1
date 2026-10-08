@@ -18,7 +18,10 @@ describe('Phase 18 release gate CI enforcement', () => {
   it('runs release:check after build so artifacts exist', async () => {
     const workflowPath = resolve(__dirname, '../../.github/workflows/verify.yml')
     const content = await readFile(workflowPath, 'utf8')
-    const buildIndex = content.indexOf('npm run build')
+    // The workflow delegates the build to the full verification script.
+    const pkg = JSON.parse(await readFile(resolve(__dirname, '../../package.json'), 'utf8'))
+    expect(pkg.scripts['verify:full']).toContain('npm run build')
+    const buildIndex = content.indexOf('npm run verify:full')
     const checkIndex = content.indexOf('npm run release:check')
     expect(buildIndex).toBeGreaterThan(-1)
     expect(checkIndex).toBeGreaterThan(buildIndex)

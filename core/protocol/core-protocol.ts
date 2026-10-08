@@ -351,7 +351,7 @@ export type ProviderStatusKind = 'disabled' | 'unconfigured' | 'configured' | 'f
 
 export interface ProviderStatus {
   id: string
-  kind: 'fake' | 'nanogpt'
+  kind: 'fake' | 'nanogpt' | 'minimax' | 'local' | 'openai'
   status: ProviderStatusKind
   /** Never a secret: a shape, not a value. */
   model: string | null
@@ -426,7 +426,17 @@ export interface JournalFault {
 
 export interface CoreStatus {
   lifecycle: CoreLifecycle
-  /** Last durable event sequence, or 0 when the log is empty. */
+  /**
+   * Whether the Core process is currently able to serve commands.
+   *
+   * Operational is a *process-level* property: a Core in the ephemeral-fallback
+   * path is still operational even though `persistence.durable` is false, and
+   * a Core in the durable path with a single corrupt subsystem is still
+   * operational. Use this in the UI to decide whether the workspace is
+   * usable, never `lifecycle === 'ready'` alone.
+   */
+  operational: boolean
+  /** Last active event sequence. Persistence describes whether it is durable. */
   eventSequence: number
   coreStartedAt: string | null
   /**
@@ -434,7 +444,43 @@ export interface CoreStatus {
    * a warning is not the same thing as a warning that is absent.
    */
   integrity: JournalFault
-  /** The latch is derived from durable events, so it survives a restart. */
+  /**
+   * How durable the current process's history actually is. A Core that opened
+   * its durable store normally reports `durable: true`; a Core that fell back
+   * to the in-memory store because the durable store could not be opened
+   * reports `durable: false` with a `mode: 'ephemeral-fallback'` and a
+   * `reason` naming the failure. The UI uses this to label the workspace
+   * honestly — "event history is temporary" — without
+   * locking the owner out.
+   */
+  persistence: {
+    mode: 'durable' | 'ephemeral-fallback'
+    durable: boolean
+    /** Always present; explains what the mode is and why. */
+    reason: string | null
+    /** The on-disk path of the active event store, when one exists. */
+    eventStorePath: string | null
+  }
+  /**
+   * Where runtime diagnostics are being written. Always present after start;
+   * lets the UI surface "show last error" without hardcoding a path.
+   */
+  diagnostics: {
+    path: string | null
+    /** How many record writes have failed since this Core started. */
+    writeFailures: number
+  }
+  /**
+   * The most recent lifecycle transition, for "what changed" UX. Optional so
+   * the first render before the first transition is still valid.
+   */
+  lastLifecycleTransition?: {
+    from: CoreLifecycle
+    to: CoreLifecycle
+    at: string
+    reason: string | null
+  }
+  /** The event-derived latch survives restart only with durable persistence. */
   stopAll: {
     active: boolean
     activatedAt: string | null
@@ -455,6 +501,7 @@ export interface CoreStatus {
     status: 'ready' | 'deny_all' | 'unknown'
     grantsActive: number
   }
+  modelSelection?: { model: string | null; providerId: string | null; defaultModel: string | null }
   providers: ProviderStatus[]
   /**
    * Provider requests executing **right now**, in this Core process.
@@ -1165,6 +1212,7 @@ export interface OfficeCommandOutcome {
  * of those and an invented figure would be a lie the size of a number.
  */
 export interface ModelView {
+  providerId?: string
   id: string
   ownedBy: string | null
 }
@@ -1178,6 +1226,7 @@ export interface ModelView {
  */
 export interface ModelCommandOutcome {
   operation: 'catalog' | 'selected' | 'refused'
+  selectedProviderId?: string | null
   reason?: string
   models?: readonly ModelView[]
   /** The provider's own configured default, which is what "no selection" means. */
@@ -1261,6 +1310,7 @@ export interface ResearchCommandOutcome {
   session?: {
     sessionId: string
     state: 'active' | 'paused' | 'completed' | 'partial' | 'cancelled' | 'failed'
+    ownerText?: string
     intentVersion: number
     intent: {
       subject: string
@@ -1283,6 +1333,12 @@ export interface ResearchCommandOutcome {
       url: string
       snippet: string
       sourceDomain: string
+      providerId?: string
+      retrievedAt?: string
+      vertical?: 'web' | 'images' | 'videos' | 'documents' | 'audio' | 'pages'
+      mediaUrl?: string | null
+      thumbnailUrl?: string | null
+      pageUrl?: string | null
       mediaType: 'web' | 'image' | 'video' | 'audio' | 'document' | 'file'
       confidence: 'exact' | 'probable' | 'weak'
       collection: 'Videos Found' | 'Images Found' | 'Audio Found' | 'Files Found' | 'Sources'

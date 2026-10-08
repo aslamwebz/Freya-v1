@@ -102,7 +102,21 @@ export function mintRef(input: {
 /* ---------------------------------------------------------------- describing */
 
 export type DescribeReading =
-  | { readonly ok: true; readonly snapshot: PageSnapshot; readonly elements: readonly PageElement[] }
+  | {
+      readonly ok: true
+      readonly snapshot: PageSnapshot
+      readonly elements: readonly PageElement[]
+      /**
+       * The page's own words, bounded to {@link BROWSER_LIMITS.maxSnapshotTextBytes}.
+       *
+       * Deliberately **not** a field of {@link PageSnapshot}. A snapshot is the *reference*
+       * view, and it reports `textBytes` rather than the text so that describing a page and
+       * handing out handles for it cannot be confused with reading the page. The Semantic
+       * Browser Protocol needs both at once, so it is offered here as a second thing beside
+       * the snapshot rather than smuggled into it.
+       */
+      readonly text: string
+    }
   | { readonly ok: false; readonly code: BrowserRefusalCode; readonly reason: string }
 
 /** The raw shape an adapter is asked for. Every field is untrusted. */
@@ -235,7 +249,7 @@ export function describePage(
     textBytes: utf8Bytes(text),
     truncated,
   })
-  return { ok: true, snapshot, elements }
+  return { ok: true, snapshot, elements, text }
 }
 
 /* --------------------------------------------------------------- the ref table */

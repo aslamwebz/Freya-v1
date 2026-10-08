@@ -4,6 +4,7 @@ dist-electron/
 extension/dist/
 release/
 *.log
+*.diagnostics.jsonl
 .DS_Store
 .vite/
 

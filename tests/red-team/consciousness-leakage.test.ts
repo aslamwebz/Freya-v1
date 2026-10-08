@@ -409,7 +409,10 @@ describe('attack: a hostile source forging a value through a widened field', () 
       {
         status: {
           lifecycle: 'ready',
-          eventSequence: 1,
+
+    operational: true,
+    persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null },
+    diagnostics: { path: null, writeFailures: 0 },          eventSequence: 1,
           coreStartedAt: AT.toISOString(),
           integrity: { integrity: 'ok', reason: '', line: null, eventsRead: 0, bytesDiscarded: 0 },
           stopAll: { active: false, activatedAt: null, activatedBy: null },

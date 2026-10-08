@@ -5,19 +5,23 @@ import {
   type BrowserProjection,
   type BrowserRequest,
 } from '../../core/browser'
+import type { BrowserServiceState } from '../../core/browser/service'
 import { DEVICE_HANDS_LIMITS } from '../../core/devicehands'
 
-export interface BrowserBridgeState {
-  readonly available: boolean
-  readonly active: boolean
-  readonly reason: string | null
-  readonly publicAvailable: boolean
+/**
+ * What the window reads about the browser.
+ *
+ * This is the Browser Service's projection, widened with the Phase 51 counters an older
+ * consumer of this channel still reads. Two vocabularies on one object is a transitional
+ * arrangement and is labelled as such: the fields a renderer should branch on are
+ * `runtimeStatus` and `reason`, and the counters are here only so nothing has to break.
+ */
+export interface BrowserBridgeState extends BrowserServiceState {
   readonly extensionPaired: boolean
   readonly extensionLive: boolean
-  readonly journalTrustworthy: boolean
   readonly summary: string
-  readonly sessions: BrowserProjection['sessions']
-  readonly handoffs: readonly { readonly handoffId: string; readonly state: string }[]
+  /** Phase 51's own folded session rows. Transitional; the service's `sessions` supersede them. */
+  readonly phase51: BrowserProjection['sessions']
   readonly described: number
   readonly staleRefs: number
   readonly mediaObserved: number
@@ -153,4 +157,25 @@ export function normaliseRendererBrowserRequest(value: unknown): BrowserRequestR
     default:
       return { ok: false, reason: 'that browser command is not renderer reachable' }
   }
+}
+
+
+export interface BrowserDockRequest {
+  sessionId: string | null
+  bounds: { x: number; y: number; width: number; height: number } | null
+}
+
+/** Clamp native views to this window; remote pages cannot request a view. */
+export function normaliseBrowserDockRequest(value: unknown, viewport: { width: number; height: number }): BrowserDockRequest | null {
+  const row = object(value)
+  if (!row) return null
+  if (row.sessionId === null && row.bounds === null) return { sessionId: null, bounds: null }
+  if (typeof row.sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(row.sessionId)) return null
+  const rect = object(row.bounds)
+  if (!rect || !['x', 'y', 'width', 'height'].every((key) => typeof rect[key] === 'number' && Number.isFinite(rect[key]))) return null
+  const x = Math.max(0, Math.min(viewport.width, Math.round(rect.x as number)))
+  const y = Math.max(0, Math.min(viewport.height, Math.round(rect.y as number)))
+  const width = Math.max(0, Math.min(viewport.width - x, Math.round(rect.width as number)))
+  const height = Math.max(0, Math.min(viewport.height - y, Math.round(rect.height as number)))
+  return { sessionId: row.sessionId, bounds: width > 0 && height > 0 ? { x, y, width, height } : null }
 }

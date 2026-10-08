@@ -564,6 +564,7 @@ export interface ModelCallOptions {
  * owner selected it.
  */
 export interface ModelCatalogEntry {
+  providerId?: string
   id: string
   ownedBy: string | null
 }
@@ -575,7 +576,7 @@ export interface ModelCatalogOptions {
 
 export interface ModelProvider {
   readonly id: string
-  readonly kind: 'fake' | 'nanogpt'
+  readonly kind: 'fake' | 'nanogpt' | 'minimax' | 'local' | 'openai'
   /** Whether this provider would spend real money or use a network. */
   readonly live: boolean
   /** Current readiness, for the status projection. */

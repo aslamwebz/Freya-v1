@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import type { UiSnapshot } from '../../ui-v2/state/contract'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { Clock } from '../../ui-v2/primitives/Clock'
@@ -14,10 +14,12 @@ import { brainState, type BrainState } from '../presence/state'
 import { ChatHistory } from '../chat/ChatHistory'
 import { SettingsOverlay, type SettingsCategory } from './Settings'
 import { GlobalComposer } from './GlobalComposer'
+import { CoreHealth } from './CoreHealth'
 import { hostBridge } from '../../platform/host'
 import type { DressingStore, DressingState } from '../dressing/store'
 import { PersistentWorkspaceLayers } from './PersistentWorkspaceLayers'
 import type { PreferencesStore } from '../../ui-v2/theme/preferences'
+import type { DockedTabOrigin } from '../chat/BrowserWorkspace'
 import './home-dashboard.css'
 
 interface Props {
@@ -34,17 +36,23 @@ interface Props {
   settingsCategory: SettingsCategory
   onSettingsCategory: (category: SettingsCategory) => void
   onOpenDressing: () => void
-  onSend: (text: string, mode: ComposerMode) => Promise<boolean>
+  onSend: (
+    text: string,
+    mode: ComposerMode,
+    intents?: { readonly webSearch?: boolean; readonly browserUse?: boolean },
+  ) => Promise<boolean>
   onStopResponse: () => void
   researchView: WorkspaceResearchView | null
+  onResearchViewChange: (view: WorkspaceResearchView) => void
   onNavigate: (screen: string) => void
   onVoicePress: () => void
   onVoiceRelease: (cancelled?: boolean) => void
   maxMessageCharacters: number | null
   browserOpen: boolean
+  browserPercent: number
+  onBrowserPercentChange: (percent: number) => void
   browserRequestedUrl: string | null
-  onBrowserToggle: () => void
-  onBrowserOpenUrl: (url: string) => void
+  onBrowserOpenUrl: (url: string, origin?: DockedTabOrigin) => void
   onBrowserRequestedUrlHandled: () => void
   onBrowserClose: () => void
 }
@@ -120,7 +128,7 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 }
 
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserRequestedUrl, onBrowserToggle, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
+export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onResearchViewChange, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserPercent, onBrowserPercentChange, browserRequestedUrl, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   /*
@@ -137,7 +145,17 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
   const attention = home?.attention.profiles[0]
   const preview = snapshot.home.status === 'ready' && snapshot.home.source === 'preview'
   const core = ready(snapshot.core)
-  const online = core?.lifecycle === 'ready'
+  const online = core?.operational === true
+  // The top-bar pill labels a Core that is up but not pristine. A degraded
+  // Core that is still operational is labelled with the cause rather than
+  // hidden behind a "WORKING" pill that would imply everything is fine.
+  const degradedReason: string | null = (() => {
+    if (!core) return null
+    if (core.operational === true && core.lifecycle === 'ready') return null
+    if (core.persistenceDurable === false) return 'EPHEMERAL'
+    if (core.lifecycle === 'degraded') return 'DEGRADED'
+    return core.lifecycle === 'booting' ? null : core.lifecycle.toUpperCase()
+  })()
   const workers = ready(snapshot.workforce)
   const activity = ready(snapshot.activity)
   const provider = ready(snapshot.provider)
@@ -146,6 +164,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
     working: workers?.working ?? 0,
     faultCount: core?.faultCount ?? 0,
     lifecycle: core?.lifecycle ?? 'booting',
+    operational: core?.operational,
   })
   const open = (screen: string) => () => onNavigate(screen)
 
@@ -189,9 +208,14 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
   // while Core reports any; it is the one "needs you" sign this screen can
   // read without inventing one.
   const warnCount = core?.faultCount ?? 0
-  const pill = cognition === 'uncertainty'
-    ? { kind: 'needs', word: 'NEEDS YOU' }
-    : cognition === 'calm' ? null : { kind: 'working', word: 'WORKING' }
+  const pill = (() => {
+    // A Core that is up but not pristine is labelled with the cause. A
+    // healthy Core only wears the cognition pill.
+    if (degradedReason !== null) return { kind: 'needs', word: degradedReason }
+    if (cognition === 'uncertainty') return { kind: 'needs', word: 'NEEDS YOU' }
+    if (cognition === 'calm') return null
+    return { kind: 'working', word: 'WORKING' }
+  })()
   const agoLabel = (at: number): string => {
     const seconds = Math.max(0, Math.round((Date.now() - at) / 1000))
     if (seconds < 60) return 'just now'
@@ -202,11 +226,28 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
     return `${Math.round(hours / 24)}d ago`
   }
 
+  /*
+   * What the composer and the shell used to print over the chat bar, which the
+   * chat now says instead: the shell's own sentence, the microphone's bounded
+   * notice, and anything local the composer hit (a file the host would not read).
+   */
+  const [composerIssue, setComposerIssue] = useState('')
+  useEffect(() => { if (notice) setComposerIssue('') }, [notice])
+  const issue = [notice, voice.notice, composerIssue].filter(Boolean).join(' ')
+
   return <div className="freya-v2 hd-viewport" data-theme="abyss" ref={viewport}>
-    <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-background={design.background}>
+    {/*
+      The conversation is the whole window on its screen: no top bar, no rail, no
+      board gutter. The one number both the workspace columns and the composer
+      read is published here, so the composer can sit over the conversation column
+      instead of over the divider.
+    */}
+    <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-background={design.background} data-browser={browserOpen || undefined} style={{ '--chats-thread': String(100 - browserPercent) } as CSSProperties}>
       <header className="hd-top">
         <div className="hd-brand"><b>FREYA</b></div>
-        {pill ? <div className={`hd-pill ${pill.kind}`}>{pill.word}</div> : null}
+        {core && (core.lifecycle === 'degraded' || core.persistenceDurable === false || core.faultCount > 0 || core.diagnosticsWriteFailures > 0)
+          ? <CoreHealth core={core} />
+          : pill ? <div className={`hd-pill ${pill.kind}`}>{pill.word}</div> : null}
         <span className="hd-gap" />
         <div className="hd-counts">
           {workingCount > 0 ? <span className="hd-count on">{workingCount} working</span> : null}
@@ -346,8 +387,12 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
         </>) : workspaceId === 'chat' ? (
           <Chats
             researchView={researchView}
+            onResearchViewChange={onResearchViewChange}
             busy={generating}
+            issue={issue}
             browserOpen={browserOpen}
+            browserPercent={browserPercent}
+            onBrowserPercentChange={onBrowserPercentChange}
             browserRequestedUrl={browserRequestedUrl}
             onBrowserOpenUrl={onBrowserOpenUrl}
             onBrowserRequestedUrlHandled={onBrowserRequestedUrlHandled}
@@ -367,7 +412,6 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
       </main>
       <GlobalComposer
         generating={generating}
-        notice={notice}
         defaultModel={provider?.model ?? null}
         voice={voice}
         voiceTranscript={voiceTranscript}
@@ -375,9 +419,8 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
         onStopResponse={onStopResponse}
         onVoicePress={onVoicePress}
         onVoiceRelease={onVoiceRelease}
-        maxMessageCharacters={maxMessageCharacters}
-        browserOpen={browserOpen}
-        onBrowserToggle={onBrowserToggle}
+maxMessageCharacters={maxMessageCharacters}
+        onNotice={setComposerIssue}
       />
     </div></div>
 

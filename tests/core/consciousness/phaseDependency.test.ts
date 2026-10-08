@@ -54,6 +54,9 @@ let core: Core | null = null
 function status(): CoreStatus {
   return {
     lifecycle: 'ready',
+    operational: true,
+    persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null },
+    diagnostics: { path: null, writeFailures: 0 },
     eventSequence: 1,
     coreStartedAt: '2026-10-03T11:00:00.000Z',
     integrity: { integrity: 'ok', reason: '', line: null, eventsRead: 0, bytesDiscarded: 0 },

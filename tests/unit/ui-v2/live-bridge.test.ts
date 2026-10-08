@@ -4,6 +4,7 @@ import { resetCoreMirror } from '../../../src/platform/coreClient'
 import { resetMissionMirror } from '../../../src/platform/missionClient'
 import { resetWorkforceMirror } from '../../../src/platform/workforceClient'
 import { resetAttentionMirror } from '../../../src/platform/attentionClient'
+import { buildCapabilityRegistry } from '../../../core/capabilities'
 import type { FreyaHostBridge } from '../../../src/platform/host'
 import type { CoreStatus } from '../../../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../../../core/protocol/activity'
@@ -21,7 +22,9 @@ import type { AttentionProjection } from '../../../core/protocol/attention'
 
 const coreStatus: CoreStatus = {
   lifecycle: 'ready',
-  eventSequence: 42,
+
+        operational: true,
+        persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null }, diagnostics: { path: null, writeFailures: 0 },  eventSequence: 42,
   coreStartedAt: '2026-10-03T00:00:00.000Z',
   integrity: { integrity: 'ok', reason: 'Journal is healthy.', line: null, eventsRead: 42, bytesDiscarded: 0 },
   stopAll: { active: false, activatedAt: null, activatedBy: null },
@@ -147,6 +150,8 @@ const attentionProjection: AttentionProjection = {
 function installFakeBridge() {
   const bridge: FreyaHostBridge = {
     isDesktop: true,
+    getCapabilitySettings: async () => buildCapabilityRegistry(),
+    setCapabilitySettings: async (preferences) => buildCapabilityRegistry(preferences),
     getRuntimeInfo: async () => ({ version: '0.1.0', electron: '44.5.0', platform: 'win32', arch: 'x64', userData: '', workspaceFile: '', dev: false }),
     loadWorkspace: async () => null,
     saveWorkspace: async () => true,
@@ -171,9 +176,14 @@ function installFakeBridge() {
       extensionPaired: false,
       extensionLive: false,
       journalTrustworthy: true,
+      runtimeStatus: 'surfaceUnavailable',
+      activeTabId: null,
+      tabs: [],
+      tabCount: 0,
+      recovery: null,
       summary: 'browser unavailable',
       sessions: [],
-      handoffs: [],
+      phase51: [],
       described: 0,
       staleRefs: 0,
       mediaObserved: 0,

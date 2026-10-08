@@ -3,9 +3,9 @@
    use minmax so the side cards cap at a comfortable size while the centre
    column (the orb) takes the slack and widens with the page. The board carries
    the backdrop so the centre canvas's `screen` blend has a backdrop. */
-.hd-viewport { position: relative; width: 100%; height: 100dvh; overflow: hidden; background: #030911; }
+.hd-viewport { position: relative; width: 100%; height: 100dvh; overflow: hidden; background: #05080b; }
 .hd-frame { position: absolute; inset: 0; }
-.hd-dashboard { --hd-rail-w: 216px; --hd-rail-gutter: 22px; }
+.hd-dashboard { --hd-rail-w: 216px; --hd-rail-gutter: 22px; --hd-main-gutter: 20px; }
 /* One source for the rail's width. The rail, the board and the Home widget
    columns all derive from this, so widening the rail can never leave one of them
    positioned for the old width. `:has()` rather than a second attribute because
@@ -108,10 +108,10 @@
   -webkit-app-region: no-drag;
 }
 .hd-rail button { -webkit-app-region: no-drag; }
-.hd-railhead { display: flex; justify-content: flex-end; padding: 12px 14px 8px; }
+.hd-railhead { display: flex; justify-content: flex-end; padding: 10px 10px 4px; }
 .hd-rail-toggle { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: #9fb4c7; }
 .hd-rail-toggle:hover { color: #fff; background: rgba(255, 255, 255, .04); }
-.hd-rail[data-collapsed] .hd-railhead { justify-content: center; padding: 12px 0 8px; }
+.hd-rail[data-collapsed] .hd-railhead { justify-content: center; padding: 10px 0 4px; }
 .hd-rail[data-collapsed] .hd-rail-toggle svg { transform: scaleX(-1); }
 .hd-rail[data-collapsed] .hd-place { justify-content: center; padding: 0; }
 .hd-rail[data-collapsed] .hd-place span,
@@ -138,7 +138,7 @@
 .hd-rail[data-collapsed] .chats-history-title span { display: none; }
 .hd-rail[data-collapsed] .hd-rail-foot { padding: 10px 0 14px; justify-items: center; }
 .hd-rail[data-collapsed] .hd-user { width: auto; padding: 4px; }
-.hd-rail-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; display: grid; gap: 2px; align-content: start; padding: 6px 10px 12px; }
+.hd-rail-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; display: grid; gap: 2px; align-content: start; padding: 4px 10px 14px; }
 .hd-rail-list::-webkit-scrollbar { display: none; }
 .hd-place {
   display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 12px; text-align: left;
@@ -152,19 +152,19 @@
 /* Chat history: the conversations, listed directly under the Chats group head
    as a quieter second level — same row shape as the places above, text aligned
    with their labels. */
-.chats-history { display: grid; gap: 2px; align-content: start; margin-top: 2px; }
-.chats-history-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 0; }
+.chats-history { display: grid; gap: 4px; align-content: start; margin-top: 6px; }
+.chats-history-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0; }
 .chats-history-title { display: flex; align-items: center; gap: 12px; height: 44px; flex: 1; min-width: 0; padding: 0 12px; border: 0; border-radius: 9px; background: none; color: #c4dcec; font-size: 13.5px; font-weight: 500; }
 .chats-history-title svg { width: 20px; color: #9db6c9; transition: opacity 140ms ease; }
 .chats-history-title:hover { color: #e6f4ff; background: rgba(255, 255, 255, .045); }
-.chats-history .chats-new { display: inline-flex; align-items: center; gap: 4px; height: 26px; margin-right: 4px; padding: 0 10px; border: 1px solid #59e0ff45; border-radius: 999px; background: none; color: #8ee6ff; font-size: 11px; }
-.chats-history .chats-new:hover { color: #eafcff; border-color: #59e0ff8c; background: #59e0ff14; }
-.chats-history .chats-new:disabled { opacity: .5; cursor: not-allowed; }
-.chats-history-list { display: grid; gap: 1px; margin: 0; padding: 2px 0 4px; list-style: none; max-height: 264px; overflow-y: auto; scrollbar-width: none; }
+.chats-history .chats-new { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-right: 8px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #9fb4c7; font-size: 11px; }
+.chats-history .chats-new:hover { color: #e6f4ff; background: rgba(255, 255, 255, .045); }
+.chats-history .chats-new:disabled { opacity: .35; cursor: not-allowed; }
+.chats-history-list { display: grid; gap: 2px; margin: 0; padding: 4px 0 6px; list-style: none; max-height: 264px; overflow-y: auto; scrollbar-width: none; }
 .chats-history-list::-webkit-scrollbar { display: none; }
 .chats-history-list li { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 2px; }
 .chats-history-item {
-  display: flex; align-items: center; width: 100%; height: 36px; padding: 0 10px 0 54px;
+  display: flex; align-items: center; width: 100%; height: 36px; padding: 0 8px 0 54px;
   text-align: left; border: 0; border-radius: 8px; color: #a9c2d4; background: none; font-size: 12.5px;
 }
 .chats-history-item:hover { color: #e6f4ff; background: rgba(255, 255, 255, .045); }
@@ -178,15 +178,15 @@
 .chats-history-copy { display: grid; min-width: 0; gap: 1px; }
 .chats-history-copy b { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chats-history-dot { flex: none; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: #59e0ff; box-shadow: 0 0 8px #59e0ff; animation: hd-pill-pulse 1.8s ease-in-out infinite; }
-.chats-history-empty { margin: 2px 0 4px 54px; font-size: 11.5px; line-height: 1.45; color: #4e6a80; }
+.chats-history-empty { margin: 6px 0 6px 54px; font-size: 11px; line-height: 1.45; color: #6d8aa2; }
 
 /* ---- the rail's foot: status and the account ---- */
-.hd-rail-foot { flex-shrink: 0; display: grid; gap: 10px; padding: 10px 14px 14px; border-top: 1px solid #8db7d326; }
+.hd-rail-foot { flex-shrink: 0; display: grid; gap: 8px; padding: 12px 10px 12px; border-top: 1px solid #8db7d326; }
 .hd-online { display: grid; grid-template-columns: 9px 1fr; gap: 5px 7px; font-size: 12px; color: #6fffe0; }
 .hd-status-dot, .hd-meta i { width: 9px; height: 9px; margin-top: 4px; border-radius: 50%; background: #6cffd5; box-shadow: 0 0 12px #52f2c7b0; }
-.hd-online small { grid-column: 2; font-size: 10px; line-height: 1.8; color: #829db4; }
+.hd-online small { grid-column: 2; margin-top: -3px; font-size: 10px; line-height: 1.45; color: #7f97ad; }
 .hd-profile { position: relative; }
-.hd-user { display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 8px; border: 1px solid transparent; border-radius: 9px; background: rgba(255, 255, 255, .025); color: #9fb4c7; cursor: pointer; }
+.hd-user { display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 8px 6px 0; border: 1px solid transparent; border-radius: 9px; background: rgba(255, 255, 255, .025); color: #9fb4c7; cursor: pointer; }
 .hd-user:hover { color: #e6f4ff; background: rgba(255, 255, 255, .05); }
 .hd-user-avatar { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #103a52, #0a1c2c); color: #cdf1ff; font-size: 12px; box-shadow: 0 0 0 1.5px rgba(89, 224, 255, .5), 0 0 12px rgba(89, 224, 255, .2); }
 .hd-user-name { flex: 1; min-width: 0; text-align: left; font-size: 13px; color: #dbe9f6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -203,7 +203,11 @@
    comfortable size, while the centre column (the orb) is `1fr` and takes the
    slack — so the page widens with the window instead of scaling. Non-Home tabs
    render `TabBody`, which is absolutely positioned and ignores this grid. */
-.hd-main { position: absolute; top: 74px; bottom: 90px; left: calc(var(--hd-rail-w) + var(--hd-rail-gutter)); right: 24px; max-width: 1800px; margin: 0 auto; pointer-events: none; }
+/* The middle is the whole of the window's content, on every screen. It used to
+   stop 1800px from the left and centre what was left, which on a wide display
+   left a band of empty backdrop down the right-hand side; nothing here is a
+   fixed canvas, so the region simply runs to the gutter. */
+.hd-main { position: absolute; top: 66px; bottom: 88px; left: calc(var(--hd-rail-w) + var(--hd-rail-gutter)); right: var(--hd-main-gutter); pointer-events: none; }
 .hd-workspace-layer { position: absolute; inset: 0; min-width: 0; min-height: 0; pointer-events: none; -webkit-app-region: no-drag; }
 .hd-workspace-layer[hidden] { display: none !important; }
 .hd-workspace-layer[data-workspace='home'] { display: grid; grid-template-columns: minmax(300px, 520px) minmax(360px, 1fr) minmax(300px, 520px); grid-template-rows: repeat(6, minmax(0, 1fr)); gap: 14px; }
@@ -341,17 +345,40 @@
 .hd-memory-icon-3 { color: #ffddb3; background: #a7672c66; }
 .hd-memory-icon-4 { color: #b7d6ff; background: #516bb566; }
 .hd-dock { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(960px, 60vw); min-height: 54px; }
-/* min-height, not height: the composer field grows to 132px as the draft wraps,
-   and a fixed 54px row clipped it. */
-.hd-dock form { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 5px 12px 5px 7px; border: 1px solid #b3e0fc; border-radius: 28px; background: linear-gradient(170deg, #425d7480, #07131bf5 35%, #0b1825f5 74%, #36566fca); box-shadow: inset 0 2px 4px #b9dfffaa, inset 0 -2px 4px #acddffaa, 0 0 9px #84a9ff87, 0 0 27px #65c9ff27, 0 8px 24px #0008; }
+
+/* The composer follows the conversation.
+    The dock is one global bar, but the browser takes the right of the window, so
+    a centred composer would sit across the divider. It is measured from the same
+    two numbers the workspace builds its grid from - `--chats-thread` for the
+    column's share, and the main region's own insets for its width - so the input
+    always lands under the conversation it belongs to. */
+.hd-dashboard[data-browser] .hd-dock {
+  left: calc(var(--hd-rail-w) + var(--hd-rail-gutter));
+  transform: none;
+  width: calc((100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter) - 6px) * var(--chats-thread, 48) / 100);
+}
+
+/*
+   Two-row composer: textarea on top, controls + send on the bottom. The whole
+   form wears the original glass pill — single border, cyan glow, soft inset
+   highlights — so it keeps the look the rest of the shell was tuned for; the
+   page underneath it gets the darker Comet-style canvas.
+   max-height on the textarea is the upper bound for the auto-grow, after which
+   the field's own scrollbar appears so the dock itself never grows.
+*/
+.hd-dock-form { display: grid; grid-template-rows: auto auto; gap: 6px; min-height: 54px; padding: 5px 12px 5px 7px; border: 1px solid #b3e0fc; border-radius: 28px; background: linear-gradient(170deg, #425d7480, #07131bf5 35%, #0b1825f5 74%, #36566fca); box-shadow: inset 0 2px 4px #b9dfffaa, inset 0 -2px 4px #acddffaa, 0 0 9px #84a9ff87, 0 0 27px #65c9ff27, 0 8px 24px #0008; }
+.hd-dock-controls { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.hd-dock-controls .hd-tools { flex: 1; min-width: 0; }
 .hd-mic { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border: 2px solid #9bffeb !important; border-radius: 50%; color: #edf7ff !important; background: radial-gradient(circle, #143445, #183252 60%, #142436) !important; box-shadow: 0 0 9px #86c9ff, 0 0 16px #5aefd286, inset 0 0 10px #45ffdd44; }
 .hd-mic[aria-pressed='true'] { border-color: #ffd98a !important; box-shadow: 0 0 12px #8bf1ff, 0 0 22px #7fe3c4aa; }
 .hd-input { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
 /* The composer field is a textarea, so it needs its own rules. Targeting `input`
-   here left every one of these declarations matching nothing and the field fell
-   back to the UA default box. */
+    here left every one of these declarations matching nothing and the field fell
+    back to the UA default box. `field-sizing: content` (where available) lets
+    the field auto-grow up to the cap; older engines still rely on
+    `max-height + overflow-y: auto` and a small JS resize hook elsewhere. */
 .hd-dashboard .hd-input textarea {
-  display: block; width: 100%; max-height: 132px; overflow-y: auto;
+  display: block; width: 100%; min-height: 22px; max-height: 160px; overflow-y: auto;
   color: #edf6ff; border: 0; outline: none; background: none; resize: none;
   font: inherit; font-size: 15px; line-height: 20px; padding: 4px 0;
 }
@@ -383,6 +410,20 @@
 .hd-dashboard .hd-menu .hd-model-pick { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hd-dashboard .hd-menu .hd-model-pick[aria-pressed='true'] { background: #12324a99; color: #fff; }
 .hd-send { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(#3f6f8c, #1c3346) !important; box-shadow: inset 0 1px 2px #cdeaff33, 0 0 12px #4fd8ff33; }
+
+/* Thinking-level row, only rendered for models that support it. Sits inside the
+   model menu under the model list, so it never claims a permanent slot in the
+   chat bar. All supported levels are listed; none is hidden behind another menu. */
+.hd-thinking-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px solid #1c2530; }
+.hd-thinking-label { color: #7f97ad; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; margin-right: 4px; }
+.hd-thinking-pick { padding: 3px 9px; border: 1px solid #1c2530; border-radius: 999px; background: transparent; color: #c2d3e3; font-size: 11px; cursor: pointer; text-transform: capitalize; }
+.hd-thinking-pick:hover { color: #fff; border-color: #2f3d4d; background: #0e1620; }
+.hd-thinking-pick[aria-pressed='true'] { color: #d6f0ff; border-color: #2f4956; background: #11212d; }
+.hd-menu-foot { display: flex; justify-content: flex-end; margin-top: 6px; padding-top: 6px; border-top: 1px solid #1c2530; }
+.hd-menu-refresh { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 0; border-radius: 6px; background: transparent; color: #8aa6bd; font-size: 10px; cursor: pointer; }
+.hd-menu-refresh:hover { color: #e6f4ff; background: #0e1620; }
+.hd-menu-refresh:disabled { opacity: .4; cursor: not-allowed; }
+.hd-menu-refresh-icon { display: inline-block; font-size: 12px; line-height: 1; }
 .hd-send:disabled { opacity: .55; }
 /* One control for the whole turn: the orb spins from submit until Core answers,
    and it doubles as the stop button so cancelling never needs a second target. */
@@ -392,7 +433,6 @@
 .hd-send-busy:not(:disabled):hover { box-shadow: 0 0 14px #ff9ea955; }
 .hd-send-busy:not(:disabled) .hd-send-orb { box-shadow: 0 0 12px #ff9ea988; }
 @keyframes hd-spin { to { transform: rotate(360deg); } }
-.hd-notice { position: absolute; bottom: 62px; left: 18px; margin: 0; border: 1px solid #6fb6d559; border-radius: 10px; padding: 10px 16px; background: #071320f0; font-size: 13px; }
 .hd-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* --------------------------------------------------------------------------
@@ -449,3 +489,15 @@
     top: 48.5vh;
   }
 }
+
+.hd-model-pick small { color: #7f9bb3; margin-left: 8px; font-size: 10px; }
+
+/* Explicit on/off switches for the composer's persistent capabilities. */
+.hd-dashboard .hd-intent-toggle { gap: 6px; }
+.hd-switch-track { position: relative; display: inline-block; flex: none; width: 28px; height: 16px; border-radius: 8px; background: #344d60; box-shadow: inset 0 0 0 1px #648297; }
+.hd-switch-thumb { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #b8cbd8; transition: transform 120ms ease; }
+.hd-switch-state { min-width: 18px; font-weight: 600; text-align: left; }
+.hd-dashboard .hd-intent-toggle[aria-checked='true'] { color: #b8f6ff; border-color: #69dcef91; background: #10364aa8; }
+.hd-intent-toggle[aria-checked='true'] .hd-switch-track { background: #67dce5; box-shadow: none; }
+.hd-intent-toggle[aria-checked='true'] .hd-switch-thumb { transform: translateX(12px); background: #082533; }
+@media (prefers-reduced-motion: reduce) { .hd-switch-thumb { transition: none; } }

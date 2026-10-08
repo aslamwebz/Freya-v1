@@ -815,6 +815,7 @@ export function createWebSearchTool(options: {
     query: string,
     vertical: SearchVertical,
     signal?: AbortSignal,
+    site?: string,
   ) => Promise<readonly unknown[]>
   readonly now?: () => Date
   readonly maxResults?: number
@@ -833,15 +834,16 @@ export function createWebSearchTool(options: {
       { name: 'query', description: 'the search query', required: true },
       {
         name: 'type',
-        description: 'what to look for: web (default), images, videos or documents',
+        description: 'what to look for: web (default), images, videos, documents, audio or pages',
         required: false,
       },
+      { name: 'site', description: 'optional domain constraint, independent of media type', required: false },
     ],
     async run(request) {
-      const query = (request.arguments['query'] ?? '').trim()
-      if (query.length === 0) throw new Error('the search query was empty')
+      const query = request.arguments['query'] ?? ''
+      if (query.trim().length === 0) throw new Error('the search query was empty')
       const vertical = readVertical(request.arguments['type'], options.verticals ?? DEFAULT_VERTICALS)
-      const rows = await options.searchWeb(query, vertical, request.signal)
+      const rows = await options.searchWeb(query, vertical, request.signal, request.arguments['site'])
       const at = now().toISOString()
       const results: ToolSource[] = []
       for (const row of rows.slice(0, maxResults)) {
@@ -861,7 +863,7 @@ export function createWebSearchTool(options: {
 
 
 /** The verticals a search may name, in the words the model is offered. */
-const DEFAULT_VERTICALS = ['web', 'images', 'videos', 'documents'] as const satisfies readonly SearchVertical[]
+const DEFAULT_VERTICALS = ['web', 'images', 'videos', 'documents', 'audio', 'pages'] as const satisfies readonly SearchVertical[]
 
 /**
  * The vertical a request asked for, or `web`.
@@ -902,7 +904,16 @@ function toSource(row: unknown, rank: number, retrievedAt: string): ToolSource |
   const mediaUrl = optionalHttpUrl(record['mediaUrl'])
   const thumbnailUrl = optionalHttpUrl(record['thumbnailUrl'])
   const vertical = typeof record['vertical'] === 'string' ? record['vertical'] : undefined
-  const duration = typeof record['duration'] === 'string' ? record['duration'] : null
+  // Runtime as the provider stated it — never derived from the title or the URL.
+  // SearXNG reports a video's length as `metadata.duration`, so that is read before
+  // assuming the row has no runtime to print.
+  const metadata = typeof record['metadata'] === 'object' && record['metadata'] !== null
+    ? record['metadata'] as Record<string, unknown>
+    : undefined
+  const statedDuration = [record['duration'], metadata?.duration].find(
+    (value): value is string => typeof value === 'string' && value.trim() !== '',
+  )
+  const duration = statedDuration ?? null
 
   return {
     title: sanitiseUntrustedText(title, MIND_TOOL_LIMITS.maxTitleChars),

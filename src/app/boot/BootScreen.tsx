@@ -53,7 +53,15 @@ function phaseOf(core: Resource<CoreView>, attached: boolean): { phase: BootPhas
   }
   if (core.status === 'ready' || core.status === 'stale') {
     const lifecycle = core.data.lifecycle
-    if (lifecycle === 'running') return { phase: 'starting', line: 'Freya Core is running. Opening your workspace…' }
+    // A Core that is operationally up (degraded or ready) opens the
+    // workspace. A Core that is still booting waits. Anything else is a
+    // genuine answer that the shell renders on the dashboard.
+    if (core.data.operational) {
+      return { phase: 'starting', line: lifecycle === 'degraded'
+        ? 'Freya Core started in degraded mode. Opening your workspace…'
+        : 'Freya Core is running. Opening your workspace…' }
+    }
+    if (lifecycle === 'booting' || lifecycle === 'starting') return { phase: 'waiting', line: 'Freya Core is starting…' }
     return { phase: 'degraded', line: `Freya Core reports “${lifecycle}”. Opening anyway…` }
   }
   // `unavailable` and `error` both mean Core answered, and the answer was that it

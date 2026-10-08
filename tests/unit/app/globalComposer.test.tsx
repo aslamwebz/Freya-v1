@@ -18,8 +18,8 @@ function voice(): VoiceView {
     capturing: false,
     speaking: false,
     muted: false,
-    wakeArmed: false,
     notice: '',
+    wakeArmed: false,
     unavailableReason: 'Voice unavailable in this test.',
     capabilities: {
       capture: false,
@@ -38,15 +38,14 @@ describe('GlobalComposer', () => {
     render(
       <GlobalComposer
         generating={false}
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={8000}
-        browserOpen={false}
-        onBrowserToggle={vi.fn()}
+
+
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -55,25 +54,24 @@ describe('GlobalComposer', () => {
     fireEvent.change(input(), { target: { value: 'do not lose me' } })
     fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
 
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('do not lose me', 'chat'))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('do not lose me', 'chat', { webSearch: false, browserUse: false }))
     expect(input().value).toBe('do not lose me')
   })
 
-  it('clears the draft only after Core accepts the send', async () => {
+  it('keeps the accepted draft available for further editing', async () => {
     const onSend = vi.fn(async () => true)
 
     render(
       <GlobalComposer
         generating={false}
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={8000}
-        browserOpen={false}
-        onBrowserToggle={vi.fn()}
+
+
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -82,8 +80,8 @@ describe('GlobalComposer', () => {
     fireEvent.change(input(), { target: { value: 'hello freya' } })
     fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
 
-    await waitFor(() => expect(input().value).toBe(''))
-    expect(onSend).toHaveBeenCalledWith('hello freya', 'chat')
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello freya', 'chat', { webSearch: false, browserUse: false }))
+    expect(input().value).toBe('hello freya')
   })
 
   it('sends the selected Freya mode with the draft', async () => {
@@ -92,15 +90,14 @@ describe('GlobalComposer', () => {
     render(
       <GlobalComposer
         generating={false}
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={8000}
-        browserOpen={false}
-        onBrowserToggle={vi.fn()}
+
+
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -111,7 +108,7 @@ describe('GlobalComposer', () => {
     fireEvent.change(input(), { target: { value: 'find 100 cat videos' } })
     fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
 
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('find 100 cat videos', 'eye'))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('find 100 cat videos', 'eye', { webSearch: false, browserUse: false }))
   })
 
   it('turns the send control into a real stop-response control while generating', () => {
@@ -120,15 +117,14 @@ describe('GlobalComposer', () => {
     render(
       <GlobalComposer
         generating
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={8000}
-        browserOpen={false}
-        onBrowserToggle={vi.fn()}
+
+
         onSend={vi.fn(async () => true)}
         onStopResponse={onStopResponse}
       />,
@@ -147,15 +143,14 @@ describe('GlobalComposer keyboard and bounds', () => {
     render(
       <GlobalComposer
         generating={false}
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={8000}
-        browserOpen={false}
-        onBrowserToggle={vi.fn()}
+
+
         onSend={onSend}
         onStopResponse={vi.fn()}
       />,
@@ -167,22 +162,21 @@ describe('GlobalComposer keyboard and bounds', () => {
 
     fireEvent.change(input(), { target: { value: 'first line\nsecond line' } })
     fireEvent.keyDown(input(), { key: 'Enter' })
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('first line\nsecond line', 'chat'))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('first line\nsecond line', 'chat', { webSearch: false, browserUse: false }))
   })
 
   it('takes the message ceiling from Core instead of inventing a renderer limit', () => {
     render(
       <GlobalComposer
         generating={false}
-        notice=""
         defaultModel={null}
         voice={voice()}
         voiceTranscript={null}
         onVoicePress={vi.fn()}
         onVoiceRelease={vi.fn()}
         maxMessageCharacters={1234}
-        browserOpen={false}
-        onBrowserToggle={vi.fn()}
+
+
         onSend={vi.fn(async () => true)}
         onStopResponse={vi.fn()}
       />,

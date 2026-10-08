@@ -22,7 +22,9 @@ describe('Phase 49 qualification gate CI enforcement', () => {
 
   it('runs it after the build, so the verdict describes artifacts that exist', async () => {
     const content = await workflow()
-    const buildIndex = content.indexOf('npm run build')
+    const pkg = JSON.parse(await readFile(resolve(__dirname, '../../package.json'), 'utf8'))
+    expect(pkg.scripts['verify:full']).toContain('npm run build')
+    const buildIndex = content.indexOf('npm run verify:full')
     const qualifyIndex = content.indexOf('npm run qualify')
     expect(buildIndex).toBeGreaterThan(-1)
     expect(qualifyIndex).toBeGreaterThan(buildIndex)

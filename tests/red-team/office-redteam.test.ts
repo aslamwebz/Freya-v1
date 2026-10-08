@@ -131,7 +131,10 @@ function emptyWorkforceProjection(): WorkforceProjection {
 function emptyCoreStatus(): CoreStatus {
   return {
     lifecycle: 'ready',
-    eventSequence: 0,
+
+    operational: true,
+    persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null },
+    diagnostics: { path: null, writeFailures: 0 },    eventSequence: 0,
     coreStartedAt: NOW,
     integrity: { integrity: 'ok', reason: 'ok', line: null, eventsRead: 0, bytesDiscarded: 0 },
     stopAll: { active: false, activatedAt: null, activatedBy: null },

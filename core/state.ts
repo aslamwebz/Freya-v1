@@ -358,7 +358,11 @@ export function reduceCoreState(state: CoreState, event: AnyCoreEvent): CoreStat
       // The repair event is written only after the store has reconstructed and
       // revalidated the full journal. Clearing the latch here makes replay and
       // the live process agree on the repaired trust state.
-      return { ...state, integrityFault: null }
+      return { ...state, integrityFault: null,
+        // The historical warning remains in the journal. It is no longer an
+        // active health fault once its recognized integrity gap is repaired.
+        faults: state.faults.filter(reason => reason !== 'the event journal was found corrupt; see the preceding integrity fault'),
+      }
 
     default:
       // Attention owns its own slice and its own reducer. Delegating here keeps

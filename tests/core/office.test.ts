@@ -118,9 +118,12 @@ function emptyWorkforceProjection(): WorkforceProjection {
 function emptyCoreStatus(): CoreStatus {
   return {
     lifecycle: 'ready',
+    operational: true,
     eventSequence: 0,
     coreStartedAt: NOW,
     integrity: { integrity: 'ok', reason: 'ok', line: null, eventsRead: 0, bytesDiscarded: 0 },
+    persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null },
+    diagnostics: { path: null, writeFailures: 0 },
     stopAll: { active: false, activatedAt: null, activatedBy: null },
     guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
     governor: { status: 'ready', grantsActive: 0 },

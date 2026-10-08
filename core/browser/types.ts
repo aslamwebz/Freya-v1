@@ -253,7 +253,7 @@ export function isBrowserEscalationReason(value: unknown): value is BrowserEscal
  */
 export const BROWSER_LIMITS = Object.freeze({
   /** Live Freya Browser sessions at once. One per owner-visible window. */
-  maxSessions: 2,
+  maxSessions: 12,
   /** Offered, unsettled handoffs retained at once. */
   maxOpenHandoffs: 8,
   /** How long an offered handoff stays acceptable, in milliseconds. */
@@ -367,6 +367,9 @@ export const BROWSER_EVENT_TYPES = [
   'browser.dual.page.replaced',
   'browser.dual.page.failed',
   'browser.dual.page.described',
+  'browser.dual.page.scrolled',
+  'browser.dual.page.selected',
+  'browser.dual.session.focused',
   'browser.dual.ref.stale',
   'browser.dual.media.observed',
   'browser.dual.handoff.offered',
@@ -396,11 +399,14 @@ export function isBrowserEventType(value: unknown): value is BrowserEventType {
  */
 export const BROWSER_PAYLOAD_KEYS: Readonly<Record<BrowserEventType, readonly string[]>> =
   Object.freeze({
-    'browser.dual.session.opened': ['sessionId', 'target', 'at'],
+    'browser.dual.session.opened': ['sessionId', 'target', 'createdBy', 'at'],
     'browser.dual.session.closed': ['sessionId', 'target', 'at'],
     'browser.dual.page.replaced': ['sessionId', 'revision', 'url', 'at'],
     'browser.dual.page.failed': ['sessionId', 'revision', 'code', 'at'],
     'browser.dual.page.described': ['sessionId', 'revision', 'elements', 'readBytes', 'at'],
+    'browser.dual.page.scrolled': ['sessionId', 'revision', 'at'],
+    'browser.dual.page.selected': ['sessionId', 'revision', 'at'],
+    'browser.dual.session.focused': ['sessionId', 'at'],
     'browser.dual.ref.stale': ['sessionId', 'ref', 'refRevision', 'currentRevision', 'at'],
     'browser.dual.media.observed': ['sessionId', 'mediaId', 'mediaType', 'bytes', 'at'],
     'browser.dual.handoff.offered': ['handoffId', 'from', 'to', 'reason', 'at'],

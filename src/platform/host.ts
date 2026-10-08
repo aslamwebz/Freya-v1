@@ -1,3 +1,5 @@
+import type { CapabilityRegistry, CapabilityPreferences } from '../../core/capabilities'
+import type { BrowserDockRequest } from '../../electron/browser/rendererRequest'
 import type {
   CoreCommandName,
   CoreCommandResult,
@@ -6,6 +8,7 @@ import type {
 import type { CoreActivityEvent } from '../../core/protocol/activity'
 import type { BrowserRequest, BrowserResult } from '../../core/browser'
 import type { BrowserBridgeState } from '../../electron/browser/rendererRequest'
+import type { SemanticBrowserResult } from '../../core/browser/service'
 import type { ConversationProjection, VoiceProjection } from '../../core/protocol/conversation'
 import type { VoiceTranscriptFragment } from '../../core/voice/types'
 import type { VoiceOutputInstruction } from '../../electron/voiceHost'
@@ -111,6 +114,8 @@ export interface FreyaHostBridge {
   voiceSettingsWrite?(patch: Partial<VoiceSettings>): Promise<VoiceSettings>
   isDesktop: true
 
+  getCapabilitySettings(): Promise<CapabilityRegistry>
+  setCapabilitySettings(input: CapabilityPreferences): Promise<CapabilityRegistry>
   getRuntimeInfo(): Promise<HostRuntimeInfo>
   loadWorkspace(): Promise<unknown>
   saveWorkspace(payload: unknown): Promise<boolean>
@@ -142,6 +147,15 @@ export interface FreyaHostBridge {
   /** A direct video's validated bytes as a data URL, only for an opened preview. */
   mediaVideo(url: string): Promise<unknown>
 
+  /**
+   * Attach the hosted player at the given box, and detach it.
+   *
+   * The main process re-checks the player allowlist, so the renderer names the
+   * address it wants but never decides whether it may be framed.
+   */
+  mediaEmbedAttach?(request: { url: string; x: number; y: number; width: number; height: number }): Promise<unknown>
+  mediaEmbedDetach?(): Promise<unknown>
+
   /** Frameless-window controls. Each acts on the window that calls. */
   windowMinimize(): Promise<void>
   windowMaximize(): Promise<void>
@@ -154,8 +168,19 @@ export interface FreyaHostBridge {
    * A request submitted here is re-bounded by preload/main and then routed through
    * the existing dual-browser runtime, which remains behind Device Hands.
    */
+  onBrowserOpenUrl?(handler: (url: string) => void): () => void
   browserState(): Promise<BrowserBridgeState>
+  browserDock?(input: BrowserDockRequest): Promise<boolean>
   browserExecute(request: BrowserRequest): Promise<BrowserResult>
+  /**
+   * One Semantic Browser Protocol operation.
+   *
+   * The normaliser on the other side refuses an act that names no element reference or no
+   * snapshot revision, so this cannot be used to aim the browser at a chosen locator.
+   */
+  browserCommand?(input: unknown): Promise<SemanticBrowserResult>
+  /** The browser state, pushed. A workspace that listens needs no timer. */
+  onBrowserEvent?(handler: (state: BrowserBridgeState) => void): () => void
 
   /**
    * The provider settings, and the one place a credential crosses this bridge — in

@@ -134,8 +134,9 @@ function MediaCard({ item, index, onOpen }: {
   )
 }
 
-export function MediaGrid({ items }: {
+export function MediaGrid({ items, onOpenBrowserUrl }: {
   readonly items: readonly MediaItem[]
+  readonly onOpenBrowserUrl?: (url: string, kind?: 'video' | 'image' | 'pdf' | 'document' | 'page') => void
 }) {
   const [openIndex, setOpenIndex] = useState<number | null>(null)
   if (items.length === 0) return null
@@ -148,7 +149,7 @@ export function MediaGrid({ items }: {
             key={`${item.kind}:${item.url}:${String(index)}`}
             item={item}
             index={index}
-            onOpen={setOpenIndex}
+            onOpen={(selected) => { const found = items[selected]; if (onOpenBrowserUrl && found) onOpenBrowserUrl(found.page || found.url, found.kind === 'document' ? 'document' : found.kind); else setOpenIndex(selected) }}
           />
         ))}
       </div>
@@ -158,17 +159,28 @@ export function MediaGrid({ items }: {
           index={openIndex}
           onIndex={setOpenIndex}
           onClose={() => setOpenIndex(null)}
+          onOpenBrowserUrl={onOpenBrowserUrl}
         />
       )}
     </>
   )
 }
 
-function MediaOverlay({ items, index, onIndex, onClose }: {
+/**
+ * The hosted player's box, measured for the main process.
+ *
+ * The player itself is a main-process view layered over this box's bounds: a
+ * `file://` transcript cannot iframe a hosted player (the frame origin reads as
+ * `null` and the player refuses it), so the box here is only the placeholder the
+ * view is drawn over. When no bridge exists — tests, a plain browser — the box
+ * degrades to a plain sandboxed iframe, which is where that path is acceptable.
+ */
+function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
   readonly items: readonly MediaItem[]
   readonly index: number
   readonly onIndex: (next: number) => void
   readonly onClose: () => void
+  readonly onOpenBrowserUrl?: (url: string, kind?: 'video' | 'image' | 'pdf' | 'document' | 'page') => void
 }) {
   const item = items[index] ?? items[0]!
   const many = items.length > 1
@@ -179,6 +191,16 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
   const [documentData, setDocumentData] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [reason, setReason] = useState<string | null>(null)
+
+  // The renderer cannot revoke the object URL in the effect's cleanup through a
+  // state field, so it is remembered here instead: one per mounted overlay item.
+  const documentUrlRef = useRef<string | null>(null)
+  const revokeDocument = (): void => {
+    if (documentUrlRef.current !== null) {
+      URL.revokeObjectURL(documentUrlRef.current)
+      documentUrlRef.current = null
+    }
+  }
 
   const fallbackPoster = useMemo(() => {
     const address = posterAddress(item)
@@ -202,6 +224,7 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
     setDocumentData(null)
     setReason(null)
     setLoading(true)
+    revokeDocument()
 
     const load = async (): Promise<void> => {
       if (bridge === undefined) {
@@ -256,7 +279,14 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
       } | null
       if (!alive) return
       if (reply?.ok === true && typeof reply.base64 === 'string' && reply.base64.length > 0) {
-        setDocumentData(`data:application/pdf;base64,${reply.base64}`)
+        // A blob: URL, not the raw base64 data: URL. Chromium's built-in PDF viewer
+        // (pdf.js in Electron) refuses to render data: application/pdf frames, and the
+        // document's CSP does not carry `data:` in `frame-src` — a blob: URL is same-origin
+        // to this window, renders in the viewer, and dies with the modal.
+        const bytes = Uint8Array.from(atob(reply.base64), (char) => char.charCodeAt(0))
+        const objectUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+        documentUrlRef.current = objectUrl
+        setDocumentData(objectUrl)
       } else {
         setReason(typeof reply?.reason === 'string' ? reply.reason : 'This PDF could not be fetched safely for preview.')
       }
@@ -266,6 +296,7 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
     void load()
     return () => {
       alive = false
+      revokeDocument()
     }
   }, [bridge, fallbackPoster, item])
 
@@ -276,6 +307,20 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
           <span className="chats-overlay-name">{item.title || 'Preview'}</span>
           <span className="chats-overlay-host">{item.host || hostOf(item.page)}</span>
           <span className="chats-overlay-count">{String(index + 1)} / {String(items.length)}</span>
+          {/* Always offer the in-app browser as a real fallback — several hosted
+              providers refuse to play inside a `file://` transcript's iframe, and
+              the user expects the preview to keep working rather than a black
+              rectangle. */}
+          {onOpenBrowserUrl && item.page && item.page !== '' ? (
+            <button
+              type="button"
+              className="chats-overlay-open"
+              aria-label="Open this page in Freya's browser"
+              onClick={() => onOpenBrowserUrl(item.page, item.kind === 'document' ? 'pdf' : item.kind)}
+            >
+              Open in browser
+            </button>
+          ) : null}
           <button type="button" className="chats-overlay-close" onClick={onClose} aria-label="Close preview">×</button>
         </header>
         <div className="chats-overlay-stage">
@@ -292,6 +337,13 @@ function MediaOverlay({ items, index, onIndex, onClose }: {
           {!loading && item.kind === 'video' ? (
             item.embedUrl
               ? (
+                // Sandboxed iframe. A `file://` transcript document has a null
+                // origin, and several providers (YouTube most visibly) refuse to
+                // play under that — the parent calls the host's BrowserWorkspace
+                // through `openBrowserRequested` so the user can keep watching in
+                // Freya's own browser. The iframe here is the best honest attempt
+                // inside the modal and degrades to a poster + an open-in-browser
+                // button if the provider rejects the embed.
                 <iframe
                   className="chats-overlay-video-embed"
                   src={item.embedUrl}

@@ -1,18 +1,19 @@
-/* Chats — a real board tab: session list on the left, live thread on the right.
-   Fills the board's main region (`.hd-main`), so it follows the same rail,
-   header and dock as every other tab. */
-/* The conversation list lives in the left rail (ChatHistory), so the workspace
-   owns the transcript plus the optional bounded browser controller. */
-.chats { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
-.chats[data-browser-open] { grid-template-columns: minmax(320px, .8fr) minmax(390px, 1.05fr); }
+/* Chats — the conversation, the browser beside it, and nothing drawn around
+   either. The workspace fills the window on its own screen: the app's top bar,
+   rail and gutters are all gone there, so the transcript and the page it is
+   reading are the whole surface. Comet-style: the canvas is near-black, the
+   assistant's text sits directly on it (no card, no border, no glow — white text
+   is already legible against the dark), and only the owner's messages wear a
+   bubble so the two sides are still readable at a glance. */
+/* `--chats-thread` is the conversation column's share of the window, published by
+   the shell (HomeDashboard) because the global composer reads the same number to
+   sit over that column. The 6px middle track is the drag handle, so the gap goes
+   to zero rather than adding a second, invisible gutter. */
+.chats { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
+.chats[data-browser-open] { gap: 0; grid-template-columns: calc((100% - 6px) * var(--chats-thread, 48) / 100) 6px minmax(320px, 1fr); }
 
 .chats-list,
-.chats-thread {
-  min-height: 0; border: 1px solid #b0daf0bd; border-radius: 12px;
-  background: linear-gradient(125deg, #2442587d, #06101ada 43%, #08131eca 71%, #4264806b);
-  box-shadow: inset 1px 1px 1px #dcf1ff60, inset -1px -1px 1px #c0e5ff38, 0 7px 24px #0003, 0 0 9px #66c9ff15;
-  backdrop-filter: blur(9px);
-}
+.chats-thread { min-height: 0; }
 
 .chats-list { display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
 .chats-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #8db7d333; }
@@ -63,8 +64,12 @@
 .chats-list-empty small { max-width:160px; font-size:10px; line-height:1.45; }
 .chats-list-empty-ring { width:22px; height:22px; margin-bottom:4px; border:1px solid #69dcf18e; border-radius:50%; box-shadow:0 0 12px #64dfff22,inset 0 0 10px #5bdfff10; }
 
-.chats-thread { padding:0; gap:0; display:grid; grid-template-rows:auto minmax(0,1fr) auto; }
-.chats-workspace-head { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:64px; padding:9px 18px; border-bottom:1px solid #7fa9c02b; background:linear-gradient(180deg,#10263a59,#0715221e); }
+/* The bottom strip stays clear: the global composer floats over the window's
+   lower edge, and the transcript scrolls underneath it rather than into it. */
+.chats-thread { padding:0 0 92px; gap:0; display:grid; grid-template-rows:auto minmax(0,1fr) auto; }
+.chats-thread,
+.chats-log { background: transparent; }
+.chats-workspace-head { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:64px; padding:9px 18px; }
 .chats-workspace-identity { display:flex; align-items:center; gap:12px; min-width:0; }
 .chats-workspace-identity > span:last-child { display:grid; gap:1px; min-width:0; }
 .chats-workspace-identity small { color:#76dff6; font-size:9px; letter-spacing:.18em; }
@@ -86,18 +91,25 @@
 .chats-log { padding:26px clamp(18px,3vw,44px) 20px; display:flex; flex-direction:column; align-items:stretch; gap:16px; }
 .chats-turn { display:flex; align-items:flex-start; gap:10px; width:min(78%,850px); }
 .chats-turn[data-role='user'] { flex-direction:row-reverse; align-self:flex-end; }
-.chats-turn-avatar { display:grid; place-items:center; width:29px; height:29px; flex:none; margin-top:18px; border-radius:50%; border:1px solid #6d9ab46c; background:#102436c4; color:#98eaff; font-size:11px; }
-.chats-turn[data-role='user'] .chats-turn-avatar { color:#e4eff8; border-color:#6485a05c; background:#203044c7; }
+.chats-turn-avatar { display:grid; place-items:center; width:29px; height:29px; flex:none; margin-top:18px; border-radius:50%; border:0; background:transparent; color:#99def3; font-size:11px; }
+.chats-turn[data-role='user'] .chats-turn-avatar { color:#e4eff8; border:1px solid #2c3a4b; background:#0e1822; }
 .chats-turn-avatar-live { box-shadow:0 0 14px #69dcff40,inset 0 0 10px #55ceef17; }
 .chats-turn-content { display:grid; min-width:0; gap:5px; }
 .chats-turn-content > header { display:flex; align-items:center; gap:8px; min-height:14px; }
 .chats-turn[data-role='user'] .chats-turn-content > header { justify-content:flex-end; }
-.chats-turn-content > header b { color:#99def3; font-size:10px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; }
+.chats-turn-content > header b { color:#8fa9bd; font-size:10px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; }
 .chats-turn[data-role='user'] .chats-turn-content > header b { color:#b7c9d8; }
 .chats-turn-content time,.chats-live-label { color:#617e95; font-size:9px; }
 .chats-live-label { text-transform:uppercase; letter-spacing:.08em; }
-.chats-bubble { min-width:0; padding:11px 14px; border:1px solid #4b769155; border-radius:4px 15px 15px 15px; background:linear-gradient(135deg,#10283aa7,#091827a6); color:#dbe9f5; font-size:13px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; box-shadow:inset 0 1px 0 #b6eaff0b; }
-.chats-turn[data-role='user'] .chats-bubble { border-color:#5cbbe16b; border-radius:15px 4px 15px 15px; background:linear-gradient(145deg,#13354bbb,#102a3cbf); color:#eaf5fb; }
+/*
+   Comet shows its answers directly on the dark canvas — no card, no border, no
+   shadow. We do the same: the assistant bubble has no fill or stroke, only
+   white-ish text. The owner's bubble stays a bubble so the two sides of the
+   transcript are still distinguishable without any decoration on the assistant.
+*/
+.chats-bubble { min-width:0; padding:6px 0; border:0; border-radius:0; background:transparent; color:#eaf2fb; font-size:14px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; box-shadow:none; }
+.chats-turn[data-role='user'] .chats-bubble { padding:10px 14px; border:1px solid #2c3a4b; border-radius:14px; background:#0f1822; color:#f1f6fb; }
+.chats-turn[data-role='user'] { width:min(72%,720px); }
 .chats-thinking { display:inline-flex; align-items:center; width:max-content; gap:5px; min-height:18px; padding-right:18px; }
 .chats-thinking i { width:5px; height:5px; border-radius:50%; background:#84e8ff; box-shadow:0 0 7px #63ddff66; animation:chats-thinking 1.2s ease-in-out infinite; }
 .chats-thinking i:nth-child(2){animation-delay:.14s}.chats-thinking i:nth-child(3){animation-delay:.28s}
@@ -114,6 +126,17 @@
 .chats-empty-orb i:nth-child(2) { inset:8px -17px; transform:rotate(20deg); border-color:#9a8cff45; }
 .chats-empty-orb span { position:absolute; left:17px; top:16px; width:21px; height:13px; border-radius:50%; background:#efffff91; filter:blur(5px); transform:rotate(-25deg); }
 
+/* What went wrong, folded away. It replaced the strip that used to float above
+   the composer, so a timeout is now said once, in Core's words, inside the
+   conversation it interrupted. */
+.chats-issue { margin:0 18px 14px; border:1px solid #d69a6a4d; border-radius:10px; background:#1b120bd9; overflow:hidden; }
+.chats-issue > summary { cursor:pointer; display:flex; align-items:center; gap:8px; padding:8px 12px; list-style:none; color:#f0c08c; font-size:12px; }
+.chats-issue > summary::-webkit-details-marker { display:none; }
+.chats-issue > summary b { font-weight:500; }
+.chats-issue > summary small { color:#b28f6e; font-size:10px; }
+.chats-issue-mark { display:grid; place-items:center; width:16px; height:16px; flex:none; border-radius:50%; background:#d69a6a2e; color:#ffd7ab; font-size:11px; }
+.chats-issue > div { display:grid; gap:6px; padding:0 12px 11px; }
+.chats-issue p { margin:0; color:#e8c9a4; font-size:12px; line-height:1.45; }
 .chats-status-stack { display:grid; gap:5px; padding:0 18px 13px; }
 .chats-boundary { margin:0; width:fit-content; max-width:min(720px,92%); padding:6px 10px; border-left:2px solid #efa966; border-radius:4px 9px 9px 4px; background:#2b1e1575; color:#e7b683; font-size:10px; line-height:1.4; }
 @keyframes chats-thinking { 0%,100%{opacity:.35;transform:translateY(0)} 50%{opacity:1;transform:translateY(-2px)} }
@@ -383,17 +406,142 @@
 .chats-rich-link:not(:disabled) { cursor:pointer; }
 .chats-rich-link:disabled { color:#86a8b9; text-decoration-style:dotted; cursor:not-allowed; }
 
+/* Provenance — retrieved / observed / inferred distinction.
+   The numbers are Core's, not invented. When Core has none, this row
+   does not render at all. */
+.chats-provenance { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:4px; }
+.chats-provenance span { display:inline-flex; align-items:center; gap:4px; padding:1px 7px; border:1px solid currentColor; border-radius:999px; font-size:9px; letter-spacing:.06em; opacity:.92; }
+.chats-provenance span b { color:inherit; font:600 10px/1 'Cascadia Code', ui-monospace, monospace; }
+.chats-provenance span small { font-size:9px; text-transform:uppercase; }
+.chats-provenance span[data-tone='retrieved'] { color:#8dfbe8; border-color:#5fdabc54; }
+.chats-provenance span[data-tone='observed']  { color:#a4d6ff; border-color:#5cb8e654; }
+.chats-provenance span[data-tone='inferred']  { color:#e9c892; border-color:#d6a85b50; }
+
+/* Contents — visible only when the markdown has two or more headings and
+   the parent opted in via `enableToc`. The summary is a state row, the list
+   is the navigation; every entry is a real button so it lands on a real
+   focusable control. */
+.chats-toc { margin-bottom:6px; border:1px solid #557c9538; border-radius:8px; background:#0b1a2bb0; overflow:hidden; }
+.chats-toc > summary { display:flex; align-items:center; gap:7px; padding:6px 10px; cursor:pointer; list-style:none; color:#b8d0df; font-size:10px; }
+.chats-toc > summary::-webkit-details-marker { display:none; }
+.chats-toc > summary::before { content:'›'; color:#6ddcf4; font:15px/1 Georgia, serif; transition:transform .14s ease; }
+.chats-toc[open] > summary::before { transform:rotate(90deg); }
+.chats-toc > summary b { font-size:9px; letter-spacing:.18em; text-transform:uppercase; color:#cfeaf7; font-weight:600; }
+.chats-toc > summary small { margin-left:auto; color:#7896a4; font-size:9px; }
+.chats-toc-list { list-style:none; margin:0; padding:0 4px 4px; display:grid; gap:1px; }
+.chats-toc-list button { width:100%; text-align:left; background:transparent; border:0; padding:5px 10px; color:#b9cede; font:inherit; font-size:11px; border-radius:5px; }
+.chats-toc-list button:hover { background:#11304a5c; color:#e6f1f8; }
+.chats-toc-list li[data-level='2'] button { padding-left:22px; }
+.chats-toc-list li[data-level='3'] button { padding-left:34px; }
+
+/* Code copy button. */
+.chats-code { position:relative; }
+.chats-code figcaption { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.chats-code-lang { font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:#81a9bf; }
+.chats-code-copy { padding:1px 7px; border:1px solid #557c954f; border-radius:5px; background:#0d2132a8; color:#9fc3d4; font-size:9px; letter-spacing:.04em; cursor:pointer; }
+.chats-code-copy:hover { color:#e3f0f8; border-color:#6ec8e898; }
+.chats-code-copy[data-copied] { color:#88f0c5; border-color:#5fdabc66; }
+
+/* Long-answer collapse toggle. */
+.chats-rich-toggle {
+  align-self:flex-start;
+  margin-top:4px;
+  padding:3px 9px;
+  border:1px solid #557c9554;
+  border-radius:6px;
+  background:#0d2132b0;
+  color:#9fc3d4;
+  font-size:10px;
+  cursor:pointer;
+}
+.chats-rich-toggle:hover { color:#e3f0f8; border-color:#6ec8e898; }
+
 
 /* Chat-owned browser controller. The web page itself stays in the isolated Electron
    browser window; this panel exposes only the Phase 51 projection and bounded actions. */
-.chats-browser {
-  min-width:0; min-height:0; overflow:hidden; display:grid;
-  grid-template-rows:auto auto auto auto minmax(0,1fr) auto;
-  border:1px solid #b0daf0bd; border-radius:12px;
-  background:linear-gradient(145deg,#112a3cc9,#06111be8 58%,#0d2030d7);
-  box-shadow:inset 1px 1px 1px #dcf1ff48,0 7px 24px #0003;
-  backdrop-filter:blur(9px);
+.chats-browser { min-width:0; min-height:0; overflow:hidden; display:grid; grid-template-rows:auto auto auto auto minmax(0,1fr) auto; }
+.chats-browser-tabs {
+  display:flex; flex-wrap:nowrap; gap:6px; padding:6px 9px 0;
+  overflow-x:auto; scrollbar-width:thin;
+  border-bottom:1px solid #739cb326;
 }
+.chats-browser-tabs-empty {
+  flex:1; padding:6px 8px; color:#7896aa; font-size:9px;
+}
+.chats-browser-tab {
+  display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:6px;
+  min-width:0; max-width:170px; padding:5px 8px 5px 10px;
+  border:1px solid #56798e44; border-radius:7px 7px 0 0; border-bottom:none;
+  background:#0c1d2c91; color:#c8deeb; font:inherit; cursor:pointer;
+  position:relative; white-space:nowrap;
+}
+.chats-browser-tab:hover { background:#11293fc7; color:#eaf5fb; }
+.chats-browser-tab.on { background:#163b58d4; border-color:#69dcef91; color:#d9faff; box-shadow:inset 0 1px 0 #69dcff44; }
+.chats-browser-tab[data-origin='handoff'] { border-left:2px solid #c4a4ff99; }
+.chats-browser-tab[data-origin='link'] { border-left:2px solid #69dcef99; }
+.chats-browser-tab[data-origin='manual'] { border-left:2px solid #56798e55; }
+.chats-browser-tab-title {
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-size:10px; font-weight:500; min-width:0;
+}
+.chats-browser-tab small { color:#7896aa; font-size:8px; text-transform:uppercase; letter-spacing:.06em; }
+.chats-browser-tab-close {
+  width:18px; height:18px; padding:0; display:grid; place-items:center;
+  border:0; background:transparent; color:#7896aa; border-radius:4px; font-size:13px; cursor:pointer;
+}
+.chats-browser-tab-close:hover { color:#ffb1b1; background:#3a2020; }
+.chats-browser-tab.on .chats-browser-tab-close { color:#bcdff0; }
+
+.chats-browser-address {
+  display:grid; grid-template-columns:auto auto auto minmax(0,1fr) auto;
+  gap:6px; padding:8px 10px 6px;
+}
+.chats-browser-body {
+  display:grid; grid-template-columns:minmax(0,1fr) 6px minmax(0,1fr);
+  min-height:0; border-top:1px solid #739cb321;
+}
+.chats-browser-body[data-split="35"] { grid-template-columns:minmax(0,1.85fr) 6px minmax(0,1fr); }
+.chats-browser-body[data-split="40"] { grid-template-columns:minmax(0,1.5fr) 6px minmax(0,1fr); }
+.chats-browser-body[data-split="46"] { grid-template-columns:minmax(0,1.18fr) 6px minmax(0,1fr); }
+.chats-browser-body[data-split="55"] { grid-template-columns:minmax(0,.85fr) 6px minmax(0,1fr); }
+.chats-browser-body[data-split="65"] { grid-template-columns:minmax(0,.55fr) 6px minmax(0,1fr); }
+.chats-browser-page, .chats-browser-history {
+  min-height:0; overflow:auto; padding:8px 11px 10px;
+}
+.chats-browser-splitter {
+  cursor:col-resize; background:linear-gradient(180deg,#0f1f2d,#102436);
+  border-left:1px solid #739cb326; border-right:1px solid #739cb326;
+  width:6px;
+}
+.chats-browser-splitter:hover { background:#143650; }
+.chats-browser-history header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 0 8px; color:#bcdff0; font-size:10px; letter-spacing:.1em; text-transform:uppercase;
+}
+.chats-browser-history ol {
+  margin:0; padding:0; list-style:none; display:grid; gap:4px;
+}
+.chats-browser-history li[data-current] button { border-color:#69dcef91; color:#d9faff; }
+.chats-browser-history button {
+  width:100%; text-align:left; display:grid; grid-template-columns:minmax(0,1fr) auto;
+  gap:6px; align-items:center;
+  border:1px solid #56788e3c; background:#0a1a28a6; color:#aebfce;
+  border-radius:6px; padding:5px 8px; font-size:9px; cursor:pointer;
+}
+.chats-browser-history button:not(:disabled):hover { background:#112a3fc7; color:#fff; border-color:#69dcef80; }
+.chats-browser-history small { font-size:8px; color:#7896aa; text-transform:uppercase; }
+.chats-browser-page-head {
+  display:grid; gap:2px; padding:0 0 6px; border-bottom:1px solid #56798e33; margin-bottom:8px;
+}
+.chats-browser-page-head b {
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:#dff5fb; font:400 14px/1.2 Georgia,serif;
+}
+.chats-browser-page-head small {
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#7896aa; font-size:9px;
+}
+.chats-browser-page-note { margin:0 0 8px; color:#7896aa; font-size:9px; line-height:1.5; }
+.chats-browser-page-frame { display:grid; gap:8px; }
 .chats-browser-head { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:54px; padding:8px 12px; border-bottom:1px solid #739cb32f; }
 .chats-browser-head > span { display:flex; align-items:center; gap:8px; color:#8eeaff; }
 .chats-browser-head b { color:#dff5fb; font-size:11px; letter-spacing:.12em; text-transform:uppercase; }
@@ -472,4 +620,81 @@
 .chats-eye-open {
   display:inline-flex; align-items:center; gap:4px; align-self:center;
   color:#7bdff4; font-size:8px; white-space:nowrap;
+}
+
+.hd-tool-search[aria-pressed='true'] {
+  color:#b8f6ff !important;
+  border-color:#69dcef91 !important;
+  background:#10364aa8 !important;
+  box-shadow:inset 0 0 8px #68dcff14;
+}
+.hd-tool-browser[aria-pressed='true'] {
+  color:#b8f6ff !important;
+  border-color:#69dcef91 !important;
+  background:#10364aa8 !important;
+  box-shadow:inset 0 0 8px #68dcff14;
+}
+
+.chats-browser { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+.chats-browser-native { flex:1; min-height:160px; position:relative; overflow:hidden; background:#081720; }
+.chats-browser-address { display:flex; align-items:center; gap:5px; padding:10px 14px 8px; }
+.chats-browser-address input { flex:1; min-width:0; }
+.chats-browser-tabs { display:flex; gap:5px; overflow-x:auto; flex-shrink:0; }
+.chats-browser-tab { display:flex; align-items:center; min-width:110px; max-width:230px; }
+.chats-browser-tab > button:first-child { min-width:0; flex:1; display:flex; flex-direction:column; text-align:left; overflow:hidden; }
+.chats-browser-tab span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px; }
+.chats-dock-divider { cursor:col-resize; touch-action:none; background:#17384b; min-height:0; }
+.chats-dock-divider:hover, .chats-dock-divider:focus { background:#69dcef; }
+.chats-browser-actions small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chats-browser-native .chats-browser-history { position:absolute; inset:0; overflow:auto; padding:16px; }
+
+.chats-eye-controls { display: grid; gap: 10px; padding: 12px 0; }
+.chats-eye-controls label { display: grid; gap: 6px; color: var(--text-muted); font-size: 12px; }
+.chats-eye-controls select { padding: 8px; max-width: 100%; background: var(--surface); color: inherit; border: 1px solid var(--border); border-radius: 6px; }
+.chats-eye-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.chats-eye-actions button { padding: 7px 10px; border: 1px solid var(--border); background: transparent; color: inherit; border-radius: 6px; cursor: pointer; }
+.chats-eye-actions button:disabled { opacity: .45; cursor: default; }
+.chats-eye-controls p { margin: 0; font-size: 12px; color: var(--text-muted); }
+
+.chats-eye-library { margin-left: auto; background: transparent; color: inherit; border: 1px solid var(--border); padding: 6px 9px; border-radius: 6px; cursor: pointer; font-size: 11px; }
+
+.chats-browser-document { border: 0; height: 100%; width: 100%; background: white; }
+
+/* Browser workspace: one visual language per lifecycle state.
+
+   Each of the five "no page is showing" states gets its own tint, because they are five
+   different facts and a person should be able to tell them apart at a glance without
+   reading. A single empty panel for all of them is the failure this styling exists to
+   make impossible to reintroduce quietly. */
+.chats-browser-empty[data-state='tab-creating'] { color:#8fb0c4; }
+.chats-browser-empty[data-state='tab-creating'] b { color:#d6ecf7; }
+.chats-browser-empty[data-state='tab-navigating'] { color:#7fb6c9; }
+.chats-browser-empty[data-state='tab-navigating'] b { color:#bfe6f5; }
+.chats-browser-empty[data-state='tab-failed'] { color:#d3a09a; }
+.chats-browser-empty[data-state='tab-failed'] b { color:#f3c4bd; }
+.chats-browser-empty[data-state='runtime-unavailable'] { color:#a89bbd; }
+.chats-browser-empty[data-state='runtime-unavailable'] b { color:#ddcff0; }
+.chats-browser-empty[data-state='journal-untrusted'] { color:#d2b283; }
+.chats-browser-empty[data-state='journal-untrusted'] b { color:#f4dcb0; }
+.chats-browser-empty[data-state='no-tab'] { color:#7693a6; }
+
+/* A loading tab gets a quiet pulse on its chip so a ten-tab strip still reads at a glance. */
+.chats-browser-tab[data-status='navigating'] button { color:#a8d9ea; }
+.chats-browser-tab[data-status='navigating']::after {
+  content:''; position:absolute; left:8px; right:8px; bottom:0; height:1px;
+  background:linear-gradient(90deg,transparent,#65dcee,transparent); animation:chats-browser-load 1.1s linear infinite;
+}
+.chats-browser-tab[data-status='failed'] button { color:#e6a9a1; }
+.chats-browser-tab[data-status='creating'] button { color:#8fa8b8; font-style:italic; }
+/* Attribution is visible on the chip: a tab Freya opened is not a tab the owner opened. */
+.chats-browser-tab[data-created-by='freya'] small { color:#c4a4ffcc; }
+.chats-browser-tab[data-created-by='user'] small { color:#8fd6e8cc; }
+@keyframes chats-browser-load { from { transform:translateX(-40%); } to { transform:translateX(40%); } }
+@media (prefers-reduced-motion: reduce) { .chats-browser-tab[data-status='navigating']::after { animation:none; } }
+
+.chats-browser-snapshot {
+  position:absolute; inset:auto 0 0 0; max-height:42%; overflow:auto; margin:0;
+  padding:9px 11px; border-top:1px solid #63839940; background:#07131eee; color:#a9c6d6;
+  font:400 9px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap;
+  word-break:break-word; pointer-events:auto;
 }

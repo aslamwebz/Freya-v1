@@ -24,7 +24,9 @@ const EVENT_NAMES: string[] = (
 /** A minimal healthy Core status, for tests that need one. */
 const READY_CORE: CoreStatus = {
   lifecycle: 'ready',
-  eventSequence: 3,
+
+        operational: true,
+        persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null }, diagnostics: { path: null, writeFailures: 0 },  eventSequence: 3,
   coreStartedAt: '2026-03-01T12:00:00.000Z',
   integrity: {
     integrity: 'ok',

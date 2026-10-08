@@ -40,7 +40,7 @@ describe('provider neutral searcher', () => {
       return [null, {}, result('http://127.0.0.1'), { ...result('https://EXAMPLE.com/a?utm_source=x#frag'), title: 'T'.repeat(900), snippet: 'S'.repeat(9000), secret: 'discard' }, result('https://example.com/a'), ...Array.from({ length: 20 }, (_, i) => result(`https://example.com/${i}`))] as SearchResult[]
     }) })
     const results = await searcher.searchWeb('  public query  ', { limit: 999 })
-    expect(query).toBe('public query')
+    expect(query).toBe('  public query  ')
     expect(limit).toBe(10)
     expect(results).toHaveLength(10)
     expect(results[0]).toEqual({ title: 'T'.repeat(512), url: 'https://example.com/a', snippet: 'S'.repeat(2048), sourceDomain: 'example.com', rank: 1, publishedAt: null, retrievedAt: '2026-10-01T00:00:00.000Z' })

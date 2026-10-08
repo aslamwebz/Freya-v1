@@ -22,6 +22,10 @@ function item(over: Partial<MediaItem>): MediaItem {
   }
 }
 
+const originalCreateObjectURL = URL.createObjectURL
+const originalRevokeObjectURL = URL.revokeObjectURL
+let objectUrlCounter = 0
+
 function installBridge() {
   const mediaThumbnail = vi.fn(async () => ({
     ok: true,
@@ -45,6 +49,13 @@ function installBridge() {
     reason: null,
   }))
 
+  // jsdom has no `URL.createObjectURL`, so the PDF blob path is stubbed here for
+  // every test rather than reaching into a single case and leaking its stub.
+  const createObjectURL = vi.fn(() => `blob:mock-${(objectUrlCounter += 1)}`)
+  const revokeObjectURL = vi.fn()
+  URL.createObjectURL = createObjectURL as unknown as typeof URL.createObjectURL
+  URL.revokeObjectURL = revokeObjectURL as unknown as typeof URL.revokeObjectURL
+
   window.freyaHost = {
     isDesktop: true,
     mediaThumbnail,
@@ -52,12 +63,14 @@ function installBridge() {
     mediaVideo,
   } as unknown as FreyaHostBridge
 
-  return { mediaThumbnail, mediaDocument, mediaVideo }
+  return { mediaThumbnail, mediaDocument, mediaVideo, createObjectURL, revokeObjectURL }
 }
 
 afterEach(() => {
   cleanup()
   delete window.freyaHost
+  URL.createObjectURL = originalCreateObjectURL
+  URL.revokeObjectURL = originalRevokeObjectURL
   vi.restoreAllMocks()
 })
 
@@ -95,7 +108,7 @@ describe('Chat media preview', () => {
     expect(screen.getByRole('dialog', { name: 'Media preview' })).toBeTruthy()
   })
 
-  it('loads a PDF into an in-app preview frame', async () => {
+  it('loads a PDF into an in-app preview frame as a blob URL', async () => {
     const bridge = installBridge()
     render(<MediaGrid items={[item({
       kind: 'document',
@@ -110,7 +123,93 @@ describe('Chat media preview', () => {
     await waitFor(() => expect(bridge.mediaDocument).toHaveBeenCalledWith('https://example.test/act.pdf'))
     const frame = await screen.findByTitle('EU AI Act')
     expect(frame.tagName).toBe('IFRAME')
-    expect(frame.getAttribute('src')).toMatch(/^data:application\/pdf;base64,/)
+    // A blob: URL, not the base64 data: URL. Chromium's built-in PDF viewer (pdf.js in
+    // Electron) does not render `data:application/pdf` frames, and the document CSP
+    // carries no `data:` in `frame-src` — so a data-URL modal was a modal that showed
+    // nothing at all.
+    expect(frame.getAttribute('src')).toMatch(/^blob:/)
     expect(screen.getByRole('dialog', { name: 'Media preview' })).toBeTruthy()
+  })
+
+  it('releases the PDF blob URL when the modal closes', async () => {
+    const bridge = installBridge()
+    render(<MediaGrid items={[item({
+      kind: 'document',
+      title: 'EU AI Act',
+      url: 'https://example.test/act.pdf',
+      thumbnailUrl: null,
+      playable: false,
+    })]} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview EU AI Act' }))
+    await screen.findByRole('dialog', { name: 'Media preview' })
+    await waitFor(() => expect(bridge.createObjectURL).toHaveBeenCalled())
+    const created = (bridge.createObjectURL.mock.results[0]?.value as string) ?? ''
+    expect(created).toMatch(/^blob:/)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Media preview' })).toBeNull())
+    // The blob URL of a closed preview is revoked, so a transcript full of previews
+    // never accumulates object URLs nobody will ever use again.
+    expect(bridge.revokeObjectURL).toHaveBeenCalledWith(created)
+  })
+
+  it('releases the previous PDF blob URL when switching to another item', async () => {
+    const bridge = installBridge()
+    render(<MediaGrid items={[
+      item({ kind: 'document', title: 'EU AI Act', url: 'https://example.test/act.pdf', thumbnailUrl: null, playable: false }),
+      item({ kind: 'document', title: 'Second Act', url: 'https://example.test/second.pdf', thumbnailUrl: null, playable: false }),
+    ]} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview EU AI Act' }))
+    await screen.findByRole('dialog', { name: 'Media preview' })
+    await waitFor(() => expect(bridge.createObjectURL).toHaveBeenCalledTimes(1))
+    const first = bridge.createObjectURL.mock.results[0]?.value as string
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+    await waitFor(() => expect(bridge.createObjectURL).toHaveBeenCalledTimes(2))
+    const second = bridge.createObjectURL.mock.results[1]?.value as string
+
+    // The first document's URL is dead the moment the second document takes the stage.
+    expect(bridge.revokeObjectURL).toHaveBeenCalledWith(first)
+    expect(second).not.toBe(first)
+  })
+})
+
+describe('the hosted player view', () => {
+  it('opens the modal as an iframe that the in-Chat host could replace', async () => {
+    installBridge()
+    render(<MediaGrid items={[item({
+      kind: 'video',
+      title: 'Queue tutorial',
+      url: 'https://www.youtube.com/watch?v=abc',
+      thumbnailUrl: 'https://i.ytimg.com/vi/abc/hqdefault.jpg',
+      embedUrl: 'https://www.youtube.com/embed/abc',
+      playable: false,
+    })]} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Queue tutorial' }))
+    const frame = (await screen.findAllByTitle('Queue tutorial')).find((node) => node.tagName === 'IFRAME')
+    expect(frame).toBeDefined()
+    // An iframe is the in-app default; a separate player seam can take it over
+    // by exposing a `mediaEmbedAttach` on the host, but the modal must never be
+    // empty in the meantime.
+  })
+
+  it('opens the default dock directly when a browser workspace is provided', async () => {
+    const onOpenBrowserUrl = vi.fn()
+    installBridge()
+    render(<MediaGrid items={[item({
+      kind: 'video',
+      title: 'Queue tutorial',
+      url: 'https://www.youtube.com/watch?v=abc',
+      thumbnailUrl: 'https://i.ytimg.com/vi/abc/hqdefault.jpg',
+      embedUrl: 'https://www.youtube.com/embed/abc',
+      playable: false,
+    })]} onOpenBrowserUrl={onOpenBrowserUrl} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Queue tutorial' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(onOpenBrowserUrl).toHaveBeenCalledWith('https://example.test/source', 'video')
   })
 })

@@ -23,6 +23,7 @@ import { resetCoreMirror, coreMirror } from '../../../src/platform/coreClient'
 
 const CORE = {
   lifecycle: 'ready',
+  persistenceDurable: true,
   sequence: 42,
   activeRequests: 0,
   stopped: false,
@@ -30,10 +31,10 @@ const CORE = {
   faultCount: 0,
 }
 
-function snapshotWith(stopped: boolean): UiSnapshot {
+function snapshotWith(stopped: boolean, durable = true): UiSnapshot {
   return {
     home: { status: 'unavailable', reason: 'unused by Settings' },
-    core: { status: 'ready', source: 'live', data: { ...CORE, stopped } },
+    core: { status: 'ready', source: 'live', data: { ...CORE, stopped, persistenceDurable: durable } },
     mission: { status: 'unavailable', reason: 'unused by Settings' },
     workforce: { status: 'unavailable', reason: 'unused by Settings' },
     activity: { status: 'unavailable', reason: 'unused by Settings' },
@@ -42,10 +43,10 @@ function snapshotWith(stopped: boolean): UiSnapshot {
   } as unknown as UiSnapshot
 }
 
-function mountSecurity(stopped: boolean) {
+function mountSecurity(stopped: boolean, durable = true) {
   return render(
     <SettingsOverlay
-      snapshot={snapshotWith(stopped)}
+      snapshot={snapshotWith(stopped, durable)}
       preferences={new PreferencesStore()}
       category="security"
       onCategory={() => {}}
@@ -121,6 +122,13 @@ describe('App Mode can stop Freya', () => {
     expect(text).toContain('LATCHED')
     expect(text).toMatch(/survives a restart/i)
     unmount()
+  })
+
+  it('warns that a temporary STOP ALL latch cannot be guaranteed after restart', () => {
+    const { container } = mountSecurity(true, false)
+    expect(container.textContent).toContain('LATCHED')
+    expect(container.textContent).toContain('cannot be guaranteed after a restart')
+    expect(container.textContent).not.toMatch(/survives a restart/i)
   })
 
   it('sends the canonical command with a reason, not a local flag', async () => {

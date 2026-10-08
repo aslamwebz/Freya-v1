@@ -98,7 +98,19 @@ const BROWSER: readonly TableRow[] = [
   { text: 'Log in to my bank yourself and check the balance.', intent: 'native_browser_task' },
 ]
 
-const TABLE: readonly TableRow[] = [...CONVERSATION, ...WEB, ...IMAGES, ...DOCUMENTS, ...VIDEOS, ...BROWSER]
+const AUDIO: readonly TableRow[] = [
+  { text: 'find me podcasts about cryptography', intent: 'audio_search' },
+  { text: 'play music for sleeping', intent: 'audio_search' },
+  { text: 'find a song called Freya', intent: 'audio_search' },
+]
+
+const PAGES: readonly TableRow[] = [
+  { text: 'find galleries of brutalist libraries', intent: 'page_search' },
+  { text: 'find me a thread on this topic', intent: 'page_search' },
+  { text: 'show me a writeup of the EU AI Act timeline', intent: 'page_search' },
+]
+
+const TABLE: readonly TableRow[] = [...CONVERSATION, ...WEB, ...IMAGES, ...DOCUMENTS, ...VIDEOS, ...BROWSER, ...AUDIO, ...PAGES]
 
 const ATTACHMENT_CASES: readonly {
   readonly text: string
@@ -118,8 +130,8 @@ const ATTACHMENT_CASES: readonly {
 ]
 
 describe('every intent is reachable and every route carries a reason', () => {
-  it('routes into exactly the eight declared intents', () => {
-    expect(CHAT_INTENTS).toHaveLength(8)
+  it('routes into exactly the declared intents', () => {
+    expect(CHAT_INTENTS).toHaveLength(10)
     const reached = new Set([
       ...TABLE.map((row) => row.intent),
       ...ATTACHMENT_CASES.map((row) => route(row.text, row.context)),
@@ -147,6 +159,27 @@ describe('every intent is reachable and every route carries a reason', () => {
       expect(route(row.text)).toBe(route(row.text))
       expect(route(row.text.toUpperCase())).toBe(row.intent)
     }
+  })
+
+  it('preserves the exact query text on every route', () => {
+    const phrases = [
+      'find 10 cat videos on YouTube',
+      '   hello there   ',
+      'A search for "EU AI Act" white papers',
+    ]
+    for (const phrase of phrases) {
+      const route = routeChatIntent(phrase, NONE)
+      expect(route.query).toBe(phrase)
+    }
+  })
+
+  it('surfaces the vertical a search wants without hardcoding a provider', () => {
+    expect(routeChatIntent('find pictures of nebulae', NONE).vertical).toBe('images')
+    expect(routeChatIntent('find me a podcast about Kotlin', NONE).vertical).toBe('audio')
+    expect(routeChatIntent('find galleries of brutalist libraries', NONE).vertical).toBe('pages')
+    expect(routeChatIntent('search the web for Laravel release notes', NONE).vertical).toBe('web')
+    expect(routeChatIntent('find the official PDF version of GDPR', NONE).vertical).toBe('documents')
+    expect(routeChatIntent('find me videos explaining Postgres indexes', NONE).vertical).toBe('videos')
   })
 })
 
@@ -329,5 +362,33 @@ describe('the composer adapter keeps its old contract', () => {
 describe('the realistic prompt table holds', () => {
   it.each(TABLE)('$intent — $text', ({ text, intent }) => {
     expect(route(text)).toBe(intent)
+  })
+})
+
+describe('site constraints come from the owner, not from the kind', () => {
+  it('extracts a host from a "on …" preposition', () => {
+    const route = routeChatIntent('find 10 cat videos on youtube.com', NONE)
+    expect(route.site).toBe('youtube.com')
+    expect(route.kind).toBe('video_search')
+  })
+
+  it('extracts a host from a site: operator', () => {
+    const route = routeChatIntent('site:arxiv.org find papers on transformers', NONE)
+    expect(route.site).toBe('arxiv.org')
+  })
+
+  it('extracts a host from an embedded URL', () => {
+    const route = routeChatIntent('summarise https://example.org/pricing for me', NONE)
+    expect(route.site).toBe('example.org')
+  })
+
+  it('does not invent a site when the owner did not name one', () => {
+    expect(routeChatIntent('find 10 cat videos', NONE).site).toBeNull()
+    expect(routeChatIntent('search the web for the latest Laravel release notes', NONE).site).toBeNull()
+  })
+
+  it('does not treat bare prepositions in conversation as site constraints', () => {
+    // "in your opinion" is conversation, not a search on "opinion.com".
+    expect(routeChatIntent('In your opinion, what is the best approach?', NONE).site).toBeNull()
   })
 })

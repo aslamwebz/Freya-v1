@@ -1,0 +1,211 @@
+/* v2 Chat workspace — additions to the Freya token system.
+   Uses the same `f-*` tokens declared in `ui-v2/shell.css`; nothing here
+   invents a colour or radius. The aim is the same dense, calm board as
+   the rest of the v2 shell, with the chat-specific touches that a long
+   transcript needs. */
+
+.f-chat-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+.f-chat-head-left { display: grid; gap: 2px; min-width: 0; }
+.f-chat-title {
+  margin: 0;
+  font: 600 14px/1.2 var(--font);
+  letter-spacing: 0.06em;
+  color: var(--f-heading);
+  text-transform: uppercase;
+}
+.f-chat-sub { color: var(--f-muted); font-size: 12px; }
+.f-chat-head-right { display: inline-flex; gap: 6px; align-items: center; }
+.f-chat-new,
+.f-chat-history-toggle {
+  padding: 4px 10px;
+  border: 1px solid var(--f-line);
+  border-radius: var(--f-radius-small);
+  background: transparent;
+  color: var(--f-ink);
+  font-size: 11px;
+  cursor: pointer;
+}
+.f-chat-new:hover,
+.f-chat-history-toggle:hover { background: var(--f-panel-2, var(--f-panel)); }
+.f-chat-history-toggle[aria-pressed='true'] { background: var(--f-panel-2, var(--f-panel)); border-color: var(--f-action); }
+.f-chat-new:disabled,
+.f-chat-history-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.f-chat-history {
+  display: grid;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--f-line);
+  border-radius: var(--f-radius-small);
+  background: var(--f-panel-2, var(--f-panel));
+  max-height: 9.5rem;
+  overflow-y: auto;
+}
+.f-chat-history-row {
+  display: grid;
+  gap: 1px;
+  padding: 4px 8px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.f-chat-history-row:hover { background: var(--f-panel); }
+.f-chat-history-row[data-active] { background: var(--f-panel); border-left: 2px solid var(--f-action); padding-left: 6px; }
+.f-chat-history-title { font-size: 12px; color: var(--f-ink); }
+.f-chat-history-row small { color: var(--f-muted); font-size: 10px; }
+
+/* Empty state with the orb that mirrors the dashboard, plus prompts. */
+.f-chat-empty-state {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 28px 18px 22px;
+  border: 1px dashed var(--f-line);
+  border-radius: var(--f-radius);
+  color: var(--f-muted);
+  margin: 12px 0;
+}
+.f-chat-empty-state > small {
+  color: var(--f-attention);
+  font-size: 9px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+}
+.f-chat-empty-state h3 {
+  margin: 0;
+  color: var(--f-heading);
+  font: 500 17px/1.2 var(--font);
+}
+.f-chat-empty-state > p {
+  margin: 0;
+  max-width: 36ch;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.f-chat-empty-prompts {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  max-width: 38ch;
+}
+.f-chat-empty-prompts li {
+  padding: 4px 8px;
+  border: 1px solid var(--f-line);
+  border-radius: 6px;
+  background: var(--f-panel-2, var(--f-panel));
+  color: var(--f-ink);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: left;
+}
+.f-chat-empty-prompts kbd {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 5px;
+  border: 1px solid var(--f-line);
+  border-radius: 4px;
+  background: var(--f-panel);
+  color: var(--f-heading);
+  font: 500 9px/1.6 ui-monospace, monospace;
+  text-transform: uppercase;
+}
+
+.f-chat-empty-orb {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 35%, var(--f-action-soft, var(--f-panel-2, var(--f-panel))), var(--f-panel) 80%);
+  box-shadow: 0 0 18px var(--f-action-line, transparent);
+}
+.f-chat-empty-orb::before,
+.f-chat-empty-orb::after,
+.f-chat-empty-orb i {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid var(--f-line);
+}
+.f-chat-empty-orb::before { inset: -6px; }
+.f-chat-empty-orb::after { inset: -12px; transform: scaleY(0.55) rotate(20deg); opacity: 0.7; }
+.f-chat-empty-orb i:first-child { inset: -8px 4px; transform: rotate(-22deg); opacity: 0.5; }
+.f-chat-empty-orb span {
+  position: absolute;
+  inset: 12px 18px;
+  border-radius: 50%;
+  background: var(--f-action-soft, var(--f-panel-2, var(--f-panel)));
+  filter: blur(4px);
+  opacity: 0.6;
+}
+
+/* Rich-message text under the user bubble. */
+.f-chat-user-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--f-ink); font-size: 13px; line-height: 1.55; }
+
+/* Thinking row. */
+.f-chat-thinking {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  color: var(--f-muted);
+  font-size: 13px;
+}
+.f-chat-thinking > i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--f-attention);
+  box-shadow: 0 0 6px var(--f-attention);
+  animation: f-chat-thinking-pulse 1.2s ease-in-out infinite;
+}
+.f-chat-thinking > i:nth-child(2) { animation-delay: 0.14s; }
+.f-chat-thinking > i:nth-child(3) { animation-delay: 0.28s; }
+@keyframes f-chat-thinking-pulse {
+  0%, 100% { opacity: 0.35; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-2px); }
+}
+
+/* Turn header — label + time. */
+.f-chat-turn > header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.f-chat-turn time { color: var(--f-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.f-chat-turn small { color: var(--f-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+
+/* "Recall last" affordance — the keyboard shortcut hint lives next to the composer
+   the parent renders, but having a button keeps the hint discoverable. */
+.f-chat-recall {
+  justify-self: end;
+  margin-top: 4px;
+  padding: 3px 9px;
+  border: 1px dashed var(--f-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--f-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+.f-chat-recall:hover { color: var(--f-ink); border-color: var(--f-action); }
+
+@media (max-width: 760px) {
+  .f-chat-head { grid-template-columns: 1fr; }
+  .f-chat-head-right { justify-self: end; }
+  .f-chat-empty-prompts { max-width: 100%; }
+}

@@ -1,4 +1,4 @@
-import { BrowserWindow, session as electronSession, type Session, type WebContents } from 'electron'
+import { BrowserWindow, WebContentsView, session as electronSession, type Session, type WebContents } from 'electron'
 import { PUBLIC_BROWSER_DENIED_PERMISSIONS, assertNonPersistentPartition, assertPublicBrowserUrl } from '../../core/browser'
 import { isPrivateOrLocalHost, utf8Bytes } from '../../core/browserext'
 import type { FieldDescriptor, FreyaBrowserPage, FreyaBrowserPageFactory } from './publicAdapter'
@@ -93,15 +93,22 @@ const READ_SCRIPT = String.raw`( () => {
 })`
 
 /**
- * Describe the actionable surface: at most 120 elements, each with a locator.
+ * Describe the page in one bounded pass: its prose, its headings, and every actionable
+ * control with a locator.
  *
- * A locator is built from the id, then a name, then classes, and is emitted at most once —
- * a duplicate locator would make two references point at one element and quietly turn a
- * description into a lie. Every part is restricted to the character class
- * `core/devicehands` accepts for a selector, so nothing is described here that the gate
- * would later refuse.
+ * This replaces the previous describe-only script rather than sitting beside it, and that is
+ * deliberate. Two scripts reading the same page is how the two drift apart: the reference a
+ * click resolves and the name a caller read would eventually describe different controls, and
+ * "click r3" would quietly become "click whatever the *other* script found third".
+ *
+ * Everything is computed **without mutating the page** — visibility is decided per subtree,
+ * never enforced by removing nodes — for the reason stated at the top of this file. A page
+ * the person is reading must be left as they left it.
+ *
+ * `withText` exists so the routed `page.describe` path pays for the elements only. One
+ * source, two views, and the prose is a flag rather than a second implementation.
  */
-const DESCRIBE_SCRIPT = String.raw`(() => {
+const SNAPSHOT_SCRIPT = String.raw`((limit, withText) => {
   const clean = (value, max) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
   const SAFE = /^[A-Za-z0-9_-]{1,64}$/;
   const QUOTED = /^[A-Za-z0-9 _.:-]{1,64}$/;
@@ -118,43 +125,176 @@ const DESCRIBE_SCRIPT = String.raw`(() => {
   const PROTECTED_HINT = /pass(word|wd|phrase)?|\bpwd\b|credit.?card|card.?(number|num|no)\b|\bcc.?(num|number|no)\b|\bcvc\b|\bcvv\b|\bcsc\b|security.?code|social.?security|\bssn\b|\botp\b|one.?time|\b2fa\b|\bmfa\b|auth.?token|access.?token|api.?key|secret|passphrase/i;
   const hidden = (node) => {
     if (!node || node.nodeType !== 1) return true;
+    if (node.hidden === true) return true;
+    if (node.getAttribute && node.getAttribute('aria-hidden') === 'true') return true;
+    if (node.getAttribute && node.getAttribute('type') === 'hidden') return true;
     const style = getComputedStyle(node);
-    return node.hidden === true || style.display === 'none' || style.visibility === 'hidden' || node.getAttribute('aria-hidden') === 'true';
+    return style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse';
   };
   const labelFor = (node) => {
     const aria = node.getAttribute && (node.getAttribute('aria-label') || node.getAttribute('title'));
     if (aria) return clean(aria, 120);
+    // An associated <label> comes before the element's own text, because that is the order a
+    // screen reader resolves an accessible name in. Getting it backwards is not cosmetic: a
+    // <select>'s inner text is its *option list*, so "Sri Lanka Japan" would become the name
+    // of the control that chooses a country.
+    if (node.labels && node.labels.length > 0) {
+      const labels = Array.from(node.labels).map(l => clean(l.innerText || l.textContent || '', 120)).filter(Boolean).join(' ');
+      if (labels) return labels;
+    }
     const text = clean(node.innerText || node.textContent || '', 120);
     if (text) return text;
     const placeholder = node.getAttribute && node.getAttribute('placeholder');
-    return placeholder ? clean(placeholder, 120) : '';
+    if (placeholder) return clean(placeholder, 120);
+    // An icon-only control still has an accessible name, from an image's alt text. A page of
+    // unlabelled icons would otherwise be a page nothing can refer to.
+    const image = node.querySelector && node.querySelector('img[alt]');
+    if (image && image.getAttribute('alt')) return clean(image.getAttribute('alt'), 120);
+    return '';
   };
-  const kinds = [['A', 'link'], ['BUTTON', 'button'], ['INPUT', 'field'], ['TEXTAREA', 'field'], ['SELECT', 'field'], ['H1', 'heading'], ['H2', 'heading'], ['H3', 'heading'], ['SUMMARY', 'button']];
+
+  /* ---- prose. Only when asked for, and never by removing anything from the page. ---- */
+  let text = '';
+  let truncated = false;
+  if (withText === '1') {
+    const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','TEMPLATE','NAV','HEADER','FOOTER','ASIDE','IFRAME','OBJECT','EMBED','SVG','CANVAS']);
+    const lines = [];
+    const walk = (node) => {
+      if (!node) return;
+      if (node.nodeType === 3) {
+        const chunk = String(node.textContent || '').replace(/\s+/g, ' ').trim();
+        if (chunk) lines.push(chunk);
+        return;
+      }
+      if (node.nodeType !== 1 || hidden(node)) return;
+      const tag = node.tagName;
+      if (SKIP.has(tag)) return;
+      const id = (node.id || '').toLowerCase();
+      const cls = String(node.className || '').toLowerCase();
+      if (id.indexOf('cookie') !== -1 || id.indexOf('consent') !== -1) return;
+      if (cls.indexOf('cookie') !== -1 || cls.indexOf('consent') !== -1) return;
+      const block = /^(P|DIV|SECTION|ARTICLE|MAIN|H1|H2|H3|H4|H5|H6|LI|UL|OL|BLOCKQUOTE|PRE|TR|BR|DT|DD|TD)$/.test(tag);
+      for (const child of Array.from(node.childNodes)) walk(child);
+      if (block) lines.push('');
+    };
+    const root = document.querySelector('article') || document.querySelector('main') || document.body;
+    if (root) walk(root);
+    const joined = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    if (joined.length > 4000) { text = joined.slice(0, 4000); truncated = true; }
+    else text = joined;
+  }
+
+  /* ---- actionable surface, in document order ---- */
+  const SELECTOR = 'a[href], button, input, textarea, select, summary, [role="button"], [role="link"], [role="tab"]';
+  const kindFor = (node) => {
+    const tag = node.tagName;
+    const role = (node.getAttribute && node.getAttribute('role')) || '';
+    if (tag === 'A' || role === 'link') return 'link';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return 'field';
+    return 'button';
+  };
   const found = [];
   const seen = new Set();
-  for (const [tag, kind] of kinds) {
-    for (const node of Array.from(document.querySelectorAll(tag))) {
-      if (found.length >= 120) break;
-      if (hidden(node)) continue;
-      const selector = locatorFor(node);
-      if (selector.length > 256 || seen.has(selector)) continue;
-      const input = node;
-      const type = (input.type || '').toLowerCase();
-      const name = (input.name || '') + ' ' + (input.id || '') + ' ' + (input.placeholder || '') + ' ' + ((node.getAttribute && node.getAttribute('aria-label')) || '');
-      const autocomplete = (input.getAttribute && input.getAttribute('autocomplete')) || '';
-      const protectedField = type === 'password' || type === 'hidden' || autocomplete.toLowerCase().indexOf('one-time-code') !== -1 || autocomplete.toLowerCase().indexOf('current-password') !== -1 || autocomplete.toLowerCase().indexOf('cc-') === 0 || PROTECTED_HINT.test(name.toLowerCase());
-      seen.add(selector);
-      found.push({
-        kind,
-        label: labelFor(node),
-        selector,
-        protected: protectedField === true,
-        disabled: node.disabled === true || node.getAttribute('aria-disabled') === 'true'
-      });
+  for (const node of Array.from(document.querySelectorAll(SELECTOR))) {
+    if (found.length >= limit) break;
+    if (hidden(node)) continue;
+    const tag = node.tagName;
+    // An anchor with no href is not a link; it is a positioning trick. Clicking it would
+    // navigate nowhere and then be reported as a successful act.
+    if (tag === 'A' && !node.getAttribute('href')) continue;
+    const type = (node.type || '').toLowerCase();
+    if (tag === 'INPUT' && ['hidden', 'reset', 'image'].includes(type)) continue;
+    const selector = locatorFor(node);
+    if (selector.length > 256 || seen.has(selector)) continue;
+    const hint = ((node.name || '') + ' ' + (node.id || '') + ' ' + (node.placeholder || '') + ' ' + ((node.getAttribute && node.getAttribute('aria-label')) || '')).toLowerCase();
+    const autocomplete = (node.getAttribute && node.getAttribute('autocomplete')) || '';
+    const entry = {
+      kind: kindFor(node),
+      label: labelFor(node),
+      selector,
+      protected: type === 'password' || type === 'hidden' || autocomplete.toLowerCase().indexOf('one-time-code') !== -1 || autocomplete.toLowerCase().indexOf('current-password') !== -1 || autocomplete.toLowerCase().indexOf('cc-') === 0 || PROTECTED_HINT.test(hint),
+      disabled: node.disabled === true || node.getAttribute('aria-disabled') === 'true'
+    };
+    if (tag === 'SELECT') {
+      entry.options = Array.from(node.options || []).slice(0, 64).map(o => clean(o.label || o.text || o.value, 80));
     }
+    seen.add(selector);
+    found.push(entry);
   }
-  return { elements: found, title: clean(document.title, 512), url: location.href };
+
+  /* ---- headings, so a section name is findable and not only a link that points at it ---- */
+  const headings = [];
+  for (const node of Array.from(document.querySelectorAll('h1,h2,h3'))) {
+    if (headings.length >= 20) break;
+    if (hidden(node)) continue;
+    const name = clean(node.innerText || node.textContent || '', 120);
+    if (!name) continue;
+    headings.push({ kind: 'heading', label: name, selector: locatorFor(node), protected: false, disabled: false });
+  }
+
+  return {
+    url: location.href,
+    title: clean(document.title, 200),
+    text,
+    truncated,
+    elements: headings.concat(found)
+  };
 })`
+
+/**
+ * Move the page's scroll position.
+ *
+ * Reads and writes one number on one element. It cannot submit, navigate or exfiltrate, and
+ * a page cannot observe it, which is why it is the one page interaction in this file that
+ * does not walk the gates — while still being recorded by whoever asked for it.
+ */
+const SCROLL_SCRIPT = String.raw`((mode, amount) => {
+  const doc = document.scrollingElement || document.documentElement;
+  const height = doc ? doc.scrollHeight : 0;
+  let top = doc ? doc.scrollTop : 0;
+  if (mode === 'top') top = 0;
+  else if (mode === 'bottom') top = Math.max(0, height);
+  else top = top + amount;
+  if (doc) doc.scrollTop = Math.max(0, Math.min(Math.max(0, height), top));
+  return { top: Math.round(doc ? doc.scrollTop : 0), height: Math.round(height) };
+})`
+
+/**
+ * Choose one option in a `<select>` and report which one is now chosen.
+ *
+ * Fires `change`, because a control set without one is a control the page does not believe
+ * in: React's value tracker ignores a bare assignment, and so would any form handler driven by
+ * it. Reading the value straight back is what makes the report an observation rather than an
+ * intention.
+ */
+const SELECT_SCRIPT = String.raw`((selector, index) => {
+  const node = document.querySelector(selector);
+  if (!node || node.tagName !== 'SELECT') return { ok: false, selected: null, reason: 'not-found' };
+  if (node.disabled === true || node.getAttribute('aria-disabled') === 'true') return { ok: false, selected: null, reason: 'disabled' };
+  const options = Array.from(node.options || []);
+  if (index < 0 || index >= options.length) return { ok: false, selected: null, reason: 'out-of-range' };
+  const option = options[index];
+  node.value = option.value;
+  node.dispatchEvent(new Event('input', { bubbles: true }));
+  node.dispatchEvent(new Event('change', { bubbles: true }));
+  return { ok: node.value === option.value, selected: String(option.label || option.text || option.value).slice(0, 80), reason: null };
+})`
+
+/** What the snapshot script hands back. Bounded, and with no element value anywhere. */
+export interface SurfaceSnapshotPayload {
+  readonly url: string
+  readonly title: string
+  readonly text: string
+  readonly truncated: boolean
+  readonly elements: ReadonlyArray<{
+    readonly kind: string
+    readonly label: string
+    readonly selector: string
+    readonly protected: boolean
+    readonly disabled: boolean
+    readonly options?: readonly string[]
+  }>
+}
 
 /** The descriptor of one element, for the host-side protected-field classification. */
 const INSPECT_SCRIPT = String.raw`((selector) => {
@@ -222,10 +362,52 @@ const SIGNATURE_SCRIPT = String.raw`(() => {
   return [location.href, document.title, document.querySelectorAll('*').length, input ? String(input.value || '').length : '0', document.activeElement ? document.activeElement.tagName : ''].join('|');
 })`
 
+/** What one page reports about itself. Every field is a fact it can witness. */
+export interface SurfaceReading {
+  readonly sessionId: string
+  readonly url: string | null
+  readonly title: string | null
+  readonly revision: number
+  readonly loading: boolean
+  readonly canGoBack: boolean
+  readonly canGoForward: boolean
+  readonly error: string | null
+}
+
+/* ---------------------------------------------------------------- live port */
+
+/**
+ * The extra surface the Browser Service needs from a live page, on top of
+ * {@link FreyaBrowserPage}.
+ *
+ * Declared here, as an interface, rather than letting callers name
+ * {@link ElectronFreyaBrowserPage}. The point of a port is that a test can implement it with
+ * a scripted page and assert on placement, navigation and reference safety without Electron
+ * in the process — and a port that names a concrete class cannot be implemented by anything
+ * but that class.
+ *
+ * Every method is bounded and answers with a code rather than throwing, for the same reason
+ * the rest of this file does: a page that could not do something is not a network failure.
+ */
+export interface FreyaBrowserLivePage extends FreyaBrowserPage {
+  /** Everything the page can witness about itself, right now. */
+  reading(): SurfaceReading
+  /** Push updates. Called back immediately with the current facts. */
+  onReading(listener: (reading: SurfaceReading) => void): () => void
+  reload(): Promise<{ readonly ok: boolean; readonly finalUrl: string | null; readonly code: string }>
+  snapshot(): Promise<{ readonly ok: boolean; readonly payload: SurfaceSnapshotPayload | null; readonly code: string }>
+  scroll(request: { readonly kind: 'top' | 'bottom' | 'delta'; readonly amount?: number }): Promise<{ readonly ok: boolean; readonly top: number; readonly height: number; readonly code: string }>
+  select(selector: string, index: number): Promise<{ readonly ok: boolean; readonly selected: string | null; readonly code: string }>
+  wait(request: { readonly settleMs: number; readonly until?: string }): Promise<{ readonly ok: boolean; readonly settled: boolean; readonly url: string | null; readonly code: string }>
+}
+
 /* ------------------------------------------------------------------ the page */
 
 export interface FreyaWindowOptions {
+  /** When supplied, pages are embedded in the main window, never popped out. */
+  readonly hostWindow?: () => BrowserWindow | null
   /** The owner's host allowlist. Empty means no host is allowlisted in strict mode. */
+  readonly onOpenUrl?: (url: string) => void
   readonly allowedHosts?: readonly string[]
   /** Development-only: remove browser permission friction. */
   readonly localUnrestricted?: boolean
@@ -264,8 +446,10 @@ function toFieldDescriptor(value: unknown): FieldDescriptor | null {
   }
 }
 
-class ElectronFreyaBrowserPage implements FreyaBrowserPage {
+export class ElectronFreyaBrowserPage implements FreyaBrowserLivePage {
   private window?: BrowserWindow
+  private view?: WebContentsView
+  private attachedHost?: BrowserWindow
   private contents?: WebContents
   private ses?: Session
   private closed = false
@@ -274,6 +458,35 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
   private title: string | null = null
   private mediaSequence = 0
   private cleanup?: Promise<void>
+  private loading = false
+  private error: string | null = null
+  private history: string[] = []
+  private cursor = -1
+  private backStack: string[] = []
+  private forwardStack: string[] = []
+  /**
+   * Push listeners, so a surface can learn about a navigation without polling.
+   *
+   * One of these per window, created eagerly rather than on the first subscribe so a caller
+   * that attaches after the page has already loaded is not silently given a stale view. The
+   * reader is called immediately with the current facts.
+   */
+  private readonly readingListeners = new Set<(reading: SurfaceReading) => void>()
+
+  private readonly onDidStartLoading = (): void => {
+    this.loading = true
+    this.publish()
+  }
+
+  private readonly onDidStopLoading = (): void => {
+    this.loading = false
+    this.publish()
+  }
+
+  private readonly onTitleUpdated = (_event: unknown, title: string): void => {
+    this.title = title.slice(0, 200)
+    this.publish()
+  }
 
   private readonly onDidNavigate = (_event: unknown, url: string): void => {
     // Every navigation a page can perform — its own, a redirect's, a link's — retires the
@@ -282,6 +495,16 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
     this.revision += 1
     this.url = url
     this.title = null
+    this.error = null
+    // A history entry is created by the *window*, not by Freya. A page that rewrites its own
+    // address with `history.pushState` is still a page the person can go back from, and
+    // pretending otherwise is how a back button that does nothing gets shipped.
+    this.backStack = this.history.slice(0, Math.max(0, this.cursor + 1))
+    this.forwardStack = []
+    const bounded = [...this.backStack, url].slice(-64)
+    this.history = bounded
+    this.cursor = bounded.length - 1
+    this.publish()
   }
 
   private readonly onNavigateInPage = (event: unknown, url: string, isMainFrame: boolean): void => {
@@ -290,17 +513,27 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
     this.revision += 1
     this.url = url
     this.title = null
+    this.error = null
+    this.publish()
   }
 
-  private readonly onFailedLoad = (_event: unknown, errorCode: number): void => {
+  private readonly onFailedLoad = (_event: unknown, errorCode: number, description: string, _url: string, isMainFrame: boolean): void => {
+    if (!isMainFrame || errorCode === -3) return
     this.revision += 1
     this.title = null
     this.url = null
-    void errorCode
+    this.loading = false
+    // A code, never Electron's prose: the description can carry a hostname and a path, and
+    // the projection that reads this must not be able to leak a URL Freya refused.
+    this.error = 'load-failed'
+    void description
+    this.publish()
   }
 
   private readonly onRenderGone = (): void => {
     this.revision += 1
+    this.error = 'renderer-gone'
+    this.publish()
     void this.close()
   }
 
@@ -393,11 +626,7 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
       callback({ cancel: !this.requestAllowed(details.url, details.resourceType) })
     })
 
-    this.window = new BrowserWindow({
-      show: true,
-      width: 1100,
-      height: 800,
-      webPreferences: {
+    const preferences: Electron.WebPreferences = {
         session: ses,
         sandbox: true,
         contextIsolation: true,
@@ -410,10 +639,19 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
         safeDialogs: true,
         navigateOnDragDrop: false,
         spellcheck: false,
-      },
+    }
+    if (this.options.hostWindow) {
+      this.view = new WebContentsView({ webPreferences: preferences })
+      this.contents = this.view.webContents
+    } else {
+      this.window = new BrowserWindow({ show: true, width: 1100, height: 800, webPreferences: preferences })
+      this.contents = this.window.webContents
+    }
+    const contents = this.contents
+    contents.setWindowOpenHandler(({ url }) => {
+      if (this.allowedUrl(url)) this.options.onOpenUrl?.(url)
+      return { action: 'deny' }
     })
-    const contents = (this.contents = this.window.webContents)
-    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
     contents.on('will-navigate', (event, url) => {
       if (!this.allowedUrl(url)) {
         event.preventDefault()
@@ -421,14 +659,33 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
       }
       this.revision += 1
     })
-    contents.on('will-frame-navigate', this.prevent)
+    contents.on('will-frame-navigate', (event) => {
+      // The existing URL policy validates owner-clicked top-level navigation.
+      // Subframe navigation retains the existing denial policy.
+      if (!event.isMainFrame || !this.allowedUrl(event.url)) event.preventDefault()
+    })
     contents.on('will-attach-webview', this.prevent)
+    contents.on('did-start-loading', this.onDidStartLoading)
+    contents.on('did-stop-loading', this.onDidStopLoading)
+    contents.on('page-title-updated', this.onTitleUpdated)
     contents.on('did-navigate', this.onDidNavigate)
     contents.on('did-navigate-in-page', this.onNavigateInPage)
     contents.on('did-fail-load', this.onFailedLoad)
     contents.on('did-fail-provisional-load', this.onFailedLoad)
     contents.on('render-process-gone', this.onRenderGone)
-    this.window.on('closed', this.onWindowClosed)
+    this.window?.on('closed', this.onWindowClosed)
+  }
+
+  setDock(bounds: Electron.Rectangle | null): void {
+    if (!this.view || this.closed) return
+    if (this.attachedHost && !this.attachedHost.isDestroyed()) this.attachedHost.contentView.removeChildView(this.view)
+    this.attachedHost = undefined
+    if (bounds === null) return
+    const host = this.options.hostWindow?.()
+    if (!host || host.isDestroyed()) return
+    host.contentView.addChildView(this.view)
+    this.view.setBounds(bounds)
+    this.attachedHost = host
   }
 
   /**
@@ -454,6 +711,51 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
 
   currentUrl(): string | null {
     return this.url
+  }
+
+  /** Everything this page can witness about itself, right now. */
+  reading(): SurfaceReading {
+    return {
+      sessionId: this.sessionId,
+      url: this.url,
+      title: this.title,
+      revision: this.revision,
+      loading: this.loading,
+      canGoBack: this.backStack.length > 0,
+      canGoForward: this.forwardStack.length > 0,
+      error: this.error,
+    }
+  }
+
+  /**
+   * Subscribe to this page's own reports.
+   *
+   * Called back immediately, because a caller that attaches after the page loaded is owed the
+   * current facts and not only the next change. One listener throwing does not stop the
+   * others: a broken window must not be able to silence the surface.
+   */
+  onReading(listener: (reading: SurfaceReading) => void): () => void {
+    this.readingListeners.add(listener)
+    try {
+      listener(this.reading())
+    } catch {
+      // A subscriber that throws on its first read gets the next one.
+    }
+    return () => {
+      this.readingListeners.delete(listener)
+    }
+  }
+
+  private publish(): void {
+    if (this.closed || this.readingListeners.size === 0) return
+    const view = this.reading()
+    for (const listener of [...this.readingListeners]) {
+      try {
+        listener(view)
+      } catch {
+        // One broken subscriber must not stop the rest.
+      }
+    }
   }
 
   currentRevision(): number {
@@ -512,11 +814,11 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
   }
 
   async navigate(url: string): Promise<{ ok: boolean; finalUrl: string | null; code: string }> {
-    if (this.closed || this.window === undefined) return { ok: false, finalUrl: null, code: 'session-closed' }
+    if (this.closed || this.contents === undefined) return { ok: false, finalUrl: null, code: 'session-closed' }
     if (!this.allowedUrl(url)) return { ok: false, finalUrl: null, code: 'url-refused' }
     const startRevision = this.revision
     try {
-      await this.window.loadURL(url)
+      await this.contents.loadURL(url)
     } catch {
       return { ok: false, finalUrl: null, code: 'navigate-failed' }
     }
@@ -529,6 +831,9 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
     }
     const read = await this.eval<{ title?: string }>(READ_SCRIPT)
     if (read !== null && typeof read.title === 'string') this.title = read.title.slice(0, 200)
+    this.loading = false
+    this.error = null
+    this.publish()
     return { ok: true, finalUrl: landed, code: 'navigated' }
   }
 
@@ -548,7 +853,7 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
    * means describePage normalises one shape instead of two.
    */
   async describe(): Promise<{ ok: boolean; payload: unknown; code: string }> {
-    const result = await this.eval<{ elements?: unknown; title?: string }>(DESCRIBE_SCRIPT)
+    const result = await this.eval<{ elements?: unknown; title?: string }>(SNAPSHOT_SCRIPT, ['120', '0'])
     if (result === null) return { ok: false, payload: null, code: 'describe-failed' }
     if (typeof result.title === 'string') this.title = result.title.slice(0, 200)
     const payload = this.allowProtectedFields && Array.isArray(result.elements)
@@ -617,8 +922,113 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
     }
   }
 
+  /**
+   * Reload the address this page is on, without being told which address that is.
+   *
+   * Re-derived from `canGoBack`-style history rather than from a remembered URL, because the
+   * two differ exactly when the page moved since the last read, and a reload that silently
+   * lands somewhere else is the failure this whole file's revision discipline exists to stop.
+   */
+  async reload(): Promise<{ ok: boolean; finalUrl: string | null; code: string }> {
+    if (this.closed || this.contents === undefined) return { ok: false, finalUrl: null, code: 'session-closed' }
+    const here = this.url
+    if (here === null) return { ok: false, finalUrl: null, code: 'page-missing' }
+    if (!this.allowedUrl(here)) return { ok: false, finalUrl: null, code: 'url-refused' }
+    const startRevision = this.revision
+    try {
+      await this.contents.reload()
+    } catch {
+      return { ok: false, finalUrl: null, code: 'navigate-failed' }
+    }
+    if (this.closed) return { ok: false, finalUrl: null, code: 'session-closed' }
+    if (this.revision === startRevision) this.revision += 1
+    const read = await this.eval<{ title?: string }>(READ_SCRIPT)
+    if (read !== null && typeof read.title === 'string') this.title = read.title.slice(0, 200)
+    this.publish()
+    return { ok: true, finalUrl: this.url ?? here, code: 'reloaded' }
+  }
+
+  /**
+   * One bounded pass over the page: prose, headings and every actionable control.
+   *
+   * The same script {@link describe} uses, asked for its text as well. Two callers, one
+   * script, no possibility that the reference a click resolves and the name a caller read
+   * were produced by different code.
+   */
+  async snapshot(): Promise<{ ok: boolean; payload: SurfaceSnapshotPayload | null; code: string }> {
+    const result = await this.eval<SurfaceSnapshotPayload>(SNAPSHOT_SCRIPT, ['120', '1'])
+    if (result === null || typeof result.url !== 'string') return { ok: false, payload: null, code: 'snapshot-failed' }
+    if (typeof result.title === 'string') this.title = result.title.slice(0, 200)
+    return { ok: true, payload: result, code: 'snapshot' }
+  }
+
+  async scroll(
+    request: { readonly kind: 'top' | 'bottom' | 'delta'; readonly amount?: number },
+  ): Promise<{ ok: boolean; top: number; height: number; code: string }> {
+    const mode = request.kind
+    const result = await this.eval<{ top?: number; height?: number }>(
+      SCROLL_SCRIPT,
+      [mode, String(Math.round(Math.max(-20_000, Math.min(20_000, request.amount ?? 0))))],
+    )
+    if (result === null || typeof result.top !== 'number' || typeof result.height !== 'number') {
+      return { ok: false, top: 0, height: 0, code: 'scroll-failed' }
+    }
+    return { ok: true, top: result.top, height: result.height, code: 'scrolled' }
+  }
+
+  async select(selector: string, index: number): Promise<{ ok: boolean; selected: string | null; code: string }> {
+    const result = await this.eval<{ ok?: boolean; selected?: string | null; reason?: string }>(SELECT_SCRIPT, [selector, String(index)])
+    if (result === null || result.ok !== true) {
+      const reason = result?.reason
+      return {
+        ok: false,
+        selected: null,
+        code: reason === 'disabled' ? 'element-disabled' : reason === 'out-of-range' ? 'request-malformed' : 'element-not-found',
+      }
+    }
+    return { ok: true, selected: typeof result.selected === 'string' ? result.selected : null, code: 'selected' }
+  }
+
+  /**
+   * Wait for the page to stop changing, or for an address to appear.
+   *
+   * Bounded twice over: by the caller's ceiling and by an internal one, and both are real.
+   * A wait that can hang is indistinguishable from a browser that has died, and the two need
+   * different answers from the owner.
+   */
+  async wait(request: { readonly settleMs: number; readonly until?: string }): Promise<{ ok: boolean; settled: boolean; url: string | null; code: string }> {
+    if (this.closed || this.contents === undefined) return { ok: false, settled: false, url: null, code: 'session-closed' }
+    const ceiling = Math.max(0, Math.min(request.settleMs, 10_000))
+    const deadline = Date.now() + ceiling
+    // A page that never stops loading — a websocket, a polling dashboard — must not turn a
+    // wait into a hang, so a quiet period counts as settled even when `isLoading` stays true.
+    const quietMs = Math.max(250, Math.min(1_000, Math.ceil(ceiling / 4)))
+    let lastSignature: string | null = null
+    let quietSince = Date.now()
+    while (Date.now() < deadline) {
+      const here = this.url ?? ''
+      if (request.until !== undefined && here.includes(request.until)) {
+        return { ok: true, settled: true, url: this.url, code: 'reached' }
+      }
+      if (!this.loading) {
+        if (this.url !== null) return { ok: true, settled: true, url: this.url, code: 'settled' }
+      }
+      const signature = `${String(this.revision)}|${String(this.loading)}|${here}`
+      if (signature !== lastSignature) {
+        lastSignature = signature
+        quietSince = Date.now()
+      } else if (Date.now() - quietSince >= quietMs) {
+        return { ok: true, settled: true, url: this.url, code: 'quiet' }
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 100))
+    }
+    if (request.until !== undefined) return { ok: false, settled: false, url: this.url, code: 'wait-exceeded' }
+    return { ok: true, settled: false, url: this.url, code: 'wait-exceeded' }
+  }
+
   close(): Promise<void> {
     if (this.cleanup !== undefined) return this.cleanup
+    this.setDock(null)
     this.closed = true
     // Retiring the revision here is what makes a closed window's references unusable rather
     // than merely unreachable: a caller holding one is refused `page-stale` instead of
@@ -626,12 +1036,20 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
     this.revision += 1
     this.url = null
     this.title = null
+    this.loading = false
+    this.history = []
+    this.backStack = []
+    this.forwardStack = []
+    this.readingListeners.clear()
     if (this.window !== undefined && !this.window.isDestroyed()) this.window.destroy()
     if (this.contents !== undefined) {
       const contents = this.contents
       contents.removeAllListeners('will-navigate')
       contents.removeAllListeners('will-frame-navigate')
       contents.removeAllListeners('will-attach-webview')
+      contents.removeAllListeners('did-start-loading')
+      contents.removeAllListeners('did-stop-loading')
+      contents.removeAllListeners('page-title-updated')
       contents.removeAllListeners('did-navigate')
       contents.removeAllListeners('did-navigate-in-page')
       contents.removeAllListeners('did-fail-load')
@@ -639,6 +1057,7 @@ class ElectronFreyaBrowserPage implements FreyaBrowserPage {
       contents.removeAllListeners('render-process-gone')
       this.window?.removeListener('closed', this.onWindowClosed)
     }
+    if (this.view && !this.view.webContents.isDestroyed()) this.view.webContents.close()
     const ses = this.ses
     // Independent teardown steps: one failed Electron call must not skip the rest, and in
     // particular must not skip the storage clear.
@@ -692,9 +1111,19 @@ export interface FreyaWindowFactoryOptions extends FreyaWindowOptions {
  * that would otherwise be invisible, because the partition name is deterministic.
  */
 export class ElectronFreyaWindowFactory implements FreyaBrowserPageFactory {
+  private readonly pages = new Map<string, ElectronFreyaBrowserPage>()
   constructor(private readonly options: FreyaWindowFactoryOptions = {}) {}
 
-  async create(sessionId: string, partition: string): Promise<FreyaBrowserPage> {
+  dock(sessionId: string | null, bounds: Electron.Rectangle | null): boolean {
+    for (const page of this.pages.values()) page.setDock(null)
+    if (sessionId === null || bounds === null) return true
+    const page = this.pages.get(sessionId)
+    if (!page) return false
+    page.setDock(bounds)
+    return true
+  }
+
+  async create(sessionId: string, partition: string): Promise<FreyaBrowserLivePage> {
     const ses = this.options.sessionFor
       ? this.options.sessionFor(partition)
       : electronSession.fromPartition(partition, { cache: true })
@@ -702,6 +1131,9 @@ export class ElectronFreyaWindowFactory implements FreyaBrowserPageFactory {
     await ses.clearCache().catch(() => undefined)
     const page = new ElectronFreyaBrowserPage(sessionId, partition, this.options)
     page.initialize(ses)
+    this.pages.set(sessionId, page)
+    const close = page.close.bind(page)
+    page.close = () => { this.pages.delete(sessionId); return close() }
     return page
   }
 }

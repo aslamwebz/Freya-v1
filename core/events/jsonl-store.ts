@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 
 const EOL = String.fromCharCode(10)
 import { copyFile, open, mkdir, readFile, truncate, writeFile, type FileHandle } from 'node:fs/promises'
@@ -11,6 +12,9 @@ import {
   type RecoveryReport,
 } from './validate'
 import { repairKnownLegacyJournal } from './legacy-repair'
+import { repairInterruptedTurnConversationId } from './interrupted-turn-repair'
+import { reconcileKnownJournal } from './reconcile-journal'
+import { preserveJournalBytes, replaceJournalAtomically } from './atomic-journal-replacement'
 
 /**
  * An append-only JSONL event store.
@@ -56,10 +60,12 @@ import { repairKnownLegacyJournal } from './legacy-repair'
  * cannot tolerate truncation should do; see `lastTruncation`.
  */
 export interface KnownJournalRepairReport {
-  readonly code: 'legacy-tool-loop-request-id' | 'voice-wake-threshold-validator'
+  readonly code: 'legacy-tool-loop-request-id' | 'voice-wake-threshold-validator' | 'interrupted-conversation-id-recovery'
   readonly repairedEvents: number
   readonly sourceQuarantinePath: string
   readonly archivedDegradedPath: string | null
+  /** The repair marker is already part of the synchronized replacement. */
+  readonly recorded?: boolean
 }
 
 export class JsonlEventStore implements EventStore {
@@ -108,15 +114,41 @@ export class JsonlEventStore implements EventStore {
     }
 
     const known = repairKnownLegacyJournal(raw.toString('utf8'))
-    if (known !== null) {
-      const sourceQuarantinePath = await this.preserveKnownRepairSource()
-      await writeFile(this.file, known.content, 'utf8')
-      raw = Buffer.from(known.content, 'utf8')
+    if (known !== null && !hasUnresolvedFault(known.events)) {
+      const sourceQuarantinePath = await this.preserveKnownRepairSource(raw, [
+        'The only accepted repair is the historical cognition continuation request-id',
+        'separator (# -> :) and the entire resulting journal must validate.',
+      ])
       this.knownRepair = {
         code: known.code,
         repairedEvents: known.repairedEvents,
         sourceQuarantinePath,
         archivedDegradedPath: null,
+        recorded: true,
+      }
+      const replacement = withRepairMarker(known.events, this.knownRepair)
+      await replaceJournalAtomically(this.file, raw, replacement)
+      raw = Buffer.from(replacement, 'utf8')
+    } else {
+      const interrupted = repairInterruptedTurnConversationId(raw.toString('utf8'))
+      if (interrupted !== null && !hasUnresolvedFault(interrupted.events)) {
+        const sourceQuarantinePath = await this.preserveKnownRepairSource(raw, [
+          'The only accepted repair is the historical interrupted-turn empty',
+          'conversationId recovery: a conversation.turn.interrupted row whose',
+          'conversationId is the empty string is rebuilt with the conversationId',
+          'of the earlier, valid conversation.turn.started that shares its turnId,',
+          'and the entire resulting journal must validate end-to-end.',
+        ])
+        this.knownRepair = {
+          code: interrupted.code,
+          repairedEvents: interrupted.repairedEvents,
+          sourceQuarantinePath,
+          archivedDegradedPath: null,
+          recorded: true,
+        }
+        const replacement = withRepairMarker(interrupted.events, this.knownRepair)
+        await replaceJournalAtomically(this.file, raw, replacement)
+        raw = Buffer.from(replacement, 'utf8')
       }
     }
 
@@ -224,13 +256,12 @@ export class JsonlEventStore implements EventStore {
 
 
   /**
-   * Restore a journal that an older Freya already quarantined because of the
-   * historical continuation-id separator bug.
+   * Reconcile a recognized historical defect with the newer active history.
    *
    * The current degraded journal must itself validate, its latest unresolved fault
-   * must name a cognition.requested shape failure, the quarantine must become fully
-   * valid after only the known repair, and the trusted prefix must exactly match.
-   * The degraded journal is archived before replacement, so no evidence is erased.
+   * must name the recognized defect, the quarantine must become fully valid after
+   * only its narrow repair, and the trusted prefix must exactly match. Both
+   * suffixes are retained; ambiguity keeps the active fault unresolved.
    */
   private async restoreKnownLegacyQuarantine(): Promise<void> {
     let currentRaw: Buffer
@@ -256,7 +287,9 @@ export class JsonlEventStore implements EventStore {
     }
     if (fault === null || repairedAfterFault) return
     const wakeValidatorFault = fault.payload.reason.includes('payload does not match the shape of voice.wake.armed')
-    if (!wakeValidatorFault && !fault.payload.reason.includes('cognition.requested')) return
+    const cognitionRequestedFault = fault.payload.reason.includes('cognition.requested')
+    const interruptedTurnFault = fault.payload.reason.includes('conversation.turn.interrupted')
+    if (!wakeValidatorFault && !cognitionRequestedFault && !interruptedTurnFault) return
 
     let quarantined: string
     try {
@@ -265,75 +298,61 @@ export class JsonlEventStore implements EventStore {
       return
     }
 
-    const validatedWakeEvents = wakeValidatorFault ? parseCompleteJournal(quarantined) : null
-    const boundary = validatedWakeEvents?.[fault.payload.trustedPrefixEvents]
-    if (wakeValidatorFault && (!validatedWakeEvents || boundary?.type !== 'voice.wake.armed' || boundary.payload.threshold !== 0.14)) return
-    const repaired = wakeValidatorFault && validatedWakeEvents
-      ? { code: 'voice-wake-threshold-validator' as const, content: quarantined, events: validatedWakeEvents, repairedEvents: validatedWakeEvents.filter(e => e.type === 'voice.wake.armed').length }
-      : repairKnownLegacyJournal(quarantined)
-    if (repaired === null) return
-
-    const prefixCount = fault.payload.trustedPrefixEvents
-    // Never replace newer authority decisions with an older quarantine. Keep the
-    // active journal degraded for deliberate reconciliation in that case.
-    if (currentEvents.slice(prefixCount).some(e => /^(?:security\.|guard\.|cognition\.|model\.|command\.)/.test(e.type))) return
-    if (repaired.events.length < prefixCount || currentEvents.length < prefixCount) return
-    for (let index = 0; index < prefixCount; index += 1) {
-      if (JSON.stringify(repaired.events[index]) !== JSON.stringify(currentEvents[index])) return
+    let repaired: { code: 'legacy-tool-loop-request-id' | 'voice-wake-threshold-validator' | 'interrupted-conversation-id-recovery'; content: string; events: readonly AnyCoreEvent[]; repairedEvents: number } | null
+    if (wakeValidatorFault) {
+      const validatedWakeEvents = parseCompleteJournal(quarantined)
+      const boundary = validatedWakeEvents?.[fault.payload.trustedPrefixEvents]
+      if (!validatedWakeEvents || boundary?.type !== 'voice.wake.armed' || boundary.payload.threshold !== 0.14) return
+      repaired = {
+        code: 'voice-wake-threshold-validator',
+        content: quarantined,
+        events: validatedWakeEvents,
+        repairedEvents: validatedWakeEvents.filter((e) => e.type === 'voice.wake.armed').length,
+      }
+    } else if (interruptedTurnFault) {
+      repaired = repairInterruptedTurnConversationId(quarantined)
+      if (repaired === null) return
+    } else {
+      repaired = repairKnownLegacyJournal(quarantined)
+      if (repaired === null) return
     }
 
-    const archivedDegradedPath = await this.archiveCurrentDegradedJournal()
-    await writeFile(this.file, repaired.content, 'utf8')
-    this.knownRepair = {
+    // Keep every newer authority decision in the active history. A known repair
+    // is safe only when both complete branches can be reconciled unambiguously.
+    const reconciled = reconcileKnownJournal(repaired.events, currentEvents, fault)
+    if (reconciled === null) return
+    const archivedDegradedPath = await preserveJournalBytes(
+      this.file, 'pre-known-repair', currentRaw,
+      `Freya active journal before known-defect reconciliation.\n` +
+      `Source quarantine: ${fault.payload.quarantinePath}\n` +
+      `Retained active continuation events: ${reconciled.reconciledEvents}\n` +
+      `Continuation envelope sequence offset: ${reconciled.sequenceOffset}\n` +
+      'Event IDs, timestamps, payloads and causal IDs are unchanged.\n',
+    )
+    const report: KnownJournalRepairReport = {
       code: repaired.code,
       repairedEvents: repaired.repairedEvents,
       sourceQuarantinePath: fault.payload.quarantinePath,
       archivedDegradedPath,
+      recorded: true,
     }
+    // Persist the acknowledgment with the recovered bytes, before Core replays
+    // any fault. A crash cannot leave a completed repair without its marker.
+    await replaceJournalAtomically(this.file, currentRaw, withRepairMarker(reconciled.events, report))
+    this.knownRepair = report
   }
 
   /** Preserve the original malformed file before an in-place known repair. */
-  private async preserveKnownRepairSource(): Promise<string> {
-    const target = this.availableSiblingPath(`${this.file}.quarantine-known-repair`)
-    await copyFile(this.file, target)
-    await writeFile(
-      `${target}.txt`,
+  private async preserveKnownRepairSource(raw: Buffer, description: readonly string[]): Promise<string> {
+    return preserveJournalBytes(
+      this.file, 'quarantine-known-repair', raw,
       [
         'Freya Core event log, preserved before a code-owned compatibility repair.',
         `Original: ${this.file}`,
-        'The only accepted repair is the historical cognition continuation request-id',
-        'separator (# -> :) and the entire resulting journal must validate.',
+        ...description,
         '',
       ].join(EOL),
-      'utf8',
     )
-    return target
-  }
-
-  /** Preserve the already-degraded replacement before restoring its verified quarantine. */
-  private async archiveCurrentDegradedJournal(): Promise<string> {
-    const target = this.availableSiblingPath(`${this.file}.pre-known-repair`)
-    await copyFile(this.file, target)
-    await writeFile(
-      `${target}.txt`,
-      [
-        'Freya Core degraded journal archived before restoring a fully validated',
-        'quarantine affected by a recognized code-owned validation defect.',
-        `Original active path: ${this.file}`,
-        '',
-      ].join(EOL),
-      'utf8',
-    )
-    return target
-  }
-
-  private availableSiblingPath(base: string): string {
-    let target = base
-    for (let n = 2; n <= 8; n += 1) {
-      if (!existsSync(target)) return target
-      target = `${base}.${n}`
-    }
-    return target
   }
 
   /** A known compatibility repair performed during this open, if any. */
@@ -422,6 +441,29 @@ export class JsonlEventStore implements EventStore {
     this.handle = null
     await handle?.close()
   }
+}
+
+function withRepairMarker(events: readonly AnyCoreEvent[], report: KnownJournalRepairReport): string {
+  const lastSequence = events.at(-1)?.sequence ?? 0
+  const marker: AnyCoreEvent = {
+    eventId: randomUUID(), sequence: lastSequence + 1, type: 'core.integrity_repaired',
+    schemaVersion: CORE_EVENT_SCHEMA_VERSION, occurredAt: new Date().toISOString(),
+    source: 'core', actor: 'system', correlationId: randomUUID(), causationId: null,
+    payload: { code: report.code, repairedEvents: report.repairedEvents,
+      sourceQuarantinePath: report.sourceQuarantinePath, archivedDegradedPath: report.archivedDegradedPath },
+  }
+  const content = [...events, marker].map(event => JSON.stringify(event) + '\n').join('')
+  if (parseCompleteJournal(content) === null) throw new Error('known journal repair did not validate completely')
+  return content
+}
+
+function hasUnresolvedFault(events: readonly AnyCoreEvent[]): boolean {
+  let unresolved = false
+  for (const event of events) {
+    if (event.type === 'core.integrity_fault') unresolved = true
+    else if (event.type === 'core.integrity_repaired') unresolved = false
+  }
+  return unresolved
 }
 
 function parseCompleteJournal(raw: string): AnyCoreEvent[] | null {

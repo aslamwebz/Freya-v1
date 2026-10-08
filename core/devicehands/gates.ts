@@ -1,3 +1,4 @@
+import { assertPublicBrowserUrl } from '../browser/isolation'
 import {
   DEVICE_HANDS_LIMITS,
   DEVICE_HANDS_GATES,
@@ -641,8 +642,10 @@ function applyPolicy(
     case 'browser.read-text':
     case 'browser.click':
     case 'browser.type-text': {
-      const url = checkUrl(input.url, policy)
-      if (!url.ok) return { code: url.code, reason: url.reason }
+      const ownerRead = policy.ownerPublicBrowser === true && request.principalId === 'owner:browser'
+        && (key === 'browser.navigate' || key === 'browser.read-text')
+      const url = ownerRead ? assertPublicBrowserUrl(input.url) : checkUrl(input.url, policy)
+      if (!url.ok) return { code: 'code' in url && url.code !== 'url-refused' ? url.code : 'url-host-not-allowed', reason: url.reason }
       let selector: string | null = null
       let text: string | null = null
       if (key === 'browser.click' || key === 'browser.type-text') {

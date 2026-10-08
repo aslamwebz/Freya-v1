@@ -197,7 +197,8 @@ export function serializeExpressionPlan(plan: ExpressionPlan): string {
 }
 
 /** Where the block sits, when a later slice splices it into context. */
-export const EXPRESSION_BLOCK_MARKER = '— personality & expression guidance (style only) —'
+export const EXPRESSION_BLOCK_MARKER =
+  '— personality & expression guidance (style only; standing background for this turn, not something anybody said) —'
 
 export function expressionBlock(plan: ExpressionPlan): string {
   const body = serializeExpressionPlan(plan)

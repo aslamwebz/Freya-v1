@@ -7,7 +7,7 @@ import { hostBridge } from '../platform/host'
 import { sendMessage } from '../ui-v2/chat/sendMessage'
 import { researchMirror } from '../platform/researchClient'
 import { routeEyePrompt, type ComposerMode, type WorkspaceResearchView } from './chat/modes'
-import { routePromptIntent } from './chat/intent'
+import { routeChatIntent, routePromptIntent } from './chat/intent'
 import {
   attachmentTray,
   collectModelAttachments,
@@ -29,6 +29,7 @@ import { setAppLayout, startupAppLayout, type AppLayout } from './state/workspac
 import { DressingTable } from './dressing/DressingTable'
 import type { DressingStore } from './dressing/store'
 import { useVoiceDock } from './voice/useVoiceDock'
+import { openUrlInDockedBrowser, sharedDockedBrowserStore, type DockedTabOrigin } from './chat/BrowserWorkspace'
 
 import { BootScreen } from './boot/BootScreen'
 
@@ -61,6 +62,21 @@ export function App({
   const [booted, setBooted] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
   const [browserRequestedUrl, setBrowserRequestedUrl] = useState<string | null>(null)
+  /*
+   * The chat/browser split lives here rather than inside the chat workspace
+   * because two things have to agree on it: the workspace's own columns and the
+   * global composer, which sits over the conversation column so the input never
+   * straddles the divider. One number, one source.
+   */
+  const [browserPercent, setBrowserPercent] = useState(52)
+  useEffect(() => {
+    const store = sharedDockedBrowserStore()
+    let count = store.getSnapshot().tabs.length
+    return store.subscribe((next) => {
+      if (next.tabs.length > count) { setScreen('chat'); setBrowserOpen(true) }
+      count = next.tabs.length
+    })
+  }, [])
 
   const mirror = conversationMirror()
   const research = researchMirror()
@@ -93,11 +109,24 @@ export function App({
     memory: Memory(),
   }
 
-  const send = async (text: string, mode: ComposerMode): Promise<boolean> => {
+  const send = async (
+    text: string,
+    mode: ComposerMode,
+    hints?: { readonly webSearch?: boolean; readonly browserUse?: boolean },
+  ): Promise<boolean> => {
     if (!text.trim()) return false
     if (!hostBridge()) {
       setNotice('This window cannot reach Freya Core.')
       return false
+    }
+    // The renderer's hint fields travel as structured metadata only. The text
+    // we received is the text the owner typed — never mutated, never prefixed.
+    // A button that changed the text would be the contamination class this whole
+    // seam exists to prevent, and a bug report is the friendliest of the
+    // responses it gets if it tries.
+    const intents = {
+      ...(hints?.webSearch === true ? { webSearch: true } : {}),
+      ...(hints?.browserUse === true ? { browserUse: true } : {}),
     }
 
     // File bytes travel as bounded attachment parts through the canonical turn.
@@ -142,12 +171,15 @@ export function App({
           : mode
     const autoNewEye = mode === 'chat' && inferred?.kind === 'eye-new'
 
+    if (intents.browserUse || routeChatIntent(text, { activeEyeSession: false }).kind === 'native_browser_task') setBrowserOpen(true)
+
     if (effectiveMode === 'chat') {
       setResearchView(null)
       const result = await sendMessage(
         mirror,
         screen === 'chat' ? (conversation?.activeConversationId ?? null) : null,
         composed.text,
+        Object.keys(intents).length > 0 ? intents : undefined,
         payload.attachments,
       )
       // The payload and the tray are cleared only once Core has accepted the turn,
@@ -175,7 +207,7 @@ export function App({
     try {
       if (effectiveMode === 'deep-research') {
         const outcome = await research.research(text)
-        setResearchView({ mode: 'deep-research', outcome })
+        setResearchView({ mode: 'deep-research', ownerText: text, outcome })
         if (outcome.operation === 'refused') {
           setNotice(outcome.reason ?? 'Deep Research was refused.')
           return false
@@ -187,20 +219,20 @@ export function App({
       // another search exists. Short refinements ("only YouTube", "make it 50")
       // deliberately stay on the active session.
       const route = autoNewEye
-        ? { kind: 'create' as const, text: text.trim() }
+        ? { kind: 'create' as const, text: text }
         : routeEyePrompt(activeEyeSessionId, text)
       let outcome = route.kind === 'create'
         ? await research.createSession(route.text)
         : await research.followUpSession(route.sessionId, route.text)
 
       if (outcome.operation === 'refused' || !outcome.session) {
-        setResearchView({ mode: 'eye', outcome })
+        setResearchView({ mode: 'eye', ownerText: text, outcome })
         setNotice(outcome.reason ?? "Freya's Eye could not start that search.")
         return false
       }
 
       setActiveEyeSessionId(outcome.session.sessionId)
-      setResearchView({ mode: 'eye', outcome })
+      setResearchView({ mode: 'eye', ownerText: text, outcome })
 
       if (outcome.ambiguous) {
         setNotice("Freya's Eye needs one missing detail before changing this existing search.")
@@ -208,7 +240,7 @@ export function App({
       }
 
       outcome = await research.collectSession(outcome.session.sessionId)
-      setResearchView({ mode: 'eye', outcome })
+      setResearchView({ mode: 'eye', ownerText: text, outcome })
       if (outcome.operation === 'refused') {
         setNotice(outcome.reason ?? "Freya's Eye could not continue that search.")
         return false
@@ -262,16 +294,15 @@ export function App({
 
   const voice = useVoiceDock(onVoiceTranscript)
 
-  const openBrowserUrl = useCallback((url: string) => {
+  const openBrowserUrl = useCallback((url: string, origin: DockedTabOrigin = { kind: 'link', from: 'chat', ownerText: 'owner' }) => {
     setScreen('chat')
     setBrowserOpen(true)
+    openUrlInDockedBrowser(sharedDockedBrowserStore(), url, { origin })
     setBrowserRequestedUrl(url)
   }, [])
 
-  const handleBrowserToggle = useCallback(() => {
-    setScreen('chat')
-    setBrowserOpen((open) => !open)
-  }, [])
+
+  useEffect(() => hostBridge()?.onBrowserOpenUrl?.((url) => openBrowserUrl(url, { kind: 'link', from: 'chat', ownerText: 'Opened from a browser page' })), [openBrowserUrl])
 
   const handleBrowserRequestedUrlHandled = useCallback(() => {
     setBrowserRequestedUrl(null)
@@ -296,13 +327,15 @@ export function App({
       onSend={send}
       onStopResponse={stopResponse}
       researchView={researchView}
+      onResearchViewChange={(view) => { setResearchView(view); setActiveEyeSessionId(view.outcome.session?.sessionId ?? null) }}
       onNavigate={setScreen}
       onVoicePress={voice.press}
       onVoiceRelease={voice.release}
       maxMessageCharacters={conversation?.maxMessageCharacters ?? null}
       browserOpen={browserOpen}
+      browserPercent={browserPercent}
+      onBrowserPercentChange={setBrowserPercent}
       browserRequestedUrl={browserRequestedUrl}
-      onBrowserToggle={handleBrowserToggle}
       onBrowserOpenUrl={openBrowserUrl}
       onBrowserRequestedUrlHandled={handleBrowserRequestedUrlHandled}
       onBrowserClose={() => setBrowserOpen(false)}

@@ -140,6 +140,8 @@ export const DENIED_ENV_NAME_WORDS: readonly string[] = Object.freeze([
 export interface SurfacePolicy {
   /** Explicit local-development profile. Omitted/false means the strict policy. */
   readonly localUnrestricted?: boolean
+  /** Public navigation/read for the trusted owner browser principal only. */
+  readonly ownerPublicBrowser?: boolean
   /** Normalised absolute roots. Strict mode refuses an empty list. */
   readonly allowedRoots: readonly string[]
   /** Normalised absolute denied roots. Never empty: a policy without them is refused. */
@@ -167,6 +169,8 @@ export type PolicyReading =
 export interface PolicyInput {
   /** Explicit local-development profile. Packaged/production callers omit this. */
   readonly localUnrestricted?: boolean
+  /** Public navigation/read for the trusted owner browser principal only. */
+  readonly ownerPublicBrowser?: boolean
   readonly allowedRoots: readonly string[]
   readonly deniedRoots: readonly string[]
   readonly allowedHosts: readonly string[]
@@ -493,6 +497,7 @@ export function normaliseSurfacePolicy(input: unknown): PolicyReading {
   }
   const raw = input as Record<string, unknown>
   const localUnrestricted = raw.localUnrestricted === true
+  const ownerPublicBrowser = raw.ownerPublicBrowser === true
 
   const deniedRootsRaw = readList(
     raw.deniedRoots,
@@ -506,18 +511,18 @@ export function normaliseSurfacePolicy(input: unknown): PolicyReading {
       `A surface policy must name the directories it protects, and this one does not: ${deniedRootsRaw.error}`,
     )
   }
-  const allowedRootsRaw = readList(raw.allowedRoots, 'allowedRoots', DEVICE_HANDS_LIMITS.maxAllowedRoots, localUnrestricted)
+  const allowedRootsRaw = readList(raw.allowedRoots, 'allowedRoots', DEVICE_HANDS_LIMITS.maxAllowedRoots, localUnrestricted || ownerPublicBrowser)
   if ('error' in allowedRootsRaw) return refuse('request-malformed', allowedRootsRaw.error)
-  const hostsRaw = readList(raw.allowedHosts, 'allowedHosts', DEVICE_HANDS_LIMITS.maxAllowedHosts, localUnrestricted)
+  const hostsRaw = readList(raw.allowedHosts, 'allowedHosts', DEVICE_HANDS_LIMITS.maxAllowedHosts, localUnrestricted || ownerPublicBrowser)
   if ('error' in hostsRaw) return refuse('request-malformed', hostsRaw.error)
   const commandsRaw = readList(
     raw.allowedCommands,
     'allowedCommands',
     DEVICE_HANDS_LIMITS.maxAllowedCommands,
-    localUnrestricted,
+    localUnrestricted || ownerPublicBrowser,
   )
   if ('error' in commandsRaw) return refuse('request-malformed', commandsRaw.error)
-  const envRaw = readList(raw.allowedEnvNames, 'allowedEnvNames', DEVICE_HANDS_LIMITS.maxAllowedEnvNames, localUnrestricted)
+  const envRaw = readList(raw.allowedEnvNames, 'allowedEnvNames', DEVICE_HANDS_LIMITS.maxAllowedEnvNames, localUnrestricted || ownerPublicBrowser)
   if ('error' in envRaw) return refuse('request-malformed', envRaw.error)
 
   const deniedRoots: string[] = []
@@ -591,8 +596,19 @@ export function normaliseSurfacePolicy(input: unknown): PolicyReading {
     DEVICE_HANDS_LIMITS.maxTransferBytesPerAction,
   )
 
+  const basePolicyDigest = listDigest([
+      localUnrestricted ? 'local-unrestricted' : 'strict',
+      ...[...allowedRoots].sort(),
+      ...[...deniedRoots].sort(),
+      ...[...allowedHosts].sort(),
+      ...[...allowedCommands].sort(),
+      ...[...allowedEnvNames].sort(),
+      String(maxTransferBytes),
+     ])
+
   const policy: SurfacePolicy = Object.freeze({
     localUnrestricted,
+    ownerPublicBrowser,
     allowedRoots: Object.freeze(allowedRoots),
     deniedRoots: Object.freeze(deniedRoots),
     allowedHosts: Object.freeze(allowedHosts),
@@ -601,15 +617,7 @@ export function normaliseSurfacePolicy(input: unknown): PolicyReading {
     maxTransferBytes,
     // Counted, then ordered as declared. `listDigest` is order-sensitive on purpose:
     // two roots swapped is a different policy and must not share a digest.
-    digest: listDigest([
-      localUnrestricted ? 'local-unrestricted' : 'strict',
-      ...[...allowedRoots].sort(),
-      ...[...deniedRoots].sort(),
-      ...[...allowedHosts].sort(),
-      ...[...allowedCommands].sort(),
-      ...[...allowedEnvNames].sort(),
-      String(maxTransferBytes),
-    ]),
+    digest: ownerPublicBrowser ? listDigest([basePolicyDigest, 'owner-public-browser']) : basePolicyDigest,
   })
 
   // Strict mode proves its protected roots. Local development deliberately has no

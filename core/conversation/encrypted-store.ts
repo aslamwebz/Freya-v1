@@ -468,8 +468,8 @@ export class EncryptedConversationStore implements ConversationStore {
     })
   }
 
-  async recoverInterruptedTurns(now: string): Promise<string[]> {
-    const recovered: string[] = []
+  async recoverInterruptedTurns(now: string): Promise<{ turnId: string; conversationId: string }[]> {
+    const recovered: { turnId: string; conversationId: string }[] = []
     for (const turn of this.turnsById.values()) {
       if (turn.outcome !== 'pending') continue
       await this.write({
@@ -482,7 +482,7 @@ export class EncryptedConversationStore implements ConversationStore {
         model: null,
         reason: null,
       })
-      recovered.push(turn.turnId)
+      recovered.push({ turnId: turn.turnId, conversationId: turn.conversationId })
     }
     return recovered
   }

@@ -7,7 +7,7 @@ import { JsonlEventStore } from '../../../core/events/jsonl-store'
 import { parseDurableEvent } from '../../../core/events/validate'
 import { CORE_EVENT_SCHEMA_VERSION } from '../../../core/events/envelope'
 function event(sequence: number, type: string, payload: unknown): string {
-  return JSON.stringify({eventId: `evt-${sequence}`, sequence, type, schemaVersion: CORE_EVENT_SCHEMA_VERSION, occurredAt: '2026-10-06T20:00:00.000Z', source: 'core', actor: 'system', correlationId: 'wake', causationId: null, payload}) + '\n'
+  return JSON.stringify({eventId: `evt-${sequence}-${type}`, sequence, type, schemaVersion: CORE_EVENT_SCHEMA_VERSION, occurredAt: '2026-10-06T20:00:00.000Z', source: 'core', actor: 'system', correlationId: 'wake', causationId: null, payload}) + '\n'
 }
 it('replays the real fractional wake sensitivity and rejects invalid thresholds', () => {
   expect(parseDurableEvent(event(1,'voice.wake.armed',{gate:'local-energy-wake',threshold:0.14,maxArmedMs:900000}).trim(),0).ok).toBe(true)
@@ -22,7 +22,8 @@ it('restores only a fully validated wake quarantine with the matching trusted pr
   const store=await JsonlEventStore.open(path)
   try {
     expect(store.knownRepairReport()?.code).toBe('voice-wake-threshold-validator')
-    expect((await store.readAll()).at(-1)?.type).toBe('security.stop_all.activated')
+    expect((await store.readAll()).some(e => e.type === 'security.stop_all.activated')).toBe(true)
+    expect((await store.readAll()).at(-1)?.type).toBe('core.integrity_repaired')
     expect(await readFile(store.knownRepairReport()!.archivedDegradedPath!,'utf8')).toContain('core.integrity_fault')
   } finally { await store.close(); await rm(dir,{recursive:true,force:true}) }
 })

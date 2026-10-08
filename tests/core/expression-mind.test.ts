@@ -10,7 +10,7 @@ import { ModelGateway, type GatewayRecorder } from '../../core/model/gateway'
 import { FakeModelProvider } from '../../core/model/fake-provider'
 import type { ModelMessage } from '../../core/model/provider'
 import { MindService } from '../../core/mind/mind'
-import type { ExpressionMemory } from '../../core/mind/expression'
+import { withExpressionBlock, type ExpressionMemory } from '../../core/mind/expression'
 import type { CueUsageLedger, InteractionFact, RelationshipItem } from '../../core/personality/types'
 import { admitRelationshipItem, createRelationshipCandidate } from '../../core/personality/relationship'
 import { emptyCueLedger } from '../../core/personality/repetition'
@@ -437,5 +437,44 @@ describe('expression planning preserves authority boundaries', () => {
 
     await mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 't1', text: 'hello' })
     expect(authority.recorded.length).toBe(1)
+  })
+})
+
+describe('the expression block stays out of the owner\'s recency window', () => {
+  it('stands in front of the history on a follow-up turn, not beside the question', async () => {
+    // Reproduces the live failure: a block spliced next to the question was answered
+    // as if the owner had said it — "what did I just say?" came back describing the
+    // style guidance instead of the conversation's first turn.
+    const messages: ModelMessage[] = [
+      { role: 'system', content: 'You are Freya. A standing framing message.' },
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'Hey. What is on your mind?' },
+      { role: 'user', content: 'what did I just say?' },
+    ]
+    const spliced = withExpressionBlock(messages, 'personality & expression guidance: speak warmly')
+
+    expect(spliced.at(-1)?.content).toBe('what did I just say?')
+    expect(spliced.at(-1)?.role).toBe('user')
+    const blockIndex = spliced.findIndex((message) => message.content.includes('expression guidance'))
+    expect(blockIndex).toBe(1)
+    // The history sits between the block and the question, so the recent turns are
+    // what a recency-shaped question reads.
+    expect(spliced[2]?.content).toBe('hello')
+    expect(spliced[3]?.content).toBe('Hey. What is on your mind?')
+    // And the framing system message is still the first thing in the packet.
+    expect(spliced[0]?.role).toBe('system')
+  })
+
+  it('lands immediately before the question on a conversation\'s first turn', async () => {
+    const messages: ModelMessage[] = [
+      { role: 'system', content: 'You are Freya. A standing framing message.' },
+      { role: 'user', content: 'hello' },
+    ]
+    const spliced = withExpressionBlock(messages, 'personality & expression guidance')
+    expect(spliced.map((message) => message.content)).toEqual([
+      'You are Freya. A standing framing message.',
+      'personality & expression guidance',
+      'hello',
+    ])
   })
 })

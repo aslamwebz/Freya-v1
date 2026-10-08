@@ -143,6 +143,8 @@ export interface ToolLoopDeps {
   readonly turnId: string
   /** The owner's model selection, read per iteration like any other request. */
   readonly selectedModel: () => string | null
+  readonly selectedProviderId?: () => string | null
+  readonly modelCapability?: 'chat' | 'browser'
   /** The whole turn's output allowance. Never raised by this loop. */
   readonly perTurnAllowance: number
   /** This turn's cancellation signal. Checked at every iteration boundary. */
@@ -240,6 +242,8 @@ export async function runToolLoop(
       // loop, `scheduleId:repeats` in the attention engine) and is valid in an id.
       cognitionRequestId: iteration === 0 ? deps.turnId : `${deps.turnId}:${iteration}`,
       requestedModel: deps.selectedModel(),
+      requestedProviderId: deps.selectedProviderId?.(),
+      modelCapability: deps.modelCapability,
       goalId: null,
       signal: deps.signal,
     })

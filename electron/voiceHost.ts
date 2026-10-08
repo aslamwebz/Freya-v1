@@ -85,6 +85,9 @@ export class HostVoiceOutput implements VoiceTtsAdapter {
     return this.reported === true ? 'available' : 'unavailable'
   }
 
+  /** Raw platform report: never reads effective provider settings. */
+  get platformAvailable(): boolean { return this.reported }
+
   private reported = false
   private knownVoices: readonly VoiceOption[] = []
   private reportedDetail: string | null = null

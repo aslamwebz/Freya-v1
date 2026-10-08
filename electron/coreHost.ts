@@ -1,3 +1,4 @@
+import type { CapabilityReadiness } from '../core/capabilities'
 import { createCore, type Core, type CoreOptions } from '../core/index'
 import type { CoreCommandEnvelope, CoreCommandResult, CoreStatus } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
@@ -26,9 +27,11 @@ import type { ConnectorKind } from '../core/connectors/types'
 import type { ConnectorCommandOutcome, ConnectorProjection } from '../core/protocol/connectors'
 import { createWindowObservationRuntime, type WindowObservationRuntime } from './context/windowObservationRuntime'
 import { createIntervalTimer, type ActiveWindowProvider, type WindowSourceStatus, type WindowTimer } from '../core/context/sources/window'
-import type { NanoGptEnv } from '../core/model/nanogpt-provider'
+import type { CapabilityEnv } from '../core/model/capability-runtime'
+import type { CapabilityPreferences } from '../core/capabilities'
 import { BraveSearchProvider } from '../core/research/providers/brave'
-import { PreferredSearchProvider } from '../core/research/providers/preferred'
+import { SelectedSearchProvider } from '../core/research/providers/selected'
+import { MiniMaxSearchProvider } from '../core/research/providers/minimax'
 import { SearxngSearchProvider } from '../core/research/providers/searxng'
 import { ElectronBrowserTargetFactory } from './research/managedTarget'
 import { fixtureSearchProvider, fixtureTransport, researchFixturesEnabled } from './research/e2eFixtures'
@@ -38,6 +41,7 @@ import type { ModelProvider } from '../core/model/provider'
 import type { DeviceHandsActionKey, GrantFact } from '../core/devicehands'
 import type { BrowserTargetFactory } from '../core/research/browser'
 import type { BrowserTaskPort } from '../core/mind/browser-tool'
+import type { BrowserTabsPort } from '../core/mind/browser-tabs-tool'
 import { randomUUID } from 'node:crypto'
 import {
   createDeviceHandsActivation,
@@ -60,7 +64,7 @@ import {
  * that happens to have a key in its environment must not start calling a paid
  * search API because the key was there. Search is enabled explicitly.
  */
-export interface HostEnv extends NanoGptEnv {
+export interface HostEnv extends CapabilityEnv {
   BRAVE_SEARCH_API_KEY?: string
   FREYA_ALLOW_WEB_SEARCH?: string
   /**
@@ -554,6 +558,7 @@ export interface DeviceHandsHostOptions {
 }
 
 export interface CoreHostOptions {
+  capabilityPreferences?: () => CapabilityPreferences
   /**
    * The conversation master key, from the OS secure storage.
    *
@@ -612,7 +617,7 @@ export interface CoreHostOptions {
    * A separate key from every other domain on purpose: a Forge package body is a
    * program Freya can run, and a store that could be opened with the Skill key could
    * be moved between domains by anyone holding either one. Null means Core falls
-   * back to process-only storage and *reports* durable: false � never plaintext.
+   * back to process-only storage and *reports* durable: false ? never plaintext.
    */
   forgeKey?: Uint8Array | null
   /** Canonical Core-private SQLCipher Vault. Never accepted from a renderer. */
@@ -668,7 +673,7 @@ export interface CoreHostOptions {
    * Whole-stack rather than per-part, so a test cannot accidentally exercise the
    * real Brave provider or the real Electron target while believing it is offline.
    */
-  research?: { searchProvider: SearchProvider; browserFactory: BrowserTargetFactory }
+  research?: { searchProvider: SearchProvider; eyeSearchProvider?: SearchProvider; browserFactory: BrowserTargetFactory }
   /**
    * Fills Core's Workforce seam. For assembly and tests; production passes
    * none, and the host does not build one.
@@ -811,6 +816,8 @@ export class ElectronCoreHost implements CoreHost {
    * nothing to read.
    */
   private deviceHands: DeviceHandsActivation | null = null
+  private readonly ownerBrowserGrants = new Map<string, GrantFact>()
+  private readonly ownerBrowserRegistrations = new Map<string, Promise<{ ok: boolean; reason: string }>>()
   /**
    * The activated dual-browser runtime, once the host has one.
    *
@@ -820,6 +827,14 @@ export class ElectronCoreHost implements CoreHost {
    * receive an honest refusal rather than a tool that was never offered.
    */
   private dualBrowserRuntime: BrowserTaskPort | null = null
+  /**
+   * The Browser Service port for Core's multi-tab tool.
+   *
+   * Null until `attachBrowserTabs` runs, which happens after the dual-browser activation has
+   * succeeded and the service has been mounted. A null here is the honest "there is no tab
+   * tool" rather than a refusal invented by this file.
+   */
+  private browserTabsPort: BrowserTabsPort | null = null
 
   /**
    * Hand Core the browser seam, once a Freya Browser has actually activated.
@@ -830,6 +845,18 @@ export class ElectronCoreHost implements CoreHost {
    */
   attachDualBrowser(runtime: BrowserTaskPort): void {
     this.dualBrowserRuntime = runtime
+  }
+
+  /**
+   * Hand Core the Browser Service, for the multi-tab tool.
+   *
+   * Separate from {@link attachDualBrowser} on purpose. That one is the routed command
+   * vocabulary; this one is the surface that owns tab identity, references and revisions.
+   * Keeping them apart is what lets the reader tool stay a reader, with no way to infer what a
+   * browser is doing without asking it.
+   */
+  attachBrowserTabs(port: BrowserTabsPort): void {
+    this.browserTabsPort = port
   }
 
   constructor(
@@ -986,6 +1013,7 @@ export class ElectronCoreHost implements CoreHost {
     if (seam === undefined) return
     const authority: DeviceHandsAuthority = {
       ...seam.authority,
+      activeGrant: (principalId, scope) => this.ownerBrowserGrant(principalId, scope) ?? seam.authority.activeGrant(principalId, scope),
       stopAllActive: () => (this.core?.status().stopAll.active ?? false) || seam.authority.stopAllActive(),
     }
     const activation = createDeviceHandsActivation({
@@ -1001,7 +1029,11 @@ export class ElectronCoreHost implements CoreHost {
     })
     await activation.open()
     if (seam.enabled === true && seam.policy !== undefined) {
-      const result = await activation.activate({ policy: seam.policy, grants: seam.grants ?? [] })
+      let result = await activation.activate({ policy: seam.policy, grants: seam.grants ?? [] })
+      if (!result.ok && result.code === 'policy-mismatch') {
+        const upgraded = await activation.runtime.enableOwnerPublicBrowser(seam.policy)
+        if (upgraded.ok) result = await activation.activate({ policy: seam.policy, grants: seam.grants ?? [] })
+      }
       if (!result.ok) {
         // A seam that could not be activated is left open but off: every action is
         // refused at its own gates, which is the safe direction.
@@ -1013,6 +1045,8 @@ export class ElectronCoreHost implements CoreHost {
 
   /** Deactivate and release the Device Hands activation, if one was built. */
   private releaseDeviceHands(): void {
+    this.ownerBrowserGrants.clear()
+    this.ownerBrowserRegistrations.clear()
     const activation = this.deviceHands
     this.deviceHands = null
     if (activation !== null) void activation.dispose()
@@ -1033,6 +1067,60 @@ export class ElectronCoreHost implements CoreHost {
    * exposes the perform call and nothing else: no grant source, no policy, no approval
    * channel, no way to reach a gate without walking it.
    */
+  /** Host-only owner browsing. No renderer can supply a grant or a principal. */
+  ownerBrowserGrant(principalId: string, scope: string): GrantFact | null {
+    if (principalId !== 'owner:browser' || this.core?.status().stopAll.active === true) return null
+    const grant = this.ownerBrowserGrants.get(scope)
+    return grant && grant.revokedAt === null && Date.parse(grant.expiresAt) > Date.now() ? grant : null
+  }
+
+  async performOwnerBrowserAction(
+    request: Parameters<ElectronCoreHost['performDeviceHandsAction']>[0],
+  ): Promise<Awaited<ReturnType<ElectronCoreHost['performDeviceHandsAction']>>> {
+    const refuse = (reason: string, code = 'grant-missing') => ({ performed: false, verdict: 'failed' as const, code, reason })
+    if (request.principalId !== 'owner:browser' || !/^freya-\d{4,}$/.test(request.scope)
+      || (request.actionKey !== 'browser.navigate' && request.actionKey !== 'browser.read-text')) {
+      return refuse('Owner browser authority covers only public navigation and reading in an exact native browser session.')
+    }
+    const seam = this.options.deviceHands
+    const profile = typeof seam?.policy === 'object' && seam.policy !== null
+      ? seam.policy as { ownerPublicBrowser?: boolean } : null
+    if (profile?.ownerPublicBrowser !== true && seam?.localUnrestricted !== true) {
+      return refuse('The owner public browser profile is not enabled.')
+    }
+    if (this.core?.status().stopAll.active === true || seam?.authority.stopAllActive() === true) {
+      return refuse('STOP ALL is latched, so owner browsing is stopped.', 'stop-all-latched')
+    }
+    const activation = this.deviceHands
+    if (activation === null || !activation.active()) return refuse('Device Hands is not active.', 'subsystem-disabled')
+    if (this.ownerBrowserGrant('owner:browser', request.scope) === null) {
+      let registering = this.ownerBrowserRegistrations.get(request.scope)
+      if (!registering) {
+        registering = (async () => {
+          const now = Date.now()
+          const grant: GrantFact = {
+            grantId: 'owner-browser-' + randomUUID(), principalId: 'owner:browser', scope: request.scope,
+            surfaces: ['browser'], actions: ['browser.navigate', 'browser.read-text'],
+            issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 15 * 60_000).toISOString(), revokedAt: null,
+          }
+          const result = await activation.runtime.registerGrant(grant)
+          if (result.ok && this.deviceHands === activation && this.core?.status().stopAll.active !== true) {
+            this.ownerBrowserGrants.set(request.scope, grant)
+          }
+          return result
+        })()
+        this.ownerBrowserRegistrations.set(request.scope, registering)
+      }
+      try {
+        const registered = await registering
+        if (!registered.ok) return refuse(registered.reason)
+      } finally {
+        if (this.ownerBrowserRegistrations.get(request.scope) === registering) this.ownerBrowserRegistrations.delete(request.scope)
+      }
+    }
+    return this.performDeviceHandsAction({ ...request, principalId: 'owner:browser' })
+  }
+
   async performDeviceHandsAction(request: {
     readonly actionId: string
     readonly principalId: string
@@ -1089,6 +1177,7 @@ export class ElectronCoreHost implements CoreHost {
       const core = createCore({
         dataPath: this.dataPath,
         env: this.env,
+        capabilityPreferences: this.options.capabilityPreferences,
         ...(research ? { research } : {}),
         /*
          * The browser seam for a turn's `browser_read` tool, as a **lazy** port.
@@ -1117,6 +1206,10 @@ export class ElectronCoreHost implements CoreHost {
             return runtime.execute(request)
           },
         },
+        // The tab tool, only once a service exists. A Core built before the browser mounted
+        // has no `browserTabs` at all, so the tool is simply not in its registry — which is a
+        // truer answer than advertising a tool that could only ever refuse.
+        ...(this.browserTabsPort === null ? {} : { browserTabs: this.browserTabsPort }),
         // Bytes in, and nowhere else. Core does not persist it, journal it, log it
         // or put it in a projection, so there is nothing for it to leak through.
         ...(this.options.conversationKey
@@ -1280,7 +1373,16 @@ export class ElectronCoreHost implements CoreHost {
    * or reach the filesystem, so there is no path from a model or a page to a
    * credential even indirectly.
    */
-  private buildResearchStack(): { searchProvider: SearchProvider; browserFactory: BrowserTargetFactory } {
+  private searchBackends(): SearchProvider[] {
+    return [new MiniMaxSearchProvider({ env: this.env }), new SearxngSearchProvider({ env: this.env }), new BraveSearchProvider({ env: this.env })]
+  }
+
+  capabilityReadiness(): CapabilityReadiness {
+    const states = Object.fromEntries(this.searchBackends().map((provider) => [provider.id, provider.status()]))
+    return { search: states, eye: states }
+  }
+
+  private buildResearchStack(): { searchProvider: SearchProvider; eyeSearchProvider?: SearchProvider; browserFactory: BrowserTargetFactory } {
     // The offline fixture path, behind two independent gate variables, replaces the
     // transport's DNS and socket seams only. The URL policy, the byte bounds, the
     // redirect handling and the browser target are all the real ones, so the E2E is
@@ -1299,10 +1401,8 @@ export class ElectronCoreHost implements CoreHost {
       // working fallback for an install that has one. `PreferredSearchProvider`
       // re-evaluates readiness per call and never retries across providers, so a
       // result's provenance always names the backend that actually served it.
-      searchProvider: new PreferredSearchProvider([
-        new SearxngSearchProvider({ env: this.env }),
-        new BraveSearchProvider({ env: this.env, transport }),
-      ]),
+      searchProvider: new SelectedSearchProvider('search', this.searchBackends(), () => this.options.capabilityPreferences?.() ?? {}),
+      eyeSearchProvider: new SelectedSearchProvider('eye', this.searchBackends(), () => this.options.capabilityPreferences?.() ?? {}),
       // Shared deliberately: `SafeHttpTransport` holds no mutable instance state, so
       // a page read and a provider call cannot interfere. Two instances would add an
       // isolation boundary that does not exist and imply a separation the code does
@@ -2143,6 +2243,7 @@ const ABSENT_WORK: WorkProjection = {
 /** A valid status for a host whose Core has not started. Nothing is guessed. */
 const NOT_READY: CoreStatus = {
   lifecycle: 'booting',
+  operational: false,
   eventSequence: 0,
   coreStartedAt: null,
   integrity: {
@@ -2152,6 +2253,8 @@ const NOT_READY: CoreStatus = {
     eventsRead: 0,
     bytesDiscarded: 0,
   },
+  persistence: { mode: 'durable', durable: true, reason: 'no Core has reported yet', eventStorePath: null },
+  diagnostics: { path: null, writeFailures: 0 },
   stopAll: { active: false, activatedAt: null, activatedBy: null },
   guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
   governor: { status: 'unknown', grantsActive: 0 },

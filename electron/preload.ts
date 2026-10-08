@@ -8,6 +8,7 @@ import type {
 } from '../core/protocol/core-protocol'
 import type { CoreActivityEvent } from '../core/protocol/activity'
 import type { BrowserRequest, BrowserResult } from '../core/browser'
+import type { SemanticBrowserResult } from '../core/browser/service'
 import type { ConversationProjection, VoiceProjection } from '../core/protocol/conversation'
 import type { BrainProjection } from '../core/brain/brain'
 import type { WorkProjection } from '../core/work/projection'
@@ -45,6 +46,7 @@ import { voiceSettingsPatch } from '../core/voice/settings'
 import { checkProviderBaseUrl } from '../core/model/provider-endpoint'
 import { LIFE_NO_PAYLOAD, type LifeProjection } from '../core/protocol/life'
 import { normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
+import { normaliseSemanticBrowserRequest } from './browser/semanticRequest'
 
 export interface RuntimeInfo {
   version: string
@@ -114,6 +116,20 @@ const api = {
   mediaVideo: (url: string): Promise<unknown> =>
     ipcRenderer.invoke('freya:media:video', boundedMediaUrl(url)),
 
+  /**
+   * Attach the hosted video player over the modal's player box.
+   *
+   * The window names the address and the box; the main process re-checks the
+   * player allowlist, owns the view and draws it at those bounds. Nothing is
+   * iframed from the transcript, and only one player exists per window.
+   */
+  mediaEmbedAttach: (request: { url: string; x: number; y: number; width: number; height: number }): Promise<unknown> =>
+    ipcRenderer.invoke('freya:media:embed-attach', request),
+
+  /** Detach this window's hosted player; stops playback and frees the view. */
+  mediaEmbedDetach: (): Promise<unknown> =>
+    ipcRenderer.invoke('freya:media:embed-detach'),
+
   // Frameless-window controls. Each acts on the window that asked.
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('freya:window:minimize'),
   windowMaximize: (): Promise<void> => ipcRenderer.invoke('freya:window:maximize'),
@@ -128,11 +144,60 @@ const api = {
    * request shape. Every actual page action still goes through Device Hands inside
    * that runtime.
    */
+  getCapabilitySettings: () => ipcRenderer.invoke('freya:capabilities:read'),
+  setCapabilitySettings: (input: unknown) => ipcRenderer.invoke('freya:capabilities:write', input),
+  browserDock: (input: unknown): Promise<boolean> => ipcRenderer.invoke('freya:browser:dock', input),
+  onBrowserOpenUrl: (handler: (url: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, url: unknown) => { if (typeof url === 'string' && url.length <= 4096 && /^https?:\/\//i.test(url)) handler(url) }
+    ipcRenderer.on('freya:browser:open-url', listener)
+    return () => ipcRenderer.removeListener('freya:browser:open-url', listener)
+  },
   browserState: (): Promise<BrowserBridgeState> => ipcRenderer.invoke('freya:browser:state'),
   browserExecute: (input: BrowserRequest): Promise<BrowserResult> => {
     const bounded = normaliseRendererBrowserRequest(input)
     if (!bounded.ok) return Promise.reject(new Error(bounded.reason))
     return ipcRenderer.invoke('freya:browser:execute', bounded.request)
+  },
+
+  /**
+   * One Semantic Browser Protocol operation.
+   *
+   * Normalised here *and* in the main process, on purpose. The preload check gives the
+   * renderer an immediate refusal rather than a round trip; the main process check is the one
+   * that counts, because a renderer that is not this preload is not stopped by this preload.
+   *
+   * The normaliser refuses a request with no element reference, a reference that is not in
+   * the `rN` shape, or no snapshot revision — so an act cannot be expressed without saying
+   * which instant it was decided from.
+   */
+  browserCommand: (input: unknown): Promise<SemanticBrowserResult> => {
+    const bounded = normaliseSemanticBrowserRequest(input)
+    if (!bounded.ok) {
+      return Promise.resolve({
+        ok: false,
+        op: 'tabs',
+        code: 'request-malformed',
+        reason: bounded.reason,
+        data: {},
+      })
+    }
+    return ipcRenderer.invoke('freya:browser:command', bounded.request)
+  },
+
+  /**
+   * The browser state, pushed rather than polled.
+   *
+   * Every navigation, load, failure and close arrives here. A workspace that listens needs no
+   * timer, which is the point: the previous build re-read the whole projection every 800 ms
+   * whether or not anything had changed, and the cost of that grows with the tab count.
+   */
+  onBrowserEvent: (handler: (state: BrowserBridgeState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      if (typeof value !== 'object' || value === null) return
+      handler(value as BrowserBridgeState)
+    }
+    ipcRenderer.on('freya:browser:event', listener)
+    return () => ipcRenderer.removeListener('freya:browser:event', listener)
   },
 
   /**
@@ -1685,7 +1750,9 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       // boundary, not the only wall.
       const model = string('model', MAX_MODEL_ID_CHARS, false)
       if (model === null) return { ok: false, reason: 'model id is invalid' }
-      return { ok: true, payload: model === undefined ? {} : { model } }
+      const providerId = string('providerId', MAX_ID_CHARS, false)
+      if (providerId === null) return { ok: false, reason: 'provider id is invalid' }
+      return { ok: true, payload: model === undefined ? {} : { model, ...(providerId === undefined ? {} : { providerId }) } }
     }
 
     case 'foundry.status.read': {

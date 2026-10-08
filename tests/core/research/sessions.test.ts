@@ -194,3 +194,38 @@ describe("Freya's Eye search sessions", () => {
     expect(done.results.map((result) => result.collection)).toEqual(['Images Found', 'Audio Found', 'Files Found'])
   })
 })
+
+
+describe('Finder collection in Eye', () => {
+  it('sends the requested vertical and retains the original request', async () => {
+    const calls: unknown[] = []
+    const manager = new SearchSessionManager({ searcher: { searchWeb: async (_query, options) => { calls.push(options); return [] } } })
+    const created = await manager.create('  find 3 podcasts about climate on example.org  ')
+    expect(created).toMatchObject({ ownerText: '  find 3 podcasts about climate on example.org  ', intent: { site: 'example.org', mediaType: 'audio' } })
+    await manager.collect(created.sessionId)
+    expect(calls[0]).toMatchObject({ vertical: 'audio' })
+  })
+  it('keeps domain matching on hostname boundaries', async () => {
+    const manager = new SearchSessionManager({ searcher: { searchWeb: async () => [row(0, 0, { sourceDomain: 'notexample.org', url: 'https://notexample.org/podcast.mp3' })] } })
+    const created = await manager.create('find audio on example.org')
+    const done = await manager.collect(created.sessionId)
+    expect(done.results).toHaveLength(0)
+  })
+})
+
+
+describe('Eye completeness and source identity', () => {
+  it('reports partial when a provider exhausts before the requested count', async () => {
+    const manager = new SearchSessionManager({ newId: () => 'short-eye', searcher: { searchWeb: async () => [row(0, 0)] } })
+    const session = await manager.create('find 10 cat videos')
+    const result = await manager.collect(session.sessionId)
+    expect(result.state).toBe('partial')
+    expect(result.results).toHaveLength(1)
+  })
+  it('does not classify an article on YouTube as a video', async () => {
+    const manager = new SearchSessionManager({ newId: () => 'article-eye', searcher: { searchWeb: async () => [row(0, 0, { url: 'https://youtube.com/about/policies', title: 'YouTube policies', snippet: 'Platform rules.', vertical: 'web' })] } })
+    const session = await manager.create('find 1 websites about policies')
+    const result = await manager.collect(session.sessionId)
+    expect(result.results[0]?.mediaType).toBe('web')
+  })
+})

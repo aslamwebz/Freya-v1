@@ -19,7 +19,9 @@ import type { CoreStatus } from '../../core/protocol/core-protocol'
 
 const STATUS: CoreStatus = {
   lifecycle: 'ready',
-  eventSequence: 12,
+
+        operational: true,
+        persistence: { mode: 'durable', durable: true, reason: null, eventStorePath: null }, diagnostics: { path: null, writeFailures: 0 },  eventSequence: 12,
   coreStartedAt: '2026-03-01T12:00:00.000Z',
   integrity: { integrity: 'ok' as const, reason: 'test fixture', line: null, eventsRead: 0, bytesDiscarded: 0 },
   stopAll: { active: false, activatedAt: null, activatedBy: null },

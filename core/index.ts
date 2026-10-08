@@ -1,8 +1,12 @@
 import { validateModelAttachments } from './model/provider'
 import { randomUUID } from 'node:crypto'
+import { EphemeralEventStore } from './events/ephemeral-store'
+import { FallbackEventStore } from './events/fallback-store'
+import { RuntimeDiagnostics, defaultDiagnosticsPath } from './runtime/diagnostics'
 import { EventFabric } from './events/fabric'
 import type { EventStore } from './events/store'
 import { JsonlEventStore } from './events/jsonl-store'
+import { JournalRepairError } from './events/atomic-journal-replacement'
 import type { AnyCoreEvent } from './events/envelope'
 import { initialCoreState, reduceCoreState, type CoreState } from './state'
 import { projectCoreStatus } from './projections/core-status'
@@ -12,10 +16,12 @@ import { ModelGateway, type GatewayRecorder } from './model/gateway'
 import { emptyUsage } from './model/usage'
 import type { ModelProvider } from './model/provider'
 import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
-import { NanoGptProvider, readNanoGptConfig, type NanoGptEnv } from './model/nanogpt-provider'
+import { buildConfiguredModelProviders, modelCapabilityPreference, type CapabilityEnv } from './model/capability-runtime'
+import type { CapabilityPreferences } from './capabilities'
 import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
 import { createWebSearchTool, MindToolRegistry } from './mind/tools'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
+import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
 import type { ReferenceKnowledge } from './mind/context-compiler'
 import { Brain, buildIdentityRoot, buildSelfDefinition, type BrainProjection } from './brain/brain'
 import { ResearchIntegration } from './research/coreIntegration'
@@ -389,7 +395,8 @@ export interface CoreOptions {
    * Production leaves this unset and opens the JSONL store from dataPath.
    */
   eventStore?: EventStore
-  env?: NanoGptEnv
+  env?: CapabilityEnv
+  capabilityPreferences?: () => CapabilityPreferences
   now?: () => Date
   newId?: () => string
   /**
@@ -584,6 +591,7 @@ export interface CoreOptions {
    */
   research?: {
     searchProvider: SearchProvider
+    eyeSearchProvider?: SearchProvider
     browserFactory: BrowserTargetFactory
     /** Test/embedding seam. Production uses the canonical encrypted Vault when available. */
     sessionStore?: SearchSessionStore
@@ -601,6 +609,15 @@ export interface CoreOptions {
    * to place in front of a model-driven loop.
    */
   readonly dualBrowser?: BrowserTaskPort
+  /**
+   * The Browser Service, for the multi-tab tool.
+   *
+   * Held separately from `dualBrowser` because the two doors are different: the reader tool
+   * wants the routed command vocabulary and nothing else, and the tab tool wants the surface
+   * that owns tab identity. Neither is a widened version of the other, and a single fat port
+   * would let the reader tool see tab state it has no business inferring from.
+   */
+  readonly browserTabs?: BrowserTabsPort
   /** A speech-to-text engine. Absent means none is configured. */
   voiceStt?: VoiceSttAdapter  /** A speech output engine. Absent means none is configured. */
   voiceTts?: VoiceTtsAdapter
@@ -1191,6 +1208,39 @@ class FreyaCore implements Core {
    */
   private integrity: JournalFault = HEALTHY_JOURNAL
   /**
+   * How the active event store is being persisted. Set in `start()` once the
+   * store is chosen. `durable` for the JSONL store, `ephemeral-fallback`
+   * when the durable store could not be opened.
+   */
+  private persistence: {
+    mode: 'durable' | 'ephemeral-fallback'
+    durable: boolean
+    reason: string | null
+    eventStorePath: string | null
+  } = { mode: 'durable', durable: true, reason: null, eventStorePath: null }
+
+  /**
+   * The runtime diagnostics writer. Independent of the EventStore so a
+   * failure that takes the journal down still leaves evidence on disk for
+   * the operator to find.
+   */
+  private diagnostics: RuntimeDiagnostics | null = null
+
+  /**
+   * Whether the process is operationally able to serve commands. Distinct
+   * from `lifecycle`: a Core can be `degraded` (one subsystem is unhealthy)
+   * and still operational, and a Core that fell back to ephemeral mode is
+   * operational even though its history is not durable.
+   */
+  private operational: boolean = false
+
+  /**
+   * The most recent lifecycle transition, surfaced on the status projection
+   * so the UI can show "what changed" without scanning the journal.
+   */
+  private lastLifecycleTransition: { from: CoreLifecycle; to: CoreLifecycle; at: string; reason: string | null } | null = null
+
+  /**
    * Set when *this* start found corruption, so it can be written into the
    * journal. Distinct from `integrity`, which is what a caller sees: on a later
    * start the damage is already in the log and there is nothing new to write.
@@ -1388,6 +1438,8 @@ class FreyaCore implements Core {
    * either without the other.
    */
   private dualBrowser: BrowserTaskPort | null = null
+  /** The Browser Service port for the multi-tab tool. Null until the host mounts it. */
+  private browserTabs: BrowserTabsPort | null = null
   /**
    * Research admission.
    *
@@ -1422,6 +1474,7 @@ class FreyaCore implements Core {
    * a budget nor survive a restart as a hidden preference.
    */
   private selectedModel: string | null = null
+  private selectedProviderId: string | null = null
   /**
    * The Work engine, or undefined before it is built.
    *
@@ -1479,6 +1532,33 @@ class FreyaCore implements Core {
 
   get lifecycle(): CoreLifecycle {
     return this.currentLifecycle
+  }
+
+  /**
+   * Move the Core to a new lifecycle, recording the transition for the status
+   * projection and the diagnostics log. Use this for every `currentLifecycle`
+   * assignment so an operator can always see what the last change was and
+   * why.
+   */
+  private setLifecycle(next: CoreLifecycle, reason: string | null): void {
+    const previous = this.currentLifecycle
+    if (previous === next) return
+    this.currentLifecycle = next
+    this.lastLifecycleTransition = {
+      from: previous,
+      to: next,
+      at: (this.options.now ?? (() => new Date()))().toISOString(),
+      reason,
+    }
+    this.diagnostics?.record({
+      at: this.lastLifecycleTransition.at,
+      level: next === 'degraded' ? 'warn' : 'info',
+      component: 'core.lifecycle',
+      event: 'lifecycle_transition',
+      message: `lifecycle ${previous} -> ${next}`,
+      lifecycleBefore: previous,
+      lifecycleAfter: next,
+    })
   }
 
   /**
@@ -1581,25 +1661,91 @@ class FreyaCore implements Core {
   async start(): Promise<CoreStatus> {
     if (this.lifecycle !== 'booting') return this.status()
 
+    // The runtime diagnostics logger is the first thing we wire up, before
+    // touching any other system. It is independent of the EventStore so a
+    // failure that takes the journal down still leaves a record on disk.
+    if (this.diagnostics === null) {
+      this.diagnostics = new RuntimeDiagnostics(defaultDiagnosticsPath(this.options.dataPath))
+    }
+
     let store: EventStore
+    let fallbackReason: string | null = null
+    let failedJournalRepair = false
+    const recoveryFaults: string[] = []
+    const closeFailedStore = async (failedStore: EventStore): Promise<void> => {
+      try { await failedStore.close() } catch (error) {
+        recoveryFaults.push(`failed store could not be closed: ${describe(error)}`)
+        this.diagnostics?.recordError('core.event-store', 'event_store_close_failed', error, 'failed store could not be closed')
+      }
+    }
     try {
-      store = this.options.eventStore ?? (await JsonlEventStore.open(this.options.dataPath))
+      const durable = this.options.eventStore ?? (await JsonlEventStore.open(this.options.dataPath))
+      store = durable
+      this.persistence = {
+        mode: 'durable',
+        durable: true,
+        reason: null,
+        eventStorePath: durable instanceof JsonlEventStore ? durable.describe() : this.options.dataPath,
+      }
     } catch (error) {
-      // Durability unavailable is a degraded Core, not a Core that silently
-      // continues without a log.
-      this.currentLifecycle = 'degraded'
-      const reason = `event store unavailable: ${describe(error)}`
-      this.state = { ...this.state, faults: [...this.state.faults, reason] }
-      return this.status()
+      // The durable store could not be opened. The Core is not allowed to
+      // pretend it has no log, but it is also not allowed to become a brick:
+      // fall back to an in-memory event store and keep going. The status
+      // projection will report `persistence: ephemeral-fallback` so the
+      // operator and the UI can both see that nothing written this session
+      // will survive a restart.
+      fallbackReason = `event store unavailable: ${describe(error)}`
+      failedJournalRepair = error instanceof JournalRepairError
+      this.diagnostics.recordError('core.event-store', 'event_store_open_failed', error, 'durable event store could not be opened', { dataPath: this.options.dataPath })
+      store = new EphemeralEventStore()
+      this.persistence = {
+        mode: 'ephemeral-fallback',
+        durable: false,
+        reason: fallbackReason,
+        eventStorePath: null,
+      }
+      recoveryFaults.push(fallbackReason)
     }
 
     // Read the journal's condition *before* trusting anything in it. A corrupt
     // log still replays — the prefix is real — but it is not the whole truth,
     // and the Core below refuses to present it as though it were.
-    this.integrity = describeRecovery(store)
-    const knownJournalRepair = store instanceof JsonlEventStore ? store.knownRepairReport() : null
+    try {
+      this.integrity = describeRecovery(store)
+    } catch (error) {
+      // A store that accepted open but throws on read is the same class of
+      // failure as one that refuses to open: the Core cannot replay history,
+      // so it falls back to ephemeral. The diagnostics record distinguishes
+      // the two failure modes.
+      const reason = `event store read failed: ${describe(error)}`
+      this.diagnostics.recordError('core.event-store', 'event_store_read_failed', error, 'event store recovery could not be read', { dataPath: this.options.dataPath })
+      fallbackReason = reason
+      recoveryFaults.push(reason)
+      await closeFailedStore(store)
+      store = new EphemeralEventStore()
+      this.persistence = { mode: 'ephemeral-fallback', durable: false, reason, eventStorePath: null }
+    }
+    let knownJournalRepair = store instanceof JsonlEventStore ? store.knownRepairReport() : null
+    const activeStore = this.persistence.durable ? new FallbackEventStore(store, (error, operation) => {
+      const reason = `event store ${operation} failed: ${describe(error)}`
+      this.persistence = { mode: 'ephemeral-fallback', durable: false, reason, eventStorePath: null }
+      this.recordRuntimeFault('core.event-store', `event_store_${operation}_failed`, `event store ${operation} failed`, error)
+    }, (error) => this.recordRuntimeFault('core.event-store', 'event_store_close_failed', 'failed store could not be closed', error)) : store
 
-    this.fabric = await EventFabric.open({ store, now: this.options.now, newId: this.options.newId })
+    try {
+      this.fabric = await EventFabric.open({ store: activeStore, now: this.options.now, newId: this.options.newId })
+    } catch (error) {
+      // Same story: the store the Core was handed is unusable. Swap to
+      // ephemeral and report the failure clearly.
+      const reason = `event fabric open failed: ${describe(error)}`
+      this.diagnostics.recordError('core.event-store', 'event_fabric_open_failed', error, 'event fabric could not recover its sequence')
+      fallbackReason = reason
+      recoveryFaults.push(reason)
+      await closeFailedStore(activeStore)
+      store = new EphemeralEventStore()
+      this.persistence = { mode: 'ephemeral-fallback', durable: false, reason, eventStorePath: null }
+      this.fabric = await EventFabric.open({ store, now: this.options.now, newId: this.options.newId })
+    }
 
     // Replayed once, deriving both state and activity from the same events in
     // the same order.
@@ -1612,7 +1758,8 @@ class FreyaCore implements Core {
     // Assigned, not appended to: `mergeActivity` is immutable, so discarding
     // its result would silently leave the replayed feed empty.
     let replayed: CoreActivityEvent[] = []
-    this.state = await this.fabric.replay(initialCoreState(), (draft, event) => {
+    try {
+      this.state = await this.fabric.replay(initialCoreState(), (draft, event) => {
       const described = describeActivity({
         type: event.type,
         sequence: event.sequence,
@@ -1621,7 +1768,35 @@ class FreyaCore implements Core {
       })
       if (described !== null) replayed = mergeActivity(replayed, [described])
       return reduceCoreState(draft, event)
-    })
+      })
+    } catch (error) {
+      fallbackReason = `event store replay failed: ${describe(error)}`
+      recoveryFaults.push(fallbackReason)
+      this.diagnostics.recordError('core.event-store', 'event_store_replay_failed', error, 'event store replay failed')
+      await closeFailedStore(activeStore)
+      store = new EphemeralEventStore()
+      this.fabric = await EventFabric.open({ store, now: this.options.now, newId: this.options.newId })
+      this.persistence = { mode: 'ephemeral-fallback', durable: false, reason: fallbackReason, eventStorePath: null }
+      this.state = initialCoreState()
+      knownJournalRepair = null
+      replayed = []
+    }
+    // The replay rebuilds state from the journal, which wipes any faults
+    // recorded before the fabric was open. For the ephemeral-fallback case
+    // the durable failure is a fact about this process that the replay
+    // cannot know, so re-apply it after the replay and emit a diagnostics
+    // record so the operator can correlate the fault with the cause.
+    if (fallbackReason !== null) {
+      this.diagnostics?.record({
+        at: (this.options.now ?? (() => new Date()))().toISOString(),
+        level: 'error',
+        component: 'core.event-store',
+        event: 'ephemeral_fallback_active',
+        message: 'event history is temporary because durable recovery failed',
+        detail: { persistence: this.persistence.mode },
+      })
+    }
+    this.state = { ...this.state, faults: [...this.state.faults, ...recoveryFaults] }
     this.activityFeed = replayed
 
     // Corruption found by *this* start, against corruption already recorded in
@@ -1644,6 +1819,8 @@ class FreyaCore implements Core {
 
     if (this.state.integrityFault !== null) {
       const recorded = this.state.integrityFault
+      // Quarantine preserves evidence, not the missing security state. Only
+      // validated repair can restore trust in a log with an unresolved fault.
       this.integrity = {
         integrity: 'corrupt',
         reason: `${recorded.reason} (recorded in the journal; the damaged bytes are at ${recorded.quarantinePath})`,
@@ -1651,6 +1828,13 @@ class FreyaCore implements Core {
         eventsRead: recorded.trustedPrefixEvents,
         bytesDiscarded: recorded.damagedBytes,
       }
+    }
+
+    if (failedJournalRepair) {
+      // Storage fallback keeps the shell operational; it must not turn an
+      // unfinished integrity repair into permission to contact providers.
+      this.integrity = { integrity: 'corrupt', reason: 'known journal repair could not be made durable',
+        line: null, eventsRead: 0, bytesDiscarded: 0 }
     }
 
     this.guard = this.buildGuard()
@@ -1667,6 +1851,15 @@ class FreyaCore implements Core {
 
     this.gateway = new ModelGateway({
       providers: this.buildProviders(),
+      ...(this.options.providers ? {} : { providerPreference: (capability) => {
+        const selectedCapability = capability === 'vision' ? 'vision' : capability === 'browser' ? 'browser' : 'chat'
+        const preferences = this.options.capabilityPreferences?.() ?? {}
+        const order = modelCapabilityPreference(this.options.env ?? {}, preferences, selectedCapability)
+        if (this.options.developerProvider === undefined || selectedCapability === 'vision') return order
+        const developerId = this.options.developerProvider === 'slow-echo' ? 'slow-echo' : 'fake'
+        // An explicit selection is never bypassed by a developer fixture.
+        return preferences[selectedCapability] === undefined ? [...order, developerId] : order.map((id) => id === 'loopback' ? developerId : id)
+      } }),
       recorder: this.fabricRecorder(),
       now: this.options.now,
       // A request appearing in or leaving the registry is a change in what this
@@ -1707,10 +1900,12 @@ class FreyaCore implements Core {
     // this is the only place that knows whether the host activated one. Absent,
     // the turn never offers a browser tool at all.
     this.dualBrowser = this.options.dualBrowser ?? null
+    this.browserTabs = this.options.browserTabs ?? null
     if (this.options.research) {
       const sessionStore = await this.buildResearchSessionStore()
       this.researchIntegration = new ResearchIntegration({
         searchProvider: this.options.research.searchProvider,
+        eyeSearchProvider: this.options.research.eyeSearchProvider,
         browserFactory: this.options.research.browserFactory,
         sessionStore,
         authority: this.service.ownerAuthority(),
@@ -1734,6 +1929,13 @@ class FreyaCore implements Core {
     // and read the same log. Any event written before this line is a bug.
     this.disposeState = this.fabric.subscribe((event) => {
       this.state = reduceCoreState(this.state, event)
+      if (event.type.endsWith('.degraded') || event.type.endsWith('.failed') || event.type === 'core.integrity_fault') {
+        this.diagnostics?.record({ at: event.occurredAt, level: event.type.endsWith('.failed') ? 'error' : 'warn',
+          component: 'core.health', event: event.type,
+          message: event.type,
+          requestId: 'requestId' in event.payload && typeof event.payload.requestId === 'string' ? event.payload.requestId : null,
+          conversationId: 'conversationId' in event.payload && typeof event.payload.conversationId === 'string' ? event.payload.conversationId : null })
+      }
       this.foundryEngine?.replay(event)
       this.recordActivity(event)
       this.observeAttentionSource(event)
@@ -1752,7 +1954,7 @@ class FreyaCore implements Core {
       this.notify()
     })
 
-    if (knownJournalRepair !== null) {
+    if (knownJournalRepair !== null && !knownJournalRepair.recorded) {
       try {
         await this.fabric.append(
           'core.integrity_repaired',
@@ -1918,6 +2120,7 @@ class FreyaCore implements Core {
       // Governor before anything is contacted — this only answers "which model,
       // if the owner named one" for a request that has already been allowed.
       selectedModel: () => this.selectedModel,
+      selectedProviderId: () => this.selectedProviderId,
       // Read-only recall. The Mind asks; the Brain decides what is recallable. This
       // callback holds no store and no admission policy, so the request path
       // cannot widen what Freya remembers — and a turn never writes memory at all,
@@ -1965,11 +2168,17 @@ class FreyaCore implements Core {
         const tools = [
           ...(this.researchIntegration
             ? [createWebSearchTool({
-              searchWeb: (query, vertical, signal) => this.researchIntegration!.searchWeb(query, vertical, signal),
+              searchWeb: (query, vertical, signal, site) => this.researchIntegration!.searchWeb(query, vertical, signal, site),
             })]
             : []),
           ...(this.dualBrowser
             ? [createBrowserTaskTool({ browser: this.dualBrowser })]
+            : []),
+          // The tab tool needs the service, not the routed runtime: tabs are a thing the
+          // service owns and the routed vocabulary has no word for. Registered only when a
+          // service is actually mounted, so a build without one does not advertise it.
+          ...(this.browserTabs
+            ? [createBrowserTabsTool({ browser: this.browserTabs })]
             : []),
         ]
         if (tools.length === 0) return null
@@ -2018,7 +2227,7 @@ class FreyaCore implements Core {
           }
         }
       },
-      stopAll: () => this.state.stopAll.active,
+      stopAll: () => this.state.stopAll.active || this.integrity.integrity === 'corrupt',
       // The canonical door. This is the same function `conversation.turn.submit`
       // reaches, so a spoken sentence is a typed sentence from the Mind down: same
       // context compilation, same grant, same Governor, same budget, same STOP ALL.
@@ -2360,7 +2569,15 @@ class FreyaCore implements Core {
     // torn tail is a crash and this is `ready`; corruption is something this
     // code did not write, and a Core that came up `ready` on it would be
     // reporting a security state assembled from a log with a hole in it.
-    this.currentLifecycle = this.integrity.integrity === 'corrupt' ? 'degraded' : 'ready'
+    //
+    // The `degraded` here is a *health* label. `operational` is independent: a
+    // degraded Core is still operationally able to serve commands as long as
+    // EventFabric, ModelGateway and the subsystems it could build are present.
+    const integrityCorrupt = this.integrity.integrity === 'corrupt'
+    const durable = this.persistence.mode === 'durable'
+    const unhealthy = integrityCorrupt || !durable || this.state.faults.length > 0
+    const nextLifecycle: CoreLifecycle = unhealthy ? 'degraded' : 'ready'
+    this.setLifecycle(nextLifecycle, integrityCorrupt ? 'durable journal is corrupt' : (!durable ? 'durable store unavailable; using ephemeral fallback' : this.state.faults[0] ?? null))
 
     await this.fabric.append(
       'core.started',
@@ -2421,10 +2638,15 @@ class FreyaCore implements Core {
     } else {
       // A `core.ready` here would be a lie in the durable record: this Core
       // cannot vouch for its own security state, and the journal has to say the
-      // same thing a reader of the log will find.
+      // same thing a reader of the log will find. The reason is the actual
+      // cause — a corrupt journal or the durable store being unavailable
+      // (the ephemeral-fallback case) — not a hardcoded sentence.
+      const reason = this.integrity.integrity === 'corrupt'
+        ? 'the event journal was found corrupt; see the preceding integrity fault'
+        : (fallbackReason ?? this.state.faults[0] ?? 'core is degraded')
       await this.fabric.append(
         'core.degraded',
-        { reason: 'the event journal was found corrupt; see the preceding integrity fault' },
+        { reason },
         { actor: 'system' },
       )
     }
@@ -2441,7 +2663,9 @@ class FreyaCore implements Core {
     })
     this.activation.register(RUNTIME_REGISTRY)
     await this.activation.load(this.runtimeFacts())
+    this.operational = true
     this.publishRuntime()
+    this.notify()
 
     return this.status()
   }
@@ -2495,7 +2719,8 @@ class FreyaCore implements Core {
   async stop(reason = 'shutdown'): Promise<void> {
     if (this.stopped) return
     this.stopped = true
-    this.currentLifecycle = 'stopping'
+    this.operational = false
+    this.setLifecycle('stopping', reason)
     this.notify()
 
     const began = Date.now()
@@ -2544,7 +2769,7 @@ class FreyaCore implements Core {
       this.disposePersonalitySource()
       this.disposePersonalitySource = () => {}
       this.service?.dispose()
-      this.currentLifecycle = 'stopped'
+      this.setLifecycle('stopped', reason)
       // Research is drained *before* the fabric closes, and on a bound: a browser
       // target or provider that ignores its signal must not be able to hang shutdown
       // forever. Bounded means the worst case is a job that never settled, which the
@@ -2701,6 +2926,7 @@ class FreyaCore implements Core {
       // The journal records what happened; it is not the Brain's memory. Losing an
       // event must not lose the operation that produced it.
       console.error('[freya.core] a research event could not be recorded', describe(error))
+      this.diagnostics?.recordError('core.research', 'research_event_write_failed', error, 'research event could not be recorded')
     }
   }
 
@@ -2719,6 +2945,7 @@ class FreyaCore implements Core {
     error: unknown,
   ): CoreCommandResult {
     const safe = safeResearchError(error, 'provider_error')
+    this.diagnostics?.recordError('core.research', 'research_operation_failed', error, safe.message, { requestId, operationId, failureCode: safe.code })
     void this.emitResearch('research.failed', operationId, 'failed', safe.code, {})
     void startedEvent
     return {
@@ -2778,9 +3005,10 @@ class FreyaCore implements Core {
     if (this.fabric === undefined || this.gateway === undefined) {
       // Booting or degraded: the log is not open, so there is nothing to derive.
       // Every fact that would require it stays null rather than being guessed.
-      return degradedStatus(this.lifecycle, this.state, this.startedAt)
+      return degradedStatus(this.lifecycle, this.state, this.startedAt, this.persistence, this.operational, this.diagnostics, this.lastLifecycleTransition)
     }
     return projectCoreStatus({
+      modelSelection: { model: this.selectedModel, providerId: this.selectedProviderId, defaultModel: this.gateway.defaultModel() },
       state: this.state,
       lifecycle: this.currentLifecycle,
       gateway: this.gateway,
@@ -2788,6 +3016,11 @@ class FreyaCore implements Core {
       now: (this.options.now ?? (() => new Date()))(),
       startedAt: this.startedAt,
       integrity: this.integrity,
+      persistence: this.persistence,
+      operational: this.operational,
+      diagnosticsPath: this.diagnostics?.path ?? null,
+      diagnosticsWriteFailures: this.diagnostics?.failureCount ?? 0,
+      ...(this.lastLifecycleTransition ? { lastLifecycleTransition: this.lastLifecycleTransition } : {}),
     })
   }
 
@@ -3607,8 +3840,8 @@ class FreyaCore implements Core {
   /**
    * The capability port Forge reads.
    *
-   * `isRegistered` is the same question Skill admission asks � does any registered
-   * Work capability need this Guard capability � so a package can only declare
+   * `isRegistered` is the same question Skill admission asks ? does any registered
+   * Work capability need this Guard capability ? so a package can only declare
    * something this Core could actually execute. `holds` is Guard's answer for the
    * owner principal, read fresh on every run.
    */
@@ -3634,7 +3867,7 @@ class FreyaCore implements Core {
    * be silently replaced by an ephemeral one, because that would report "nothing is
    * remembered" when the truth is "the file is damaged and Freya stopped trusting
    * it". So the runtime records a fault, the projection reports `durable: false`
-   * with the reason, and no body is adopted � which means a package Core cannot read
+   * with the reason, and no body is adopted ? which means a package Core cannot read
    * is a package that cannot run.
    */
 private async buildForge(): Promise<void> {
@@ -6166,10 +6399,22 @@ state: {
   }
 
   async handleCommand(envelope: CoreCommandEnvelope): Promise<CoreCommandResult> {
-    if (this.lifecycle === 'degraded' || this.fabric === undefined) {
-      // Degraded must still be inspectable. These reads cannot mutate security
-      // state or contact a provider, and without them the UI can only say
-      // "degraded" while hiding the integrity reason needed to recover safely.
+    // The previous version of this gate rejected every command when the
+    // aggregate lifecycle was `degraded`, which meant a single corrupt
+    // subsystem (or a single integrity fault in the journal) took Chat,
+    // Browser, diagnostics, and provider calls down with it. That was the
+    // wrong shape: degraded is a health label, not a security policy.
+    //
+    // The only blanket reasons to refuse a command now are:
+    //   - the EventFabric was never built (Core never finished starting);
+    //   - shutdown has begun (no command may reopen execution or mutate state).
+    // Everything else is decided by the specific subsystem the command
+    // needs: the governor for security, the gateway for provider calls, the
+    // browser for browser actions, the relevant store for its own writes, and
+    // STOP ALL for its own effects. A degraded-but-operational Core is
+    // usable, and the status projection tells the operator which subsystem
+    // is the one that is not.
+    if (this.fabric === undefined || (!this.operational && this.lifecycle !== 'stopping' && this.lifecycle !== 'stopped')) {
       if (
         typeof envelope === 'object' &&
         envelope !== null &&
@@ -6179,7 +6424,7 @@ state: {
       ) {
         return { requestId: envelope.requestId, ok: true, status: this.status() }
       }
-      return reject(envelope, 'core is degraded and cannot serve commands')
+      return reject(envelope, 'core is still booting; the event log is not open yet')
     }
     // Everything crossing this boundary is untrusted, whatever it claims.
     if (typeof envelope !== 'object' || envelope === null) {
@@ -6617,7 +6862,17 @@ state: {
           let attachments
           try { attachments = validateModelAttachments(readRaw(envelope.payload, 'attachments')) }
           catch { return { requestId, ok: false, refusal: { reason: 'Conversation attachments are invalid or too large.' } } }
-          const result = await this.conversations.submitTurn({ conversationId, text, attachments, requestId })
+          // The renderer's tool directives travel as structured metadata. The
+          // shape is a closed `{ webSearch?, browserUse? }`; anything else is
+          // dropped on the floor so a malformed payload cannot influence routing.
+          const intents = readTurnIntentHints(readRaw(envelope.payload, 'intents'))
+          const result = await this.conversations.submitTurn({
+            conversationId,
+            text,
+            attachments,
+            requestId,
+            ...(intents !== undefined ? { intents } : {}),
+          })
           if (!result.ok) {
             return { requestId, ok: false, refusal: { reason: result.reason } }
           }
@@ -6688,7 +6943,9 @@ state: {
             status: this.status(),
             model: {
               operation: 'catalog',
-              models: catalog.models.map((entry) => ({ id: entry.id, ownedBy: entry.ownedBy })),
+              models: catalog.models.map((entry) => ({ id: entry.id, ownedBy: entry.ownedBy, providerId: entry.providerId })),
+              ...(catalog.reason ? { reason: catalog.reason } : {}),
+              selectedProviderId: this.selectedProviderId,
               defaultModel: catalog.defaultModel,
               selected: this.selectedModel,
             },
@@ -6706,11 +6963,12 @@ state: {
           // would make "use the default" unspellable from a window.
           if (!hasKey(envelope.payload, 'model')) {
             this.selectedModel = null
+            this.selectedProviderId = null
             return {
               requestId,
               ok: true,
               status: this.status(),
-              model: { operation: 'selected', selected: null },
+              model: { operation: 'selected', selected: null, selectedProviderId: null },
             }
           }
           const model = readString(envelope.payload, 'model')
@@ -6722,7 +6980,9 @@ state: {
               model: { operation: 'refused', reason: 'a model id must be a string of at most 256 characters' },
             }
           }
-          if (!this.gateway.canServeModel(model)) {
+          const providerId = hasKey(envelope.payload, 'providerId') ? readString(envelope.payload, 'providerId') : null
+          if (hasKey(envelope.payload, 'providerId') && (providerId === null || providerId.length > 128)) return { requestId, ok: false, model: { operation: 'refused', reason: 'provider id is invalid' } }
+          if (!this.gateway.canServeModel(model, providerId)) {
             // Refused now, visibly, rather than becoming a turn that spends a
             // grant and fails mid-call. This is the same question the Gateway
             // will ask when the turn arrives, so a selection accepted here can
@@ -6738,11 +6998,12 @@ state: {
             }
           }
           this.selectedModel = model
+          this.selectedProviderId = providerId
           return {
             requestId,
             ok: true,
             status: this.status(),
-            model: { operation: 'selected', selected: model },
+            model: { operation: 'selected', selected: model, selectedProviderId: providerId },
           }
         }
 
@@ -7379,8 +7640,6 @@ state: {
         }
 
         case 'voice.mic.disable': {
-          const guarded = await this.guardVoice(requestId)
-          if (guarded !== null) return guarded
           // Always permitted, and deliberately not Guard-blocked: a person must be
           // able to close the microphone even in the middle of anything.
           await this.voiceService.disableMic(readString(envelope.payload, 'reason') ?? 'the owner turned the microphone off')
@@ -7546,8 +7805,6 @@ state: {
         }
 
         case 'voice.tts.stop': {
-          const guarded = await this.guardVoice(requestId)
-          if (guarded !== null) return guarded
           await this.voiceService.stopSpeaking()
           return {
             requestId,
@@ -9268,6 +9525,7 @@ case 'forge.run': {
           return reject(envelope, `unknown command: ${String(command)}`)
       }
     } catch (error) {
+      this.diagnostics?.recordError('core.command', 'command_failed', error, 'command execution failed', { requestId, command })
       // An unexpected failure is reported without a stack and without leaking
       // anything about the internals.
       return { requestId, ok: false, error: { message: describe(error) } }
@@ -9337,6 +9595,7 @@ case 'forge.run': {
     } catch (error) {
       this.vault = null
       this.vaultFault = 'the encrypted Vault could not be opened'
+      this.recordRuntimeFault('core.vault', 'vault_open_failed', this.vaultFault, error)
       console.error('[freya.core] encrypted Vault unavailable', describe(error))
       return null
     }
@@ -9395,6 +9654,7 @@ case 'forge.run': {
         return await EncryptedMissionStore.open({ path, key: this.options.missionKey })
       } catch (error) {
         console.error('[freya.core] encrypted Mission store unavailable', describe(error))
+        this.recordRuntimeFault('core.mission', 'mission_store_open_failed', 'Mission content could not be encrypted', error)
         return new MemoryMissionStore({
           faultReason: `Mission content could not be encrypted: ${describe(error)}`,
         })
@@ -9424,6 +9684,7 @@ case 'forge.run': {
         return store
       } catch (error) {
         console.error('[freya.core] encrypted Vault Life store unavailable', describe(error))
+        this.recordRuntimeFault('core.life', 'life_store_open_failed', 'Life History could not be encrypted', error)
         return new MemoryLifeStore({
           mode: 'ephemeral',
           faultReason: `Life History could not be encrypted: ${describe(error)}`,
@@ -9457,6 +9718,7 @@ case 'forge.run': {
         // Not replaced with a weaker *persistent* store. An ephemeral one that
         // reports itself is the only honest fallback.
         console.error('[freya.core] encrypted Brain store unavailable', describe(error))
+        this.recordRuntimeFault('core.brain', 'brain_store_open_failed', 'the Brain could not be opened', error)
         return new MemoryBrainStore({
           mode: 'ephemeral',
           faultReason: `the Brain could not be opened: ${describe(error)}`,
@@ -9741,6 +10003,7 @@ case 'forge.run': {
         // A store that cannot be opened is not replaced with a weaker one. The
         // conversation commands are refused and the UI says why.
         console.error('[freya.core] encrypted conversation store unavailable', describe(error))
+        this.recordRuntimeFault('core.conversation', 'conversation_store_open_failed', 'encrypted conversation history is unavailable', error)
         return new MemoryConversationStore({
           mode: 'ephemeral',
           faultReason: `encrypted conversation history is unavailable: ${describe(error)}`,
@@ -9765,6 +10028,9 @@ case 'forge.run': {
    * deciding what they are allowed to say.
    */
   private cognitionAvailability(): { available: boolean; reason: string | null } {
+    if (this.integrity.integrity === 'corrupt') {
+      return { available: false, reason: 'journal-not-trustworthy' }
+    }
     if (this.state.stopAll.active) {
       return { available: false, reason: 'Freya is stopped. Every model request is refused.' }
     }
@@ -9922,16 +10188,28 @@ case 'forge.run': {
   private buildGuard(): Guard {
     // Deny by default. Nothing is on an approval list, because no approval
     // workflow exists; the concept is present and empty.
-    return new DefaultGuard()
+    const policy = new DefaultGuard()
+    return {
+      holds: (principal, capability) => policy.holds(principal, capability),
+      evaluate: (principal, capability) => {
+        // A missing STOP ALL in discarded security history must not authorize
+        // external effects. Local reads and owner recovery controls still work.
+        const externalEffect = ['cognition.request', 'search.web', 'browser.read', 'research.start', 'work.execute',
+          'connector.connect', 'connector.read', 'connector.action'].includes(capability)
+          || (capability.startsWith('relay.') && capability !== 'relay.status.read' && capability !== 'relay.approval.decide')
+        if (externalEffect && this.integrity.integrity === 'corrupt') {
+          return { allowed: false, outcome: 'deny', reason: 'journal-not-trustworthy' }
+        }
+        return policy.evaluate(principal, capability)
+      },
+    }
   }
 
   /**
    * The provider set for a normal runtime.
    *
-   * NanoGPT and nothing else. If it is absent or disabled, there is no
-   * configured provider, and a cognition request is refused for want of one.
-   * That is the honest outcome: a refusal the user can see beats an echo of
-   * their own words presented as an answer.
+   * MiniMax is preferred, followed by the configured NanoGPT, local and OpenAI
+   * adapters. The Gateway applies the capability-specific saved order.
    *
    * The echo provider is opt-in and explicitly named, and it is listed last so
    * it never shadows a real provider when both are present.
@@ -9939,7 +10217,7 @@ case 'forge.run': {
   private buildProviders(): ModelProvider[] {
     if (this.options.providers) return [...this.options.providers]
     const env = this.options.env ?? {}
-    const providers: ModelProvider[] = [new NanoGptProvider({ config: readNanoGptConfig(env) })]
+    const providers = buildConfiguredModelProviders(env)
     if (this.options.developerProvider !== undefined) {
       providers.push(
         this.options.developerProvider === 'slow-echo'
@@ -10012,6 +10290,9 @@ case 'forge.run': {
   private async guardVoice(
     requestId: string,
   ): Promise<{ requestId: string; ok: false; refusal: { reason: string } } | null> {
+    if (this.integrity.integrity === 'corrupt') {
+      return { requestId, ok: false, refusal: { reason: 'journal-not-trustworthy' } }
+    }
     const decision = this.guard.evaluate(this.owner, 'core.command.submit')
     if (decision.allowed) return null
     await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
@@ -10086,6 +10367,13 @@ case 'forge.run': {
     } catch (error) {
       console.error('[freya.core] Office notify threw', error)
     }
+  }
+
+  private recordRuntimeFault(component: string, event: string, reason: string, error: unknown): void {
+    const fault = `${reason}: ${describe(error)}`
+    this.state = { ...this.state, faults: [...this.state.faults, fault] }
+    this.diagnostics?.recordError(component, event, error, reason)
+    if (this.operational || this.lifecycle === 'ready') this.setLifecycle('degraded', reason)
   }
 }
 
@@ -10245,9 +10533,14 @@ function degradedStatus(
   lifecycle: CoreLifecycle,
   state: CoreState,
   startedAt: string | null,
+  persistence: { mode: 'durable' | 'ephemeral-fallback'; durable: boolean; reason: string | null; eventStorePath: string | null },
+  operational: boolean,
+  diagnostics: RuntimeDiagnostics | null,
+  lastTransition: { from: CoreLifecycle; to: CoreLifecycle; at: string; reason: string | null } | null,
 ): CoreStatus {
   return {
     lifecycle,
+    operational,
     eventSequence: 0,
     coreStartedAt: startedAt,
     stopAll: {
@@ -10255,8 +10548,6 @@ function degradedStatus(
       activatedAt: state.stopAll.activatedAt,
       activatedBy: state.stopAll.activatedBy,
     },
-    // A Core whose log never opened has no journal to report on, and that is
-    // exactly as trustworthy as it sounds.
     integrity: {
       integrity: 'corrupt',
       reason: 'the event log could not be opened, so no durable state could be read',
@@ -10264,13 +10555,17 @@ function degradedStatus(
       eventsRead: 0,
       bytesDiscarded: 0,
     },
+    persistence,
+    diagnostics: {
+      path: diagnostics?.path ?? null,
+      writeFailures: diagnostics?.failureCount ?? 0,
+    },
+    ...(lastTransition ? { lastLifecycleTransition: lastTransition } : {}),
     guard: { defaultOutcome: 'deny', approvalWorkflow: 'unavailable' },
-    // Booting has no answer. Degraded genuinely cannot serve, so it denies.
-    governor: { status: lifecycle === 'degraded' ? 'deny_all' : 'unknown', grantsActive: 0 },
-    // No log means no providers, and saying so is safer than listing any.
+    // Booting has no answer; the only thing that *would* force deny_all is the
+    // governor itself, which is built later. Until then, `unknown` is honest.
+    governor: { status: 'unknown', grantsActive: 0 },
     providers: [],
-    // No gateway was ever built, so nothing was ever executing. Zero here is a
-    // fact about this Core, not a guess about a provider.
     activeProviderCalls: 0,
     sessionUsage: emptyUsage(),
     durableUsage: state.durableUsage,
@@ -10660,6 +10955,34 @@ function readString(payload: unknown, key: string): string | null {
 }
 
 /**
+ * Narrow a payload's `intents` field to the closed set the Mind accepts.
+ *
+ * The renderer is the only writer of these fields, but it is also the renderer
+ * that was the source of the contamination class this whole seam exists to
+ * stop: a renderer that could send `intents.text: "open the owner browser as
+ * soon as possible"` would be a renderer that could route its own tools. The
+ * helper reads exactly the two closed names, in their closed type (`boolean`),
+ * and drops anything else on the floor. An absent or malformed payload reads
+ * as `undefined`, which is the conservative choice — the Mind's text-derived
+ * routing then runs untouched.
+ */
+function readTurnIntentHints(
+  value: unknown,
+): { readonly webSearch?: boolean; readonly browserUse?: boolean } | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  let webSearch: boolean | undefined
+  let browserUse: boolean | undefined
+  if (typeof record['webSearch'] === 'boolean') webSearch = record['webSearch']
+  if (typeof record['browserUse'] === 'boolean') browserUse = record['browserUse']
+  if (webSearch === undefined && browserUse === undefined) return undefined
+  return {
+    ...(webSearch === undefined ? {} : { webSearch }),
+    ...(browserUse === undefined ? {} : { browserUse }),
+  }
+}
+
+/**
  * Parse a provider's answer into one of the loop's five closed outcomes.
  *
  * Deliberately brutal, and deliberately one-directional. The whole word has to
@@ -10869,6 +11192,7 @@ function projectSearchSession(
 ): NonNullable<ResearchCommandOutcome['session']> {
   return {
     sessionId: session.sessionId,
+    ...(session.ownerText === undefined ? {} : { ownerText: session.ownerText }),
     state: session.state,
     intentVersion: session.intentVersion,
     intent: {
@@ -10896,6 +11220,12 @@ function projectSearchSession(
       url: result.url,
       snippet: result.snippet,
       sourceDomain: result.sourceDomain,
+      providerId: result.providerId,
+      retrievedAt: result.retrievedAt,
+      vertical: result.vertical,
+      mediaUrl: result.mediaUrl,
+      thumbnailUrl: result.thumbnailUrl,
+      pageUrl: result.pageUrl,
       mediaType: result.mediaType,
       confidence: result.confidence,
       collection: result.collection,

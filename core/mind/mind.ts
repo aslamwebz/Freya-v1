@@ -1,3 +1,4 @@
+import { routeChatIntent } from '../research/chat-intent'
 import { validateModelAttachments, type ModelAttachment } from '../model/provider'
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
@@ -32,7 +33,7 @@ import {
 } from './expression'
 import type { CueKind, CueUsageLedger, InteractionFact, RelationshipItem } from '../personality/types'
 import { runToolLoop, type ToolIteration } from './loop'
-import { initialToolRequestForOwnerText } from './tool-intent'
+import { initialToolRequestForOwnerText, type TurnIntentHints } from './tool-intent'
 import { MIND_TOOL_LIMITS, renderToolFooter, type MindToolRegistry, type ToolObservation } from './tools'
 import { mediaFromObservations } from '../media/collect'
 import type { MediaItem } from '../media/types'
@@ -135,6 +136,21 @@ export interface MindSubmitInput {
   turnId: string
   text: string
   attachments?: readonly ModelAttachment[]
+  /**
+   * Composer-held tool directives that travel as structured metadata.
+   *
+   * The two intent buttons used to prepend "find on the web: " and "use your
+   * browser: " onto the owner's text. That mutated the words the owner actually
+   * said — the stored user message, the journaled event, and the next turn's
+   * history all carried text the owner never typed. Hints now travel as a
+   * separate object: the text is stored verbatim, and the hint is read here by
+   * `initialToolRequestForOwnerText` to derive an initial tool call.
+   *
+   * Absent, or all `false`, means the normal text-derived path. Present-but-all-
+   * `false` is the same thing, written explicitly; either way, no intent
+   * overrides are applied.
+   */
+  intents?: TurnIntentHints
 }
 
 /**
@@ -289,6 +305,7 @@ export interface MindServiceOptions {
    * which is exactly what a turn did before any selector existed.
    */
   selectedModel?: () => string | null
+  selectedProviderId?: () => string | null
   /**
    * What Freya remembers about this turn's text, if anything.
    *
@@ -509,6 +526,7 @@ export class MindService {
   private readonly newId: () => string
   private readonly runtimeFacts: () => readonly string[]
   private readonly selectedModel: () => string | null
+  private readonly selectedProviderId: () => string | null
   private readonly recall: ((query: string) => ReferenceKnowledge | null) | null
   private readonly turnContext: TurnContextReader | null
   private readonly onTurnStateChange: () => void
@@ -575,6 +593,7 @@ export class MindService {
     this.newId = options.newId ?? (() => randomUUID())
     this.runtimeFacts = options.runtimeFacts ?? (() => [])
     this.selectedModel = options.selectedModel ?? (() => null)
+    this.selectedProviderId = options.selectedProviderId ?? (() => null)
     this.recall = options.recall ?? null
     this.turnContext = options.turnContext ?? null
     this.onTurnStateChange = options.onTurnStateChange ?? (() => {})
@@ -930,6 +949,7 @@ export class MindService {
         grantId: grant.grantId,
         messages,
         ownerText: text,
+        intents: input.intents ?? {},
         perTurnAllowance: maxOutputTokens,
       })
 
@@ -1079,15 +1099,19 @@ export class MindService {
     grantId: string
     messages: readonly ModelMessage[]
     ownerText: string
+    intents: TurnIntentHints
     perTurnAllowance: number
   }): Promise<Cognition> {
-    const initialToolRequest = initialToolRequestForOwnerText(input.ownerText)
+    const initialToolRequest = initialToolRequestForOwnerText(input.ownerText, input.intents)
+    const modelCapability = input.intents.browserUse === true || initialToolRequest?.name === 'browser_read' || routeChatIntent(input.ownerText, { activeEyeSession: false }).kind === 'native_browser_task' ? 'browser' : 'chat'
 
     if (!this.toolLoopEnabled) {
       if (initialToolRequest !== null) {
         return {
           kind: 'failed',
-          reason: "Freya's own browser is not available for this turn, so it was not opened.",
+          reason: initialToolRequest.name === 'web_search'
+            ? 'Web search is not available for this turn, so no current sources were retrieved.'
+            : "Freya's own browser is not available for this turn, so it was not opened.",
           providerContacted: false,
         }
       }
@@ -1109,6 +1133,8 @@ export class MindService {
         // decision: the Governor still authors, the Gateway still refuses any
         // model it cannot serve, and a null here is the ordinary default.
         requestedModel: this.selectedModel(),
+        requestedProviderId: this.selectedProviderId(),
+        modelCapability,
         goalId: null,
       })
       if (outcome.status === 'denied') return { kind: 'denied', reason: outcome.reason }
@@ -1154,6 +1180,8 @@ export class MindService {
           grantId: input.grantId,
           turnId: input.turnId,
           selectedModel: this.selectedModel,
+          selectedProviderId: this.selectedProviderId,
+          modelCapability,
           perTurnAllowance: input.perTurnAllowance,
           signal: controller.signal,
           initialToolRequest,
@@ -1539,13 +1567,21 @@ private async finishTurn(
 }
 
 /**
- * Place a turn's shared Context block immediately before the owner's question.
+ * Place a turn's shared Context block in front of the conversation history.
  *
  * Position is a truthfulness decision, not a formatting one. The compiler's last
  * message is always the current user message and it stays last, so the material a
  * question refers to never arrives *after* the reference — and the question is
  * still the final thing a provider reads, which is what keeps the person's own
  * words at the end of the packet rather than a file's.
+ *
+ * The block goes *before the history* rather than beside the question because it
+ * is standing material, and the owner's recency window is theirs: the first call
+ * of a conversation has no history, so there the block lands immediately before
+ * the question exactly as it always did, but a follow-up such as "what did I just
+ * say?" must not find a shared-context paragraph sitting in the position the
+ * answer to "what I just said" is read from. Measured on the live endpoint: a
+ * block spliced next to the question is answered as if the owner had said it.
  *
  * A null block returns the compiler's array untouched, so a turn with nothing
  * shared produces exactly the packet it produced before Context existed.
@@ -1555,9 +1591,10 @@ function withTurnContext(
   block: ModelMessage | null,
 ): readonly ModelMessage[] {
   if (block === null) return messages
-  const last = messages[messages.length - 1]
-  if (last === undefined) return [...messages, block]
-  return [...messages.slice(0, -1), block, last]
+  // After the compiler's own framing system message, if it has one; otherwise first.
+  const anchor = messages.findIndex((message) => message.role === 'system')
+  if (anchor === -1) return [block, ...messages]
+  return [...messages.slice(0, anchor + 1), block, ...messages.slice(anchor + 1)]
 }
 
 function terminalEventFor(outcome: MindTurnOutcome) {

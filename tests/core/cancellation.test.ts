@@ -410,7 +410,7 @@ describe('D — the durable stop', () => {
   })
 })
 
-describe('D2 — STOP persistence failure stays fail-closed', () => {
+describe('D2 — STOP disk failure retains a temporary latch', () => {
   it('keeps cognition denied until an explicit owner resume reopens the gate', async () => {
     const path = join(dir, 'events.jsonl')
     const base = await JsonlEventStore.open(path)
@@ -434,14 +434,15 @@ describe('D2 — STOP persistence failure stays fail-closed', () => {
     await core.start()
 
     const stopped = await stopAll(core)
-    expect(stopped.ok).toBe(false)
-    expect(stopped.error?.message).toMatch(/simulated STOP persistence failure/)
+    expect(stopped.ok).toBe(true)
 
-    // The durable latch could not be written, but runtime authority still fails
-    // closed and says so. Nothing may reach the provider in this condition.
-    expect(core.status().stopAll.active).toBe(false)
+    // The disk write failed, but fallback retains the latch for this process.
+    // The missing durability remains visible; no provider is contacted.
+    expect(core.status().stopAll.active).toBe(true)
+    expect(core.status().persistence.durable).toBe(false)
+    expect(core.status().lifecycle).toBe('degraded')
     expect(core.status().governor.status).toBe('deny_all')
-    expect(core.status().faults.join(' ')).toMatch(/fail-closed/i)
+    expect(core.status().faults.join(' ')).toMatch(/simulated STOP persistence failure/)
 
     const refused = await ownerAuthority(core).request(
       userTurn({ cognitionRequestId: 'after-failed-stop' }),
@@ -449,8 +450,7 @@ describe('D2 — STOP persistence failure stays fail-closed', () => {
     expect(refused.status).toBe('denied')
     expect(provider.calls).toBe(0)
 
-    // Only an explicit owner resume reopens the runtime gate. There is no
-    // durable STOP event to clear, so this changes session authority only.
+    // Only an explicit owner resume clears the temporary latch and gate.
     const opened = await resume(core, 'resume-after-failed-stop')
     expect(opened.ok).toBe(true)
     expect(core.status().governor.status).toBe('ready')

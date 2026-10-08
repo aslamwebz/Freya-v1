@@ -1,3 +1,4 @@
+import { buildCapabilityRegistry, CAPABILITY_IDS, describeCapability, describeProvider, PROVIDER_IDS, type CapabilityId, type CapabilityRegistry } from '../../../core/capabilities'
 import { useEffect, useState } from 'react'
 import { Card, Chip, Row } from '../cards/Card'
 import { VoiceSettings } from '../voice/VoiceSettings'
@@ -332,8 +333,58 @@ function ProviderCard({ snapshot }: { snapshot: SettingsProps['snapshot'] }) {
         */}
         <p className="st-note">Live inference needs both a stored key and this switch. Either alone spends nothing.</p>
       </div>
+      <CapabilityPanel />
       {notice.length > 0 && <p className="st-notice" role="status">{notice}</p>}
     </Card>
+  )
+}
+
+/** Host-backed capability preferences: a successful write affects the next request. */
+export function CapabilityPanel() {
+  const [registry, setRegistry] = useState<CapabilityRegistry>(buildCapabilityRegistry)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  useEffect(() => {
+    let live = true
+    const host = hostBridge()
+    if (!host) { setNotice('Capability settings require the desktop host.'); return }
+    void host.getCapabilitySettings().then((next) => { if (live) setRegistry(next) }).catch(() => { if (live) setNotice('Capability settings could not be read.') })
+    return () => { live = false }
+  }, [])
+  const save = async (capability: CapabilityId, providers: CapabilityRegistry[CapabilityId]['providers']) => {
+    const host = hostBridge()
+    if (!host || busy) return
+    setBusy(true); setNotice('')
+    try { setRegistry(await host.setCapabilitySettings({ [capability]: providers })); setNotice('Preference saved. It applies to the next request.') }
+    catch { setNotice('Preference was not saved. The host refused or could not persist it.') }
+    finally { setBusy(false) }
+  }
+  return (
+    <div className="st-capabilities">
+      <header><b>Capabilities</b><small>Web search defaults to SearXNG. Readiness means an adapter is configured; it does not guarantee network availability.</small></header>
+      <ul>{CAPABILITY_IDS.map((capability) => {
+        const selection = registry[capability]
+        const description = describeCapability(capability)
+        return <li key={capability}>
+          <header><span><b>{description.name}</b><small>{description.blurb}</small></span><Chip tone={selection.status === 'ready' ? 'accent' : undefined}>{selection.available ? describeProvider(selection.available) : selection.status}</Chip></header>
+          {selection.reason && <p className="st-note">{selection.reason}</p>}
+          <label className="st-field"><span>Preferred provider</span><select aria-label={`${description.name} preferred provider`} value={selection.providers[0]} disabled={busy} onChange={(event) => {
+            const provider = PROVIDER_IDS.find((id) => id === event.target.value)
+            if (provider) void save(capability, [provider, ...selection.providers.filter((id) => id !== provider)])
+          }}>{(capability === 'search' ? ['searxng' as const, ...PROVIDER_IDS.filter((id) => id !== 'searxng')] : PROVIDER_IDS).map((id) => <option key={id} value={id}>{describeProvider(id)}</option>)}</select></label>
+          <ol className="st-capability-providers">{selection.providers.map((provider, index) => <li key={provider} data-active={provider === selection.available || undefined}>
+            <span>{describeProvider(provider)}</span><small>{provider === selection.available ? 'configured' : `position ${index + 1}`}</small>
+            <button type="button" disabled={busy || index === 0} aria-label={`Move ${describeProvider(provider)} up for ${description.name}`} onClick={() => {
+              const next = [...selection.providers]
+              const previous = next[index - 1]
+              if (previous !== undefined) { next[index - 1] = provider; next[index] = previous; void save(capability, next) }
+            }}>↑</button>
+          </li>)}</ol>
+        </li>
+      })}</ul>
+      <p className="st-note">Unsupported selections do not enable a capability. Freya uses the first configured adapter in the saved order; a paid call is never retried through a fallback.</p>
+      {notice && <p className="st-notice" role="status">{notice}</p>}
+    </div>
   )
 }
 
@@ -366,8 +417,8 @@ function SecurityCard({ snapshot }: { snapshot: SettingsProps['snapshot'] }) {
    *
    * There is no second stop system here and no local boolean pretending Freya is
    * stopped. `security.stopAll` is the same command the legacy Security surface
-   * issues; it latches durably in the journal, cancels in-flight provider calls,
-   * closes research, Relay and the workforce, and survives a restart. The only way
+   * issues; it latches in Core, cancels in-flight provider calls,
+   * closes research, Relay and the workforce. Durability follows Core's store. The only way
    * back is an explicit `security.resume`.
    *
    * Two rules this deliberately keeps:
@@ -430,7 +481,10 @@ function SecurityCard({ snapshot }: { snapshot: SettingsProps['snapshot'] }) {
         </div>
         <p className="st-note">
           STOP ALL latches in Core: it cancels in-flight provider calls, closes research,
-          Relay and the workforce, and survives a restart. Only an explicit resume clears it.
+          Relay and the workforce. Only an explicit resume clears it.{' '}
+          {core.persistenceDurable
+            ? 'The latch survives a restart.'
+            : 'Event history is temporary: the latch cannot be guaranteed after a restart.'}
         </p>
         {notice.length > 0 && <p className="st-notice" role="status">{notice}</p>}
       </div>

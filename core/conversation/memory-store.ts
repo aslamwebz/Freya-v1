@@ -152,9 +152,9 @@ export class MemoryConversationStore implements ConversationStore {
     if (detail.reason !== undefined) turn.reason = detail.reason
   }
 
-  async recoverInterruptedTurns(now: string): Promise<string[]> {
+  async recoverInterruptedTurns(now: string): Promise<{ turnId: string; conversationId: string }[]> {
     this.assertOpen()
-    const recovered: string[] = []
+    const recovered: { turnId: string; conversationId: string }[] = []
     for (const turn of this.turnsById.values()) {
       if (turn.outcome !== 'pending') continue
       turn.outcome = 'interrupted'
@@ -162,7 +162,7 @@ export class MemoryConversationStore implements ConversationStore {
       // No reason, and deliberately not one. The process died; the record cannot
       // say why, and inventing a cause would be a fabrication about a real event.
       turn.reason = null
-      recovered.push(turn.turnId)
+      recovered.push({ turnId: turn.turnId, conversationId: turn.conversationId })
     }
     return recovered
   }

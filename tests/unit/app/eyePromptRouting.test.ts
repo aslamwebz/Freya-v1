@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { routeEyePrompt } from '../../../src/app/chat/modes'
 
 describe('routeEyePrompt', () => {
-  it('creates the first Eye session from a trimmed prompt', () => {
+  it('creates the first Eye session without trimming the owner prompt', () => {
     expect(routeEyePrompt(null, '  find 100 cat videos  ')).toEqual({
       kind: 'create',
-      text: 'find 100 cat videos',
+      text: '  find 100 cat videos  ',
     })
   })
 
@@ -39,15 +39,15 @@ describe('routeEyePrompt', () => {
 
     expect(routeEyePrompt(sessionId, 'start new search for barn cats')).toEqual({
       kind: 'create',
-      text: 'barn cats',
+      text: 'start new search for barn cats',
     })
     expect(routeEyePrompt(sessionId, 'please begin a new eye: alpine cabins')).toEqual({
       kind: 'create',
-      text: 'alpine cabins',
+      text: 'please begin a new eye: alpine cabins',
     })
     expect(routeEyePrompt(sessionId, 'new search - electric vans')).toEqual({
       kind: 'create',
-      text: 'electric vans',
+      text: 'new search - electric vans',
     })
   })
 })

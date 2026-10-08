@@ -19,7 +19,7 @@ import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
 import { buildConfiguredModelProviders, modelCapabilityPreference, type CapabilityEnv } from './model/capability-runtime'
 import type { CapabilityPreferences } from './capabilities'
 import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
-import { createWebSearchTool, MindToolRegistry } from './mind/tools'
+import { createWebSearchTool, createChartTool, MindToolRegistry } from './mind/tools'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
 import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
 import type { ReferenceKnowledge } from './mind/context-compiler'
@@ -2179,6 +2179,10 @@ class FreyaCore implements Core {
               searchWeb: (query, vertical, signal, site) => this.researchIntegration!.searchWeb(query, vertical, signal, site),
             })]
             : []),
+          // The chart tool does not talk to the network; it returns a typed artifact
+          // that the renderer draws. Always available alongside the other tools so a
+          // turn that does not look anything up can still produce a chart.
+          createChartTool(),
           ...(this.dualBrowser
             ? [createBrowserTaskTool({ browser: this.dualBrowser })]
             : []),

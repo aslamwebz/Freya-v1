@@ -29,7 +29,7 @@
  * Conversation Service, not in a type the renderer can satisfy with a string.
  */
 import type { MediaItem } from '../media/types'
-import type { ToolSource } from '../mind/tools'
+import type { ToolSource, ChartSpec } from '../mind/tools'
 export type MessageRole = 'user' | 'assistant'
 
 export interface ConversationMessage {
@@ -59,6 +59,15 @@ export interface ConversationMessage {
    * the search returned) at render time.
    */
   sources?: readonly ToolSource[]
+  /**
+   * Typed charts the model produced for this answer.
+   *
+   * The renderer draws them; the journal keeps them as data. A chart that came
+   * back from a tool is the only honest way to display a series: a renderer that
+   * read numbers out of prose would be drawing from a guess, not a measurement.
+   * Absent on a turn that did not call the chart tool.
+   */
+  charts?: readonly ChartSpec[]
 }
 
 export interface Conversation {

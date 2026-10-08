@@ -802,3 +802,28 @@
 .f-assistant-related > summary::-webkit-details-marker { display:none; }
 .f-assistant-related > summary::marker { content:''; }
 .f-assistant-related-list { margin-top:8px; max-height:240px; overflow:auto; }
+
+/* ----- charts ---------------------------------------------------------- */
+
+.f-assistant-charts { display:grid; gap:14px; margin-top:6px; }
+.f-chart {
+  margin:0; padding:14px 14px 10px;
+  border-radius:12px;
+  background:rgba(8,14,22,0.55);
+  border:1px solid #1f2c3b66;
+  display:grid; gap:6px;
+}
+.f-chart-title { font:600 12px/1.3 var(--f-font); color:#cfe6f7; letter-spacing:.04em; }
+.f-chart-svg { width:100%; height:auto; display:block; }
+.f-chart-grid { stroke:#1f2c3b80; stroke-width:1; stroke-dasharray:3 3; }
+.f-chart-axis { stroke:#36506980; stroke-width:1; }
+.f-chart-tick { fill:#7c93a8; font:400 10px/1 var(--f-font); }
+.f-chart-x-label { fill:#7c93a8; font:400 10px/1 var(--f-font); }
+.f-chart-bar { fill:url(#f-chart-bar-grad); }
+.f-chart[data-kind='bar'] .f-chart-svg { background:transparent; }
+.f-chart-line { fill:none; stroke:#6fdcff; stroke-width:2; }
+.f-chart-dot { fill:#6fdcff; }
+.f-chart-foot { display:flex; justify-content:space-between; color:#7c93a8; font:400 10px/1 var(--f-font); }
+.f-chart-unit { color:#a4b9cc; }
+.f-chart-range { color:#7c93a8; }
+.f-chart-empty { color:#7c93a8; font:400 12px/1.4 var(--f-font); }

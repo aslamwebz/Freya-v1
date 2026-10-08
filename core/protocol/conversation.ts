@@ -16,7 +16,7 @@ import type { ConversationPersistenceMode } from '../conversation/store'
 
 /** One rendered message. The full content, because this is the transcript. */
 import type { MediaItem } from '../media/types'
-import type { ToolSource } from '../mind/tools'
+import type { ToolSource, ChartSpec } from '../mind/tools'
 export interface ConversationMessageView {
   messageId: string
   role: 'user' | 'assistant'
@@ -39,6 +39,14 @@ export interface ConversationMessageView {
    * the turn did not call the web search tool.
    */
   sources?: readonly ToolSource[]
+  /**
+   * Typed charts the model produced for this answer.
+   *
+   * The renderer draws these; the journal keeps them as data. A chart that came
+   * back from a tool is the only honest way to display a series: a renderer that
+   * read numbers out of prose would be drawing from a guess, not a measurement.
+   */
+  charts?: readonly ChartSpec[]
 }
 
 export interface ConversationSummaryView {

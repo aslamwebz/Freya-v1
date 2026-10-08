@@ -317,6 +317,7 @@ export function Chats({
                         retrieved={message.media?.length ?? 0}
                         mediaCount={message.media?.length ?? 0}
                         sources={message.sources}
+                        charts={message.charts}
                       >
                       </AssistantMessageView>
                     : <p className="chats-user-text">{message.content}</p>}

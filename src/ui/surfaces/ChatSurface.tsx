@@ -338,6 +338,7 @@ export function ChatSurface() {
                       retrieved={message.media?.length ?? 0}
                       mediaCount={message.media?.length ?? 0}
                       sources={message.sources}
+                      charts={message.charts}
                     >
                     </AssistantMessageView>
                   : <p className="chat-turn-text">{message.content}</p>}

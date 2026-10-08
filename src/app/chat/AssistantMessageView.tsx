@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { RichMessage } from './RichMessage'
 import { splitAssistantContent, type TypedSource } from './assistantParts'
+import { ChartView, type ChartSpec } from './ChartView'
 
 export interface AssistantMessageViewProps {
   /** The literal text the journal stored for this assistant message. */
@@ -18,6 +19,12 @@ export interface AssistantMessageViewProps {
    * to the prose footer's `Sources:` list.
    */
   readonly sources?: readonly TypedSource[]
+  /**
+   * Typed charts the model produced for this answer. The renderer draws them
+   * from the data the model returned, not from prose, so a chart cannot be a
+   * guess about numbers. One or many.
+   */
+  readonly charts?: readonly ChartSpec[]
   /** Optional children rendered below the answer body, e.g. a media grid. */
   readonly children?: ReactNode
 }
@@ -38,7 +45,7 @@ export interface AssistantMessageViewProps {
  * The journal is still the source of truth — nothing here throws the
  * literal text away. The view just shows less of it by default.
  */
-export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCount, sources, children }: AssistantMessageViewProps) {
+export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCount, sources, charts, children }: AssistantMessageViewProps) {
   const parts = splitAssistantContent(content, sources)
   const hasThinking = parts.thinking.length > 0
   const hasSteps = parts.steps.length > 0
@@ -77,6 +84,11 @@ export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCoun
         ) : (
           <p className="f-assistant-empty">Freya did not return a written answer for this turn.</p>
         )}
+        {charts !== undefined && charts.length > 0 ? (
+          <div className="f-assistant-charts">
+            {charts.map((chart, index) => <ChartView key={`c-${index}-${chart.title}`} chart={chart} />)}
+          </div>
+        ) : null}
         {children}
       </div>
 

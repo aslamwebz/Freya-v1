@@ -720,6 +720,25 @@ export function parseToolResponse(text: string, known: (name: string) => boolean
 
   const closing = trimmed.indexOf(TOOL_CALL_CLOSE, open)
   if (closing === -1) {
+    // Some text-only providers emit the entire JSON object but omit just the
+    // closing sentinel. Recover ONLY an exact single JSON object with a known
+    // tool and at least one valid string argument; no prose, fences, trailing
+    // bytes, or multiple requests can enter this compatibility path.
+    const candidate = trimmed.slice(open + TOOL_CALL_OPEN.length).trim()
+    if (open === 0 && candidate.length <= MIND_TOOL_LIMITS.maxRequestChars
+        && candidate.startsWith('{') && candidate.endsWith('}')) {
+      try {
+        const value: unknown = JSON.parse(candidate)
+        if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+          const record = value as Record<string, unknown>
+          const name = record['tool']
+          if (typeof name === 'string' && known(name)
+              && Object.entries(record).some(([key, item]) => key !== 'tool' && typeof item === 'string' && item.trim().length > 0)) {
+            return { kind: 'request', tool: name, arguments: readArguments(record) }
+          }
+        }
+      } catch { /* Malformed or partial JSON must never execute. */ }
+    }
     return { kind: 'invalid', reason: 'the tool request was not closed' }
   }
 

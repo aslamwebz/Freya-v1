@@ -1110,6 +1110,14 @@ describe('the wire protocol is strict', () => {
     expect(parseToolResponse('FREYA_TOOL_CALL\n{"tool":"web_search"}', known).kind).toBe('invalid')
   })
 
+  it('recovers exactly one complete JSON tool request missing only its closing sentinel', () => {
+    expect(parseToolResponse('FREYA_TOOL_CALL\n{"tool":"web_search","query":"Sri Lankan websites"}', known)).toEqual({
+      kind: 'request', tool: 'web_search', arguments: { query: 'Sri Lankan websites' },
+    })
+    expect(parseToolResponse('FREYA_TOOL_CALL\n{"tool":"web_search","query":"cut off"', known).kind).toBe('invalid')
+    expect(parseToolResponse('note: FREYA_TOOL_CALL\n{"tool":"web_search","query":"x"}', known).kind).toBe('invalid')
+  })
+
   it('refuses a non-object body', () => {
     expect(parseToolResponse('FREYA_TOOL_CALL\n[1,2,3]\nFREYA_TOOL_CALL_END', known).kind).toBe('invalid')
   })

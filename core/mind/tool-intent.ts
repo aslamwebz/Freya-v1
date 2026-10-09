@@ -69,6 +69,24 @@ const EXPLANATION_FRAME =
 const EXPLICIT_BROWSER =
   /\b(?:use|open|launch|start|drive|pilot|operate|control)\b[^.!?]{0,36}\b(?:your|freya'?s|the)\s+(?:own\s+)?browser\b|\byour\s+own\s+browser\b|\bin\s+(?:your|freya'?s|the)\s+(?:own\s+)?browser\b|\bbrowse\s+to\b/
 
+/**
+ * Query text is a tool argument, not the original owner message. Keep the
+ * owner's words unchanged in the conversation while removing instructions
+ * about Freya's execution, output formatting, and subsequent browser work.
+ * Conservative: when extraction is uncertain, retain the original query.
+ */
+export function searchQueryForOwnerText(text: string): string {
+  const original = text.trim()
+  const first = original.split(/(?:[.!?]\s+|[;\n]+)/u)[0]?.trim() ?? original
+  const candidate = first
+    .replace(/^(?:please\s+)?(?:use\s+freya(?:'s)?\s+(?:built-in\s+)?web_search\s+tool\s+(?:to\s+)?|(?:use\s+)?web\s+search\s+(?:to\s+)?)/iu, '')
+    .replace(/^(?:please\s+)?(?:find|search\s+for|look\s+up|discover)\s+/iu, '')
+    .replace(/^(?:exactly\s+)?\d+\s+/u, '')
+    .replace(/\s+(?:with\s+(?:working|likely)\s+contact\s+pages?|and\s+(?:verify|open|visit|click|scroll)\b.*|(?:and\s+)?(?:include|provide|return|report|list)\b.*)$/iu, '')
+    .trim()
+  // Never pass an instruction-only fragment or an empty query to the backend.
+  return candidate.length >= 4 && candidate.length <= 220 ? candidate : original
+}
 const HTTP_URL = /https?:\/\/[^\s<>(){}"']+/iu
 const WEB_ADDRESS = /(?:https?:\/\/)?(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s,;]*)?/giu
 function cleanUrl(raw: string): string { return raw.replace(/[.,!?;:]+$/u, '') }
@@ -111,7 +129,7 @@ export function initialToolRequestForOwnerText(
 ): InitialToolRequest | null {
   const value = text
   const route = routeChatIntent(text, { activeEyeSession: false })
-  const search = (): InitialToolRequest => ({ name: 'web_search', arguments: Object.freeze({ query: text, type: route.kind === 'native_browser_task' ? 'web' : route.vertical, ...(route.site ? { site: route.site } : {}) }) })
+  const search = (): InitialToolRequest => ({ name: 'web_search', arguments: Object.freeze({ query: hints?.webSearch === true ? searchQueryForOwnerText(text) : text, type: route.kind === 'native_browser_task' ? 'web' : route.vertical, ...(route.site ? { site: route.site } : {}) }) })
   if (value.trim().length === 0) return null
 
   const lower = value.toLowerCase().replace(/\s+/gu, ' ')

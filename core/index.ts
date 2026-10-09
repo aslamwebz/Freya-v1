@@ -21,6 +21,10 @@ import type { CapabilityPreferences } from './capabilities'
 import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
 import { proposeMissionPlan, type MissionGoalRequest, type MissionGoalOutcome } from './mind/mission-planning'
 import { registerFileInspection } from './work/file-inspection'
+import { registerResearchInspection } from './work/research-inspection'
+import { createMissionProposalTool } from './mind/mission-proposal'
+import { ChatMissionIntegration } from './missions/chat-integration'
+import type { ChatMissionProposal } from './missions/chat-types'
 import { createWebSearchTool, createChartTool, createCanvasTool, MindToolRegistry } from './mind/tools'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
 import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
@@ -1496,6 +1500,7 @@ class FreyaCore implements Core {
    */
   private workEngine: WorkEngine | undefined
   private missionEngine: MissionEngine | undefined
+  private chatMissions: ChatMissionIntegration | undefined
   /**
    * The canonical encrypted Vault, or null when the host supplied none or it could
    * not be opened. Held privately so that Mission content has one owner of the
@@ -2182,6 +2187,7 @@ class FreyaCore implements Core {
        */
       tools: (() => {
         const tools = [
+          ...(this.researchIntegration && this.conversationStore.mode === 'encrypted' && this.options.missionKey ? [createMissionProposalTool()] : []),
           ...(this.researchIntegration
             ? [createWebSearchTool({
               searchWeb: (query, vertical, signal, site) => this.researchIntegration!.searchWeb(query, vertical, signal, site),
@@ -2224,6 +2230,7 @@ class FreyaCore implements Core {
       now: this.options.now,
       newId: this.options.newId,
       cognitionAvailability: () => this.cognitionAvailability(),
+      missionViews: conversationId => this.chatMissions?.views(conversationId) ?? Promise.resolve([]),
       stopAll: () => ({
         active: this.state.stopAll.active,
         activatedAt: this.state.stopAll.activatedAt,
@@ -2303,6 +2310,28 @@ class FreyaCore implements Core {
       this.workRegistry.register(capability)
     }
     if (this.options.missionReadRoots?.length) registerFileInspection(this.workRegistry, [...this.options.missionReadRoots])
+    if (this.researchIntegration) registerResearchInspection(this.workRegistry, {
+      research: this.researchIntegration,
+      admit: async (runId, stepKey, signal) => {
+        signal?.throwIfAborted()
+        const id = this.workEngine?.snapshot().runs.get(runId)?.parentId
+        const content = id ? await this.missionEngine?.privateContent(id, true) : null
+        const mission = id ? this.missionEngine?.record(id) : null
+        if (!id || !content?.chatBinding || !mission || !mission.childRuns.includes(runId) || !mission.activePlan?.steps.some(step => step.stepId === stepKey && step.capability === 'research.search') || !await this.chatMissionAuthorized(id) || !this.chatResearchAvailable() || content.chatBinding.paused || !['active', 'planning'].includes(mission.status)) throw new Error('Research authorization unavailable.')
+        const charged = await this.requireMission().charge({ missionId: id, modelCalls: 0, actions: 0, externalRequests: 1, retries: 0, delegations: 0 })
+        if (!charged.ok) throw new Error('Research request budget exhausted.')
+        signal?.throwIfAborted()
+      },
+      save: async (runId, stepKey, evidence) => {
+        const id = this.workEngine?.snapshot().runs.get(runId)?.parentId
+        if (!id) throw new Error('Attached Mission unavailable.')
+        await this.requireMission().updateChatContent(id, content => ({ ...content, researchEvidence: { ...content.researchEvidence, [stepKey]: evidence } }))
+      },
+      read: async (runId, stepKey) => {
+        const id = this.workEngine?.snapshot().runs.get(runId)?.parentId
+        return id ? (await this.missionEngine?.privateContent(id))?.researchEvidence?.[stepKey] ?? null : null
+      },
+    })
     registerFoundryWorkCapabilities(this.workRegistry, this.requireFoundry())
     registerPhaseSixCapabilities(this.workRegistry)
     this.workEngine = new WorkEngine({
@@ -2692,6 +2721,26 @@ class FreyaCore implements Core {
     this.activation.register(RUNTIME_REGISTRY)
     await this.activation.load(this.runtimeFacts())
     this.operational = true
+    if (this.missionEngine && this.researchIntegration && this.conversationStore.mode === 'encrypted') {
+      this.chatMissions = new ChatMissionIntegration({ engine: this.missionEngine, store: this.conversationStore, ownerId: this.owner.id,
+        now: () => (this.options.now ?? (() => new Date()))(), available: () => this.chatResearchAvailable(),
+        authorized: id => this.chatMissionAuthorized(id),
+        authorize: async (id, grantId, expiresAt) => {
+          if (!this.chatResearchAvailable()) return false
+          const scope = this.issueWorkforceOwnerScope()
+          if (!scope.projection().workers.some(worker => worker.capabilities.includes('cognition.request'))) {
+            const worker = await scope.createWorker({ name: 'Research', specialisation: 'general' })
+            if (!worker.ok || !worker.workerId || !(await scope.assignCapability(worker.workerId, 'cognition.request')).ok) return false
+          }
+          await this.ownerAuthority.createGrant({ grantId, expiresAt, allowedOrigins: ['agent'], allowedCauses: ['run_finished'], actor: this.owner.id, goalId: id, backgroundAllowed: true, maxCalls: 3, maxOutputTokens: 6144 })
+          return true
+        },
+        plan: (id, grantId, revision) => this.planChatMissionGoal({ missionId: id, grantId, continueAfterVerification: true }, revision),
+        advance: id => this.advanceMission(id, 'manual'), request: intent => this.ownerAuthority.request(intent),
+        notify: () => this.conversations.publish(),
+      })
+      await this.chatMissions.recover()
+    }
     this.publishRuntime()
     this.notify()
 
@@ -5079,6 +5128,7 @@ private async buildForge(): Promise<void> {
   }
 
   private publishMission(): void {
+    if (this.chatMissions) this.conversations?.publish()
     // Every subsystem that can move the snapshot does, through this one call.
     // The conscious context is derived from all of them, so a change to any one
     // is a change to it - and hooking each publisher is what keeps that true
@@ -5240,7 +5290,7 @@ private async buildForge(): Promise<void> {
       recordDecision: (input) => engine.recordDecision(input),
       charge: (input) => engine.charge(input),
       noteBudgetExceeded: (input) => engine.noteBudgetExceeded(input),
-      requestCompletion: (missionId) => engine.requestCompletion(missionId),
+      requestCompletion: (missionId) => this.completeMission(missionId),
       writeIntent: (missionId, intent) => engine.writeIntent(missionId, intent),
       readIntent: (missionId) => engine.readIntent(missionId),
     }
@@ -5388,14 +5438,39 @@ state: {
 
   /** Trusted host entry: an existing owner grant authorizes one model proposal. */
   async planMissionGoal(input: MissionGoalRequest): Promise<MissionGoalOutcome> {
+    return this.planChatMissionGoal(input, false)
+  }
+
+  private chatResearchAvailable(): boolean {
+    return !!this.researchIntegration && this.operational && !this.stopped && this.persistence.durable && !this.state.stopAll.active && this.conversationStore.mode === 'encrypted'
+      && (['mission.manage', 'work.execute', 'research.start', 'search.web', 'browser.read', 'cognition.request'] as const).every(capability => this.guard.evaluate(this.owner, capability).allowed)
+  }
+
+  private chatMissionGrantAvailable(id: string, grantId: string): boolean {
+    const grant = this.ownerAuthority.grants().find(candidate => candidate.goalId === id && candidate.id === grantId)
+    return !!grant && isGrantActive(grant, (this.options.now ?? (() => new Date()))()) && grant.actor === this.owner.id && grant.backgroundAllowed
+  }
+
+  private async chatMissionAuthorized(id: string): Promise<boolean> {
+    const binding = (await this.missionEngine?.privateContent(id, true))?.chatBinding
+    return !!binding && binding.ownerId === this.owner.id && this.chatMissionGrantAvailable(id, binding.grantId)
+  }
+
+  private async completeMission(id: string): Promise<MissionCommandOutcome> {
+    const content = await this.requireMission().privateContent(id)
+    return content?.chatBinding && this.chatMissions ? this.chatMissions.complete(id) : this.requireMission().requestCompletion(id)
+  }
+
+  private async planChatMissionGoal(input: MissionGoalRequest, revision: boolean): Promise<MissionGoalOutcome> {
     const engine = this.missionEngine
     const unavailable = { ok: false, reason: 'mission_unavailable' } as const
     if (!engine || !this.operational || this.stopped || !this.persistence.durable || this.state.stopAll.active || this.missionPlanning.has(input.missionId)
       || this.missionAdvancing.has(input.missionId) || !this.guard.evaluate(this.owner, 'mission.manage').allowed) return unavailable
     const mission = engine.record(input.missionId)
-    if (!mission || mission.activePlan || !['draft', 'ready'].includes(mission.status)) return unavailable
+    if (!mission || (revision ? !mission.activePlan || mission.status !== 'blocked' || mission.planRevisions !== 1 : !!mission.activePlan || !['draft', 'ready'].includes(mission.status))) return unavailable
     const content = await engine.privateContent(input.missionId, true)
-    if (!content || content.executionPlan || this.missionPlanning.has(input.missionId)) return unavailable
+    if (!content || (revision ? !content.chatBinding || !content.executionPlan : !!content.executionPlan) || this.missionPlanning.has(input.missionId)) return unavailable
+    if (content.chatBinding && (!this.chatResearchAvailable() || !await this.chatMissionAuthorized(input.missionId) || content.chatBinding.paused)) return unavailable
     const now = (this.options.now ?? (() => new Date()))()
     const deadline = Math.min(Date.parse(mission.deadlineAt), Date.parse(mission.activatedAt ?? mission.createdAt) + mission.budget.maxDurationMs)
     if (now.getTime() >= deadline || mission.planRevisions >= mission.budget.maxPlanRevisions) return { ok: false, reason: 'budget_exhausted' }
@@ -5408,14 +5483,15 @@ state: {
         await engine.autonomyTransition({ missionId: input.missionId, to: 'blocked', reason: 'budget_exhausted' })
         return { ok: false, reason: 'budget_exhausted' }
       }
-      const maxSteps = Math.min(mission.budget.maxStepsPerPlan, mission.budget.maxActions - mission.spend.actions,
+      const maxSteps = Math.min(mission.budget.maxStepsPerPlan - (revision ? mission.activePlan!.steps.filter(step => step.status === 'verified').length : 0), mission.budget.maxActions - mission.spend.actions,
         mission.budget.maxDelegations - mission.spend.delegations, mission.limits.maxChildRuns - mission.childRuns.length)
-      const outcome = await proposeMissionPlan({ ...input, goal: content.intent, successCriteria: content.successCriteria, budget: mission.budget, maxSteps, now },
-        this.missionCapabilityPort(), name => this.missionAuthorityPort().mayUse(name), intent => this.ownerAuthority.request(intent))
+      const outcome = await proposeMissionPlan({ ...input, goal: content.intent, successCriteria: content.successCriteria, budget: mission.budget, maxSteps, now,
+        ...(revision ? { previousPlan: mission.activePlan!, previousExecution: content.executionPlan, failure: content.researchEvidence } : {}) },
+        this.missionCapabilityPort(), name => (!content.chatBinding || name === 'research.search') && this.missionAuthorityPort().mayUse(name), intent => this.ownerAuthority.request(intent))
       // Owner cancellation, correction and STOP ALL win over a delayed provider answer.
       const current = engine.record(input.missionId)
       const latest = await engine.privateContent(input.missionId)
-      if (this.stopped || !this.persistence.durable || this.state.stopAll.active || current?.status !== 'planning' || current.activePlan
+      if (this.stopped || !this.persistence.durable || this.state.stopAll.active || current?.status !== 'planning' || (revision ? current.activePlan?.planId !== mission.activePlan?.planId : !!current.activePlan)
         || latest?.intent !== content.intent || !this.guard.evaluate(this.owner, 'mission.manage').allowed) return unavailable
       if (!outcome.ok) {
         await engine.setBlocker({ missionId: input.missionId, code: 'intent_ambiguous', stepId: null, raised: true })
@@ -5428,10 +5504,13 @@ state: {
         await engine.autonomyTransition({ missionId: input.missionId, to: 'blocked', reason: 'deadline_expired' })
         return { ok: false, reason: 'budget_exhausted' }
       }
-      await engine.persistExecutionPlan(input.missionId, outcome.execution, content.intent)
+      await engine.persistExecutionPlan(input.missionId, outcome.execution, content.intent, revision ? mission.activePlan!.planId : undefined)
       if (this.state.stopAll.active || engine.record(input.missionId)?.status !== 'planning') return unavailable
-      const committed = await engine.commitPlan({ missionId: input.missionId, ...outcome.plan, reason: 'goal_needs_a_plan', expectedStatus: 'planning' })
+      const committed = await engine.commitPlan({ missionId: input.missionId, ...outcome.plan, reason: revision ? 'step_failed' : 'goal_needs_a_plan', expectedStatus: 'planning', ...(revision ? { expectedPreviousPlanId: mission.activePlan!.planId } : {}) })
       if (!committed.ok) return unavailable
+      if (revision) for (const blocker of engine.record(input.missionId)?.blockers ?? []) {
+        if (blocker.clearedAt === null && blocker.code === 'step_failed') await engine.setBlocker({ missionId: input.missionId, code: blocker.code, stepId: blocker.stepId, raised: false })
+      }
       if (!(await engine.autonomyTransition({ missionId: input.missionId, to: 'active', reason: 'plan_committed' })).ok) return unavailable
       return outcome
     } catch {
@@ -5443,7 +5522,7 @@ state: {
   }
 
   private observeVerifiedMissionStep(event: AnyCoreEvent): void {
-    if (event.type !== 'mission.step.transitioned' || event.payload.to !== 'verified') return
+    if (event.type !== 'mission.step.transitioned' || !['verified', 'failed'].includes(event.payload.to)) return
     const { missionId, planId, stepId } = event.payload
     // Publication happens inside the current decision. Wait for its final transition,
     // then use live state; never replay events, queue retries, or call a model here.
@@ -5451,6 +5530,12 @@ state: {
     void pending.then(async () => {
       const content = await this.missionEngine?.privateContent(missionId)
       const mission = this.missionEngine?.record(missionId)
+      if (content?.chatBinding) {
+        if (mission?.activePlan?.planId !== planId || content.executionPlan?.planId !== planId) return
+        await this.chatMissions?.settled(missionId)
+        return
+      }
+      if (event.payload.to !== 'verified') return
       if (this.stopped || !this.persistence.durable || this.state.stopAll.active || mission?.status !== 'active' || mission.activePlan?.planId !== planId
         || !content?.executionPlan?.continueAfterVerification || content.executionPlan.planId !== planId
         || !mission.activePlan.steps.some(step => step.stepId === stepId && step.status === 'verified')) return
@@ -5474,6 +5559,8 @@ state: {
 
   private async advanceMissionDecision(missionId: string, trigger: DecisionTrigger, delivered: { type: string } | null): Promise<StepOutcome | null> {
     if (this.missionAutonomy === undefined || this.stopped) return null
+    const content = await this.missionEngine?.privateContent(missionId)
+    if (content?.chatBinding && (!this.chatResearchAvailable() || content.chatBinding.paused || !await this.chatMissionAuthorized(missionId))) return null
     if (this.missionAdvancing.has(missionId) || this.missionPlanning.has(missionId)) return null
     const mission = this.missionEngine?.record(missionId)
     // A failed intelligent planning attempt cannot drop into the legacy fixture planner.
@@ -5717,7 +5804,10 @@ state: {
       return { ok: false, reason: attached.reason ?? 'the Run could not be attached' }
     }
 
-    const started = await engine.startRun(runId)
+    const abort = () => { void engine.cancelRun(runId, 'Mission execution was cancelled.').catch(() => undefined) }
+    input.signal.addEventListener('abort', abort, { once: true })
+    if (input.signal.aborted) abort()
+    const started = await engine.startRun(runId).finally(() => input.signal.removeEventListener('abort', abort))
     if (!started.ok) return { ok: false, reason: started.reason ?? 'the Run could not start' }
 
     const snapshot = engine.snapshot()
@@ -7025,6 +7115,15 @@ state: {
             status: this.status(),
             conversation: { operation: 'cancelled', cancelled: result.cancelled },
           }
+        }
+
+        case 'conversation.mission.decide': {
+          const conversationId = readString(envelope.payload, 'conversationId')
+          const proposalMessageId = readString(envelope.payload, 'proposalMessageId')
+          const decision = readString(envelope.payload, 'decision')
+          if (!this.guard.evaluate(this.owner, 'mission.manage').allowed || !this.chatMissions || !conversationId || !proposalMessageId || !decision) return { requestId, ok: false, refusal: { reason: 'An authorized chat Mission decision is required.' } }
+          const outcome = await this.chatMissions.decide(conversationId, proposalMessageId, decision)
+          return outcome.ok ? { requestId, ok: true, conversation: { operation: 'mission', missionId: outcome.missionId, decision } } : { requestId, ok: false, refusal: { reason: outcome.reason ?? 'Mission decision refused.' } }
         }
 
         /* ------------------------------------------------------------------ *
@@ -8604,7 +8703,7 @@ state: {
             'mission.fail': () => engine.fail(missionId),
             // Completion is not a status setter. It asks a verifier, and completes the
             // Mission only if the verifier establishes the outcome.
-            'mission.requestCompletion': () => engine.requestCompletion(missionId),
+            'mission.requestCompletion': () => this.completeMission(missionId),
           }
           const run = operations[envelope.command]
           if (run === undefined) {
@@ -10940,6 +11039,7 @@ function toTurnView(turn: {
   outcome: string
   reason: string | null
   assistantMessage: {
+    missionProposal?: ChatMissionProposal
     messageId: string
     role: 'user' | 'assistant'
     content: string
@@ -10961,6 +11061,7 @@ function toTurnView(turn: {
     assistantMessage: turn.assistantMessage
       ? {
           messageId: turn.assistantMessage.messageId,
+          ...(turn.assistantMessage.missionProposal ? { missionProposal: turn.assistantMessage.missionProposal } : {}),
           role: turn.assistantMessage.role,
           content: turn.assistantMessage.content,
           createdAt: turn.assistantMessage.createdAt,

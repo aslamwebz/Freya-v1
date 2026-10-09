@@ -31,7 +31,9 @@ import type {
  * any of them here would create a second place for them to be wrong.
  */
 
+import type { ChatMissionProposal, ConversationMissionView } from '../missions/chat-types'
 export interface ConversationServiceOptions {
+  missionViews?: (conversationId: string) => Promise<readonly ConversationMissionView[]>
   fabric: EventFabric
   store: ConversationStore
   /**
@@ -87,6 +89,7 @@ export type ArchiveResult =
   | { ok: false; reason: string }
 
 export class ConversationService {
+  private readonly missionViews: ConversationServiceOptions['missionViews']
   private readonly fabric: EventFabric
   private readonly store: ConversationStore
   private readonly mind: MindService
@@ -102,6 +105,7 @@ export class ConversationService {
   private publicationVersion = 0
 
   constructor(options: ConversationServiceOptions) {
+    this.missionViews = options.missionViews
     this.fabric = options.fabric
     this.store = options.store
     this.mind = options.mind
@@ -394,6 +398,7 @@ export class ConversationService {
       conversations,
       activeConversationId: conversationId,
       messages,
+      ...(conversationId && this.missionViews ? { missions: await this.missionViews(conversationId) } : {}),
       activeTurn,
       cognition: this.cognitionAvailability(),
       stopAll: { active: stop.active, activatedAt: stop.activatedAt },
@@ -485,6 +490,9 @@ export class ConversationService {
 }
 
 function toMessageView(message: {
+  missionProposal?: ChatMissionProposal
+  missionId?: string
+  missionDecision?: { proposalMessageId: string; decision: 'approved' | 'rejected' }
   messageId: string
   role: 'user' | 'assistant'
   content: string
@@ -498,6 +506,9 @@ function toMessageView(message: {
 }): ConversationMessageView {
   return {
     messageId: message.messageId,
+    ...(message.missionProposal ? { missionProposal: message.missionProposal } : {}),
+    ...(message.missionId ? { missionId: message.missionId } : {}),
+    ...(message.missionDecision ? { missionDecision: message.missionDecision } : {}),
     role: message.role,
     content: message.content,
     createdAt: message.createdAt,

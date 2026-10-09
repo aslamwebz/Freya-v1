@@ -277,9 +277,11 @@ export interface ToolProvenance {
  * evidence: a refusal that named a system that did the work would be the lie this whole
  * type is built to make impossible.
  */
+import type { ChatMissionProposal } from '../missions/chat-types'
 export type ToolObservation =
   | {
       readonly kind: 'ok'
+      readonly missionProposal?: ChatMissionProposal
       readonly tool: string
       readonly capability: Capability
       readonly summary: string
@@ -429,6 +431,7 @@ export interface MindTool {
    * takes a turn down.
    */
   run(request: { readonly arguments: Readonly<Record<string, string>>; readonly signal?: AbortSignal }): Promise<{
+    readonly missionProposal?: ChatMissionProposal
     readonly summary: string
     readonly sources: readonly ToolSource[]
     /**
@@ -586,6 +589,7 @@ export class MindToolRegistry {
           provenance: boundProvenance(raw.provenance),
           ...(raw.chart === undefined ? {} : { chart: boundChart(raw.chart) }),
           ...(raw.canvas === undefined ? {} : { canvas: boundCanvas(raw.canvas) }),
+          ...(raw.missionProposal === undefined ? {} : { missionProposal: raw.missionProposal }),
         },
         executed: true,
       }

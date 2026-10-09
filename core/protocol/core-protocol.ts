@@ -550,6 +550,7 @@ export type CoreCommandName =
   | 'conversation.turn.submit'
   /** Scoped: stops one response. Does not latch STOP ALL. */
   | 'conversation.turn.cancel'
+  | 'conversation.mission.decide'
   /* -------------------------------------------------------------- voice */
 
   /**

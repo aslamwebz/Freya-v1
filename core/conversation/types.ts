@@ -29,10 +29,14 @@
  * Conversation Service, not in a type the renderer can satisfy with a string.
  */
 import type { MediaItem } from '../media/types'
+import type { ChatMissionProposal } from '../missions/chat-types'
 import type { ToolSource, ToolStepRecord, ChartSpec, CanvasSpec } from '../mind/tools'
 export type MessageRole = 'user' | 'assistant'
 
 export interface ConversationMessage {
+  missionProposal?: ChatMissionProposal
+  missionId?: string
+  missionDecision?: { proposalMessageId: string; decision: 'approved' | 'rejected' }
   messageId: string
   conversationId: string
   role: MessageRole

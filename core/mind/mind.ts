@@ -1102,6 +1102,7 @@ export class MindService {
         ...sourcesField(cognition.steps.map((iteration) => iteration.observation), 100, compiled.research?.sources),
         ...chartsField(cognition.steps.map((iteration) => iteration.observation)),
         ...canvasField(cognition.steps.map((iteration) => iteration.observation)),
+        ...cognition.steps.reduce((fields, iteration) => iteration.observation.kind === 'ok' && iteration.observation.missionProposal ? { missionProposal: iteration.observation.missionProposal } : fields, {}),
         // The loop's own record of what it did, carried beside the prose so the
         // renderer can draw the "What Freya did" section from the loop rather
         // than from the model's text. Absent on a turn that looked nothing up.
@@ -1207,7 +1208,8 @@ export class MindService {
     researchFollowUp: boolean
     perTurnAllowance: number
   }): Promise<Cognition> {
-    const inferredRequest = initialToolRequestForOwnerText(input.ownerText, input.intents)
+    const inferredRequest = this.tools?.has('propose_mission') && input.intents.webSearch !== true && input.intents.browserUse !== true
+      ? null : initialToolRequestForOwnerText(input.ownerText, input.intents)
     const initialToolRequest = input.researchFollowUp && input.intents.webSearch !== true && input.intents.browserUse !== true
       && inferredRequest?.name === 'web_search' && !requestsNewLookup(input.ownerText)
       ? null : inferredRequest

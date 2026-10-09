@@ -24,6 +24,10 @@
  *   freya browser status
  *   freya browser tabs
  *   freya browser open https://example.com
+ *   freya browser dock
+ *   freya browser snapshot
+ *   freya browser scroll bottom
+ *   freya browser click r7 12
  *   freya browser activate <tabId>
  *   freya missions
  *   freya agents
@@ -266,6 +270,38 @@ function asText(method, result) {
         `bytes: ${data.mediaUrl ?? ''}`,
       ].join('\n')
     }
+    case 'browser.snapshot': {
+      const out = obj
+      if (out.ok !== true) return `no snapshot: ${out.code ?? ''}  ${out.reason ?? ''}`
+      const snap = out.data?.snapshot ?? {}
+      const header = `${snap.title ?? ''}  ${snap.url ?? ''}`.trim()
+      const state = `revision ${snap.revision ?? ''}${snap.truncated === true ? '  (truncated)' : ''}${snap.superseded === true ? '  (page moved on — re-snapshot)' : ''}`
+      // `rendered` is the protocol's own wording, refs included, so the CLI never
+      // re-formats what a click must quote.
+      return [header, state, snap.rendered ?? ''].filter((line) => line !== '').join('\n')
+    }
+    case 'browser.click': {
+      const out = obj
+      if (out.ok !== true) return `click refused: ${out.code ?? ''}  ${out.reason ?? ''}`
+      return `clicked "${out.data?.name ?? ''}"  (revision ${out.data?.revision ?? ''})`
+    }
+    case 'browser.scroll': {
+      const out = obj
+      if (out.ok !== true) return `scroll refused: ${out.code ?? ''}  ${out.reason ?? ''}`
+      return `scrolled to ${out.data?.top ?? ''}  (height ${out.data?.height ?? ''})`
+    }
+    case 'browser.dock': {
+      const out = obj
+      if (out.ok !== true) return `dock refused: ${out.code ?? ''}  ${out.reason ?? ''}`
+      const b = out.bounds ?? {}
+      const where = `${b.x ?? ''},${b.y ?? ''} ${b.width ?? ''}x${b.height ?? ''}`
+      return `docked ${out.tabId ?? ''} (${out.sessionId ?? ''}) at ${where}${out.docked === false ? ' — surface has no native view' : ''}`
+    }
+    case 'browser.undock': {
+      const out = obj
+      if (out.ok !== true) return `undock refused: ${out.code ?? ''}  ${out.reason ?? ''}`
+      return 'undocked'
+    }
     case 'mission.list': {
       const list = obj.missions ?? []
       if (list.length === 0) return '(no missions)'
@@ -323,6 +359,11 @@ const USAGE = `freya — control the Freya you are looking at
   browser tabs                            list open tabs
   browser open <url>                      open a tab
   browser screenshot [tabId]              capture a tab as PNG (prints where the bytes live)
+  browser snapshot [tabId]                read the front tab as numbered elements + revision
+  browser click <ref> <revision> [tabId]  click a snapshot element (quote its ref and revision)
+  browser scroll <top|bottom|px> [tabId]  scroll a tab to the top, the bottom, or N pixels
+  browser dock [tabId]                    give a tab's view a real size (needed before scroll)
+  browser undock                          hide the docked view
   browser activate <tabId>                focus a tab
   missions   | mission list               list missions
   mission    | mission get <id>           show a mission
@@ -396,12 +437,16 @@ function resolveMethod(command, argv) {
       return 'conversation.send'
     case 'browser': {
       const sub = argv[1]
-      if (sub === 'activate') return 'browser.activate'
-      if (sub === 'screenshot' || sub === 'shot') return 'browser.screenshot'
       if (sub === 'status' || sub === undefined) return 'browser.status'
       if (sub === 'tabs') return 'browser.tabs'
       if (sub === 'open') return 'browser.open'
       if (sub === 'activate') return 'browser.activate'
+      if (sub === 'screenshot' || sub === 'shot') return 'browser.screenshot'
+      if (sub === 'snapshot' || sub === 'snap') return 'browser.snapshot'
+      if (sub === 'click') return 'browser.click'
+      if (sub === 'scroll') return 'browser.scroll'
+      if (sub === 'dock') return 'browser.dock'
+      if (sub === 'undock') return 'browser.undock'
       return null
     }
     case 'missions':
@@ -448,6 +493,27 @@ function resolveParams(method, argv) {
       return { url: argv[2] ?? '' }
     case 'browser.screenshot':
       return { ...(argv[2] === undefined || argv[2] === '' ? {} : { tabId: argv[2] }) }
+    case 'browser.snapshot':
+      // snapshot [tabId]
+      return { ...(argv[2] === undefined || argv[2] === '' ? {} : { tabId: argv[2] }) }
+    case 'browser.click':
+      // click <ref> <revision> [tabId]
+      return {
+        ref: argv[2] ?? '',
+        revision: argv[3] ?? '',
+        ...(argv[4] === undefined || argv[4] === '' ? {} : { tabId: argv[4] }),
+      }
+    case 'browser.scroll':
+      // scroll <top|bottom|px> [tabId]
+      return {
+        to: argv[2] ?? 'bottom',
+        ...(argv[3] === undefined || argv[3] === '' ? {} : { tabId: argv[3] }),
+      }
+    case 'browser.dock':
+      // dock [tabId]
+      return { ...(argv[2] === undefined || argv[2] === '' ? {} : { tabId: argv[2] }) }
+    case 'browser.undock':
+      return {}
     case 'browser.activate':
       return { tabId: argv[2] ?? '' }
     case 'mission.get':

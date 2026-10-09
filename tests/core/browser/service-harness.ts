@@ -69,6 +69,8 @@ export class ScriptedSurfacePage {
   alwaysFailNavigate = false
   navigateLandsNowhere = false
   scrollTop = 0
+  /** The document height the scripted scroll reports. 0 models an unsized view. */
+  scrollHeight = 4_000
   readonly listeners = new Set<(reading: SurfaceTabReading) => void>()
 
   constructor(readonly sessionId: string, options: ScriptedPageOptions = {}) {
@@ -188,8 +190,9 @@ export class ScriptedSurfacePage {
 
   async scroll(request: { kind: 'top' | 'bottom' | 'delta' | 'fraction'; amount?: number }): Promise<{ ok: boolean; top: number; height: number; code: string }> {
     this.calls.push(`scroll:${request.kind}`)
-    this.scrollTop = request.kind === 'top' ? 0 : request.kind === 'bottom' ? 4_000 : request.kind === 'fraction' ? Math.round(4_000 * (request.amount ?? 0)) : this.scrollTop + (request.amount ?? 0)
-    return { ok: true, top: this.scrollTop, height: 4_000, code: 'scrolled' }
+    const height = this.scrollHeight
+    this.scrollTop = request.kind === 'top' ? 0 : request.kind === 'bottom' ? height : request.kind === 'fraction' ? Math.round(height * (request.amount ?? 0)) : this.scrollTop + (request.amount ?? 0)
+    return { ok: true, top: Math.max(0, Math.min(height, this.scrollTop)), height, code: 'scrolled' }
   }
 
   async select(selector: string, index: number): Promise<{ ok: boolean; selected: string | null; code: string }> {

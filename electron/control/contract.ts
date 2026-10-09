@@ -9,12 +9,13 @@
  * Three groups of methods:
  *
  *   - read: `protocol.version`, `freya.status`, `freya.health`, `conversation.list`,
- *     `conversation.get`, `browser.status`, `browser.tabs`, `mission.list`,
+ *     `conversation.get`, `browser.status`, `browser.tabs`, `browser.snapshot`,
+ *     `browser.screenshot`, `browser.dock`, `browser.undock`, `mission.list`,
  *     `mission.get`, `agent.list`, `system.stopStatus`.
  *   - action: `conversation.create`, `conversation.send`, `browser.open`,
- *     `browser.activate`, `notification.send`. Each one routes through the same
- *     Core / Browser / Voice authority the renderer would, with the same
- *     STOP-ALL gate and the same approval rules.
+ *     `browser.activate`, `browser.click`, `browser.scroll`, `notification.send`.
+ *     Each one routes through the same Core / Browser / Voice authority the
+ *     renderer would, with the same STOP-ALL gate and the same approval rules.
  *   - wait / event: `event.subscribe`, `event.unsubscribe`, `wait`.
  *
  * No method accepts a Core command string. A caller that knows the Core protocol
@@ -85,7 +86,10 @@ export const READ_METHODS = new Set<string>([
   'conversation.get',
   'browser.status',
   'browser.tabs',
+  'browser.snapshot',
   'browser.screenshot',
+  'browser.dock',
+  'browser.undock',
   'mission.list',
   'mission.get',
   'agent.list',
@@ -97,6 +101,8 @@ export const ACTION_METHODS = new Set<string>([
   'conversation.send',
   'browser.open',
   'browser.activate',
+  'browser.click',
+  'browser.scroll',
   'notification.send',
 ])
 

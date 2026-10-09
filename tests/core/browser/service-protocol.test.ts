@@ -541,6 +541,16 @@ describe('semantic snapshots and references', () => {
     expect(h.journal.types).toContain('browser.dual.page.scrolled')
   })
 
+  it('refuses a scroll rather than reporting a sized-nowhere viewport as success', async () => {
+    const h = harness()
+    const opened = await h.ok({ op: 'open', url: URL_A, createdBy: 'user' })
+    const sessionId = h.service.tab(String(opened.data.tabId))!.sessionId
+    // An embedded view that was never docked has no viewport, so the document
+    // reports a height of 0. That is not "the page is at the top".
+    h.page(sessionId).scrollHeight = 0
+    await h.refused({ op: 'scroll', to: 'bottom' }, 'surface-unavailable')
+  })
+
   it('waits for a settle, and reports the address it settled on', async () => {
     const h = harness()
     await h.ok({ op: 'open', url: URL_A, createdBy: 'user' })

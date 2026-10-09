@@ -128,6 +128,23 @@ Activate an existing tab:
 
     node bin\freya.mjs browser activate <tabId>
 
+Snapshot a tab as numbered elements plus the revision they belong to:
+
+    node bin\freya.mjs browser snapshot [tabId]
+
+Give a tab's embedded view a real size before scrolling or capturing (a view that was never docked has no viewport, so `scroll` is refused with `surface-unavailable` and `screenshot` returns nothing):
+
+    node bin\freya.mjs browser dock [tabId]
+    node bin\freya.mjs browser undock
+
+Scroll a tab to the top, the bottom, or a pixel offset:
+
+    node bin\freya.mjs browser scroll <top|bottom|px> [tabId]
+
+Click an element from a snapshot, quoting its ref and the snapshot revision:
+
+    node bin\freya.mjs browser click <ref> <revision> [tabId]
+
 These commands use Freya's Browser Service and the same browser authority as the app.
 
 ## Browser mode inside Chat
@@ -213,7 +230,7 @@ Freya also exposes an MCP adapter:
 
     node bin\freya-mcp.mjs
 
-It exposes the same control-plane vocabulary, including freya_status, freya_health, freya_focus, conversation_list, conversation_get, conversation_create, conversation_send, browser_status, browser_tabs, browser_open, browser_activate, mission_list, mission_get, agent_list, notification_send, and stop_status.
+It exposes the same control-plane vocabulary, including freya_status, freya_health, freya_focus, conversation_list, conversation_get, conversation_create, conversation_send, browser_status, browser_tabs, browser_open, browser_activate, browser_snapshot, browser_click, browser_scroll, browser_dock, browser_undock, mission_list, mission_get, agent_list, notification_send, and stop_status.
 
 The MCP adapter is a thin client over the same authenticated local channel. It does not create a second Freya runtime.
 

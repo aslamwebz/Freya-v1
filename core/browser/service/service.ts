@@ -972,6 +972,18 @@ export function createBrowserService(options: BrowserServiceOptions): BrowserSer
       to === 'bottom' ? { kind: 'bottom' } : to === 'top' ? { kind: 'top' } : { kind: 'delta', amount: Math.max(-20_000, Math.min(20_000, to)) },
     )
     if (!done.ok) return no('scroll', 'adapter-failed', done.reason)
+    // A height of zero is not "scrolled to the top". It is the signature of a view
+    // that has never been given a viewport: the DOM is there, but the document has
+    // nothing to lay out against, so there is nothing to scroll and no position to
+    // report. Claiming success here would hand a caller a `top: 0` that means "my
+    // view is not on screen", not "the page is at the top". Dock the tab first.
+    if (done.value.height <= 0) {
+      return no(
+        'scroll',
+        'surface-unavailable',
+        'The tab has no sized viewport (its height read 0), so nothing scrolled. Dock the tab so it has a view, then scroll again.',
+      )
+    }
     await note('browser.dual.page.scrolled', { sessionId: record.sessionId, revision: record.carry.revision, at: nowIso() })
     return ok('scroll', { tabId: record.tabId, top: done.value.top, height: done.value.height })
   }

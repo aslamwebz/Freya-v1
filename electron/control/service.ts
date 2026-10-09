@@ -24,8 +24,10 @@ import type { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import type { ElectronCoreHost } from '../coreHost'
 import type { TurnIntentHints } from '../../core/mind/tool-intent'
-import type { BrowserService } from '../../core/browser/service/service'
+import type { BrowserService, SemanticBrowserRequest } from '../../core/browser/service/service'
+import type { SurfaceBounds } from '../../core/browser/service'
 import {
+  ACTION_METHODS,
   ALL_METHODS,
   PROTOCOL_VERSION,
   type CallerIdentity,
@@ -91,6 +93,31 @@ function payloadString(value: unknown, _key: string, max: number): string | null
 function payloadObject(value: unknown): Record<string, unknown> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   return value as Record<string, unknown>
+}
+
+/** A whole number, accepting the numeric string an external caller may send. Never NaN. */
+function payloadWholeNumber(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN
+  return Number.isInteger(n) ? n : null
+}
+
+/**
+ * A scroll destination: `top`, `bottom`, or a non-negative pixel offset.
+ *
+ * The same closed set the Browser Service accepts. An offset arrives as a string
+ * from the CLI and as a number from the MCP adapter, so both are read here rather
+ * than trusted to already be the right type.
+ */
+function payloadScrollTarget(value: unknown): 'top' | 'bottom' | number | null {
+  if (value === 'top' || value === 'bottom') return value
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : null
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (text === 'top' || text === 'bottom') return text
+    const n = Number(text)
+    if (text !== '' && Number.isFinite(n) && n >= 0) return n
+  }
+  return null
 }
 
 /**
@@ -227,6 +254,61 @@ export class ControlService {
             },
           })
         }
+
+        case 'browser.snapshot': {
+          // A read: the snapshot describes the page, it does not change it. It is
+          // the step that mints the numbered references a later click must quote,
+          // which is what lets an external caller act on a page without a selector
+          // ever crossing the pipe.
+          const tabId = payloadString(params.tabId, 'tabId', 128)
+          if (params.tabId !== undefined && tabId === null) {
+            return err(id, structured('INVALID_REQUEST', 'tabId is invalid'))
+          }
+          return ok(id, await this.runBrowser({ op: 'snapshot', ...(tabId === null ? {} : { tabId }) }))
+        }
+
+        case 'browser.click': {
+          const ref = payloadString(params.ref, 'ref', 64)
+          if (ref === null) {
+            return err(id, structured('INVALID_REQUEST', 'ref is required: the element number from a snapshot, such as r3'))
+          }
+          const revision = payloadWholeNumber(params.revision)
+          if (revision === null || revision < 1) {
+            return err(id, structured('INVALID_REQUEST', 'revision is required: the whole number the snapshot reported'))
+          }
+          const tabId = payloadString(params.tabId, 'tabId', 128)
+          if (params.tabId !== undefined && tabId === null) {
+            return err(id, structured('INVALID_REQUEST', 'tabId is invalid'))
+          }
+          return ok(id, await this.runBrowser({ op: 'click', ref, revision, ...(tabId === null ? {} : { tabId }) }))
+        }
+
+        case 'browser.scroll': {
+          const to = payloadScrollTarget(params.to)
+          if (to === null) {
+            return err(id, structured('INVALID_REQUEST', 'to is required: top, bottom, or a number of pixels'))
+          }
+          const tabId = payloadString(params.tabId, 'tabId', 128)
+          if (params.tabId !== undefined && tabId === null) {
+            return err(id, structured('INVALID_REQUEST', 'tabId is invalid'))
+          }
+          return ok(id, await this.runBrowser({ op: 'scroll', to, ...(tabId === null ? {} : { tabId }) }))
+        }
+
+        case 'browser.dock': {
+          // Placement, not a page act: docking shows Freya's own view so a
+          // snapshot/scroll/screenshot has a sized viewport to work with. It is a
+          // read for the STOP-ALL gate (the same as the renderer docking its own
+          // panel), and it never touches a page itself.
+          const tabId = payloadString(params.tabId, 'tabId', 128)
+          if (params.tabId !== undefined && tabId === null) {
+            return err(id, structured('INVALID_REQUEST', 'tabId is invalid'))
+          }
+          return ok(id, this.dockBrowser(tabId))
+        }
+
+        case 'browser.undock':
+          return ok(id, this.undockBrowser())
 
         case 'mission.list':
           return ok(id, this.listMissions())
@@ -427,16 +509,89 @@ export class ControlService {
     }
     return service.run({ op: 'screenshot', ...(tabId === undefined ? {} : { tabId }) })
   }
+
+  /**
+   * One semantic browser request through the mounted service.
+   *
+   * The same door the Mind's browser tool and the renderer use, so an external
+   * snapshot, click or scroll is the same request with the same refusals —
+   * including the one that matters most, that a click quoting a revision the page
+   * has moved past is refused (`stale-reference`) rather than acted on.
+   */
+  private async runBrowser(request: SemanticBrowserRequest) {
+    const service = this.deps.getBrowserService()
+    if (service === null) {
+      return {
+        ok: false as const,
+        code: 'BROWSE_DENIED' as const,
+        reason: 'the browser service is not mounted in this build',
+      }
+    }
+    return service.run(request)
+  }
+
+  /**
+   * Give a tab's embedded view a real size.
+   *
+   * A view that was opened but never docked has no viewport: a snapshot can still
+   * read the DOM, but `scroll` reads a height of 0 and a screenshot returns 0x0.
+   * This is the explicit lifecycle control an external caller needs, using the
+   * same `BrowserService.dock` seam the renderer's own browser panel uses. The
+   * rect is derived from the window's own content bounds — never from a caller —
+   * for the same reason `freya:browser:dock` re-derives it.
+   */
+  private dockBrowser(tabId: string | null): unknown {
+    const service = this.deps.getBrowserService()
+    if (service === null) {
+      return { ok: false, code: 'BROWSE_DENIED', reason: 'the browser service is not mounted in this build' }
+    }
+    const resolved = tabId ?? service.activeTabId()
+    if (resolved === null) {
+      return { ok: false, code: 'tab-unknown', reason: 'there is no tab to dock' }
+    }
+    const record = service.tab(resolved)
+    if (record === null) {
+      return { ok: false, code: 'tab-unknown', reason: `there is no tab ${resolved}` }
+    }
+    const bounds = this.browserDockBounds()
+    if (bounds === null) {
+      return { ok: false, code: 'surface-unavailable', reason: 'the main window has no sized content area to dock the browser into' }
+    }
+    const docked = service.dock(record.sessionId, bounds)
+    return { ok: true, docked, tabId: resolved, sessionId: record.sessionId, bounds }
+  }
+
+  /** Hide whatever view is attached. Idempotent. */
+  private undockBrowser(): unknown {
+    const service = this.deps.getBrowserService()
+    if (service === null) {
+      return { ok: false, code: 'BROWSE_DENIED', reason: 'the browser service is not mounted in this build' }
+    }
+    return { ok: true, docked: service.dock(null, null) }
+  }
+
+  /**
+   * The rect the embedded view is docked to.
+   *
+   * The window's full content area. It is deliberately not the caller's choice:
+   * placement is a host fact, and a caller-supplied rect is how a native view
+   * ends up parked over application chrome. The surface refuses a rect smaller
+   * than its own minimum, so a window too small to hold a view docks nothing and
+   * says so.
+   */
+  private browserDockBounds(): SurfaceBounds | null {
+    const window = this.deps.getMainWindow()
+    if (window === null || window.isDestroyed()) return null
+    const content = window.getContentBounds()
+    if (content.width < 320 || content.height < 240) return null
+    return { x: 0, y: 0, width: content.width, height: content.height }
+  }
 }
 
 function isActionMethod(method: string): boolean {
-  return (
-    method === 'conversation.create' ||
-    method === 'conversation.send' ||
-    method === 'browser.open' ||
-    method === 'browser.activate' ||
-    method === 'notification.send'
-  )
+  // One set, read from the contract, so a new action method cannot be added to the
+  // wire and forgotten by the STOP-ALL gate (or vice versa).
+  return ACTION_METHODS.has(method)
 }
 
 function actorField(caller: CallerIdentity, action: string): Record<string, unknown> {

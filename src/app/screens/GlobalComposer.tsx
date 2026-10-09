@@ -22,6 +22,8 @@ function VoiceDockButton({ voice, onPress, onRelease }: {
   onRelease: (cancelled?: boolean) => void
 }) {
   const [holding, setHolding] = useState(false)
+  const isDenied = voice.state === 'permission-denied' || voice.state === 'permission-required'
+  const isOff = !voice.micEnabled
 
   const label = voice.capturing
     ? 'Release to stop recording'
@@ -29,52 +31,68 @@ function VoiceDockButton({ voice, onPress, onRelease }: {
       ? 'Hold to interrupt Freya and speak'
       : (voice.unavailableReason ?? 'Hold to speak to Freya')
 
-  return <button
-    type="button"
-    className="hd-mic"
-    aria-label={label}
-    aria-pressed={voice.capturing}
-    aria-describedby={voice.unavailableReason ? 'hd-mic-detail' : undefined}
-    disabled={voice.state === 'unsupported' || !voice.capabilities.capture}
-    data-capturing={voice.capturing || undefined}
-    data-voice-state={voice.state}
-    onPointerDown={event => {
-      if (voice.capturing) return
-      event.preventDefault()
-      setHolding(true)
-      onPress()
-    }}
-    onPointerUp={() => {
-      if (!holding) return
-      setHolding(false)
-      onRelease(false)
-    }}
-    onPointerCancel={() => {
-      if (!holding) return
-      setHolding(false)
-      onRelease(true)
-    }}
-    onPointerLeave={() => {
-      if (!holding) return
-      setHolding(false)
-      onRelease(false)
-    }}
-    onContextMenu={event => event.preventDefault()}
-    onDoubleClick={() => {
-      if (!holding) return
-      setHolding(false)
-      onRelease(true)
-    }}
-    title={label}
-  >
-    <Glyph name="mic" size={22} />
-    <span className="hd-sr-only" role="status" aria-live="polite">
-      {voice.capturing ? 'Recording locally. Release to stop.' : ''}
-    </span>
-    {voice.unavailableReason
-      ? <span className="hd-sr-only" id="hd-mic-detail">{voice.unavailableReason}</span>
-      : null}
-  </button>
+  return (
+    <div className="hd-mic-wrapper">
+      <button
+        type="button"
+        className="hd-mic"
+        aria-label={label}
+        aria-pressed={voice.capturing}
+        aria-describedby={voice.unavailableReason ? 'hd-mic-detail' : undefined}
+        disabled={voice.state === 'unsupported' || !voice.capabilities.capture}
+        data-capturing={voice.capturing || undefined}
+        data-voice-state={voice.state}
+        onPointerDown={event => {
+          if (voice.capturing) return
+          event.preventDefault()
+          setHolding(true)
+          onPress()
+        }}
+        onPointerUp={() => {
+          if (!holding) return
+          setHolding(false)
+          onRelease(false)
+        }}
+        onPointerCancel={() => {
+          if (!holding) return
+          setHolding(false)
+          onRelease(true)
+        }}
+        onPointerLeave={() => {
+          if (!holding) return
+          setHolding(false)
+          onRelease(false)
+        }}
+        onContextMenu={event => event.preventDefault()}
+        onDoubleClick={() => {
+          if (!holding) return
+          setHolding(false)
+          onRelease(true)
+        }}
+        title={label}
+      >
+        <Glyph name="mic" size={22} />
+        {isDenied ? (
+          <span className="hd-mic-badge hd-mic-badge-denied" title="Microphone permission required" aria-hidden="true">!</span>
+        ) : voice.wakeArmed ? (
+          <span className="hd-mic-badge hd-mic-badge-wake" title="Wake armed: say 'Freya'" aria-hidden="true">•</span>
+        ) : isOff ? (
+          <span className="hd-mic-badge hd-mic-badge-off" title="Microphone is off" aria-hidden="true">×</span>
+        ) : null}
+        <span className="hd-sr-only" role="status" aria-live="polite">
+          {voice.capturing ? 'Recording locally. Release to stop.' : ''}
+        </span>
+        {voice.unavailableReason
+          ? <span className="hd-sr-only" id="hd-mic-detail">{voice.unavailableReason}</span>
+          : null}
+      </button>
+      {voice.unavailableReason ? (
+        <span className="hd-mic-tooltip" role="tooltip" aria-hidden="true">
+          {voice.unavailableReason}
+        </span>
+      ) : null}
+    </div>
+  )
 }
 
 /**
@@ -418,8 +436,13 @@ export function GlobalComposer({
       return
     }
 
-    // Escape: cancel generation if in flight
+    // Escape: cancel voice recording or generation if in flight
     if (event.key === 'Escape') {
+      if (voice.capturing) {
+        event.preventDefault()
+        onVoiceRelease(true)
+        return
+      }
       if (generating) {
         event.preventDefault()
         onStopResponse()
@@ -464,6 +487,27 @@ export function GlobalComposer({
           <div className="hd-composer-drop-overlay" aria-live="polite">
             <Glyph name="attach" size={20} />
             <span>Drop files or pictures here to attach</span>
+          </div>
+        ) : null}
+        {voice.capturing ? (
+          <div className="hd-voice-interim-bar" role="status" aria-live="polite">
+            <div className="hd-voice-live-meta">
+              <span className="hd-voice-live-dot" aria-hidden="true" />
+              <span className="hd-voice-live-label">
+                {voice.state === 'transcribing' ? 'Transcribing…' : 'Listening…'}
+              </span>
+            </div>
+            <p className="hd-voice-interim-text">
+              {voice.interim.trim().length > 0 ? voice.interim : 'Listening to your voice…'}
+            </p>
+            <button
+              type="button"
+              className="hd-voice-discard-btn"
+              onClick={() => onVoiceRelease(true)}
+              aria-label="Discard voice recording"
+            >
+              Cancel
+            </button>
           </div>
         ) : null}
         <label className="hd-input">

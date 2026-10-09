@@ -10,7 +10,7 @@
 | 4. Right Workspace | Complete | 343 focused tests; full TypeScript; scoped lint; both builds; unified 8-pane workspace with browser/canvas/sources/docs/media/charts/execution/files | `cf495db` |
 | 5. Composer | Complete | 362 focused tests; full TypeScript; scoped lint; both builds; advanced composer with drag-drop, paste, thinking levels, draft preservation | `367529b` |
 | 6. Agentic Execution | Complete | 373 focused tests; full TypeScript; scoped lint; both builds; active turn tracking, approval alerts, retry option, structured execution cards | `7cf3b5c` |
-| 7. Voice & Multimodal | Not started | — | — |
+| 7. Voice & Multimodal | Complete | 383 focused tests (10 new integration tests); full TypeScript; scoped lint; both builds; push-to-talk live interim visualizer, permission/wake status badges, TTS read-aloud waves, multimodal audio playback in chat & Right Workspace | pending |
 | 8. Integration | Not started | — | — |
 
 ### Phase 1 audit and implementation sequence
@@ -385,5 +385,17 @@ Phase 6:
 - `tests/unit/app/chatsAgenticExecution.test.tsx`
 - `tests/unit/app/chatsRightWorkspaceIntegration.test.tsx`
 - `tests/unit/app/rightWorkspace.test.tsx`
+
+Phase 7:
+
+- `docs/chat-evolution-8-phases.md`
+- `src/app/chat/Chats.tsx`
+- `src/app/chat/MediaCards.tsx`
+- `src/app/chat/RightWorkspace.tsx`
+- `src/app/chat/chat.css`
+- `src/app/chat/media.css`
+- `src/app/screens/GlobalComposer.tsx`
+- `src/app/screens/home-dashboard.css`
+- `tests/unit/app/voiceChatIntegration.test.tsx`
 
 

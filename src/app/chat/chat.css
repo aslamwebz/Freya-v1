@@ -2040,4 +2040,102 @@
   color: #f2bf87;
 }
 
+/* ----- TTS Read Aloud / Stop Button ------------------------------------ */
+.chats-speak-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid #1f2c3b80;
+  border-radius: 6px;
+  color: #9cb5c9;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chats-speak-btn:hover {
+  background: #112333;
+  color: #e2f2ff;
+  border-color: #3b6180;
+}
+
+.chats-speak-btn[data-speaking] {
+  background: #0f324a;
+  border-color: #5edbf5;
+  color: #8cefff;
+}
+
+.chats-speaking-pulse {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 12px;
+}
+
+.chats-speaking-pulse i {
+  display: inline-block;
+  width: 2px;
+  height: 10px;
+  background: #6fe0fa;
+  border-radius: 1px;
+  animation: chats-wave 0.8s ease-in-out infinite alternate;
+}
+
+.chats-speaking-pulse i:nth-child(2) {
+  animation-delay: 0.2s;
+  height: 14px;
+}
+
+.chats-speaking-pulse i:nth-child(3) {
+  animation-delay: 0.4s;
+  height: 8px;
+}
+
+@keyframes chats-wave {
+  0% { transform: scaleY(0.4); opacity: 0.5; }
+  100% { transform: scaleY(1.2); opacity: 1; }
+}
+
+/* ----- Right Workspace Audio Player ------------------------------------ */
+.chats-rw-audio-frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 36px 20px;
+  background: rgba(10, 20, 32, 0.85);
+  border: 1px solid #1d3347;
+  border-radius: 12px;
+  width: 100%;
+}
+
+.chats-rw-audio-visualizer {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(111, 220, 255, 0.12);
+  color: #6fdcff;
+  border: 1px solid rgba(111, 220, 255, 0.3);
+}
+
+.chats-rw-audio-player {
+  width: min(100%, 420px);
+  border-radius: 20px;
+}
+
+.chats-rw-thumb-audio {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  background: rgba(14, 28, 44, 0.8);
+  color: #6fdcff;
+  font-size: 14px;
+}
+
 

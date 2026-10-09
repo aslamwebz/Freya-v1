@@ -134,15 +134,30 @@ function AnswerActions({ content, canSpeak, speaking, onSpeak, onStop }: {
 
   return (
     <div className="chats-actions">
-      <button type="button" onClick={() => void copy()} aria-label="Copy answer" aria-live="polite">{copied ? 'Copied' : copyFailed ? 'Copy failed' : 'Copy'}</button>
+      <button type="button" onClick={() => void copy()} aria-label="Copy answer" aria-live="polite">
+        {copied ? 'Copied' : copyFailed ? 'Copy failed' : 'Copy'}
+      </button>
       {canSpeak ? (
         <button
           type="button"
+          className="chats-speak-btn"
           data-speaking={speaking || undefined}
           aria-label={speaking ? 'Stop reading aloud' : 'Read this answer aloud'}
           onClick={speaking ? onStop : onSpeak}
         >
-          {speaking ? 'Stop' : 'Read aloud'}
+          {speaking ? (
+            <>
+              <span className="chats-speaking-pulse" aria-hidden="true">
+                <i /><i /><i />
+              </span>
+              <span>Stop</span>
+            </>
+          ) : (
+            <>
+              <Glyph name="mic" size={13} />
+              <span>Read aloud</span>
+            </>
+          )}
         </button>
       ) : null}
     </div>
@@ -319,8 +334,15 @@ export function Chats({
   const [notice, setNotice] = useState('')
   const [fault, setFault] = useState<string | null>(null)
   const [issueOpen, setIssueOpen] = useState(false)
+  const [activeSpeakingTurnId, setActiveSpeakingTurnId] = useState<string | null>(null)
   const logRef = useRef<HTMLDivElement | null>(null)
   const [dismissedCanvasId, setDismissedCanvasId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!voiceSpeaking) {
+      setActiveSpeakingTurnId(null)
+    }
+  }, [voiceSpeaking])
 
   useEffect(() => {
     void ensureConversationAttached().then((attached) => {
@@ -556,9 +578,15 @@ export function Chats({
                     <AnswerActions
                       content={message.content}
                       canSpeak={canSpeak}
-                      speaking={voiceSpeaking}
-                      onSpeak={() => onSpeakTurn?.(message.turnId)}
-                      onStop={() => onStopSpeaking?.()}
+                      speaking={Boolean(voiceSpeaking && (activeSpeakingTurnId === message.turnId || activeSpeakingTurnId === null))}
+                      onSpeak={() => {
+                        setActiveSpeakingTurnId(message.turnId)
+                        onSpeakTurn?.(message.turnId)
+                      }}
+                      onStop={() => {
+                        setActiveSpeakingTurnId(null)
+                        onStopSpeaking?.()
+                      }}
                     />
                   ) : null}
                 </div>

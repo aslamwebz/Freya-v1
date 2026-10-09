@@ -446,6 +446,20 @@ function MediaView({
                   <p>{current.title}</p>
                 </div>
               )
+            ) : current.kind === 'audio' ? (
+              <div className="chats-rw-audio-frame">
+                <div className="chats-rw-audio-visualizer" aria-hidden="true">
+                  <Glyph name="mic" size={40} />
+                </div>
+                <audio
+                  controls
+                  src={current.url}
+                  className="chats-rw-audio-player"
+                  aria-label={current.title || 'Audio player'}
+                >
+                  Your browser does not support the audio element.
+                </audio>
+              </div>
             ) : (
               <img
                 src={current.url}
@@ -473,7 +487,7 @@ function MediaView({
               className="chats-rw-action-btn"
               onClick={() => void copyText(current.url)}
             >
-              Copy Image URL
+              {current.kind === 'audio' ? 'Copy Audio URL' : current.kind === 'video' ? 'Copy Video URL' : 'Copy Image URL'}
             </button>
           </footer>
         </div>
@@ -489,7 +503,13 @@ function MediaView({
               onClick={() => setSelectedIndex(idx)}
               aria-label={`View ${item.title}`}
             >
-              <img src={item.thumbnailUrl || item.url} alt="" />
+              {item.kind === 'audio' ? (
+                <span className="chats-rw-thumb-audio" aria-hidden="true">
+                  <Glyph name="mic" size={14} />
+                </span>
+              ) : (
+                <img src={item.thumbnailUrl || item.url} alt="" />
+              )}
             </button>
           ))}
         </div>

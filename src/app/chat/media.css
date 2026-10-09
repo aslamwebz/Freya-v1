@@ -318,3 +318,106 @@
 
 .chats-overlay-nav.prev { left: 4px; }
 .chats-overlay-nav.next { right: 4px; }
+
+/* Audio card */
+.chats-media[data-kind='audio'] {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.chats-audio-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  background: rgba(14, 25, 38, 0.7);
+  border: 1px solid var(--border, rgb(255 255 255 / 0.12));
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chats-audio-card:hover,
+.chats-audio-card:focus-visible {
+  border-color: var(--accent, #6ea8fe);
+  background: rgba(18, 35, 54, 0.85);
+  outline: none;
+}
+
+.chats-audio-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(111, 220, 255, 0.15);
+  color: #6fdcff;
+  flex: none;
+}
+
+.chats-audio-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.chats-audio-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #dbeaf7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chats-audio-meta {
+  font-size: 11px;
+  color: #7997af;
+}
+
+/* Audio overlay */
+.chats-overlay-audio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(100%, 500px);
+  padding: 32px 24px;
+  background: rgba(12, 22, 34, 0.95);
+  border: 1px solid #233d54;
+  border-radius: 16px;
+  text-align: center;
+}
+
+.chats-overlay-audio-icon {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: rgba(111, 220, 255, 0.15);
+  color: #6fdcff;
+}
+
+.chats-overlay-audio-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #eaf3fb;
+}
+
+.chats-overlay-audio-host {
+  margin: 0;
+  font-size: 12px;
+  color: #8da4b8;
+}
+
+.chats-overlay-audio-player {
+  width: 100%;
+  margin-top: 8px;
+  border-radius: 24px;
+}

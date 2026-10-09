@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { MediaItem } from '../../../core/media/types'
+import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { hostBridge } from '../../platform/host'
 import './media.css'
 
@@ -41,7 +42,7 @@ function hostOf(url: string): string {
 }
 
 function posterAddress(item: MediaItem): string | null {
-  if (item.kind === 'document') return null
+  if (item.kind === 'document' || item.kind === 'audio') return null
   return item.thumbnailUrl ?? item.url
 }
 
@@ -61,7 +62,7 @@ function MediaCard({ item, index, onOpen }: {
     mounted.current = true
     setRefused(false)
 
-    if (item.kind === 'document' || address === null) {
+    if (item.kind === 'document' || item.kind === 'audio' || address === null) {
       return () => { mounted.current = false }
     }
 
@@ -96,6 +97,30 @@ function MediaCard({ item, index, onOpen }: {
           <span className="chats-doc-name">{item.title || 'Document'}</span>
           <span className="chats-doc-meta">
             {[item.host || hostOf(item.page), item.pages === null ? null : `${String(item.pages)} pages`]
+              .filter((part): part is string => part !== null && part !== '')
+              .join(' · ')}
+          </span>
+        </span>
+      </button>
+    )
+  }
+
+  if (item.kind === 'audio') {
+    return (
+      <button
+        type="button"
+        className="chats-audio-card"
+        onClick={() => onOpen(index)}
+        aria-label={`Listen to ${item.title || 'audio'}`}
+        title={item.title || item.host || undefined}
+      >
+        <span className="chats-audio-icon" aria-hidden="true">
+          <Glyph name="mic" size={18} />
+        </span>
+        <span className="chats-audio-text">
+          <span className="chats-audio-name">{item.title || 'Audio clip'}</span>
+          <span className="chats-audio-meta">
+            {[item.host || hostOf(item.page), item.duration]
               .filter((part): part is string => part !== null && part !== '')
               .join(' · ')}
           </span>
@@ -237,6 +262,12 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
         return
       }
 
+      if (item.kind === 'audio') {
+        if (!alive) return
+        setLoading(false)
+        return
+      }
+
       if (item.kind === 'image') {
         const full = await imageFor(item.url)
         const shown = full ?? fallbackPoster
@@ -369,7 +400,26 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
             <iframe className="chats-overlay-pdf" src={documentData} title={item.title || 'PDF preview'} />
           ) : null}
 
-          {!loading && item.kind !== 'video' && (
+          {!loading && item.kind === 'audio' ? (
+            <div className="chats-overlay-audio">
+              <span className="chats-overlay-audio-icon" aria-hidden="true">
+                <Glyph name="mic" size={40} />
+              </span>
+              <h3 className="chats-overlay-audio-title">{item.title || 'Audio Clip'}</h3>
+              <p className="chats-overlay-audio-host">{item.host || hostOf(item.page)}</p>
+              <audio
+                className="chats-overlay-audio-player"
+                src={item.url}
+                controls
+                autoPlay
+                aria-label={item.title || 'Audio player'}
+              >
+                Your browser does not support the audio element.
+              </audio>
+            </div>
+          ) : null}
+
+          {!loading && item.kind !== 'video' && item.kind !== 'audio' && (
             (item.kind === 'image' && imageData === null) ||
             (item.kind === 'document' && documentData === null)
           ) && reason !== null ? (

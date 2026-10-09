@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { CoreActivityEvent } from '../../../core/protocol/activity'
+import type { MediaItem } from '../../../core/media/types'
 import {
   conversationList,
   conversationMirror,
@@ -10,7 +11,7 @@ import { coreMirror, ensureActivityAttached } from '../../platform/coreClient'
 import { researchMirror } from '../../platform/researchClient'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import type { WorkspaceResearchView } from './modes'
-import { RichMessage } from './RichMessage'
+import { RichMessage, plainTextFromRich, type RichCitation } from './RichMessage'
 import { MediaGrid } from './MediaCards'
 import { DockedBrowser, type DockedTabOrigin } from './BrowserWorkspace'
 import { EyeSessionControls } from './EyeSessionControls'
@@ -46,10 +47,113 @@ function latestTurnFault(events: readonly CoreActivityEvent[], now: number): str
   return null
 }
 
-function timeLabel(value: string): string {
-  const date = new Date(value)
-  if (!Number.isFinite(date.getTime())) return ''
-  return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host.replace(/^www\./, '')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The citation table for an answer: its media items, in order, 1-based. The inline
+ * `[n]` chips and the numbered sources strip are both drawn from this one list, so
+ * a `[2]` chip and source row 2 are always the same address.
+ */
+function sourceCitations(items: readonly MediaItem[]): RichCitation[] {
+  return items.map((item) => ({
+    url: item.page || item.url,
+    title: item.title,
+    host: item.host || hostOf(item.page),
+  }))
+}
+
+/**
+ * The numbered source list for an answer, index-for-index with its inline `[n]`
+ * chips. Both read the same `message.media` array, so a citation and the row it
+ * points at cannot drift apart. Nothing here is recovered from the prose.
+ */
+function SourceStrip({ items, onOpen }: {
+  readonly items: readonly MediaItem[]
+  readonly onOpen: (url: string, kind: MediaItem['kind']) => void
+}) {
+  return (
+    <section className="chats-sources" aria-label="Sources">
+      <ol>
+        {items.map((item, index) => (
+          <li key={`${item.kind}:${item.url}:${String(index)}`}>
+            <button
+              type="button"
+              onClick={() => onOpen(item.page || item.url, item.kind)}
+              title={item.title || item.host || item.url}
+            >
+              <span className="chats-source-num" aria-hidden="true">{index + 1}</span>
+              <span className="chats-source-host">{item.host || hostOf(item.page) || 'source'}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+/**
+ * The quiet row under an answer: copy, and read-aloud when a speech engine is
+ * configured. It holds no state Core owns — copying is the window's own clipboard
+ * write, and speaking is a request Core either accepts or refuses.
+ */
+function AnswerActions({ content, canSpeak, speaking, onSpeak, onStop }: {
+  readonly content: string
+  readonly canSpeak: boolean
+  readonly speaking: boolean
+  readonly onSpeak: () => void
+  readonly onStop: () => void
+}) {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<number | null>(null)
+  useEffect(() => () => {
+    if (timer.current !== null) window.clearTimeout(timer.current)
+  }, [])
+
+  const copy = async (): Promise<void> => {
+    const text = plainTextFromRich(content)
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        const area = document.createElement('textarea')
+        area.value = text
+        area.setAttribute('readonly', '')
+        area.style.position = 'fixed'
+        area.style.opacity = '0'
+        document.body.appendChild(area)
+        area.select()
+        document.execCommand('copy')
+        document.body.removeChild(area)
+      }
+      setCopied(true)
+      if (timer.current !== null) window.clearTimeout(timer.current)
+      timer.current = window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // A failed copy is not a render error; the reader will retry.
+    }
+  }
+
+  return (
+    <div className="chats-actions">
+      <button type="button" onClick={() => void copy()} aria-label="Copy answer">{copied ? 'Copied' : 'Copy'}</button>
+      {canSpeak ? (
+        <button
+          type="button"
+          data-speaking={speaking || undefined}
+          aria-label={speaking ? 'Stop reading aloud' : 'Read this answer aloud'}
+          onClick={speaking ? onStop : onSpeak}
+        >
+          {speaking ? 'Stop' : 'Read aloud'}
+        </button>
+      ) : null}
+    </div>
+  )
 }
 
 function ResearchWorkspace({
@@ -182,6 +286,10 @@ export function Chats({
   onBrowserOpenUrl,
   onBrowserRequestedUrlHandled,
   onBrowserClose,
+  voiceCanSpeak = false,
+  voiceSpeaking = false,
+  onSpeakTurn,
+  onStopSpeaking,
 }: {
   researchView: WorkspaceResearchView | null
   onResearchViewChange?: (view: WorkspaceResearchView) => void
@@ -201,6 +309,11 @@ export function Chats({
   onBrowserOpenUrl: (url: string, origin?: DockedTabOrigin) => void
   onBrowserRequestedUrlHandled: () => void
   onBrowserClose: () => void
+  /** True when Core reports a speech engine, so read-aloud is worth offering. */
+  voiceCanSpeak?: boolean
+  voiceSpeaking?: boolean
+  onSpeakTurn?: (turnId: string) => void
+  onStopSpeaking?: () => void
 }) {
   const mirror = conversationMirror()
   const projection = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
@@ -302,44 +415,53 @@ export function Chats({
               <h2>Ready when you are.</h2>
               <p>Start below. This conversation stays in the same Freya workspace while you move between tabs.</p>
             </div>
-          ) : messages.map((message, messageIndex) => (
-            <article key={message.messageId} className="chats-turn" data-role={message.role}>
-              <span className="chats-turn-avatar" aria-hidden="true">
-                {message.role === 'user' ? 'A' : <Glyph name="core" size={15} />}
-              </span>
-              <div className="chats-turn-content">
-                <header><b>{message.role === 'user' ? 'You' : 'Freya'}</b><time>{timeLabel(message.createdAt)}</time></header>
-                <div className="chats-bubble">
-                  {message.role === 'assistant'
-                    ? <RichMessage
-                        content={message.content}
-                        onOpenLink={(url, provenance) => onBrowserOpenUrl(url, { kind: 'link', from: provenance?.kind === 'source' ? 'citation' : 'chat', ownerText: messages.slice(0, messageIndex).reverse().find((row) => row.role === 'user')?.content ?? '' })}
-                        enableCodeCopy
-                        enableToc
-                        collapseAbove={2400}
-                        provenance={
-                          message.media !== undefined && message.media.length > 0
-                            ? { retrieved: message.media.length }
-                            : undefined
-                        }
-                      />
-                    : <p className="chats-user-text">{message.content}</p>}
-                  {/* What the lookups behind this answer returned. Drawn from the
-                      message Core stored, never recovered from the prose: a card needs
-                      an address, and an address read out of a sentence is a guess. */}
-                  {message.role === 'assistant' && message.media !== undefined && message.media.length > 0 ? (
-                    <MediaGrid items={message.media} onOpenBrowserUrl={(url, kind) => onBrowserOpenUrl(url, { kind: 'link', from: 'media', ownerText: messages.slice(0, messageIndex).reverse().find((row) => row.role === 'user')?.content ?? '', mediaKind: kind })} />
+          ) : messages.map((message, messageIndex) => {
+            const ownerText = messages.slice(0, messageIndex).reverse().find((row) => row.role === 'user')?.content ?? ''
+            const media = message.media ?? []
+            const citations = sourceCitations(media)
+            const canSpeak = voiceCanSpeak && onSpeakTurn !== undefined && message.turnId !== ''
+            return (
+              <article key={message.messageId} className="chats-turn" data-role={message.role}>
+                <div className="chats-turn-content">
+                  <div className="chats-bubble">
+                    {message.role === 'assistant'
+                      ? <RichMessage
+                          content={message.content}
+                          citations={citations}
+                          onOpenLink={(url, provenance) => onBrowserOpenUrl(url, { kind: 'link', from: provenance?.kind === 'source' || provenance?.kind === 'citation' ? 'citation' : 'chat', ownerText })}
+                          enableCodeCopy
+                          enableToc
+                          collapseAbove={2400}
+                          provenance={media.length > 0 ? { retrieved: media.length } : undefined}
+                        />
+                      : <p className="chats-user-text">{message.content}</p>}
+                    {/* What the lookups behind this answer returned. Drawn from the
+                        message Core stored, never recovered from the prose: a card needs
+                        an address, and an address read out of a sentence is a guess. */}
+                    {message.role === 'assistant' && media.length > 0 ? (
+                      <MediaGrid items={media} onOpenBrowserUrl={(url, kind) => onBrowserOpenUrl(url, { kind: 'link', from: 'media', ownerText, mediaKind: kind })} />
+                    ) : null}
+                  </div>
+                  {message.role === 'assistant' && media.length > 0 ? (
+                    <SourceStrip items={media} onOpen={(url, kind) => onBrowserOpenUrl(url, { kind: 'link', from: 'citation', ownerText, mediaKind: kind })} />
+                  ) : null}
+                  {message.role === 'assistant' ? (
+                    <AnswerActions
+                      content={message.content}
+                      canSpeak={canSpeak}
+                      speaking={voiceSpeaking}
+                      onSpeak={() => onSpeakTurn?.(message.turnId)}
+                      onStop={() => onStopSpeaking?.()}
+                    />
                   ) : null}
                 </div>
-              </div>
-            </article>
-          ))}
+              </article>
+            )
+          })}
           {researchView ? <ResearchWorkspace view={researchView} onChange={onResearchViewChange ?? (() => {})} onOpenCitation={(url) => openResearchCitationInDockedBrowser(researchView, url)} /> : null}
           {generating ? (
             <article className="chats-turn" data-role="assistant" aria-live="polite">
-              <span className="chats-turn-avatar chats-turn-avatar-live" aria-hidden="true"><Glyph name="core" size={15} /></span>
               <div className="chats-turn-content">
-                <header><b>Freya</b><span className="chats-live-label">{projection?.activeTurn?.providerExecuting ? 'thinking' : 'preparing'}</span></header>
                 <div className="chats-bubble chats-thinking"><i /><i /><i /></div>
                 <ActivityFeed active={generating} />
               </div>

@@ -55,6 +55,7 @@ export interface VoiceDock {
   toggleAutoSubmit: () => void
   stopSpeaking: () => void
   chooseVoice: (voiceId: string) => void
+  speak: (turnId: string) => void
 }
 
 /**
@@ -169,6 +170,13 @@ export function useVoiceDock(
     void runtime.instance.stopSpeaking()
   }, [runtime])
 
+  const speak = useCallback(
+    (turnId: string) => {
+      void runtime.instance.speak(turnId)
+    },
+    [runtime],
+  )
+
   const chooseVoice = useCallback(
     (voiceId: string) => {
       void runtime.instance.selectVoice(voiceId)
@@ -234,6 +242,7 @@ export function useVoiceDock(
     toggleAutoSubmit,
     stopSpeaking,
     chooseVoice,
+    speak,
   }
 }
 

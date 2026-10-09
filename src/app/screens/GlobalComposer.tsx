@@ -221,13 +221,14 @@ export function GlobalComposer({
     // by passing the text through unchanged and reporting the directives
     // separately.
     //
-    // The draft is deliberately *not* cleared on a successful send. The owner
-    // can keep iterating on it, or wipe it with the platform's clear shortcut,
-    // and an interrupted turn never silently consumes the words it was sent.
+    // The draft is cleared once Core accepts the turn, so the bar is empty for
+    // the next message. A refusal keeps the words where they are, because a
+    // turn that never went must not silently consume what was typed.
     onNotice?.('')
     setSending(true)
     try {
-      await onSend(value, mode, { webSearch: wantWeb, browserUse: wantBrowser })
+      const accepted = await onSend(value, mode, { webSearch: wantWeb, browserUse: wantBrowser })
+      if (accepted) setText('')
     } finally {
       setSending(false)
     }

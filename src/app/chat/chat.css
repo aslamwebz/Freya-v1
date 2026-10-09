@@ -69,6 +69,9 @@
 .chats-thread { padding:0 0 92px; gap:0; display:grid; grid-template-rows:auto minmax(0,1fr) auto; }
 .chats-thread,
 .chats-log { background: transparent; }
+/* The global stylesheet disables selection on <body>; the transcript opts back
+   in so an answer can be selected and copied like any other text. */
+.chats-log { user-select: text; }
 .chats-workspace-head { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:64px; padding:9px 18px; }
 .chats-workspace-identity { display:flex; align-items:center; gap:12px; min-width:0; }
 .chats-workspace-identity > span:last-child { display:grid; gap:1px; min-width:0; }
@@ -88,9 +91,9 @@
 .chats-workspace-state[data-busy] { color:#b8ebf9; }
 .chats-workspace-state[data-busy] i { background:#7fdcff; box-shadow:0 0 11px #69dcff; animation:chats-pulse 1.15s ease-in-out infinite; }
 
-.chats-log { padding:26px clamp(18px,3vw,44px) 20px; display:flex; flex-direction:column; align-items:stretch; gap:16px; }
-.chats-turn { display:flex; align-items:flex-start; gap:10px; width:min(78%,850px); }
-.chats-turn[data-role='user'] { flex-direction:row-reverse; align-self:flex-end; }
+.chats-log { padding:26px clamp(18px,3vw,44px) 20px; display:flex; flex-direction:column; align-items:center; gap:22px; }
+.chats-turn { display:flex; align-items:flex-start; gap:10px; width:min(100%,820px); }
+.chats-turn[data-role='user'] { flex-direction:row-reverse; }
 .chats-turn-avatar { display:grid; place-items:center; width:29px; height:29px; flex:none; margin-top:18px; border-radius:50%; border:0; background:transparent; color:#99def3; font-size:11px; }
 .chats-turn[data-role='user'] .chats-turn-avatar { color:#e4eff8; border:1px solid #2c3a4b; background:#0e1822; }
 .chats-turn-avatar-live { box-shadow:0 0 14px #69dcff40,inset 0 0 10px #55ceef17; }
@@ -107,9 +110,9 @@
    white-ish text. The owner's bubble stays a bubble so the two sides of the
    transcript are still distinguishable without any decoration on the assistant.
 */
-.chats-bubble { min-width:0; padding:6px 0; border:0; border-radius:0; background:transparent; color:#eaf2fb; font-size:14px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; box-shadow:none; }
-.chats-turn[data-role='user'] .chats-bubble { padding:10px 14px; border:1px solid #2c3a4b; border-radius:14px; background:#0f1822; color:#f1f6fb; }
-.chats-turn[data-role='user'] { width:min(72%,720px); }
+.chats-bubble { min-width:0; padding:6px 0; border:0; border-radius:0; background:transparent; color:#eaf2fb; font-size:15px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; box-shadow:none; }
+.chats-turn[data-role='user'] .chats-bubble { padding:10px 15px; border:1px solid #2c3a4b; border-radius:16px; background:#141a20; color:#f1f6fb; }
+.chats-turn[data-role='user'] { width:min(100%,820px); }
 .chats-thinking { display:inline-flex; align-items:center; width:max-content; gap:5px; min-height:18px; padding-right:18px; }
 .chats-thinking i { width:5px; height:5px; border-radius:50%; background:#84e8ff; box-shadow:0 0 7px #63ddff66; animation:chats-thinking 1.2s ease-in-out infinite; }
 .chats-thinking i:nth-child(2){animation-delay:.14s}.chats-thinking i:nth-child(3){animation-delay:.28s}
@@ -129,7 +132,7 @@
 /* What went wrong, folded away. It replaced the strip that used to float above
    the composer, so a timeout is now said once, in Core's words, inside the
    conversation it interrupted. */
-.chats-issue { margin:0 18px 14px; border:1px solid #d69a6a4d; border-radius:10px; background:#1b120bd9; overflow:hidden; }
+.chats-issue { align-self:stretch; margin:0 18px 14px; border:1px solid #d69a6a4d; border-radius:10px; background:#1b120bd9; overflow:hidden; }
 .chats-issue > summary { cursor:pointer; display:flex; align-items:center; gap:8px; padding:8px 12px; list-style:none; color:#f0c08c; font-size:12px; }
 .chats-issue > summary::-webkit-details-marker { display:none; }
 .chats-issue > summary b { font-weight:500; }
@@ -137,7 +140,7 @@
 .chats-issue-mark { display:grid; place-items:center; width:16px; height:16px; flex:none; border-radius:50%; background:#d69a6a2e; color:#ffd7ab; font-size:11px; }
 .chats-issue > div { display:grid; gap:6px; padding:0 12px 11px; }
 .chats-issue p { margin:0; color:#e8c9a4; font-size:12px; line-height:1.45; }
-.chats-status-stack { display:grid; gap:5px; padding:0 18px 13px; }
+.chats-status-stack { align-self:stretch; display:grid; gap:5px; padding:0 18px 13px; }
 .chats-boundary { margin:0; width:fit-content; max-width:min(720px,92%); padding:6px 10px; border-left:2px solid #efa966; border-radius:4px 9px 9px 4px; background:#2b1e1575; color:#e7b683; font-size:10px; line-height:1.4; }
 @keyframes chats-thinking { 0%,100%{opacity:.35;transform:translateY(0)} 50%{opacity:1;transform:translateY(-2px)} }
 @keyframes chats-pulse { 50%{opacity:.45;transform:scale(.78)} }
@@ -416,6 +419,47 @@
 .chats-provenance span[data-tone='retrieved'] { color:#8dfbe8; border-color:#5fdabc54; }
 .chats-provenance span[data-tone='observed']  { color:#a4d6ff; border-color:#5cb8e654; }
 .chats-provenance span[data-tone='inferred']  { color:#e9c892; border-color:#d6a85b50; }
+
+/* Inline citation chips. A `[n]` in the answer becomes a small superscript button
+   that opens source n. Neutral by default; accent is reserved for hover. */
+.chats-cite {
+  display:inline-grid; place-items:center;
+  min-width:16px; height:16px; padding:0 4px; margin:0 1px;
+  vertical-align:super; font:600 10px/1 'Cascadia Code', ui-monospace, monospace;
+  color:#9fd8ec; background:#16232e; border:1px solid #33475a; border-radius:5px;
+  cursor:pointer; transition:color .12s ease, border-color .12s ease, background .12s ease;
+}
+.chats-cite:hover { color:#eafcff; border-color:#69dcef91; background:#12364a; }
+
+/* The numbered sources under an answer. Compact chips, index-for-index with the
+   inline citations, so a `[2]` chip and source row 2 are the same address. */
+.chats-sources { display:grid; gap:7px; }
+.chats-sources > ol { display:flex; flex-wrap:wrap; gap:6px; margin:0; padding:0; list-style:none; }
+.chats-sources button {
+  display:inline-flex; align-items:center; gap:7px; max-width:240px;
+  padding:5px 10px 5px 6px; border:1px solid #2b3a48; border-radius:999px;
+  background:#111820; color:#c3d4e2; font:inherit; font-size:11px; cursor:pointer;
+}
+.chats-sources button:hover { color:#eafcff; border-color:#4d6a80; background:#16222d; }
+.chats-source-num {
+  display:grid; place-items:center; width:17px; height:17px; flex:none;
+  border-radius:50%; background:#1d2a36; color:#8fb6cb;
+  font:600 9px/1 'Cascadia Code', ui-monospace, monospace;
+}
+.chats-source-host { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* The quiet per-answer action row. Hidden until the answer is hovered or focused,
+   so a finished transcript stays calm; always visible where hover does not exist. */
+.chats-actions { display:flex; gap:4px; opacity:0; transition:opacity .12s ease; }
+.chats-turn:hover .chats-actions,
+.chats-turn:focus-within .chats-actions { opacity:1; }
+@media (hover: none) { .chats-actions { opacity:1; } }
+.chats-actions button {
+  padding:4px 9px; border:1px solid transparent; border-radius:8px;
+  background:transparent; color:#7f95a6; font-size:11px; cursor:pointer;
+}
+.chats-actions button:hover { color:#eafcff; border-color:#33475a; background:#141d26; }
+.chats-actions button[data-speaking] { color:#8ff4d7; border-color:#3f7d6a; }
 
 /* Contents — visible only when the markdown has two or more headings and
    the parent opted in via `enableToc`. The summary is a state row, the list

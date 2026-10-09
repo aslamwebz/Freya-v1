@@ -56,7 +56,7 @@ describe('GlobalComposer', () => {
     expect(input().value).toBe('do not lose me')
   })
 
-  it('keeps the accepted draft available for further editing', async () => {
+  it('clears the accepted draft so the bar is ready for the next message', async () => {
     const onSend = vi.fn(async () => true)
 
     render(
@@ -79,7 +79,7 @@ describe('GlobalComposer', () => {
     fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
 
     await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello freya', 'chat', { webSearch: false, browserUse: false }))
-    expect(input().value).toBe('hello freya')
+    await waitFor(() => expect(input().value).toBe(''))
   })
 
   it('sends the selected Freya mode with the draft', async () => {

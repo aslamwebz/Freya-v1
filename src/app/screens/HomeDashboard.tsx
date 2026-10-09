@@ -397,6 +397,10 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
             onBrowserOpenUrl={onBrowserOpenUrl}
             onBrowserRequestedUrlHandled={onBrowserRequestedUrlHandled}
             onBrowserClose={onBrowserClose}
+            voiceCanSpeak={voice.projection?.synthesis.available === true}
+            voiceSpeaking={voice.speaking}
+            onSpeakTurn={voiceControls?.speak}
+            onStopSpeaking={voiceControls?.stopSpeaking}
           />
         ) : workspaceId === 'settings' ? (
           <SettingsOverlay

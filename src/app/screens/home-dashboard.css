@@ -17,6 +17,10 @@
 .hd-dashboard[data-background='aurora'] { background: radial-gradient(120% 90% at 20% 110%, #c8b2e63d, transparent 55%), radial-gradient(120% 90% at 80% 120%, #7ff0c02e, transparent 55%), #030911; }
 .hd-dashboard[data-background='grid'] { background-image: linear-gradient(#8fa4a82e 1px, transparent 1px), linear-gradient(90deg, #8fa4a82e 1px, transparent 1px); background-size: 46px 46px; background-color: #030911; }
 .hd-dashboard[data-background='obsidian'] { background: radial-gradient(120% 85% at 50% 118%, #7fe3c438, transparent 62%), radial-gradient(90% 60% at 50% -10%, #c8b2e629, transparent 55%), #030911; }
+/* Chats, Perplexity-style: one flat black page instead of the panorama. The
+   transcript, rail and composer all sit on the same black ground, so nothing
+   of the backdrop bleeds through behind an answer. */
+.hd-dashboard[data-screen='chat'] { background: #000; }
 .hd-dashboard button { color: inherit; background: none; border: 0; padding: 0; }
 .hd-dashboard button:focus-visible { outline: 2px solid #91ecff; outline-offset: 4px; }
 .hd-dashboard button:hover { color: #fff; }
@@ -366,11 +370,11 @@
    max-height on the textarea is the upper bound for the auto-grow, after which
    the field's own scrollbar appears so the dock itself never grows.
 */
-.hd-dock-form { display: grid; grid-template-rows: auto auto; gap: 6px; min-height: 54px; padding: 5px 12px 5px 7px; border: 1px solid #b3e0fc; border-radius: 28px; background: linear-gradient(170deg, #425d7480, #07131bf5 35%, #0b1825f5 74%, #36566fca); box-shadow: inset 0 2px 4px #b9dfffaa, inset 0 -2px 4px #acddffaa, 0 0 9px #84a9ff87, 0 0 27px #65c9ff27, 0 8px 24px #0008; }
+.hd-dock-form { display: grid; grid-template-rows: auto auto; gap: 6px; min-height: 54px; padding: 6px 12px 6px 8px; border: 1px solid #2b3a48; border-radius: 22px; background: #101418; box-shadow: 0 10px 30px #0007; }
 .hd-dock-controls { display: flex; align-items: center; gap: 10px; min-height: 32px; }
 .hd-dock-controls .hd-tools { flex: 1; min-width: 0; }
-.hd-mic { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border: 2px solid #9bffeb !important; border-radius: 50%; color: #edf7ff !important; background: radial-gradient(circle, #143445, #183252 60%, #142436) !important; box-shadow: 0 0 9px #86c9ff, 0 0 16px #5aefd286, inset 0 0 10px #45ffdd44; }
-.hd-mic[aria-pressed='true'] { border-color: #ffd98a !important; box-shadow: 0 0 12px #8bf1ff, 0 0 22px #7fe3c4aa; }
+.hd-mic { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border: 1px solid #33475a !important; border-radius: 50%; color: #dbe9f5 !important; background: #171f27 !important; box-shadow: none; }
+.hd-mic[aria-pressed='true'] { border-color: #7fe3c4 !important; box-shadow: 0 0 0 3px #7fe3c422; }
 .hd-input { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
 /* The composer field is a textarea, so it needs its own rules. Targeting `input`
     here left every one of these declarations matching nothing and the field fell
@@ -409,7 +413,9 @@
 .hd-dashboard .hd-menu .hd-fav[aria-pressed='true'] { color: #ffd98a; }
 .hd-dashboard .hd-menu .hd-model-pick { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hd-dashboard .hd-menu .hd-model-pick[aria-pressed='true'] { background: #12324a99; color: #fff; }
-.hd-send { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(#3f6f8c, #1c3346) !important; box-shadow: inset 0 1px 2px #cdeaff33, 0 0 12px #4fd8ff33; }
+.hd-send { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: #2f6b86 !important; box-shadow: none; transition: background .12s ease; }
+.hd-send:hover:not(:disabled) { background: #3d819f !important; }
+.hd-send:disabled { background: #22303a !important; opacity: .7; }
 
 /* Thinking-level row, only rendered for models that support it. Sits inside the
    model menu under the model list, so it never claims a permanent slot in the

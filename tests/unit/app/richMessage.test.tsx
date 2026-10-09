@@ -55,6 +55,18 @@ describe('RichMessage', () => {
     expect(blocks).toEqual([{ kind: 'code', language: 'ts', text: 'const x = "<tag>"' }])
   })
 
+  it('strips a chain-of-thought block and still parses the answer after it', () => {
+    // A `<think>` block shifts the stripped lines out of step with the raw
+    // lines; the block parser must read the stripped array everywhere or it
+    // fails to advance and spins forever.
+    const content = '<think>\nreasoning\nmore reasoning\n</think>\n> conclusion\n\n- one\n- two'
+    const blocks = parseRichBlocks(content)
+    expect(blocks).toEqual([
+      { kind: 'quote', text: 'conclusion' },
+      { kind: 'ul', items: ['one', 'two'] },
+    ])
+  })
+
   it('hides the copy affordance by default so the plain text path is zero-feature', () => {
     render(<RichMessage content={'```ts\nconst x = 1\n```'} />)
     expect(screen.queryByRole('button', { name: /copy/i })).toBeNull()

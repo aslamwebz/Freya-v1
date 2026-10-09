@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
+/**
+ * One numbered source an answer can cite inline.
+ *
+ * The index is 1-based and matches the marker a model wrote as `[1]`. The renderer
+ * does not invent the mapping: `citations[n - 1]` is the same list the sources strip
+ * draws, so a `[2]` chip and the second source row can never disagree.
+ */
+export interface RichCitation {
+  readonly url: string
+  readonly title?: string
+  readonly host?: string
+}
+
 export interface RichMessageProps {
   readonly content: string
   /**
@@ -8,6 +21,12 @@ export interface RichMessageProps {
    * render visibly but cannot escape Freya through the renderer on their own.
    */
   readonly onOpenLink?: (url: string, provenance?: { readonly kind: 'citation' | 'source' | 'inline'; readonly title?: string }) => void
+  /**
+   * Sources this answer may cite. A `[n]` marker in the text becomes a numbered
+   * chip that opens the matching source, Perplexity-style. Absent means markers
+   * stay literal text rather than becoming a chip that leads nowhere.
+   */
+  readonly citations?: readonly RichCitation[]
   /**
    * Show a "Copy" affordance on every code block. Defaults to `false` so the
    * plain-text path stays zero-feature.
@@ -81,10 +100,10 @@ export function parseRichBlocks(content: string): Block[] {
   const trimmed: string[] = []
   let inThink = false
   for (const line of lines) {
-    const open = /<think>\b/.test(line)
-    const close = /<\/think>/.test(line)
+    const open = /<think>/i.test(line)
+    const close = /<\/think>/i.test(line)
     if (open && close) {
-      trimmed.push(line.replace(/<think>[\s\S]*?<\/think>/g, '').trim())
+      trimmed.push(line.replace(/<think>[\s\S]*?<\/think>/gi, '').trim())
       continue
     }
     if (open) { inThink = true; continue }
@@ -108,11 +127,11 @@ export function parseRichBlocks(content: string): Block[] {
       const language = fence[1] ?? ''
       const body: string[] = []
       index += 1
-      while (index < lines.length && !(lines[index] ?? '').match(FENCE)) {
-        body.push(lines[index] ?? '')
+      while (index < trimmed.length && !(trimmed[index] ?? '').match(FENCE)) {
+        body.push(trimmed[index] ?? '')
         index += 1
       }
-      if (index < lines.length) index += 1
+      if (index < trimmed.length) index += 1
       blocks.push({ kind: 'code', language, text: body.join('\n') })
       continue
     }
@@ -129,8 +148,8 @@ export function parseRichBlocks(content: string): Block[] {
     if (quote) {
       flushParagraph()
       const quoted: string[] = []
-      while (index < lines.length) {
-        const hit = (lines[index] ?? '').match(QUOTE)
+      while (index < trimmed.length) {
+        const hit = (trimmed[index] ?? '').match(QUOTE)
         if (!hit) break
         quoted.push(hit[1] ?? '')
         index += 1
@@ -143,8 +162,8 @@ export function parseRichBlocks(content: string): Block[] {
     if (unordered) {
       flushParagraph()
       const items: string[] = []
-      while (index < lines.length) {
-        const hit = (lines[index] ?? '').match(UL)
+      while (index < trimmed.length) {
+        const hit = (trimmed[index] ?? '').match(UL)
         if (!hit) break
         items.push(hit[1] ?? '')
         index += 1
@@ -157,8 +176,8 @@ export function parseRichBlocks(content: string): Block[] {
     if (ordered) {
       flushParagraph()
       const items: string[] = []
-      while (index < lines.length) {
-        const hit = (lines[index] ?? '').match(OL)
+      while (index < trimmed.length) {
+        const hit = (trimmed[index] ?? '').match(OL)
         if (!hit) break
         items.push(hit[1] ?? '')
         index += 1
@@ -169,14 +188,14 @@ export function parseRichBlocks(content: string): Block[] {
 
     if (
       line.includes('|') &&
-      index + 1 < lines.length &&
-      tableDivider(lines[index + 1] ?? '')
+      index + 1 < trimmed.length &&
+      tableDivider(trimmed[index + 1] ?? '')
     ) {
       flushParagraph()
       const rows: string[][] = [tableCells(line)]
       index += 2
-      while (index < lines.length && (lines[index] ?? '').includes('|') && (lines[index] ?? '').trim()) {
-        rows.push(tableCells(lines[index] ?? ''))
+      while (index < trimmed.length && (trimmed[index] ?? '').includes('|') && (trimmed[index] ?? '').trim()) {
+        rows.push(tableCells(trimmed[index] ?? ''))
         index += 1
       }
       blocks.push({ kind: 'table', rows })
@@ -219,8 +238,8 @@ function safeWebUrl(value: string): string | null {
  * ends `… at https://example.com.` links the address and leaves the full stop as
  * prose.
  */
-export function inlineRichText(text: string, onOpenLink?: (url: string, provenance?: { readonly kind: 'citation' | 'source' | 'inline'; readonly title?: string }) => void): ReactNode[] {
-  const token = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\)|https?:\/\/[^\s<>()]*[^\s<>().,;:!?'")])/g
+export function inlineRichText(text: string, onOpenLink?: (url: string, provenance?: { readonly kind: 'citation' | 'source' | 'inline'; readonly title?: string }) => void, citations?: readonly RichCitation[]): ReactNode[] {
+  const token = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\)|\[\d+\]|https?:\/\/[^\s<>()]*[^\s<>().,;:!?'")])/g
   const nodes: ReactNode[] = []
   let cursor = 0
   let match: RegExpExecArray | null
@@ -235,6 +254,25 @@ export function inlineRichText(text: string, onOpenLink?: (url: string, provenan
       nodes.push(<strong key={key++}>{raw.slice(2, -2)}</strong>)
     } else if (raw.startsWith('*')) {
       nodes.push(<em key={key++}>{raw.slice(1, -1)}</em>)
+    } else if (/^\[\d+\]$/.test(raw)) {
+      const index = Number(raw.slice(1, -1))
+      const source = citations?.[index - 1]
+      if (source === undefined) {
+        nodes.push(raw)
+      } else {
+        nodes.push(
+          <button
+            key={key++}
+            type="button"
+            className="chats-cite"
+            title={source.title ?? source.host ?? source.url}
+            aria-label={`Source ${String(index)}${source.title ? `: ${source.title}` : ''}`}
+            onClick={() => onOpenLink?.(source.url, { kind: 'citation', ...(source.title === undefined ? {} : { title: source.title }) })}
+          >
+            {index}
+          </button>,
+        )
+      }
     } else {
       const link = raw.startsWith('http') ? null : raw.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
       const label = link === null ? raw : (link?.[1] ?? raw)
@@ -327,6 +365,7 @@ function headingId(index: number, text: string): string {
 export function RichMessage({
   content,
   onOpenLink,
+  citations,
   enableCodeCopy = false,
   enableToc = false,
   collapseAbove,
@@ -365,7 +404,7 @@ export function RichMessage({
           <ol className="chats-toc-list">
             {headingBlocks.map(({ block, index }) => {
               const id = headingId(index, block.text ?? '')
-              const label = inlineRichText(block.text ?? '', onOpenLink)
+              const label = inlineRichText(block.text ?? '', onOpenLink, citations)
               return (
                 <li key={`toc-${String(index)}`} data-level={block.level ?? 1}>
                   <button type="button" onClick={() => scrollTo(id)} aria-label={`Jump to: ${block.text ?? ''}`}>
@@ -381,7 +420,7 @@ export function RichMessage({
       {visible.map((block, index) => {
         const key = `${block.kind}-${index}`
         if (block.kind === 'heading') {
-          const body = inlineRichText(block.text ?? '', onOpenLink)
+          const body = inlineRichText(block.text ?? '', onOpenLink, citations)
           const id = headingId(index, block.text ?? '')
           if (block.level === 1) return <h2 key={key} id={id}>{body}</h2>
           if (block.level === 2) return <h3 key={key} id={id}>{body}</h3>
@@ -391,25 +430,25 @@ export function RichMessage({
           return <CodeBlock key={key} language={block.language} text={block.text ?? ''} enableCopy={enableCodeCopy} />
         }
         if (block.kind === 'quote') {
-          return <blockquote key={key}>{inlineRichText(block.text ?? '', onOpenLink)}</blockquote>
+          return <blockquote key={key}>{inlineRichText(block.text ?? '', onOpenLink, citations)}</blockquote>
         }
         if (block.kind === 'ul') {
           return <ul key={key}>{(block.items ?? []).map((item, itemIndex) =>
-            <li key={itemIndex}>{inlineRichText(item, onOpenLink)}</li>)}</ul>
+            <li key={itemIndex}>{inlineRichText(item, onOpenLink, citations)}</li>)}</ul>
         }
         if (block.kind === 'ol') {
           return <ol key={key}>{(block.items ?? []).map((item, itemIndex) =>
-            <li key={itemIndex}>{inlineRichText(item, onOpenLink)}</li>)}</ol>
+            <li key={itemIndex}>{inlineRichText(item, onOpenLink, citations)}</li>)}</ol>
         }
         if (block.kind === 'table') {
           const [head = [], ...body] = block.rows ?? []
           return <div key={key} className="chats-table-wrap"><table>
-            <thead><tr>{head.map((cell, cellIndex) => <th key={cellIndex}>{inlineRichText(cell, onOpenLink)}</th>)}</tr></thead>
+            <thead><tr>{head.map((cell, cellIndex) => <th key={cellIndex}>{inlineRichText(cell, onOpenLink, citations)}</th>)}</tr></thead>
             <tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) =>
-              <td key={cellIndex}>{inlineRichText(cell, onOpenLink)}</td>)}</tr>)}</tbody>
+              <td key={cellIndex}>{inlineRichText(cell, onOpenLink, citations)}</td>)}</tr>)}</tbody>
           </table></div>
         }
-        return <p key={key}>{inlineRichText(block.text ?? '', onOpenLink)}</p>
+        return <p key={key}>{inlineRichText(block.text ?? '', onOpenLink, citations)}</p>
       })}
 
       {showToggle ? (

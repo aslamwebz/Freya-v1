@@ -58,6 +58,7 @@ function dock(overrides: Partial<VoiceView> & { autoSubmit?: boolean } = {}): Vo
     toggleAutoSubmit: () => pressed.push('toggleAutoSubmit'),
     stopSpeaking: () => pressed.push('stopSpeaking'),
     chooseVoice: () => pressed.push('chooseVoice'),
+    speak: () => pressed.push('speak'),
   }
 }
 

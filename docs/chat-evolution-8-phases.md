@@ -11,7 +11,7 @@
 | 5. Composer | Complete | 362 focused tests; full TypeScript; scoped lint; both builds; advanced composer with drag-drop, paste, thinking levels, draft preservation | `367529b` |
 | 6. Agentic Execution | Complete | 373 focused tests; full TypeScript; scoped lint; both builds; active turn tracking, approval alerts, retry option, structured execution cards | `7cf3b5c` |
 | 7. Voice & Multimodal | Complete | 383 focused tests (10 new integration tests); full TypeScript; scoped lint; both builds; push-to-talk live interim visualizer, permission/wake status badges, TTS read-aloud waves, multimodal audio playback in chat & Right Workspace | `17e743f` |
-| 8. Integration | Complete | 391 focused tests (8 new integration tests); full TypeScript (0 errors); renderer & electron builds; all 11 acceptance workflows verified | `3ddf98a` |
+| 8. Integration | Complete | 391 focused tests (8 new integration tests); full TypeScript (0 errors); renderer & electron builds; all 11 acceptance workflows verified | `e5858b0` |
 
 ### Phase 1 audit and implementation sequence
 

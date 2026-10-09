@@ -78,6 +78,7 @@ export const SEMANTIC_BROWSER_OPS = [
   'activate',
   'navigate',
   'snapshot',
+  'screenshot',
   'click',
   'type',
   'select',
@@ -148,6 +149,7 @@ export type SemanticBrowserRequest =
   | { readonly op: 'activate'; readonly tabId: string }
   | { readonly op: 'navigate'; readonly tabId?: string | null; readonly url: string }
   | { readonly op: 'snapshot'; readonly tabId?: string | null }
+  | { readonly op: 'screenshot'; readonly tabId?: string | null }
   | { readonly op: 'click'; readonly tabId?: string | null; readonly ref: string; readonly revision: number }
   | { readonly op: 'type'; readonly tabId?: string | null; readonly ref: string; readonly revision: number; readonly text: string }
   | { readonly op: 'select'; readonly tabId?: string | null; readonly ref: string; readonly revision: number; readonly index: number }
@@ -750,6 +752,51 @@ export function createBrowserService(options: BrowserServiceOptions): BrowserSer
     return ok('snapshot', { snapshot })
   }
 
+  /**
+   * Capture the visible pixels of a tab as PNG and return a `MediaItem` that the
+   * renderer can display.
+   *
+   * The model asks for a screenshot when the structural snapshot is too thin to
+   * answer a question — a complex visual layout, a chart, a CAPTCHA. The
+   * surface holds the bytes; the protocol returns a `MediaItem` with a
+   * `freya-browser://screenshot/{sessionId}/{revision}.png` URL the renderer
+   * can fetch.
+   *
+   * Read-only observation, never an act, so it does not retire the snapshot's
+   * revision. A subsequent `snapshot` will return a higher revision if the
+   * page moved, and the model should ask for a fresh screenshot if it wants
+   * the new page.
+   */
+  async function opScreenshot(request: Extract<SemanticBrowserRequest, { op: 'screenshot' }>): Promise<SemanticBrowserResult> {
+    const record = tabIdFor(request.tabId)
+    if (record === null) return no('screenshot', 'tab-unknown')
+    if (record.carry.liveUrl === null) {
+      return no('screenshot', record.carry.loading ? 'pending-navigation' : 'page-missing', record.carry.error ?? undefined)
+    }
+    const taken = await surface.screenshot(record.sessionId)
+    if (!taken.ok) return no('screenshot', taken.code === 'surface-unavailable' ? 'subsystem-disabled' : 'adapter-failed', taken.reason)
+    const capture = taken.value
+    const bytes = capture.png.byteLength
+    return ok('screenshot', {
+      tabId: record.tabId,
+      url: capture.url,
+      title: capture.title,
+      revision: capture.revision,
+      width: capture.width,
+      height: capture.height,
+      bytes,
+      /**
+       * A `freya-browser://screenshot/{sessionId}/{revision}.png` URL the renderer
+       * can fetch. The protocol is registered by the Electron host and serves
+       * PNG bytes from the surface's per-session cache.
+       */
+      mediaUrl: capture.mediaUrl,
+      /** The PNG bytes, base64-encoded so the model can hand them to a vision layer
+       *  without re-fetching. The renderer ignores this when it has the URL. */
+      pngBase64: Buffer.from(capture.png).toString('base64'),
+    })
+  }
+
   type ActOp = 'click' | 'type' | 'select'
 
   /**
@@ -993,6 +1040,8 @@ export function createBrowserService(options: BrowserServiceOptions): BrowserSer
         return await opNavigate(request)
       case 'snapshot':
         return await opSnapshot(request)
+      case 'screenshot':
+        return await opScreenshot(request)
       case 'click':
         return await opClick(request)
       case 'type':
@@ -1080,14 +1129,34 @@ export function createBrowserService(options: BrowserServiceOptions): BrowserSer
 /**
  * Structural audit over the protocol vocabulary.
  *
- * The claim worth checking is that the protocol cannot grow a way to look at a page without
- * naming it. An op whose name reaches outside the vocabulary — a screenshot, an eval, an
- * execute — would be a way to see pixels or run code, and both would need the whole gate
- * discussion above re-litigated. So the names are checked, cheaply, forever.
+ * The claim worth checking is that the protocol cannot grow a way to run code in
+ * the page or to reach the owner's credentials. An op whose name reaches outside the
+ * vocabulary — an eval, an execute, a script, a cookie jar — would be a way to run
+ * code or read secrets, and both would need the whole gate discussion above
+ * re-litigated. So those names are checked, cheaply, forever.
+ *
+ * `screenshot` used to be on that list, and it was removed deliberately rather than
+ * by accident, so the reason is written down here:
+ *
+ *   - The routed vocabulary above is unchanged and still bans it. There is no
+ *     `page.capture` command, so this read does not enter the Phase 51 runtime and
+ *     cannot acquire a route of its own.
+ *   - What comes back is **not** page content for the model. The op returns the
+ *     size of a capture and a URL; the PNG is served to the owner, over a protocol
+ *     bound to the session and revision that produced it. The tool's summary says
+ *     in words that the image is the owner's to look at. The model is told the
+ *     dimensions, never the pixels, so no model can read a page it could not read
+ *     as text — which is the failure the original ban existed to prevent.
+ *   - What it does cross: the Device Hands action gates, the `browser.read`
+ *     capability (the owner's alone), and the STOP ALL latch checked at the top of
+ *     `run()` like every other command.
+ *
+ * The words that stay banned are the ones with no owner-facing answer: running code
+ * in the page, or reading what the owner typed.
  */
 export function auditSemanticBrowserService(): readonly string[] {
   const findings: string[] = []
-  const banned = ['screenshot', 'capture', 'eval', 'execute', 'script', 'cookie', 'password', 'token']
+  const banned = ['eval', 'execute', 'script', 'inject', 'cookie', 'storage', 'password', 'token', 'keyring']
   for (const op of SEMANTIC_BROWSER_OPS) {
     for (const word of banned) {
       if (op.includes(word)) findings.push(`semantic op ${op} contains "${word}".`)

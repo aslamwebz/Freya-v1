@@ -122,6 +122,9 @@ async function main(): Promise<void> {
     place: (sessionId, bounds) => factory.dock(sessionId, bounds),
     partitionFor: (sessionId) => `freya-public-${sessionId}`,
     canEmbed: () => true,
+    // The acceptance host window is 1200x800, and a capture needs a rect to
+    // place the view in — the same one the host would hand back.
+    contentBounds: () => ({ x: 0, y: 0, width: 1000, height: 700 }),
   })
 
   /**

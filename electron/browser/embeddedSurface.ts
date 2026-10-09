@@ -1,5 +1,6 @@
-import type { BrowserSurfacePort, OpenSurfaceTabRequest, ScrollRequest, SurfaceBounds, SurfaceElement, SurfaceReading, SurfaceSnapshot, SurfaceTabReading } from '../../core/browser/service'
+import type { BrowserSurfacePort, OpenSurfaceTabRequest, ScrollRequest, SurfaceBounds, SurfaceElement, SurfaceReading, SurfaceScreenshot, SurfaceSnapshot, SurfaceTabReading } from '../../core/browser/service'
 import type { FreyaBrowserLivePage } from './freyaWindow'
+import type { ScreenshotResource } from './screenshotResource'
 
 /**
  * The embedded surface: one real `WebContentsView` per tab.
@@ -41,6 +42,22 @@ export interface EmbeddedSurfaceOptions {
   readonly partitionFor: (sessionId: string) => string
   /** Whether the host window can hold a view at all. False in a headless test. */
   readonly canEmbed: () => boolean
+  /**
+   * Where captured PNG bytes go after a screenshot, so the renderer can fetch
+   * them. Optional, so the test harness can omit it; without it, screenshots
+   * return a `mediaUrl` that 404s, which is a fair signal that the host
+   * has not been wired up.
+   */
+  readonly screenshotResource?: ScreenshotResource
+  /**
+   * The rect a tab occupies when the host has not been told a smaller one.
+   *
+   * A capture has to place the view somewhere, and `capturePage` returns a
+   * 0x0 image for a view that was never attached at all. The rect is asked for
+   * on every screenshot rather than remembered, because the window may have been
+   * resized, moved to another display, or fullscreened since the last one.
+   */
+  readonly contentBounds: () => SurfaceBounds | null
   readonly now?: () => Date
   readonly settleMs?: number
 }
@@ -57,6 +74,16 @@ export function createEmbeddedBrowserSurface(options: EmbeddedSurfaceOptions): B
   let attached: string | null = null
   let bounds: SurfaceBounds | null = null
   let disposed = false
+  /**
+   * While a screenshot is in flight, placement changes from anywhere else (the
+   * renderer's panel effect re-sending its dock on every resize frame, for
+   * example) must wait: a view detached half-way through `capturePage` is a
+   * view whose capture throws, and a capture that throws is an image nobody
+   * got. The deferred request is applied when the capture settles, so nothing
+   * is lost — it is only ordered after the capture.
+   */
+  let capturing = false
+  let deferred: { readonly sessionId: string | null; readonly next: SurfaceBounds | null } | null = null
 
   function emit(sessionId: string): void {
     const live = tabs.get(sessionId)
@@ -89,6 +116,16 @@ export function createEmbeddedBrowserSurface(options: EmbeddedSurfaceOptions): B
       return
     }
     options.place(attached, bounds)
+  }
+
+  /** The unchecked core of `dock`: update state and place. Bypasses the capture guard. */
+  function placeNow(sessionId: string | null, next: SurfaceBounds | null): boolean {
+    bounds = next
+    if (!options.canEmbed()) return false
+    if (sessionId !== null && !tabs.has(sessionId)) return false
+    attached = sessionId
+    reattach()
+    return true
   }
 
   async function open(request: OpenSurfaceTabRequest): Promise<SurfaceReading<SurfaceTabReading>> {
@@ -136,6 +173,9 @@ export function createEmbeddedBrowserSurface(options: EmbeddedSurfaceOptions): B
     }
     live.detach()
     tabs.delete(sessionId)
+    // Forget any stashed screenshot for this session. A closed tab cannot be
+    // screenshotted again, and a 404 is a clearer answer than stale bytes.
+    options.screenshotResource?.drop(sessionId)
     // Release the view for real: `close()` destroys the web contents, clears the partition's
     // storage and cache, and detaches from the window. Anything less leaves a page running
     // with no tab that owns it.
@@ -275,6 +315,76 @@ export function createEmbeddedBrowserSurface(options: EmbeddedSurfaceOptions): B
       return { ok: true, value: Object.freeze({ top: done.top, height: done.height }) }
     },
 
+    async screenshot(sessionId) {
+      const live = tabs.get(sessionId)
+      if (live === undefined) return { ok: false, code: 'tab-unknown', reason: 'That tab has no embedded page.' }
+      /**
+       * A capture needs a view that is actually on screen. `capturePage` does not
+       * fail loudly for a view nobody attached — it returns a 0x0 image, and a
+       * caller that accepted that would hand the model an empty PNG as a page.
+       * So the tab is docked for the duration of the capture and the docks are
+       * checked before anything is captured, not after.
+       */
+      const captureBounds = bounds ?? options.contentBounds()
+      if (captureBounds === null || captureBounds.width < 320 || captureBounds.height < 240) {
+        return {
+          ok: false,
+          code: 'surface-unavailable',
+          reason:
+            'The embedded browser has no sized view to capture, so there is no screenshot to return. ' +
+            'Open the browser panel in Freya, then ask for the screenshot again.',
+        }
+      }
+      // From here until the `finally`, the view must not move: a placement change
+      // landing mid-capture is what makes `capturePage` throw (`UnknownVizError`).
+      // `dock()` defers anything it is asked while `capturing` is set, and this
+      // block applies whatever was deferred after the restore.
+      capturing = true
+      const wasAttached = attached
+      const priorBounds = bounds
+      const docked = placeNow(sessionId, captureBounds)
+      if (!docked) {
+        // A host that cannot place at all (headless test, no window) cannot capture. Surface
+        // surfaces that have no native view to place return false from `dock`, and that is
+        // the case here too.
+        capturing = false
+        return { ok: false, code: 'surface-unavailable', reason: 'The embedded browser has no view to capture, so the page is not on screen.' }
+      }
+      try {
+        const taken = await live.page.screenshot()
+        if (!taken.ok || taken.payload === null) {
+          return { ok: false, code: taken.code, reason: `The embedded browser could not capture the page (${taken.code}), so there is no screenshot to return.` }
+        }
+        const p = taken.payload
+        // The resource store, if the host wired one, holds the bytes behind the URL.
+        // Without it, the URL is a 404 — a host that did not register the protocol
+        // will see the renderer draw a broken image, which is the right signal.
+        if (options.screenshotResource !== undefined) {
+          options.screenshotResource.store(sessionId, p.revision, p.png, 'image/png')
+        }
+        const mediaUrl = `freya-browser://screenshot/${encodeURIComponent(sessionId)}/${String(p.revision)}.png`
+        const value: SurfaceScreenshot = Object.freeze({
+          png: new Uint8Array(p.png.buffer, p.png.byteOffset, p.png.byteLength),
+          mediaUrl,
+          width: p.width,
+          height: p.height,
+          revision: p.revision,
+          url: p.url,
+          title: p.title,
+        })
+        return { ok: true, value }
+      } finally {
+        // Restore whatever was attached before, then apply anything the renderer
+        // asked for while the capture held the view. Deferred goes last on
+        // purpose: it is the renderer's latest word about where the view belongs.
+        placeNow(wasAttached, priorBounds)
+        capturing = false
+        const pending = deferred
+        deferred = null
+        if (pending !== null) placeNow(pending.sessionId, pending.next)
+      }
+    },
+
     async wait(sessionId, request) {
       const live = tabs.get(sessionId)
       if (live === undefined) return { ok: false, code: 'tab-unknown', reason: 'That tab has no embedded page.' }
@@ -285,12 +395,15 @@ export function createEmbeddedBrowserSurface(options: EmbeddedSurfaceOptions): B
     },
 
     dock(sessionId, next) {
-      bounds = next
-      if (!options.canEmbed()) return false
-      if (sessionId !== null && !tabs.has(sessionId)) return false
-      attached = sessionId
-      reattach()
-      return true
+      if (capturing) {
+        // A capture holds the view; anything asked now is applied after it
+        // settles. Returning true is honest: the request is accepted, only
+        // ordered after the capture, which is the ordering that keeps the
+        // capture from throwing.
+        deferred = { sessionId, next }
+        return true
+      }
+      return placeNow(sessionId, next)
     },
 
     subscribe(listener) {

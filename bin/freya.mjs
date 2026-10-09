@@ -19,6 +19,8 @@
  *   freya chats
  *   freya chat new "My new chat"
  *   freya send <conversationId> "What is the weather?"
+ *   freya send <conversationId> "summarise this page" --browser
+ *   freya send <conversationId> "anything new today?" --search
  *   freya browser status
  *   freya browser tabs
  *   freya browser open https://example.com
@@ -39,7 +41,9 @@ import process from 'node:process'
 
 const ARGV = process.argv.slice(2)
 const AS_JSON = ARGV.includes('--json')
-const FILTERED = ARGV.filter((a) => a !== '--json')
+const WANT_BROWSER = ARGV.includes('--browser')
+const WANT_SEARCH = ARGV.includes('--search')
+const FILTERED = ARGV.filter((a) => a !== '--json' && a !== '--browser' && a !== '--search')
 const COMMAND = FILTERED[0] ?? 'help'
 
 function userDataDir() {
@@ -248,6 +252,20 @@ function asText(method, result) {
       if (out.ok) return `ok${out.tabId !== undefined ? `  ${out.tabId}` : ''}`
       return `denied: ${out.reason ?? ''}`
     }
+    case 'browser.screenshot': {
+      const out = obj
+      if (out.ok !== true) return `no screenshot: ${out.code ?? ''}  ${out.reason ?? ''}`
+      const data = out.data ?? {}
+      // The bytes themselves are not printed. A megabyte of base64 in a
+      // terminal is unreadable and unsaveable; the URL is what the chat surface
+      // draws and what another tool can fetch.
+      return [
+        `captured ${data.url ?? ''}`,
+        `${data.title ?? ''}`,
+        `${data.width}x${data.height}  ${data.bytes} bytes  revision ${data.revision}`,
+        `bytes: ${data.mediaUrl ?? ''}`,
+      ].join('\n')
+    }
     case 'mission.list': {
       const list = obj.missions ?? []
       if (list.length === 0) return '(no missions)'
@@ -299,9 +317,12 @@ const USAGE = `freya — control the Freya you are looking at
   chat      | conversation get <id>      show a conversation
   chat new  | conversation create <title> create a conversation
   send      | conversation send <id> <text>  send a turn to a conversation
+              --browser: this turn is for Freya's own browser, not the web
+              --search:  this turn is for web search
   browser status                          browser service status
   browser tabs                            list open tabs
   browser open <url>                      open a tab
+  browser screenshot [tabId]              capture a tab as PNG (prints where the bytes live)
   browser activate <tabId>                focus a tab
   missions   | mission list               list missions
   mission    | mission get <id>           show a mission
@@ -375,6 +396,8 @@ function resolveMethod(command, argv) {
       return 'conversation.send'
     case 'browser': {
       const sub = argv[1]
+      if (sub === 'activate') return 'browser.activate'
+      if (sub === 'screenshot' || sub === 'shot') return 'browser.screenshot'
       if (sub === 'status' || sub === undefined) return 'browser.status'
       if (sub === 'tabs') return 'browser.tabs'
       if (sub === 'open') return 'browser.open'
@@ -413,10 +436,18 @@ function resolveParams(method, argv) {
       const idIndex = argv[1] === 'conversation' || argv[1] === 'conv' ? 2 : 1
       const id = argv[idIndex]
       const text = argv.slice(idIndex + 1).join(' ')
-      return { conversationId: id ?? '', text }
+      // The same two directives the composer's buttons send, so a turn submitted
+      // from the shell can declare which tool the owner meant. Neither grants
+      // anything: Guard still decides whether the tool may run.
+      const intents = {}
+      if (WANT_BROWSER) intents.browserUse = true
+      if (WANT_SEARCH) intents.webSearch = true
+      return { conversationId: id ?? '', text, ...(Object.keys(intents).length === 0 ? {} : { intents }) }
     }
     case 'browser.open':
       return { url: argv[2] ?? '' }
+    case 'browser.screenshot':
+      return { ...(argv[2] === undefined || argv[2] === '' ? {} : { tabId: argv[2] }) }
     case 'browser.activate':
       return { tabId: argv[2] ?? '' }
     case 'mission.get':

@@ -85,6 +85,7 @@ export const READ_METHODS = new Set<string>([
   'conversation.get',
   'browser.status',
   'browser.tabs',
+  'browser.screenshot',
   'mission.list',
   'mission.get',
   'agent.list',

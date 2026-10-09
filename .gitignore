@@ -35,3 +35,24 @@ artifacts/acceptance.env
 .kilo/live-test/
 .kilo/live-test/**
 
+# Local Kilo agent sessions, MCP exports, evidence and scratch files.
+# Existing tracked Kilo project configuration remains tracked.
+.kilo/
+
+# Throwaway probes used during local browser/acceptance investigations.
+# Do not ignore scripts/ itself: launch, build, release and tests live there.
+/scripts/acceptance-9223.mjs
+/scripts/acceptance-step1*.mjs
+/scripts/contact-check*.mjs
+/scripts/core-probe.mjs
+/scripts/debug-repair.mjs
+/scripts/get-sl-urls*.mjs
+/scripts/inspect-9223.mjs
+/scripts/investigate-journal*.mjs
+/scripts/probe-state.mjs
+/scripts/sl-test.mjs
+/scripts/verify-repair-on-quarantine.mjs
+
+# Temporary inspection scripts under the local artifacts area.
+/artifacts/*.mjs
+/artifacts/*.py

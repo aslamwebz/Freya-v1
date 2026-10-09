@@ -1,7 +1,7 @@
 import { CapabilitySettingsStore } from './capabilitySettings'
 import { readRuntimeCapabilityRegistry } from '../core/model/capability-runtime'
 import type { CapabilityPreferences } from '../core/capabilities'
-import { app, BrowserWindow, WebContentsView, ipcMain, screen, shell, safeStorage, Notification } from 'electron'
+import { app, BrowserWindow, WebContentsView, ipcMain, protocol, screen, shell, safeStorage, Notification } from 'electron'
 import { join, resolve } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
@@ -49,6 +49,7 @@ import type { GrantFact } from '../core/devicehands'
 import type { BrowserResult } from '../core/browser'
 import { normaliseBrowserDockRequest, normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
 import { createEmbeddedBrowserSurface } from './browser/embeddedSurface'
+import { createScreenshotResource } from './browser/screenshotResource'
 import { normaliseSemanticBrowserRequest } from './browser/semanticRequest'
 import { clampSurfaceBounds, createBrowserService, type BrowserService } from '../core/browser/service'
 import { EncryptedConversationStore } from '../core/conversation/encrypted-store'
@@ -361,6 +362,20 @@ function mountBrowserService(seam: DualBrowserActivation): void {
     console.warn('[freya] the browser service did not mount: no embedded page factory')
     return
   }
+  // The screenshot resource is a per-session PNG store, served over the
+  // `freya-browser://` custom protocol. We register it on the *renderer* session
+  // (the one the chat surface fetches from), not the Freya Browser session,
+  // because the renderer is what draws the screenshot card.
+  const screenshotResource = createScreenshotResource()
+  if (mainWindow !== null && !mainWindow.isDestroyed()) {
+    try {
+      screenshotResource.register(mainWindow.webContents.session)
+    } catch (error) {
+      // The protocol can already be registered on this session; we ignore that
+      // because the previous instance went away with the previous app launch.
+      void error
+    }
+  }
   const surface = createEmbeddedBrowserSurface({
     create: async (sessionId, partition) => await factory.create(sessionId, partition),
     // The factory docks exactly one view and undocks the rest, so "the front tab" is a fact
@@ -368,6 +383,16 @@ function mountBrowserService(seam: DualBrowserActivation): void {
     place: (sessionId, bounds) => factory.dock(sessionId, bounds),
     partitionFor: (sessionId) => `freya-public-${sessionId}`,
     canEmbed: () => mainWindow !== null && !mainWindow.isDestroyed(),
+    // A capture needs a rect to place the view in. The window's own content
+    // bounds are the honest default: it is the largest area a tab can occupy,
+    // and it is re-derived per capture so a resize or a display move is not
+    // answered with a stale rectangle.
+    contentBounds: () => {
+      const window = mainWindow
+      if (window === null || window.isDestroyed()) return null
+      return clampSurfaceBounds({ x: 0, y: 0, width: window.getContentBounds().width, height: window.getContentBounds().height }, window.getContentBounds())
+    },
+    screenshotResource,
   })
   const journal = coreHost?.deviceHandsJournal() ?? null
   browserService = createBrowserService({
@@ -1718,6 +1743,19 @@ function registerIpc(): void {
     return accepted
   })
 }
+
+// The `freya-browser://` scheme is the only path a window has to fetch a screenshot the
+// main process just captured. It must be registered as privileged before `app.ready`,
+// because the renderer that asks for the screenshot loads over http and a non-privileged
+// custom scheme is rejected by Electron's CORS layer. `standard: true` makes it a same-origin
+// scheme; `supportFetchAPI: true` is what `fetch()` needs; `secure: true` keeps CSP
+// happy on a renderer that ships one.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'freya-browser',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false, codeCache: false },
+  },
+])
 
 app.whenReady().then(async () => {
   if (!ownsProfile) return

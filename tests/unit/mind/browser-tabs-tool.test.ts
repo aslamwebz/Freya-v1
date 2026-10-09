@@ -323,3 +323,40 @@ describe('the audit', () => {
     expect(BROWSER_TABS_LIMITS.maxTabs).toBeGreaterThanOrEqual(10)
   })
 })
+
+describe('the screenshot op', () => {
+  it('hands the model the facts of a capture and says in words that it has not seen the image', async () => {
+    // The pixels are the owner's. A summary that let a model describe what it
+    // "saw" in an image it cannot read would be the failure the routed
+    // vocabulary's ban on capture commands exists to prevent, arriving by the
+    // back door.
+    const { bridge, log } = port((request) =>
+      ok(request.op, {
+        tabId: 'tab-1',
+        url: URL_A,
+        title: 'Alpha',
+        revision: 7,
+        width: 1920,
+        height: 1080,
+        bytes: 4096,
+        mediaUrl: 'freya-browser://screenshot/freya-0001/7.png',
+      }),
+    )
+    const tool = createBrowserTabsTool({ browser: bridge })
+    const result = await tool.run({ arguments: { op: 'screenshot' } })
+    expect(log).toEqual([{ op: 'screenshot', tabId: null }])
+    expect(result.summary).toContain('1920x1080')
+    expect(result.summary).toContain('4096')
+    expect(result.summary).toContain('freya-browser://screenshot/freya-0001/7.png')
+    expect(result.summary).toContain('for the owner to look at')
+    // And the whole base64 payload must not be handed over: the summary is text.
+    expect(result.summary).not.toContain('data:image')
+  })
+
+  it('reports a refused capture as a refusal, with the code', async () => {
+    const { bridge } = port((request) => no(request.op, 'capture-empty', 'the view has no painted frame'))
+    const tool = createBrowserTabsTool({ browser: bridge })
+    const result = await tool.run({ arguments: { op: 'screenshot' } })
+    expect(result.summary).toContain('capture-empty')
+  })
+})

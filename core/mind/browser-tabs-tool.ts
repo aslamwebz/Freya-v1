@@ -68,7 +68,7 @@ export const BROWSER_TABS_LIMITS = Object.freeze({
 })
 
 /** The operations this tool can ask for, in its own names. Closed. */
-const OPERATIONS = ['tabs', 'open', 'close', 'activate', 'navigate', 'snapshot', 'click', 'type', 'select', 'scroll', 'back', 'forward', 'reload', 'wait'] as const
+const OPERATIONS = ['tabs', 'open', 'close', 'activate', 'navigate', 'snapshot', 'screenshot', 'click', 'type', 'select', 'scroll', 'back', 'forward', 'reload', 'wait'] as const
 type Operation = (typeof OPERATIONS)[number]
 
 function isOperation(value: unknown): value is Operation {
@@ -87,7 +87,7 @@ export interface BrowserTabsToolOptions {
 }
 
 const PARAMETERS: readonly ToolParameter[] = Object.freeze([
-  { name: 'op', description: 'tabs — list every open tab. open — open an address in a new tab (or give "urls", one tab each). close — close a tab. activate — bring a tab to the front. navigate — point a tab at an address. snapshot — read the front tab as numbered elements plus the revision they belong to. click, type, select — act on an element. scroll — top, bottom or a number of pixels. back, forward, reload, wait — page motion.', required: true },
+  { name: 'op', description: 'tabs — list every open tab. open — open an address in a new tab (or give "urls", one tab each). close — close a tab. activate — bring a tab to the front. navigate — point a tab at an address. snapshot — read the front tab as numbered elements plus the revision they belong to. screenshot — capture the front tab as an image, for a page the element list cannot describe. click, type, select — act on an element. scroll — top, bottom or a number of pixels. back, forward, reload, wait — page motion.', required: true },
   { name: 'url', description: 'for open and navigate: the address, http or https only' },
   { name: 'urls', description: 'for opening several pages at once: the addresses, one per line or separated by commas, one tab each' },
   { name: 'tab', description: 'for a request about one tab: which tab id. Omit to mean the tab in front.' },
@@ -110,7 +110,8 @@ export function createBrowserTabsTool(options: BrowserTabsToolOptions): MindTool
     description:
       "Drive Freya's embedded browser as a set of tabs. Open addresses in separate tabs, switch between them, " +
       'read a page as a list of numbered elements, and act on one by quoting its number together with the revision ' +
-      'it came from. Use this when the owner asks for several pages at once, or to click something you just read. ' +
+      'it came from. Take a screenshot when the element list cannot answer the question, and the owner needs to see ' +
+      'the page itself. Use this when the owner asks for several pages at once, or to click something you just read. ' +
       'Every act must quote both a reference and a revision; a page that changed since you read it refuses the act ' +
       'rather than guessing. It cannot log in, solve a captcha, buy anything or upload a file.',
     capability: 'browser.read',
@@ -262,6 +263,22 @@ export function createBrowserTabsTool(options: BrowserTabsToolOptions): MindTool
           return { summary, sources: toSources(snapshot), provenance: provenance(issued) }
         }
 
+        case 'screenshot': {
+          const result = await send({ op: 'screenshot', tabId: tab })
+          if (!result.ok) return refusal(result, issued)
+          const d = result.data
+          // The summary is what the model reads. It carries the facts a snapshot cannot:
+          // that there *are* pixels, how big they are, and which instant they belong to.
+          // The URL is the owner's path to the same bytes, drawn by the chat surface.
+          const summary = [
+            `Screenshot of ${String(d.url ?? 'the tab')} — ${String(d.width ?? '?')}x${String(d.height ?? '?')} pixels, ` +
+              `${String(d.bytes ?? 0)} bytes, taken at revision ${String(d.revision ?? '?')}.`,
+            `Image: ${String(d.mediaUrl ?? '(none)')}`,
+            'The image is for the owner to look at. Describe what you asked about only if the element list above already told you, otherwise say what the page claims in text.',
+          ].join('\n')
+          return { summary, sources: [], provenance: provenance(issued) }
+        }
+
         case 'click':
         case 'type':
         case 'select': {
@@ -404,6 +421,6 @@ export function auditBrowserTabsTool(): readonly string[] {
   }
   if (BROWSER_TABS_LIMITS.maxTabs < 10) findings.push('the tab ceiling is below the ten-tab acceptance number.')
   if (BROWSER_TABS_LIMITS.maxActs > BROWSER_TABS_LIMITS.maxCommands) findings.push('the act ceiling exceeds the command ceiling.')
-  if (OPERATIONS.length !== 14) findings.push('the operation vocabulary is not the fourteen operations this build performs.')
+  if (OPERATIONS.length !== 15) findings.push('the operation vocabulary is not the fifteen operations this build performs.')
   return findings
 }

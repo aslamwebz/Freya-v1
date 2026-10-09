@@ -1,5 +1,5 @@
 import { BrowserWindow, WebContentsView, session as electronSession, type Session, type WebContents } from 'electron'
-import { PUBLIC_BROWSER_DENIED_PERMISSIONS, assertNonPersistentPartition, assertPublicBrowserUrl } from '../../core/browser'
+import { PUBLIC_BROWSER_DENIED_PERMISSIONS, assertNonPersistentPartition, assertPublicBrowserUrl, BROWSER_LIMITS } from '../../core/browser'
 import { isPrivateOrLocalHost, utf8Bytes } from '../../core/browserext'
 import type { FieldDescriptor, FreyaBrowserPage, FreyaBrowserPageFactory } from './publicAdapter'
 
@@ -399,6 +399,27 @@ export interface FreyaBrowserLivePage extends FreyaBrowserPage {
   scroll(request: { readonly kind: 'top' | 'bottom' | 'delta'; readonly amount?: number }): Promise<{ readonly ok: boolean; readonly top: number; readonly height: number; readonly code: string }>
   select(selector: string, index: number): Promise<{ readonly ok: boolean; readonly selected: string | null; readonly code: string }>
   wait(request: { readonly settleMs: number; readonly until?: string }): Promise<{ readonly ok: boolean; readonly settled: boolean; readonly url: string | null; readonly code: string }>
+  /**
+   * Capture the visible pixels as PNG.
+   *
+   * Bounded at `BROWSER_LIMITS.maxScreenshotBytes` so a tab that paints a 4K
+   * surface does not return a 60 MB PNG and exhaust the journal. Returns
+   * PNG bytes plus the dimensions and the surface's own revision at the
+   * moment of capture, so a caller can decide whether the bytes are still
+   * the page it is looking at.
+   */
+  screenshot(): Promise<{ readonly ok: boolean; readonly payload: ScreenshotPayload | null; readonly code: string }>
+}
+
+/** What `screenshot` hands back. Crosses the IPC boundary, so every field is serialisable. */
+export interface ScreenshotPayload {
+  /** PNG bytes. Crosses the boundary as a `Buffer`. */
+  readonly png: Buffer
+  readonly width: number
+  readonly height: number
+  readonly revision: number
+  readonly url: string
+  readonly title: string
 }
 
 /* ------------------------------------------------------------------ the page */
@@ -1024,6 +1045,171 @@ export class ElectronFreyaBrowserPage implements FreyaBrowserLivePage {
     }
     if (request.until !== undefined) return { ok: false, settled: false, url: this.url, code: 'wait-exceeded' }
     return { ok: true, settled: false, url: this.url, code: 'wait-exceeded' }
+  }
+
+  /**
+   * Capture the visible pixels of the page as PNG.
+   *
+   * `webContents.capturePage()` is the one path that turns the offscreen
+   * surface into bytes the kernel can return to the model. The call is on the
+   * page's own `webContents`, not a generic one, because a tab that is not the
+   * active view returns a black rectangle; we always capture the tab the
+   * surface asked us to.
+   *
+   * Two refusals are not `capturePage` failures and are checked here, because
+   * they are the shapes of a lie rather than a failed capture:
+   *   - a view nobody attached answers 0x0 with zero bytes, "successfully";
+   *   - a view attached to a one-pixel rect answers 2x2, also "successfully".
+   * Either one handed back as a screenshot would tell the model it had seen a
+   * page it had not seen, so both are refused with their own code.
+   */
+  async screenshot(): Promise<{ readonly ok: boolean; readonly payload: ScreenshotPayload | null; readonly code: string }> {
+    const contents = this.contents
+    if (this.closed || contents === undefined || contents.isDestroyed()) {
+      return { ok: false, payload: null, code: 'screenshot-failed' }
+    }
+    if (this.url === null) {
+      return { ok: false, payload: null, code: 'page-missing' }
+    }
+    /**
+     * Two ways to get pixels, tried in this order, because they answer
+     * different questions.
+     *
+     * `webContents.capturePage()` asks the compositor for the frame the window
+     * last painted. That is the truthful picture of what is on screen — and it
+     * is exactly what throws `UnknownVizError` when the window's compositor has
+     * not produced a frame for this view: a view that was attached a moment ago,
+     * a window that was minimised or occluded, or a host whose panel is closed
+     * and has never composited the child at all.
+     *
+     * `Page.captureScreenshot` over the DevTools protocol asks the page's own
+     * renderer to rasterise itself. It does not need a window frame, so it
+     * answers in precisely those cases. What it gives is the page as it lays
+     * itself out, which for a hidden view is the same layout the visible capture
+     * would have produced at that size.
+     *
+     * So the compositor is tried first and the renderer is the fallback: the
+     * owner sees a real screenshot whenever there is a real frame to take, and
+     * the model is not told "there is nothing to see" when there is a page.
+     */
+    const captured = await this.captureFromCompositor(contents)
+    if (captured.ok) return captured.result
+    const rendered = await this.captureFromRenderer(contents)
+    if (rendered.ok) return rendered.result
+    return {
+      ok: false,
+      payload: null,
+      code: `${captured.code} | renderer-capture: ${rendered.code}`,
+    }
+  }
+
+  /** The compositor path, with its own emptiness refusal. */
+  private async captureFromCompositor(
+    contents: WebContents,
+  ): Promise<{ readonly ok: true; readonly result: { readonly ok: boolean; readonly payload: ScreenshotPayload | null; readonly code: string } } | { readonly ok: false; readonly code: string }> {
+    let image
+    try {
+      image = await contents.capturePage()
+    } catch (error) {
+      // Electron's reason travels with the code, because "the capture failed"
+      // without it is a diagnosis nobody can act on.
+      return { ok: false, code: `screenshot-failed: ${error instanceof Error ? error.message : String(error)}` }
+    }
+    const png = image.toPNG()
+    const size = image.getSize()
+    if (png.byteLength === 0 || size.width < 64 || size.height < 64) {
+      // `capturePage` reports "success" for a view nobody attached (0x0, zero
+      // bytes) and for a view given a one-pixel rect (2x2). Neither is a page,
+      // and reporting either would be the shape of a lie.
+      return {
+        ok: false,
+        code: `capture-empty: ${String(size.width)}x${String(size.height)} returned, ${String(png.byteLength)} bytes; the view has no painted frame`,
+      }
+    }
+    if (png.byteLength > BROWSER_LIMITS.maxScreenshotBytes) {
+      return { ok: false, code: 'screenshot-too-large' }
+    }
+    return {
+      ok: true,
+      result: {
+        ok: true,
+        payload: {
+          png,
+          width: size.width,
+          height: size.height,
+          revision: this.revision,
+          url: this.url ?? '',
+          title: this.title ?? '',
+        },
+        code: 'captured',
+      },
+    }
+  }
+
+  /**
+   * The renderer path: `Page.captureScreenshot` over the DevTools protocol.
+   *
+   * The debugger is attached for the one call and detached again, and only when
+   * this page did not already have one attached — the extension bridge and any
+   * future debugging path own their own attachment, and a screenshot must never
+   * take it away. `fromSurface: false` asks the renderer for its own frame, which
+   * is what works when the window's compositor has none.
+   */
+  private async captureFromRenderer(
+    contents: WebContents,
+  ): Promise<{ readonly ok: true; readonly result: { readonly ok: boolean; readonly payload: ScreenshotPayload | null; readonly code: string } } | { readonly ok: false; readonly code: string }> {
+    const alreadyAttached = contents.debugger.isAttached()
+    if (!alreadyAttached) {
+      try {
+        contents.debugger.attach('1.3')
+      } catch (error) {
+        return { ok: false, code: `debugger-attach-failed: ${error instanceof Error ? error.message : String(error)}` }
+      }
+    }
+    try {
+      const reply = (await contents.debugger.sendCommand('Page.captureScreenshot', {
+        format: 'png',
+        fromSurface: false,
+        captureBeyondViewport: false,
+      })) as { data?: unknown }
+      const encoded = typeof reply.data === 'string' ? reply.data : ''
+      if (encoded === '') return { ok: false, code: 'capture-empty: the renderer returned no image data' }
+      const png = Buffer.from(encoded, 'base64')
+      if (png.byteLength === 0) return { ok: false, code: 'capture-empty: the renderer returned zero bytes' }
+      if (png.byteLength > BROWSER_LIMITS.maxScreenshotBytes) return { ok: false, code: 'screenshot-too-large' }
+      // The PNG's own IHDR carries the dimensions, so the answer needs no second
+      // round trip and cannot disagree with the bytes it is describing.
+      const width = png.byteLength >= 24 ? png.readUInt32BE(16) : 0
+      const height = png.byteLength >= 24 ? png.readUInt32BE(20) : 0
+      if (width < 64 || height < 64) {
+        return { ok: false, code: `capture-empty: ${String(width)}x${String(height)} returned, ${String(png.byteLength)} bytes` }
+      }
+      return {
+        ok: true,
+        result: {
+          ok: true,
+          payload: {
+            png,
+            width,
+            height,
+            revision: this.revision,
+            url: this.url ?? '',
+            title: this.title ?? '',
+          },
+          code: 'captured-renderer',
+        },
+      }
+    } catch (error) {
+      return { ok: false, code: `capture-failed: ${error instanceof Error ? error.message : String(error)}` }
+    } finally {
+      if (!alreadyAttached) {
+        try {
+          contents.debugger.detach()
+        } catch {
+          // A debugger that detached itself with the page needs nothing from us.
+        }
+      }
+    }
   }
 
   close(): Promise<void> {

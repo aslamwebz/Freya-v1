@@ -128,6 +128,9 @@ export function normaliseSemanticBrowserRequest(value: unknown): SemanticRequest
     case 'snapshot':
       return { ok: true, request: withTab({ op: 'snapshot' }) }
 
+    case 'screenshot':
+      return { ok: true, request: withTab({ op: 'screenshot' }) }
+
     case 'click':
     case 'type':
     case 'select': {

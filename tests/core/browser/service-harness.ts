@@ -310,6 +310,18 @@ export function createScriptedSurface(options: ScriptedSurfaceOptions = {}): {
       const done = await page.scroll(request)
       return { ok: true, value: Object.freeze({ top: done.top, height: done.height }) }
     },
+    async screenshot(sessionId) {
+      const page = pages.get(sessionId)
+      if (page === undefined) return fail('tab-unknown', 'no page')
+      // The harness has no real engine; a screenshot is a 1x1 transparent PNG that
+      // tests can still inspect for the bytes they expect, and the URL is stable.
+      const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64')
+      return { ok: true, value: Object.freeze({
+        png: new Uint8Array(png.buffer, png.byteOffset, png.byteLength),
+        mediaUrl: `freya-browser://screenshot/${encodeURIComponent(sessionId)}/0.png`,
+        width: 1, height: 1, revision: 0, url: page.url ?? '', title: page.title ?? '',
+      }) }
+    },
     async wait(sessionId, request) {
       const page = pages.get(sessionId)
       if (page === undefined) return fail('tab-unknown', 'no page')

@@ -198,7 +198,7 @@ function acceptanceSettings() {
 
 /** SearXNG, started for the duration of the run unless one is already answering. */
 const SEARXNG_URL = process.env.FREYA_SEARXNG_URL ?? 'http://127.0.0.1:8899'
-const SEARXNG_ROOT = 'C:/Users/you/Desktop/AI/Athena/runtime/searxng'
+const SEARXNG_ROOT = process.env.FREYA_SEARXNG_ROOT?.trim() ?? ''
 
 /**
  * Browser sessions this run may open, in the order the runtime will number them.
@@ -267,6 +267,9 @@ async function startSearxng() {
   if (await searxngAnswering()) {
     say(`[searxng] already answering at ${SEARXNG_URL}`)
     return null
+  }
+  if (SEARXNG_ROOT === '') {
+    throw new Error('SearXNG is not already running and FREYA_SEARXNG_ROOT is not set')
   }
   const child = spawn(
     join(SEARXNG_ROOT, 'python', 'python.exe'),

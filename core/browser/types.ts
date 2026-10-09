@@ -270,6 +270,19 @@ export const BROWSER_LIMITS = Object.freeze({
   maxMediaOffers: 8,
   /** Wall-clock a single routed command may occupy. */
   maxCommandMs: 15_000,
+  /**
+   * Bytes one screenshot may carry, capped so a tab that paints a 4K surface
+   * does not return a 60 MB PNG and exhaust the journal. The cap is generous
+   * enough for a normal page at 1280x800; a full-screen capture of a 4K
+   * surface is the trade-off the caller makes when it asks.
+   */
+  maxScreenshotBytes: 4 * 1024 * 1024,
+  /**
+   * Screenshots retained per session. Each call to `page.screenshot` retires the
+   * previous one, so the cache is at most one per session; this constant is the
+   * bound for any cross-session table the host chooses to keep.
+   */
+  maxScreenshotsRetained: 16,
 })
 
 export type BrowserLimits = typeof BROWSER_LIMITS

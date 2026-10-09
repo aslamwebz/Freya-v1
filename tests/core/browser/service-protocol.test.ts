@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SemanticSnapshot } from '../../../core/browser/service'
 import { auditSemanticBrowserService, SEMANTIC_BROWSER_OPS } from '../../../core/browser/service'
+import { auditBrowserTables, BROWSER_COMMANDS } from '../../../core/browser/types'
 import { harness, ScriptedSurfacePage, type Harness } from './service-harness'
 
 /**
@@ -695,10 +696,28 @@ describe('the protocol vocabulary audit', () => {
     expect(auditSemanticBrowserService()).toEqual([])
   })
 
-  it('has no way to look at a page without naming it', () => {
+  it('has no way to run code in a page or read what the owner typed', () => {
     for (const op of SEMANTIC_BROWSER_OPS) {
-      for (const banned of ['screenshot', 'capture', 'eval', 'execute']) {
+      for (const banned of ['eval', 'execute', 'script', 'inject', 'cookie', 'storage', 'password', 'token', 'keyring']) {
         expect(op.includes(banned), `${op} contains ${banned}`).toBe(false)
+      }
+    }
+  })
+
+  /**
+   * `screenshot` is allowed here because the pixels are the owner's, not the
+   * model's: the routed command vocabulary still bans a capture command, so this
+   * read cannot enter the Phase 51 runtime, and the tool's summary tells the model
+   * outright that it has not seen the image. These two are what keep that true,
+   * and they are checked in the places that own them — see
+   * `browser-tabs-tool.test.ts` for the summary, and `types.ts` for the routed
+   * vocabulary's own ban.
+   */
+  it('still refuses a capture command in the routed vocabulary', () => {
+    expect(auditBrowserTables()).toEqual([])
+    for (const command of BROWSER_COMMANDS) {
+      for (const banned of ['screenshot', 'capture']) {
+        expect(command.toLowerCase().includes(banned), `${command} contains ${banned}`).toBe(false)
       }
     }
   })

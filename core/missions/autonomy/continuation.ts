@@ -189,10 +189,10 @@ export function decide(input: DecisionInput): DecisionResult {
   // 6. Budget, before any progress question. A Mission with no actions left cannot make
   //    progress, and saying "out of budget" is more useful than naming the step it
   //    cannot run.
-  if (remaining.actions <= 0) {
+  if (remaining.actions <= 0 && !(steps.length > 0 && steps.every(step => step.status === 'verified') && mission.blockers.length === 0)) {
     return { decision: 'wait', reason: 'budget_exhausted', stepId: null, nextWakeAt: later(now, defaultWaitMs(mission, now)) }
   }
-  if (remaining.planRevisions <= 0) {
+  if (remaining.planRevisions <= 0 && steps.length === 0) {
     // Replanning is unavailable, so a plan that would have been replaced cannot be.
     // Reported as waiting rather than failing: the Mission may still complete on the
     // plan it has.

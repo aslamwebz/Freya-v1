@@ -16,6 +16,7 @@ import { countChildren, liveChildCount, missionProjection, summarise, type WorkT
 import { reduceMissionState, initialMissionState } from './state'
 import type { MissionStore } from './store'
 import type { MissionExecutionPlan } from '../mind/mission-planning'
+import type { ChatMissionBinding } from './chat-types'
 import { MissionVerifierRegistry } from './verifier'
 import {
   DEFAULT_MISSION_LIMITS,
@@ -192,6 +193,7 @@ export class MissionEngine {
       readonly priority?: MissionPriority
       /** How many results the owner asked for. Null when they named no number. */
       readonly requestedQuantity?: number | null
+      readonly chatBinding?: ChatMissionBinding
     } = {},
   ): Promise<MissionCommandOutcome> {
     if (this.closed) return refused('created', 'missions are shutting down')
@@ -244,6 +246,7 @@ export class MissionEngine {
         intentShape: content.value.intentShape,
         successCriteria: content.value.successCriteria,
         createdAt: now,
+        ...(options.chatBinding ? { chatBinding: options.chatBinding } : {}),
       })
     } catch (error) {
       return refused('created', `Mission content could not be stored: ${describe(error)}`)
@@ -873,12 +876,21 @@ export class MissionEngine {
     return read?.ok ? read.value : null
   }
 
-  async persistExecutionPlan(missionId: string, executionPlan: MissionExecutionPlan, expectedIntent: string): Promise<void> {
+  async updateChatContent(missionId: string, update: (content: MissionContent) => MissionContent): Promise<void> {
+    await this.serialise(missionId, async () => {
+      const content = await this.privateContent(missionId, true)
+      if (this.closed || !content?.chatBinding) throw new Error('Durable chat Mission content is unavailable.')
+      await this.options.store.write(update(content))
+      this.options.onChange?.()
+    })
+  }
+
+  async persistExecutionPlan(missionId: string, executionPlan: MissionExecutionPlan, expectedIntent: string, previousPlanId?: string): Promise<void> {
     await this.serialise(missionId, async () => {
       if (!this.options.store.durable || this.closed || this.options.stopAll?.()
         || this.record(missionId)?.status !== 'planning') throw new Error('Durable mission planning is unavailable.')
       const content = await this.privateContent(missionId, true)
-      if (!content || content.executionPlan || content.intent !== expectedIntent) throw new Error('Mission content changed.')
+      if (!content || (previousPlanId ? content.executionPlan?.planId !== previousPlanId : !!content.executionPlan) || content.intent !== expectedIntent) throw new Error('Mission content changed.')
       await this.options.store.write({ ...content, executionPlan })
     })
   }
@@ -945,6 +957,7 @@ export class MissionEngine {
     reason: string | null
     steps: readonly MissionStepRecord[]
     expectedStatus?: MissionStatus
+    expectedPreviousPlanId?: string
   }): Promise<MissionCommandOutcome> {
     if (this.closed) return refused('plan-committed', 'missions are shutting down')
     return this.serialise(input.missionId, async () => {
@@ -952,7 +965,7 @@ export class MissionEngine {
         return refused('plan-committed', 'no such mission', input.missionId)
       }
       if (input.expectedStatus !== undefined && (this.closed || this.options.stopAll?.()
-        || this.record(input.missionId)?.status !== input.expectedStatus || this.record(input.missionId)?.activePlan)) {
+        || this.record(input.missionId)?.status !== input.expectedStatus || (input.expectedPreviousPlanId ? this.record(input.missionId)?.activePlan?.planId !== input.expectedPreviousPlanId : !!this.record(input.missionId)?.activePlan))) {
         return refused('plan-committed', 'mission planning was interrupted', input.missionId)
       }
       // The steps are spread field by field rather than passed through with `...input`.

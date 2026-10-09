@@ -19,6 +19,8 @@ import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
 import { buildConfiguredModelProviders, modelCapabilityPreference, type CapabilityEnv } from './model/capability-runtime'
 import type { CapabilityPreferences } from './capabilities'
 import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
+import { proposeMissionPlan, type MissionGoalRequest, type MissionGoalOutcome } from './mind/mission-planning'
+import { registerFileInspection } from './work/file-inspection'
 import { createWebSearchTool, createChartTool, createCanvasTool, MindToolRegistry } from './mind/tools'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
 import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
@@ -655,6 +657,8 @@ export interface CoreOptions {
    * — which is the correct starting posture rather than a gap.
    */
   workCapabilities?: readonly WorkCapability[]
+  /** Trusted host authorization for read-only mission file metadata; empty by default. */
+  missionReadRoots?: readonly string[]
   /**
    * The Phase 8 Workforce seam.
    *
@@ -926,6 +930,7 @@ export interface Core {
    * `null` means the runtime is not built, which a surface can render rather than crash on.
    */
   advanceMission(missionId: string, trigger: DecisionTrigger): Promise<StepOutcome | null>
+  planMissionGoal(input: MissionGoalRequest): Promise<MissionGoalOutcome>
   /**
    * One worker with its mailbox, decrypted from this process's memory.
    *
@@ -1522,6 +1527,8 @@ class FreyaCore implements Core {
    * render that plainly during startup.
    */
   private missionAutonomy: MissionAutonomyRuntime | undefined
+  private readonly missionPlanning = new Set<string>()
+  private readonly missionAdvancing = new Map<string, Promise<StepOutcome | null>>()
 
   constructor(private readonly options: CoreOptions) {
     this.newId = options.newId ?? (() => randomUUID())
@@ -1954,6 +1961,7 @@ class FreyaCore implements Core {
       // another subsystem decided to forward it. Fire-and-forget, for the same
       // ordering reason as every other line here.
       this.observeLifeLoopSource(event)
+      this.observeVerifiedMissionStep(event)
       // Life History derives from authoritative events live. The engine is
       // idempotent, so a replayed event cannot duplicate an entry.
       if (!event.type.startsWith('life.')) void this.lifeEngine?.observe(event)
@@ -2294,6 +2302,7 @@ class FreyaCore implements Core {
     for (const capability of this.workCapabilities()) {
       this.workRegistry.register(capability)
     }
+    if (this.options.missionReadRoots?.length) registerFileInspection(this.workRegistry, [...this.options.missionReadRoots])
     registerFoundryWorkCapabilities(this.workRegistry, this.requireFoundry())
     registerPhaseSixCapabilities(this.workRegistry)
     this.workEngine = new WorkEngine({
@@ -5288,10 +5297,11 @@ private async buildForge(): Promise<void> {
   private missionAuthorityPort(): MissionAuthorityPort {
     return {
       stopAll: () => this.state.stopAll.active,
-      // Read against the **Work registry**, not the Guard vocabulary. A Work capability
-      // is registered or it is not, and whether it *may* run is decided by Guard when the
-      // Run executes — which the executor reaches through Work, as it always has.
-      mayUse: (capability) => this.workRegistry?.capability(capability) !== undefined,
+      // Bind the registered action to current Guard authority. Work checks again.
+      mayUse: (capability) => {
+        const binding = this.workRegistry?.capability(capability)
+        return binding !== undefined && this.guard.evaluate(this.owner, binding.capability).allowed
+      },
       maySpend: () => false,
       approvalState: async ({ runId }) => {
         // Resolved from the `runId` the executor returned, **not** from the step record.
@@ -5376,6 +5386,78 @@ state: {
     return await this.missionEngine.markGoalReady(missionId)
   }
 
+  /** Trusted host entry: an existing owner grant authorizes one model proposal. */
+  async planMissionGoal(input: MissionGoalRequest): Promise<MissionGoalOutcome> {
+    const engine = this.missionEngine
+    const unavailable = { ok: false, reason: 'mission_unavailable' } as const
+    if (!engine || !this.operational || this.stopped || !this.persistence.durable || this.state.stopAll.active || this.missionPlanning.has(input.missionId)
+      || this.missionAdvancing.has(input.missionId) || !this.guard.evaluate(this.owner, 'mission.manage').allowed) return unavailable
+    const mission = engine.record(input.missionId)
+    if (!mission || mission.activePlan || !['draft', 'ready'].includes(mission.status)) return unavailable
+    const content = await engine.privateContent(input.missionId, true)
+    if (!content || content.executionPlan || this.missionPlanning.has(input.missionId)) return unavailable
+    const now = (this.options.now ?? (() => new Date()))()
+    const deadline = Math.min(Date.parse(mission.deadlineAt), Date.parse(mission.activatedAt ?? mission.createdAt) + mission.budget.maxDurationMs)
+    if (now.getTime() >= deadline || mission.planRevisions >= mission.budget.maxPlanRevisions) return { ok: false, reason: 'budget_exhausted' }
+    this.missionPlanning.add(input.missionId)
+    try {
+      if (mission.status === 'draft' && !(await engine.markGoalReady(input.missionId)).ok) return unavailable
+      if (!(await engine.autonomyTransition({ missionId: input.missionId, to: 'planning', reason: 'plan_started' })).ok) return unavailable
+      const charged = await engine.charge({ missionId: input.missionId, modelCalls: 1, actions: 0, externalRequests: 0, retries: 0, delegations: 0 })
+      if (!charged.ok) {
+        await engine.autonomyTransition({ missionId: input.missionId, to: 'blocked', reason: 'budget_exhausted' })
+        return { ok: false, reason: 'budget_exhausted' }
+      }
+      const maxSteps = Math.min(mission.budget.maxStepsPerPlan, mission.budget.maxActions - mission.spend.actions,
+        mission.budget.maxDelegations - mission.spend.delegations, mission.limits.maxChildRuns - mission.childRuns.length)
+      const outcome = await proposeMissionPlan({ ...input, goal: content.intent, successCriteria: content.successCriteria, budget: mission.budget, maxSteps, now },
+        this.missionCapabilityPort(), name => this.missionAuthorityPort().mayUse(name), intent => this.ownerAuthority.request(intent))
+      // Owner cancellation, correction and STOP ALL win over a delayed provider answer.
+      const current = engine.record(input.missionId)
+      const latest = await engine.privateContent(input.missionId)
+      if (this.stopped || !this.persistence.durable || this.state.stopAll.active || current?.status !== 'planning' || current.activePlan
+        || latest?.intent !== content.intent || !this.guard.evaluate(this.owner, 'mission.manage').allowed) return unavailable
+      if (!outcome.ok) {
+        await engine.setBlocker({ missionId: input.missionId, code: 'intent_ambiguous', stepId: null, raised: true })
+        await engine.autonomyTransition({ missionId: input.missionId, to: 'blocked',
+          reason: outcome.reason === 'capability_unavailable' ? 'capability_unavailable'
+            : outcome.reason === 'budget_exhausted' ? 'budget_exhausted' : 'intent_ambiguous' })
+        return outcome
+      }
+      if ((this.options.now ?? (() => new Date()))().getTime() >= deadline) {
+        await engine.autonomyTransition({ missionId: input.missionId, to: 'blocked', reason: 'deadline_expired' })
+        return { ok: false, reason: 'budget_exhausted' }
+      }
+      await engine.persistExecutionPlan(input.missionId, outcome.execution, content.intent)
+      if (this.state.stopAll.active || engine.record(input.missionId)?.status !== 'planning') return unavailable
+      const committed = await engine.commitPlan({ missionId: input.missionId, ...outcome.plan, reason: 'goal_needs_a_plan', expectedStatus: 'planning' })
+      if (!committed.ok) return unavailable
+      if (!(await engine.autonomyTransition({ missionId: input.missionId, to: 'active', reason: 'plan_committed' })).ok) return unavailable
+      return outcome
+    } catch {
+      if (!this.state.stopAll.active && engine.record(input.missionId)?.status === 'planning') {
+        await engine.autonomyTransition({ missionId: input.missionId, to: 'blocked', reason: 'intent_ambiguous' }).catch(() => undefined)
+      }
+      return { ok: false, reason: 'planning_failed' }
+    } finally { this.missionPlanning.delete(input.missionId) }
+  }
+
+  private observeVerifiedMissionStep(event: AnyCoreEvent): void {
+    if (event.type !== 'mission.step.transitioned' || event.payload.to !== 'verified') return
+    const { missionId, planId, stepId } = event.payload
+    // Publication happens inside the current decision. Wait for its final transition,
+    // then use live state; never replay events, queue retries, or call a model here.
+    const pending = this.missionAdvancing.get(missionId) ?? Promise.resolve(null)
+    void pending.then(async () => {
+      const content = await this.missionEngine?.privateContent(missionId)
+      const mission = this.missionEngine?.record(missionId)
+      if (this.stopped || !this.persistence.durable || this.state.stopAll.active || mission?.status !== 'active' || mission.activePlan?.planId !== planId
+        || !content?.executionPlan?.continueAfterVerification || content.executionPlan.planId !== planId
+        || !mission.activePlan.steps.some(step => step.stepId === stepId && step.status === 'verified')) return
+      await this.advanceMissionDecision(missionId, 'event', { type: event.type })
+    }).catch(() => undefined)
+  }
+
   /**
    * Advance one Mission by one decision.
    *
@@ -5383,19 +5465,27 @@ state: {
    * no default of "tick": a caller says why it is asking, and that reason is journalled with
    * the decision.
    *
-   * There is deliberately **no** method here that loops until a Mission settles, and no
-   * timer that calls this on a cadence. A Mission advances because somebody asked it to,
-   * once — and the absence of a loop is the enforcement of "no hidden continuous
-   * inference", which a scheduler would have quietly reintroduced.
+   * Each call makes one decision. Opted-in private plans also reach this same boundary
+   * from a newly verified durable event. No timer or background model loop is involved.
    */
   async advanceMission(missionId: string, trigger: DecisionTrigger): Promise<StepOutcome | null> {
-    if (this.missionAutonomy === undefined) return null
-    const outcome = await this.missionAutonomy.step(missionId, trigger, null)
-    // Closed *after* the decision, and only for a Mission that settled — see the method's
-    // own note. Doing it after rather than before means the assignment was open for every
-    // step that used it, so the workforce's audit trail shows the work as in flight.
-    if (outcome !== null) await this.releaseMissionAssignments(missionId)
-    return outcome
+    return this.advanceMissionDecision(missionId, trigger, null)
+  }
+
+  private async advanceMissionDecision(missionId: string, trigger: DecisionTrigger, delivered: { type: string } | null): Promise<StepOutcome | null> {
+    if (this.missionAutonomy === undefined || this.stopped) return null
+    if (this.missionAdvancing.has(missionId) || this.missionPlanning.has(missionId)) return null
+    const mission = this.missionEngine?.record(missionId)
+    // A failed intelligent planning attempt cannot drop into the legacy fixture planner.
+    if (mission && mission.spend.modelCalls > 0 && mission.activePlan === null) return null
+    const pending = this.missionAutonomy.step(missionId, trigger, delivered)
+    this.missionAdvancing.set(missionId, pending)
+    try {
+      const outcome = await pending
+      // Release assignments only once the mission settles.
+      if (outcome !== null) await this.releaseMissionAssignments(missionId)
+      return outcome
+    } finally { this.missionAdvancing.delete(missionId) }
   }
 
   /**
@@ -5582,6 +5672,17 @@ state: {
     const verifier = this.requireWorkRegistry().verifier(input.verifier)
     if (verifier === undefined) return { ok: false, reason: `no such verifier: ${input.verifier}` }
 
+    const content = await this.requireMission().privateContent(input.missionId)
+    const privatePlan = content?.executionPlan
+    if (privatePlan && !this.persistence.durable) return { ok: false, reason: 'Durable execution history is unavailable.' }
+    if (privatePlan && capability.verifier !== input.verifier) return { ok: false, reason: 'The registered verifier binding changed.' }
+    const mission = this.requireMission().record(input.missionId)
+    const privateStep = privatePlan?.steps.find(step => step.stepId === input.stepId)
+    if (privatePlan && (privatePlan.planId !== mission?.activePlan?.planId || !privateStep
+      || privateStep.capability !== input.capability || privateStep.verifier !== input.verifier)) return { ok: false, reason: 'Private execution binding does not match the validated plan.' }
+    if (!privatePlan && !input.capability.startsWith('test.')) return { ok: false, reason: 'A real capability requires encrypted execution inputs.' }
+    if (this.stopped || input.signal.aborted || this.state.stopAll.active) return { ok: false, reason: 'Execution was stopped.' }
+
     const created = await engine.createRun({
       steps: [
         {
@@ -5589,22 +5690,8 @@ state: {
           label: input.stepId,
           capability: input.capability,
           verifier: input.verifier,
-          // The verifier's **expected value**, which a verifier must be able to check
-          // against.
-          //
-          // This is not a shortcut around verification — it is the only way the check can
-          // happen at all. `test.record.matches` compares the observation against
-          // `input.expect`; a Mission Run built with no input leaves it null and the
-          // verifier reports "the step declared no expected result to check against" on
-          // every single attempt. The Mission then retried to its ceiling and blocked, which
-          // looked exactly like a Mission whose work kept failing.
-          //
-          // The value is the **step id** — Core's own identifier — and not anything derived
-          // from the goal, because the goal is private and this input is journalled into the
-          // Work plan. `test.record` echoes its label into `data.produced`, so a comparison
-          // against the step id is a genuine check that the capability returned what the
-          // step it was given produced, rather than one that passes unconditionally.
-          input: { expect: input.stepId },
+          // Real inputs stay private in Work. Only legacy test fixtures use an echo input.
+          input: privateStep ? privateStep.input : { expect: input.stepId },
           // The **request**, never the decision. Work's Guard decides whether this becomes
           // a gate, and a person decides it.
           ...(input.requiresApproval ? { requiresApproval: true } : {}),

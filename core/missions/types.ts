@@ -48,6 +48,7 @@
 
 import type { PrincipalId } from '../protocol/core-protocol'
 import type { WorkRisk } from '../work/types'
+import type { MissionExecutionPlan } from '../mind/mission-planning'
 import type {
   MissionApprovalReference,
   MissionBlockerCode,
@@ -518,6 +519,8 @@ export interface MissionContentInput {
 }
 
 export interface MissionContent {
+  /** Private execution intent/inputs, under the existing encrypted store. */
+  readonly executionPlan?: MissionExecutionPlan
   readonly missionId: string
   readonly title: string
   readonly intent: string

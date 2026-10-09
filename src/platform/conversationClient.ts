@@ -39,6 +39,7 @@ export interface ConversationMirror {
   list(): Promise<ConversationCommandOutcome>
   read(conversationId: string): Promise<ConversationCommandOutcome>
   archive(conversationId: string): Promise<ConversationCommandOutcome>
+  rename(conversationId: string, title: string): Promise<ConversationCommandOutcome>
   submitTurn(
     conversationId: string,
     text: string,
@@ -86,6 +87,31 @@ export function ensureConversationAttached(): Promise<ConversationMirror> {
   return attachPromise
 }
 
+/** Apply the workspace's explicit selection before the desktop shell accepts input. */
+export async function restoreConversationSelection(savedId: string | null): Promise<void> {
+  const mirror = await ensureConversationAttached()
+  if (!savedId) return
+  if (mirror.projection === ABSENT_PROJECTION && hostBridge()) {
+    // Electron deliberately opens its window before Core starts. A null snapshot
+    // is not proof that saved history is missing. Bound the startup wait so a
+    // failed Core still opens the shell's unavailable/retry state.
+    let unsubscribe = () => {}
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    await new Promise<void>(resolve => {
+      timeout = setTimeout(resolve, 12_000)
+      unsubscribe = mirror.subscribe(next => { if (next && next !== ABSENT_PROJECTION) resolve() })
+    })
+    clearTimeout(timeout)
+    unsubscribe()
+  }
+  const projection = mirror.projection
+  if (projection?.activeConversationId === savedId) return
+  // An archived/deleted thread must not displace Core's valid startup fallback.
+  if (projection?.conversations.some(item => item.conversationId === savedId)) {
+    await mirror.read(savedId)
+  }
+}
+
 export function resetConversationMirror(): void {
   shared = null
   attachPromise = null
@@ -117,6 +143,7 @@ export function createConversationMirror(): ConversationMirror {
   const listeners = new Set<(projection: ConversationProjection | null) => void>()
   let current: ConversationProjection | null = null
   let disposeBridge: (() => void) | null = null
+  let generation = 0
 
   const publish = (projection: ConversationProjection | null): void => {
     current = projection
@@ -175,6 +202,7 @@ export function createConversationMirror(): ConversationMirror {
     list: () => submit('conversation.list'),
     read: (conversationId) => submit('conversation.read', { conversationId }),
     archive: (conversationId) => submit('conversation.archive', { conversationId }),
+    rename: (conversationId, title) => submit('conversation.rename', { conversationId, title }),
 
     submitTurn: (conversationId, text, intents, attachments) => {
       // The renderer's exact text reaches Core as `text`; the button directive
@@ -191,19 +219,43 @@ export function createConversationMirror(): ConversationMirror {
     cancelTurn: (turnId) => submit('conversation.turn.cancel', { turnId }),
 
     async attach(): Promise<() => void> {
+      const attachment = ++generation
       disposeBridge?.()
+      disposeBridge = null
       const bridge = host()
       if (!bridge) {
         publish(ABSENT_PROJECTION)
         return () => {}
       }
-      disposeBridge = bridge.onCoreConversation((projection) => publish(projection))
-      // Backstop for a push that raced the subscription, same as for status.
-      publish((await bridge.coreConversation()) ?? ABSENT_PROJECTION)
-      return disposeBridge
+      let pushed = false
+      try {
+        const unsubscribe = bridge.onCoreConversation((projection) => {
+          if (attachment !== generation) return
+          pushed = true
+          publish(projection)
+        })
+        disposeBridge = unsubscribe
+        // A snapshot requested before a push may finish after it. Never replace
+        // the newer transcript with that old snapshot (or a failed snapshot).
+        const snapshot = await bridge.coreConversation()
+        if (attachment === generation && !pushed) publish(snapshot ?? ABSENT_PROJECTION)
+        return () => {
+          unsubscribe()
+          if (attachment === generation) { generation++; disposeBridge = null }
+        }
+      } catch (error) {
+        if (attachment === generation && !pushed) {
+          const reason = `Freya Core could not be reached — ${error instanceof Error ? error.message : 'unknown error'}`
+          publish({ ...ABSENT_PROJECTION, persistence: { mode: 'unavailable', reason }, faults: [reason] })
+        }
+        return () => {
+          if (attachment === generation) { generation++; disposeBridge?.(); disposeBridge = null }
+        }
+      }
     },
 
     reset() {
+      generation++
       disposeBridge?.()
       disposeBridge = null
       publish(null)

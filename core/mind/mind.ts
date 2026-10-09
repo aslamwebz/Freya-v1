@@ -1668,7 +1668,7 @@ private async finishTurn(
     const next: Conversation = {
       ...record.conversation,
       updatedAt: at,
-      title: isFirstMessage ? firstMessageTitle : record.conversation.title,
+      title: isFirstMessage && record.conversation.title === 'New conversation' ? firstMessageTitle : record.conversation.title,
     }
     await this.replaceConversation(next)
   }

@@ -99,6 +99,7 @@ export class ConversationService {
   private readonly listeners = new Set<(projection: ConversationProjection) => void>()
   private activeConversationId: string | null = null
   private faults: string[] = []
+  private publicationVersion = 0
 
   constructor(options: ConversationServiceOptions) {
     this.fabric = options.fabric
@@ -203,6 +204,24 @@ export class ConversationService {
         CONVERSATION_LIMITS.maxConversationsListed,
       )
       return { ok: true, conversations: summaries.map(toSummaryView) }
+    } catch (error) {
+      return { ok: false, reason: describeStore(error) }
+    }
+  }
+
+  async rename(conversationId: string, title: string): Promise<CreateResult> {
+    const normalized = title.replace(/\s+/g, ' ').trim()
+    if (!normalized || normalized.length > CONVERSATION_LIMITS.maxTitleCharacters) {
+      return { ok: false, reason: `Conversation title must contain 1–${CONVERSATION_LIMITS.maxTitleCharacters} characters.` }
+    }
+    try {
+      const record = await this.store.readConversation(conversationId)
+      if (!record) return { ok: false, reason: 'Conversation was not found.' }
+      await this.store.putConversation({ ...record.conversation, title: normalized, updatedAt: this.now().toISOString() })
+      await this.fabric.append('conversation.renamed', { conversationId, titleLength: normalized.length }, { actor: 'owner', correlationId: conversationId })
+      const summary = await this.summaryOf(conversationId)
+      this.publish()
+      return summary === null ? { ok: false, reason: 'The renamed conversation could not be read back.' } : { ok: true, conversation: summary }
     } catch (error) {
       return { ok: false, reason: describeStore(error) }
     }
@@ -320,10 +339,12 @@ export class ConversationService {
 
   subscribe(listener: (projection: ConversationProjection) => void): () => void {
     this.listeners.add(listener)
+    const version = this.publicationVersion
     // Built asynchronously because it reads the store, and pushed immediately so a
     // window that attaches late is already correct rather than briefly empty.
     void this.projection()
       .then((projection) => {
+        if (version !== this.publicationVersion || !this.listeners.has(listener)) return
         try {
           listener(projection)
         } catch (error) {
@@ -444,8 +465,10 @@ export class ConversationService {
    * they happen.
    */
   publish(): void {
+    const version = ++this.publicationVersion
     void this.projection()
       .then((projection) => {
+        if (version !== this.publicationVersion) return
         for (const listener of [...this.listeners]) {
           try {
             listener(projection)

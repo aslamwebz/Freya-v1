@@ -157,6 +157,9 @@ export interface CoreActivityEvent {
   /** One sentence. Never contains command text, prompt text or a response. */
   text: string
   tone: 'neutral' | 'good' | 'busy' | 'warn' | 'bad'
+  /** Present only for conversation turns, to associate status with its transcript. */
+  conversationId?: string
+  turnId?: string
 }
 
 /** How many entries a renderer may be handed at once. */
@@ -181,6 +184,10 @@ export function describeActivity(event: {
     type: event.type,
     sequence: event.sequence,
     at: event.at,
+    ...(event.type.startsWith('conversation.turn.') ? {
+      ...(typeof event.payload.conversationId === 'string' ? { conversationId: event.payload.conversationId } : {}),
+      ...(typeof event.payload.turnId === 'string' ? { turnId: event.payload.turnId } : {}),
+    } : {}),
   }
 
   switch (event.type) {

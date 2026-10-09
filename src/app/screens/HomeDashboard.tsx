@@ -12,6 +12,7 @@ import type { ComposerMode, WorkspaceResearchView } from '../chat/modes'
 import type { VoiceDock, VoiceView } from '../voice/useVoiceDock'
 import { brainState, type BrainState } from '../presence/state'
 import { ChatHistory } from '../chat/ChatHistory'
+import { ChatSidebarResize } from '../chat/ChatSidebarResize'
 import { SettingsOverlay, type SettingsCategory } from './Settings'
 import { GlobalComposer } from './GlobalComposer'
 import { CoreHealth } from './CoreHealth'
@@ -140,6 +141,15 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
   const [collapsed, setCollapsed] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < 1800,
   )
+  const [chatSidebarWidth, setChatSidebarWidth] = useState(216)
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth)
+  useEffect(() => {
+    const resize = () => { setWindowWidth(window.innerWidth) }
+    window.addEventListener('resize', resize)
+    return () => window.removeEventListener('resize', resize)
+  }, [])
+  const sidebarMax = Math.max(192, Math.min(360, Math.floor(windowWidth * .4)))
+  const sidebarWidth = Math.min(chatSidebarWidth, sidebarMax)
   const home = ready(snapshot.home)
   const focus = home?.focus
   const attention = home?.attention.profiles[0]
@@ -242,7 +252,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
       read is published here, so the composer can sit over the conversation column
       instead of over the divider.
     */}
-    <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-background={design.background} data-browser={browserOpen || undefined} style={{ '--chats-thread': String(100 - browserPercent) } as CSSProperties}>
+    <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-background={design.background} data-browser={browserOpen || undefined} style={{ '--chats-thread': String(100 - browserPercent), '--chat-sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
       <header className="hd-top">
         <div className="hd-brand"><b>FREYA</b></div>
         {core && (core.lifecycle === 'degraded' || core.persistenceDurable === false || core.faultCount > 0 || core.diagnosticsWriteFailures > 0)
@@ -313,7 +323,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
         </div>
         <div className="hd-rail-list">
           <button className="hd-place" aria-label="Home" aria-current={screen === 'home' ? 'page' : undefined} onClick={open('home')}><Glyph name="home" size={20} /><span>Home</span></button>
-          <ChatHistory onOpen={open('chat')} collapsed={collapsed} current={screen === 'chat'} />
+          <ChatHistory onOpen={() => { setCollapsed(false); onNavigate('chat') }} collapsed={collapsed} current={screen === 'chat'} />
           {NAV.filter(([id]) => id !== 'home' && id !== 'chat').map(([id, label, icon]) => (
             <button key={id} className="hd-place" aria-label={label} aria-current={id === screen ? 'page' : undefined} onClick={open(id)}><Glyph name={icon} size={20} /><span>{label}</span></button>
           ))}
@@ -332,6 +342,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
             ) : null}
           </div>
         </div>
+        {screen === 'chat' && !collapsed ? <ChatSidebarResize width={sidebarWidth} max={sidebarMax} onChange={setChatSidebarWidth} /> : null}
       </aside>
       <main className="hd-main" aria-label={preview ? 'Freya dashboard · Sample data' : 'Freya dashboard'}>
         <PersistentWorkspaceLayers

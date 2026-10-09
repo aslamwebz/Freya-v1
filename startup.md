@@ -2,6 +2,19 @@
 
 Operational runbook for launching Freya for normal use, automated testing, and external agent control.
 
+### Chat evolution feature worktree
+
+In `C:\Users\you\Desktop\AI\Freya-chat-evolution`, build the app first, then
+double-click `FreyaChatDebug.cmd`. It opens the feature build visibly on debugging
+port **9235** using `.kilo/chat-evolution-profile`. It uses the existing Electron
+launcher and keeps the original Freya profile and port 9234 separate. Test-profile
+settings start fresh; provider availability is reported by the application.
+
+The existing `freyadebugging.exe` uses port 9234 and the default owner profile.
+When the original Freya is already running, it cannot independently start a second
+feature copy with that same profile. This worktree also needs `dist/index.html`
+and `dist-electron/main.cjs`; a source checkout alone is not a built application.
+
 ---
 
 ## 1. Launching Freya

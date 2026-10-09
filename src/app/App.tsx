@@ -53,6 +53,7 @@ export function App({
   const [screen, setScreen] = useState(() => startupAppLayout(initialLayout).nav)
   const [dressingOpen, setDressingOpen] = useState(false)
   const [notice, setNotice] = useState('')
+  const [noticeConversationId, setNoticeConversationId] = useState<string | null>(null)
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('appearance')
   const [researchBusy, setResearchBusy] = useState(false)
   const [activeResearchMode, setActiveResearchMode] = useState<Exclude<ComposerMode, 'chat'> | null>(null)
@@ -114,6 +115,7 @@ export function App({
     mode: ComposerMode,
     hints?: { readonly webSearch?: boolean; readonly browserUse?: boolean },
   ): Promise<boolean> => {
+    setNoticeConversationId(null)
     if (!text.trim()) return false
     if (!hostBridge()) {
       setNotice('This window cannot reach Freya Core.')
@@ -187,6 +189,7 @@ export function App({
       if (result.ok) {
         attachmentTray.clear()
       }
+      setNoticeConversationId(result.conversationId)
       setNotice([result.notice, payload.notice, composed.notice].filter(Boolean).join(' '))
       return result.ok
     }
@@ -315,7 +318,7 @@ export function App({
       slotsByScreen={slotsByScreen}
       snapshot={snapshot}
       generating={generating}
-      notice={notice}
+      notice={noticeConversationId === null || noticeConversationId === conversation?.activeConversationId ? notice : ''}
       dressing={dressing}
       preferences={preferences}
       voice={voice.view}

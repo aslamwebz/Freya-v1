@@ -39,9 +39,10 @@ const FAULT_WINDOW_MS = 120_000
  * timeout, a refusal, a dropped connection — and a turn that completed clears it,
  * because the honest state after a good answer is "nothing went wrong".
  */
-function latestTurnFault(events: readonly CoreActivityEvent[], now: number): string | null {
+function latestTurnFault(events: readonly CoreActivityEvent[], now: number, conversationId: string | null): string | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]!
+    if (conversationId === null || event.conversationId !== conversationId) continue
     if (event.kind !== 'conversation.turn.failed' && event.kind !== 'conversation.turn.completed') continue
     if (now - event.at > FAULT_WINDOW_MS) return null
     return event.kind === 'conversation.turn.failed' ? event.text : null
@@ -345,7 +346,7 @@ export function Chats({
     let disposed = false
     let disposeSubscription: (() => void) | null = null
     const read = (events: readonly CoreActivityEvent[]) => {
-      if (!disposed) setFault(latestTurnFault(events, Date.now()))
+      if (!disposed) setFault(latestTurnFault(events, Date.now(), projection?.activeConversationId ?? null))
     }
     void ensureActivityAttached().then(() => {
       if (disposed) return
@@ -356,12 +357,14 @@ export function Chats({
       disposed = true
       disposeSubscription?.()
     }
-  }, [])
+  }, [projection?.activeConversationId])
 
   const conversations = conversationList(projection)
   const messages = visibleMessages(projection)
   const generating = projection?.activeTurn != null
   const workspaceBusy = generating || busy
+  const unavailable = projection?.persistence.mode === 'unavailable'
+  const stateLabel = projection === null ? 'Connecting' : unavailable ? 'Unavailable' : projection.stopAll.active ? 'Stopped' : workspaceBusy ? 'Working' : !projection.cognition.available ? 'Provider unavailable' : 'Ready'
   const activeConversation = conversations.find((conversation) => conversation.conversationId === projection?.activeConversationId) ?? null
   // The most recent assistant message that has a canvas. We open it
   // automatically so a turn that "made X" is one click away from "see X",
@@ -394,8 +397,17 @@ export function Chats({
       ? (projection.cognition.reason ?? 'No cognition provider is available.')
       : '',
     notice,
+    ...(projection?.faults ?? []),
   ].filter(Boolean))]
-  const problems = [...new Set([issue, fault].filter(Boolean) as string[])]
+  // The command reply and the journal often report the same failure. Prefer
+  // the journal's wording and compare reasons without their status prefix.
+  const problemReasons = new Set<string>()
+  const problems = ([fault, issue].filter(Boolean) as string[]).filter((problem) => {
+    const reason = problem.replace(/^Turn (?:failed|cancelled|not started):\s*/i, '').trim().toLocaleLowerCase()
+    if (problemReasons.has(reason)) return false
+    problemReasons.add(reason)
+    return true
+  })
   const problemKey = problems.join(' ')
 
   // A problem opens itself, because a collapsed error is an error nobody reads;
@@ -423,7 +435,7 @@ export function Chats({
           </div>
           {onResearchViewChange ? <button type="button" className="chats-eye-library" onClick={() => { void researchMirror().listSessions().then((outcome) => onResearchViewChange({ mode: 'eye', outcome })) }}>Saved Eye searches</button> : null}
           <span className="chats-workspace-state" data-busy={workspaceBusy || undefined}>
-            <i aria-hidden="true" />{workspaceBusy ? 'Working' : 'Ready'}
+            <i aria-hidden="true" />{stateLabel}
           </span>
         </header>
 
@@ -432,8 +444,9 @@ export function Chats({
             <div className="chats-empty-state">
               <div className="chats-empty-orb" aria-hidden="true"><i /><i /><span /></div>
               <small>FREYA</small>
-              <h2>Ready when you are.</h2>
-              <p>Start below. This conversation stays in the same Freya workspace while you move between tabs.</p>
+              <h2>{projection === null ? 'Connecting to Freya…' : unavailable ? 'Conversation unavailable.' : 'Ready when you are.'}</h2>
+              <p>{projection === null ? 'Waiting for your saved conversations.' : unavailable ? 'Reconnect to load your saved conversations.' : 'Start below. This conversation stays in the same Freya workspace while you move between tabs.'}</p>
+              {unavailable ? <button type="button" className="chats-reconnect" onClick={() => { void mirror.attach().then(() => mirror.list()).then((outcome) => setNotice(outcome.operation === 'refused' ? outcome.reason : '')) }}>Retry connection</button> : null}
             </div>
           ) : messages.map((message, messageIndex) => {
             const ownerText = messages.slice(0, messageIndex).reverse().find((row) => row.role === 'user')?.content ?? ''

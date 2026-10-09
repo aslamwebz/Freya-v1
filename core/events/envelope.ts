@@ -110,6 +110,7 @@ export const CORE_EVENT_TYPES = [
   // read, copied and backed up far more freely than the conversation itself.
   'conversation.created',
   'conversation.archived',
+  'conversation.renamed',
   'conversation.turn.started',
   'conversation.turn.completed',
   'conversation.turn.cancelled',
@@ -949,6 +950,11 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
   'conversation.archived': {
     conversationId: string
     /** Length only; closing a chat never copies its title into the audit journal. */
+    titleLength: number
+  }
+  'conversation.renamed': {
+    conversationId: string
+    /** Title text remains exclusively in the encrypted conversation store. */
     titleLength: number
   }
 

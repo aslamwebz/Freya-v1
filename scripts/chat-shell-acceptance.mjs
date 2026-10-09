@@ -1,0 +1,88 @@
+import { chromium } from 'playwright-core'
+import { mkdir, writeFile } from 'node:fs/promises'
+import assert from 'node:assert/strict'
+/* global document, window */
+
+// Operates only Freya's controls. Never drives an external website.
+const endpoint = process.env.FREYA_TEST_CDP ?? 'http://127.0.0.1:9235'
+const browser = await chromium.connectOverCDP(endpoint)
+const checks = []
+const evidence = 'artifacts/live-visible/chat-evolution'
+try {
+  const page = browser.contexts().flatMap(context => context.pages()).find(page => page.url().includes('Freya-chat-evolution/dist/index.html'))
+  if (!page) throw new Error('Feature worktree renderer is not running')
+  page.setDefaultTimeout(15000)
+  await mkdir(evidence, { recursive: true })
+  await page.waitForSelector('.hd-dashboard')
+  await page.getByRole('button', { name: 'Home', exact: true }).click()
+  const homeOrb = await page.locator('.hd-presence').boundingBox()
+  await page.getByRole('button', { name: 'Open Chats', exact: true }).click()
+  await page.getByRole('button', { name: 'Start a new conversation', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('.chats-history-item[aria-current="true"]')?.textContent?.trim() === 'New conversation')
+  const firstTitle = `Chat acceptance A ${Date.now()}`
+  const secondTitle = `Chat acceptance B ${Date.now()}`
+  async function renameCurrent(title) {
+    await page.locator('.chats-history-item[aria-current="true"]').locator('..').getByRole('button', { name: /^Rename / }).click()
+    await page.getByRole('textbox', { name: 'Conversation title' }).fill(title)
+    await page.getByRole('button', { name: 'Save title', exact: true }).click()
+    await page.getByRole('button', { name: title, exact: true }).waitFor()
+  }
+  await renameCurrent(firstTitle)
+  checks.push('New conversation and Core-backed rename')
+  await page.getByRole('textbox', { name: 'Ask Freya', exact: true }).fill('Phase 1 persistence check: keep this exact sentence.')
+  await page.getByRole('button', { name: 'Send message', exact: true }).click()
+  await page.locator('.chats-user-text').filter({ hasText: 'Phase 1 persistence check' }).waitFor()
+  await page.waitForFunction(() => !document.querySelector('button.hd-send-busy'), null, { timeout: 180000 })
+  const afterTurn = await page.evaluate(() => window.freyaHost.coreConversation())
+  if (afterTurn.cognition.available) {
+    assert.equal(afterTurn.conversations.find(conversation => conversation.conversationId === afterTurn.activeConversationId)?.lastTurnOutcome, 'completed')
+    assert.ok(afterTurn.messages.some(message => message.role === 'assistant' && message.content.trim()))
+    checks.push('Real provider response stored by Core')
+  } else checks.push('Stored user message and truthful unavailable-provider outcome')
+  await page.getByRole('button', { name: 'Start a new conversation', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('.chats-history-item[aria-current="true"]')?.textContent?.trim() === 'New conversation')
+  await renameCurrent(secondTitle)
+  assert.equal(await page.locator('.chats-user-text').count(), 0)
+  await page.getByRole('button', { name: firstTitle, exact: true }).click()
+  await page.locator('.chats-user-text').filter({ hasText: 'Phase 1 persistence check' }).waitFor()
+  checks.push('Switch conversations without transcript loss or leakage')
+  await page.getByRole('searchbox', { name: 'Search conversations' }).fill(firstTitle)
+  assert.equal(await page.locator('.chats-history-item').count(), 1)
+  await page.getByRole('searchbox', { name: 'Search conversations' }).fill('unmatched-search')
+  await page.getByText('No matching conversations.', { exact: true }).waitFor()
+  await page.getByRole('searchbox', { name: 'Search conversations' }).fill('')
+  checks.push('Search and no-match state')
+  const handle = page.getByRole('separator', { name: 'Resize conversation sidebar' })
+  await handle.focus()
+  await page.keyboard.press('End')
+  assert.equal(await handle.getAttribute('aria-valuenow'), '360')
+  await page.waitForFunction(() => Math.round(document.querySelector('.hd-rail').getBoundingClientRect().width) === 360)
+  assert.equal(Math.round((await page.locator('.hd-rail').boundingBox()).width), 360)
+  await page.screenshot({ path: `${evidence}/chat-sidebar-wide.png` })
+  await page.keyboard.press('Home')
+  await page.waitForFunction(() => Math.round(document.querySelector('.hd-rail').getBoundingClientRect().width) === 192)
+  assert.equal(Math.round((await page.locator('.hd-rail').boundingBox()).width), 192)
+  checks.push('Keyboard sidebar resizing and real rendered widths')
+  const divider = await handle.boundingBox()
+  await page.mouse.move(divider.x + divider.width / 2, divider.y + 100)
+  await page.mouse.down()
+  await page.mouse.move(divider.x + divider.width / 2 + 80, divider.y + 100, { steps: 8 })
+  await page.mouse.up()
+  await page.waitForFunction(() => Math.round(document.querySelector('.hd-rail').getBoundingClientRect().width) === 272)
+  checks.push('Pointer sidebar resizing with native pointer capture')
+  await page.getByRole('button', { name: 'Home', exact: true }).click()
+  const restoredOrb = await page.locator('.hd-presence').boundingBox()
+  assert.equal(restoredOrb.x + restoredOrb.width / 2, homeOrb.x + homeOrb.width / 2)
+  assert.equal(restoredOrb.y + restoredOrb.height / 2, homeOrb.y + homeOrb.height / 2)
+  await page.getByRole('button', { name: 'Open Chats', exact: true }).click()
+  await page.locator('.chats-user-text').filter({ hasText: 'Phase 1 persistence check' }).waitFor()
+  checks.push('Screen navigation preserves transcript and dashboard orb geometry')
+  await page.screenshot({ path: `${evidence}/chat-shell.png` })
+  const projection = await page.evaluate(() => window.freyaHost.coreConversation())
+  assert.equal(projection.persistence.mode, 'encrypted')
+  assert.equal(projection.conversations.some(conversation => conversation.title === firstTitle), true)
+  assert.equal(projection.conversations.some(conversation => conversation.title === secondTitle), true)
+  checks.push('Actual encrypted conversation projection')
+  await writeFile(`${evidence}/phase1.json`, JSON.stringify({ endpoint, renderer: page.url(), checks, persistence: projection.persistence.mode, providerAvailable: projection.cognition.available }, null, 2))
+  console.log(JSON.stringify({ checks, persistence: projection.persistence.mode, providerAvailable: projection.cognition.available }, null, 2))
+} finally { await browser.close() }

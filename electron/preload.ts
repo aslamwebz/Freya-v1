@@ -822,6 +822,7 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   // The sidebar's close button submits this. It was missing here while Core
   // implemented it, so closing a conversation failed with `unknown command`.
   'conversation.archive',
+  'conversation.rename',
   'conversation.turn.submit',
   'conversation.turn.cancel',
   // Model catalogue and selection. A window may ask which text models the
@@ -1699,6 +1700,13 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
         return { ok: false, reason: 'conversation id is invalid' }
       }
       return { ok: true, payload: { conversationId } }
+    }
+
+    case 'conversation.rename': {
+      const conversationId = string('conversationId', MAX_ID_CHARS)
+      const title = string('title', CONVERSATION_LIMITS.maxTitleCharacters)
+      if (!conversationId || !title || !title.trim()) return { ok: false, reason: 'Conversation id and a non-empty title are required.' }
+      return { ok: true, payload: { conversationId, title } }
     }
 
     case 'conversation.archive': {

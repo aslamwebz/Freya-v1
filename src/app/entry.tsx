@@ -8,6 +8,7 @@ import { createLiveAdapter, isElectron } from '../ui-v2/state/live'
 import type { UiAdapter } from '../ui-v2/state/contract'
 import { attachAppOps } from './state/ops'
 import { armAppWorkspace, loadAppLayout, setAppLayout, type AppLayout } from './state/workspace'
+import { restoreConversationSelection } from '../platform/conversationClient'
 import '../ui-v2/theme/tokens.css'
 import '../ui-v2/primitives/controls.css'
 import './cards/cards.css'
@@ -54,9 +55,8 @@ const preferences = new PreferencesStore(storage)
 const dressing = new DressingStore(storage)
 
 /**
- * The layout is read before the first render so the shell opens on the screen the
- * person left, rather than flashing Home and then moving. A browser read is a
- * localStorage read that cannot reject; a desktop read resolves through the bridge.
+ * Restore the saved conversation before input becomes available. Cold launch still
+ * lands on Home; opening Chat then shows the thread the owner last selected.
  */
 async function start(): Promise<void> {
   let initialLayout: AppLayout | null = null
@@ -67,6 +67,7 @@ async function start(): Promise<void> {
       initialLayout = null
     }
     if (initialLayout) setAppLayout(initialLayout)
+    await restoreConversationSelection(initialLayout?.conversationId ?? null)
     void attachAppOps()
   }
   if (root === null) throw new Error('Freya: #root is missing from the document')

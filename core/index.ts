@@ -6820,6 +6820,21 @@ state: {
           }
         }
 
+        case 'conversation.rename': {
+          const decision = this.guard.evaluate(this.owner, 'core.command.submit')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'core.command.submit', requestId)
+            return { requestId, ok: false, refusal: { reason: decision.reason } }
+          }
+          const conversationId = readString(envelope.payload, 'conversationId')
+          const title = readString(envelope.payload, 'title')
+          if (conversationId === null || title === null) return { requestId, ok: false, refusal: { reason: 'Conversation id and title are required.' } }
+          const result = await this.conversations.rename(conversationId, title)
+          return result.ok
+            ? { requestId, ok: true, status: this.status(), conversation: { operation: 'renamed', conversation: result.conversation } }
+            : { requestId, ok: false, refusal: { reason: result.reason }, conversation: { operation: 'refused', reason: result.reason } }
+        }
+
         case 'conversation.archive': {
           const decision = this.guard.evaluate(this.owner, 'core.command.submit')
           if (!decision.allowed) {

@@ -118,6 +118,7 @@ export type ConversationCommandOutcome =
   | { operation: 'turn'; turn: ConversationTurnView }
   | { operation: 'cancelled'; cancelled: boolean }
   | { operation: 'archived'; archived: boolean }
+  | { operation: 'renamed'; conversation: ConversationSummaryView }
   | { operation: 'refused'; reason: string }
 
 export interface ActiveTurnView {  turnId: string

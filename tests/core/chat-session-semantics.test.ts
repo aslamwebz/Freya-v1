@@ -112,6 +112,68 @@ async function listConversations(c: Core) {
   return outcome.conversations
 }
 
+describe('owner conversation rename', () => {
+  it('preserves an owner title when the first message is submitted', async () => {
+    const c = await started()
+    const id = await newConversation(c)
+    await c.handleCommand({ command: 'conversation.rename', requestId: 'rename-first', payload: { conversationId: id, title: 'My research' } })
+    await submit(c, id, 'A different first message')
+    expect((await readMessages(c, id)).conversation?.title).toBe('My research')
+  })
+
+  it('stores the normalized title, preserves messages and keeps title text out of the journal', async () => {
+    const c = await started()
+    const id = await newConversation(c)
+    await submit(c, id, 'Keep this transcript')
+    const result = await c.handleCommand({ command: 'conversation.rename', requestId: 'rename', payload: { conversationId: id, title: '  Private   research  ' } })
+    expect(result.ok).toBe(true)
+    expect(result.conversation).toMatchObject({ operation: 'renamed', conversation: { conversationId: id, title: 'Private research', messageCount: 2 } })
+    expect((await readMessages(c, id)).messages[0]?.content).toBe('Keep this transcript')
+    const { readFile } = await import('node:fs/promises')
+    const journal = await readFile(join(dir, 'events.jsonl'), 'utf8')
+    expect(journal).toContain('conversation.renamed')
+    expect(journal).not.toContain('Private research')
+  })
+
+  it('refuses blank, oversized and missing-conversation renames without changing history', async () => {
+    const c = await started()
+    const id = await newConversation(c)
+    for (const payload of [{ conversationId: id, title: '  ' }, { conversationId: id, title: 'x'.repeat(81) }, { conversationId: 'missing', title: 'New title' }]) {
+      expect((await c.handleCommand({ command: 'conversation.rename', requestId: 'invalid', payload })).ok).toBe(false)
+    }
+    expect((await listConversations(c))[0]?.title).toBe('New conversation')
+  })
+})
+
+describe('conversation projection ordering', () => {
+  it('does not publish a late subscription snapshot over a newer conversation selection', async () => {
+    let hold = false
+    let release!: () => void
+    let reached!: () => void
+    const blocked = new Promise<void>(resolve => { reached = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    class SlowListStore extends MemoryConversationStore {
+      override async listConversations(limit: number) {
+        const result = await super.listConversations(limit)
+        if (hold) { hold = false; reached(); await gate }
+        return result
+      }
+    }
+    const c = await started({ conversationStore: new SlowListStore({ mode: 'memory' }) })
+    await newConversation(c)
+    const seen: (string | null)[] = []
+    hold = true
+    const unsubscribe = c.onConversation(projection => { seen.push(projection.activeConversationId) })
+    await blocked
+    const second = await newConversation(c)
+    await waitFor(() => seen.includes(second))
+    release()
+    await new Promise<void>(resolve => setImmediate(resolve))
+    unsubscribe()
+    expect(seen.at(-1)).toBe(second)
+  })
+})
+
 describe('fresh chat is a fresh conversation', () => {
   it('a fresh conversation has no messages and a distinct id', async () => {
     const c = await started()
@@ -186,6 +248,7 @@ describe('reload persistence round-trips through the encrypted store', () => {
     await first.start()
     const conversationId = await newConversation(first)
     await submit(first, conversationId, 'do you remember this?')
+    expect((await first.handleCommand({ command: 'conversation.rename', requestId: 'durable-rename', payload: { conversationId, title: 'Remembered research' } })).ok).toBe(true)
     await first.stop('test')
 
     const second = createCore(options({
@@ -201,6 +264,7 @@ describe('reload persistence round-trips through the encrypted store', () => {
     expect(projection.messages.map((m) => m.content)).toContain('do you remember this?')
     const read = await readMessages(second, conversationId)
     expect(read.messages.map((m) => m.content)).toContain('do you remember this?')
+    expect(read.conversation?.title).toBe('Remembered research')
   })
 
   it('the memory store says so on reload, so a window cannot think it persisted', async () => {

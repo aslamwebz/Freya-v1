@@ -12,6 +12,9 @@
    the width is the rail's own business — a duplicate flag is a duplicate that can
    disagree. */
 .hd-dashboard:has(.hd-rail[data-collapsed]) { --hd-rail-w: 64px; }
+.hd-dashboard[data-screen='chat']:has(.hd-rail:not([data-collapsed])) { --hd-rail-w: var(--chat-sidebar-width, 216px); }
+.chats-sidebar-resize { position:absolute; top:0; bottom:0; right:-3px; width:6px; cursor:col-resize; touch-action:none; }
+.chats-sidebar-resize:hover, .chats-sidebar-resize:focus-visible { background:#59e0ff55; outline:1px solid #91ecff; }
 .hd-dashboard { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; color: #d4e6f5; font: 14px 'Segoe UI', sans-serif; background: linear-gradient(180deg, #01070c24, transparent 60%, #02081215), url('../../ui-v2/assets/panorama.webp') center / cover; }
 .hd-dashboard[data-background='space'] { background: linear-gradient(180deg, transparent 35%, #020812cc), url('../assets/earth-night.jpg') center 60% / cover no-repeat, #01030a; }
 .hd-dashboard[data-background='aurora'] { background: radial-gradient(120% 90% at 20% 110%, #c8b2e63d, transparent 55%), radial-gradient(120% 90% at 80% 120%, #7ff0c02e, transparent 55%), #030911; }
@@ -166,7 +169,7 @@
 .chats-history .chats-new:disabled { opacity: .35; cursor: not-allowed; }
 .chats-history-list { display: grid; gap: 2px; margin: 0; padding: 4px 0 6px; list-style: none; max-height: 264px; overflow-y: auto; scrollbar-width: none; }
 .chats-history-list::-webkit-scrollbar { display: none; }
-.chats-history-list li { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 2px; }
+.chats-history-list li { display: grid; grid-template-columns: minmax(0, 1fr) 24px 24px; align-items: center; gap: 2px; }
 .chats-history-item {
   display: flex; align-items: center; width: 100%; height: 36px; padding: 0 8px 0 54px;
   text-align: left; border: 0; border-radius: 8px; color: #a9c2d4; background: none; font-size: 12.5px;
@@ -183,6 +186,18 @@
 .chats-history-copy b { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chats-history-dot { flex: none; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: #59e0ff; box-shadow: 0 0 8px #59e0ff; animation: hd-pill-pulse 1.8s ease-in-out infinite; }
 .chats-history-empty { margin: 6px 0 6px 54px; font-size: 11px; line-height: 1.45; color: #6d8aa2; }
+.chats-history-search { width:calc(100% - 12px); min-width:0; margin:2px 6px; padding:8px; border:1px solid #8db7d326; border-radius:8px; background:#101418; color:#d4e6f5; font:inherit; font-size:12px; }
+.chats-history-search:focus-visible, .chats-history-rename input:focus-visible { outline:2px solid #91ecff; outline-offset:2px; }
+.chats-history-rename-button { width:24px; height:24px; border-radius:7px; opacity:0; }
+.chats-history-list li:hover .chats-history-rename-button, .chats-history-list li:focus-within .chats-history-rename-button, .chats-history-rename-button:focus-visible { opacity:1; }
+.chats-history-rename { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; padding:8px; }
+.chats-history-rename input { width:100%; min-width:0; padding:7px; background:#101418; border:1px solid #8db7d350; border-radius:6px; color:inherit; }
+.hd-dashboard .chats-history-rename button, .hd-dashboard .chats-history-error button { padding:6px 8px; border-radius:6px; color:#91ecff; background:#59e0ff17; font-size:11px; }
+.chats-history-error { padding:8px; color:#e6a9a1; font-size:11px; }
+.chats-history-error p { margin:0 0 6px; overflow-wrap:anywhere; }
+.chats-history button:disabled { cursor:not-allowed; opacity:.35; }
+.hd-dashboard .chats-reconnect { padding:8px 12px; border:1px solid #8db7d350; border-radius:8px; color:#91ecff; }
+.hd-dashboard[data-screen='chat']:not([data-browser]) .hd-dock { left:calc(var(--hd-rail-w) + var(--hd-rail-gutter)); transform:none; width:calc(100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter)); }
 
 /* ---- the rail's foot: status and the account ---- */
 .hd-rail-foot { flex-shrink: 0; display: grid; gap: 8px; padding: 12px 10px 12px; border-top: 1px solid #8db7d326; }

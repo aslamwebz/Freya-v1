@@ -1,6 +1,14 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import { auditBrowserTabsTool, BROWSER_TABS_LIMITS, createBrowserTabsTool, type BrowserTabsPort } from '../../../core/mind/browser-tabs-tool'
+import {
+  MindToolRegistry,
+  TOOL_CALL_CLOSE,
+  TOOL_CALL_OPEN,
+  parseToolResponse,
+  type MindToolRegistryOptions,
+} from '../../../core/mind/tools'
+import type { Capability } from '../../../core/protocol/core-protocol'
 import type { SemanticBrowserRequest, SemanticBrowserResult, SemanticSnapshot } from '../../../core/browser/service'
 
 /**
@@ -321,5 +329,62 @@ describe('the audit', () => {
 
   it('holds at least ten tabs', () => {
     expect(BROWSER_TABS_LIMITS.maxTabs).toBeGreaterThanOrEqual(10)
+  })
+})
+
+/**
+ * The integration that the ten-site acceptance actually travels.
+ *
+ * A unit test of the tool body is not enough, because the tool is never reached
+ * through its body alone: the model writes an envelope, the wire parser reads it,
+ * and the registry bounds each argument before the body runs. A list of addresses
+ * was flattened and cut to 200 characters somewhere in that chain, so ten sites
+ * became one unparseable line and the tool reported opening a single tab. These
+ * tests go through the whole chain the way a turn does.
+ */
+describe('through the wire and the registry', () => {
+  function registryWith(guard: MindToolRegistryOptions['guard'], bridge: BrowserTabsPort): MindToolRegistry {
+    return new MindToolRegistry({
+      tools: [createBrowserTabsTool({ browser: bridge })],
+      guard,
+      principal: { id: 'owner', capabilities: new Set<Capability>(['browser.read']), trusted: true },
+      stopped: () => false,
+    })
+  }
+
+  const allow = {
+    evaluate: () => ({ allowed: true as const, outcome: 'allow' as const, reason: 'allowed' }),
+    holds: () => true,
+  }
+  const deny = {
+    evaluate: () => ({ allowed: false as const, outcome: 'deny' as const, reason: 'browser.read is not held' }),
+    holds: () => false,
+  }
+
+  it('carries a ten-address list intact and opens exactly those ten tabs', async () => {
+    const urls = Array.from({ length: 10 }, (_unused, index) => `https://www.site${String(index)}.lk/`)
+    let next = 0
+    const { bridge, log } = port((request) => ok(request.op, request.op === 'open' ? { tabId: `tab-${String(++next)}`, sessionId: 's', status: 'ready', url: request.url } : {}))
+    const registry = registryWith(allow, bridge)
+    const text = [TOOL_CALL_OPEN, JSON.stringify({ tool: 'browser_tabs', op: 'open', urls: urls.join('\n') }), TOOL_CALL_CLOSE].join('\n')
+    const parsed = parseToolResponse(text, (name) => registry.has(name))
+    expect(parsed.kind).toBe('request')
+    if (parsed.kind !== 'request') return
+    const invocation = await registry.invoke({ name: 'browser_tabs', arguments: parsed.arguments })
+    expect(invocation.executed).toBe(true)
+    const opened = log.filter((entry) => entry.op === 'open').map((entry) => (entry.op === 'open' ? entry.url : ''))
+    expect(opened).toEqual(urls)
+    expect(invocation.observation.kind === 'ok' && invocation.observation.summary).toContain('Opened 10 tab(s)')
+  })
+
+  it('opens nothing at all when Guard refuses, and reports the denial', async () => {
+    // Anti-false-success: the harness that runs the acceptance must never see a
+    // tab it did not authorise. A denial is a denial, and no call reaches a port.
+    const { bridge, log } = port((request) => ok(request.op, request.op === 'open' ? { tabId: 'tab-1', url: request.url } : {}))
+    const registry = registryWith(deny, bridge)
+    const invocation = await registry.invoke({ name: 'browser_tabs', arguments: { op: 'open', urls: 'https://a.lk/\nhttps://b.lk/' } })
+    expect(invocation.executed).toBe(false)
+    expect(invocation.observation.kind).toBe('denied')
+    expect(log).toHaveLength(0)
   })
 })

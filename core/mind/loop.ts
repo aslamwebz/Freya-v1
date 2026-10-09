@@ -3,6 +3,7 @@ import type { InitialToolRequest } from './tool-intent'
 import { isTruncationSignal, type ModelFinishReason, type ModelMessage } from '../model/provider'
 import {
   MIND_TOOL_LIMITS,
+  TOOL_CALL_OPEN,
   parseToolResponse,
   renderObservation,
   type MindToolRegistry,
@@ -332,7 +333,9 @@ export async function runToolLoop(
         kind: 'failed',
         tool: 'unknown',
         capability: 'search.web',
-        reason: `the tool request could not be read: ${parsed.reason}`,
+        reason:
+          `the tool request could not be read: ${parsed.reason}. ` +
+          `Reply again with exactly one ${TOOL_CALL_OPEN} envelope and nothing else, and it will run.`,
       }
       iterations.push({
         step: { index: iterations.length + 1, tool: 'unknown', capability: 'search.web', outcome: 'failed', executed: false, sourceCount: 0 },

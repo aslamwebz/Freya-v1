@@ -123,16 +123,29 @@ export const MIND_TOOL_LIMITS = Object.freeze({
   /** Characters allowed in any single tool argument, before it is checked. */
   maxArgumentChars: 200,
 
-  /** Characters allowed in the JSON body of one tool request. */
-  maxRequestChars: 600,
+  /**
+   * Characters allowed in the JSON body of one tool request.
+   *
+   * It was 600, which fits a single query and a single address but not a *list*
+   * of addresses. The tab tool's documented shape is "give urls, one per line",
+   * and ten real addresses run to a few hundred characters, so a 600-character
+   * body could not carry the ten-site acceptance even before the per-argument
+   * bound was applied. 2000 leaves room for ten ordinary addresses plus the JSON
+   * that carries them, and the per-parameter `maxChars` is what still bounds any
+   * one argument.
+   */
+  maxRequestChars: 2_000,
   /**
    * How much text may sit around a tool envelope before the reply is rejected.
    *
    * Observed narration from a real model: two sentences of the order of 150
-   * characters. 600 leaves room for that with a wide margin while still refusing a
-   * reply that is mostly essay with a request hidden at one end.
+   * characters. It was 600, which left room for that with a wide margin — but a
+   * model that narrates its plan at length before it asks had its request refused
+   * as "mostly prose" because the narration around it was longer than the cap. 1500
+   * keeps the guard (an essay with a request hidden at one end is still refused)
+   * while not losing a good request to a model that thinks out loud first.
    */
-  maxToolCallProseChars: 600,
+  maxToolCallProseChars: 1_500,
 
   /** Sources listed in the transcript footer. */
   maxFooterSources: 5,
@@ -292,6 +305,24 @@ export interface ToolParameter {
   readonly name: string
   readonly description: string
   readonly required?: boolean
+  /**
+   * Characters this argument may carry, before it is checked. Defaults to the
+   * global `MIND_TOOL_LIMITS.maxArgumentChars`.
+   *
+   * A per-parameter bound exists because arguments are not one shape. A single
+   * query is short; a list of addresses is not, and a list that the harness cuts
+   * in the middle is a list that silently drops the sites nobody asked to drop.
+   */
+  readonly maxChars?: number
+  /**
+   * When true, the newlines in this argument are kept rather than flattened.
+   *
+   * A list-valued argument names its entries one per line. Flattening its
+   * separators turns ten addresses into one unparseable string, which is a
+   * failure that reads as a tool refusing real work. Only parameters this flag
+   * marks keep newlines; every other argument still has its controls flattened.
+   */
+  readonly multiline?: boolean
 }
 
 /**
@@ -579,7 +610,13 @@ export type ParsedToolResponse =
  * it refuses it under Guard like any other request.
  */
 export function parseToolResponse(text: string, known: (name: string) => boolean): ParsedToolResponse {
-  const trimmed = text.trim()
+  // A reasoning model may put its chain of thought in the same reply, sometimes in
+  // the same message as the request. A closed reasoning block is presentation, not
+  // protocol: strip it before anything else, so its length cannot make a real
+  // request look like "mostly prose". An unclosed tag is left alone, because the
+  // request may sit after it and there is no reliable end to cut at.
+  const withoutReasoning = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/giu, '')
+  const trimmed = withoutReasoning.trim()
 
   // Locate the envelope rather than assuming it sits at position zero.
   const open = trimmed.indexOf(TOOL_CALL_OPEN)
@@ -608,7 +645,15 @@ export function parseToolResponse(text: string, known: (name: string) => boolean
     return { kind: 'invalid', reason: 'the reply was mostly prose around a tool request' }
   }
 
-  const body = trimmed.slice(open + TOOL_CALL_OPEN.length, closing).trim()
+  let body = trimmed.slice(open + TOOL_CALL_OPEN.length, closing).trim()
+  // Models habitually wrap JSON in a Markdown code fence, even inside the
+  // envelope. The fence is presentation; the JSON inside it is the request. Strip
+  // a surrounding ```lang ... ``` pair so a good request is not lost to it. A body
+  // with no fence is untouched, because the leading pattern requires the backticks.
+  body = body
+    .replace(/^```[A-Za-z0-9_-]*[ \t]*\r?\n?/u, '')
+    .replace(/\r?\n?```$/u, '')
+    .trim()
   if (body.length === 0) {
     return { kind: 'invalid', reason: 'the tool request was empty' }
   }
@@ -646,7 +691,13 @@ function readArguments(record: Record<string, unknown>): Record<string, string> 
   for (const [key, value] of Object.entries(record)) {
     if (key === 'tool') continue
     if (typeof value !== 'string') continue
-    out[key] = sanitiseUntrustedText(value, MIND_TOOL_LIMITS.maxArgumentChars)
+    // Bounded to the whole-request ceiling, and with newlines kept. This layer has
+    // no tool metadata — it does not know which parameters are lists — so it does
+    // the one bound the body already implies and leaves the per-parameter bound and
+    // the control flattening to `boundArguments`, which does know. Doing the list
+    // flattening here is what turned ten addresses into one truncated line before
+    // any tool body ever saw them.
+    out[key] = sanitiseArgumentText(value, MIND_TOOL_LIMITS.maxRequestChars, true)
   }
   return out
 }
@@ -761,6 +812,14 @@ export function renderToolFooter(steps: readonly ToolStepRecord[], observations:
       lines.push(
         `Tried to use the "${step.tool}" lookup and was NOT PERMITTED, so nothing was looked up. ` +
           `Nothing in the answer above came from a search.`,
+      )
+    } else if (step.tool === 'unknown') {
+      // A request the parser could not read names no tool, so there is no name to
+      // report. "the unknown lookup" read as a broken tool rather than a malformed
+      // request; this says what actually happened.
+      lines.push(
+        'A lookup request could not be read, so nothing was looked up. ' +
+          'Nothing in the answer above came from a search.',
       )
     } else {
       lines.push(
@@ -1074,13 +1133,22 @@ function boundLines(value: unknown, limit: number, maxChars: number): string[] {
  * what to do about a missing required one, rather than receiving a surprise).
  */
 function boundArguments(tool: MindTool, args: Readonly<Record<string, string>>): Record<string, string> {
-  const declared = new Set(tool.parameters.map((parameter) => parameter.name))
+  const declared = new Map(tool.parameters.map((parameter) => [parameter.name, parameter]))
   const out: Record<string, string> = {}
   for (const [key, value] of Object.entries(args)) {
-    if (!declared.has(key)) continue
+    const parameter = declared.get(key)
+    if (parameter === undefined) continue
     if (typeof value !== 'string') continue
-    if (value.length === 0) continue
-    out[key] = sanitiseUntrustedText(value, MIND_TOOL_LIMITS.maxArgumentChars)
+    // The per-parameter bound, and newlines kept only for a parameter that is a
+    // list. `sanitiseArgumentText` still defangs the envelope markers, so a value
+    // cannot smuggle protocol syntax into a tool's inputs either way.
+    const bounded = sanitiseArgumentText(
+      value,
+      parameter.maxChars ?? MIND_TOOL_LIMITS.maxArgumentChars,
+      parameter.multiline === true,
+    )
+    if (bounded.length === 0) continue
+    out[key] = bounded
   }
   return out
 }
@@ -1104,6 +1172,47 @@ export function sanitiseUntrustedText(value: string, maxChars: number): string {
     .split(TOOL_CALL_OPEN).join('FREYA_TOOL_CALL[defanged]')
     .split(TOOL_CALL_CLOSE).join('FREYA_TOOL_CALL_END[defanged]')
   return boundText(defanged, maxChars)
+}
+
+/**
+ * Make a model-supplied *argument* safe to carry, keeping newlines when the
+ * parameter is a list.
+ *
+ * The difference from {@link sanitiseUntrustedText} is exactly one thing, and it
+ * is the thing a list-valued argument needs: when `multiline` is true, a newline
+ * survives as the separator instead of being flattened to a space. Every other
+ * control character is flattened in both cases, the envelope markers are defanged
+ * in both cases, and both are length-bounded with a visible marker.
+ */
+export function sanitiseArgumentText(value: string, maxChars: number, multiline: boolean): string {
+  if (typeof value !== 'string') return ''
+  const flattened = multiline ? flattenControlsKeepingNewlines(value) : stripControlCharacters(value)
+  const defanged = flattened
+    .split(TOOL_CALL_OPEN).join('FREYA_TOOL_CALL[defanged]')
+    .split(TOOL_CALL_CLOSE).join('FREYA_TOOL_CALL_END[defanged]')
+  return boundText(defanged, maxChars)
+}
+
+/**
+ * Flatten every C0 control and DEL to a space, except the line separators.
+ *
+ * A carriage return is normalised to a single newline so a Windows-style list and
+ * a Unix-style list are the same list, and runs of blank lines are collapsed so a
+ * model that leaves gaps between entries does not hand a tool a list full of
+ * empty rows. Leading and trailing whitespace is trimmed, because an address list
+ * with a trailing blank line is not a different list.
+ */
+function flattenControlsKeepingNewlines(text: string): string {
+  let out = ''
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0
+    if (code === 0x0a || code === 0x0d) {
+      out += '\n'
+      continue
+    }
+    out += code < 0x20 || code === 0x7f ? ' ' : character
+  }
+  return out.replace(/[ \t]+\n/gu, '\n').replace(/\n{3,}/gu, '\n\n').trim()
 }
 
 /**

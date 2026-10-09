@@ -89,7 +89,15 @@ export interface BrowserTabsToolOptions {
 const PARAMETERS: readonly ToolParameter[] = Object.freeze([
   { name: 'op', description: 'tabs — list every open tab. open — open an address in a new tab (or give "urls", one tab each). close — close a tab. activate — bring a tab to the front. navigate — point a tab at an address. snapshot — read the front tab as numbered elements plus the revision they belong to. click, type, select — act on an element. scroll — top, bottom or a number of pixels. back, forward, reload, wait — page motion.', required: true },
   { name: 'url', description: 'for open and navigate: the address, http or https only' },
-  { name: 'urls', description: 'for opening several pages at once: the addresses, one per line or separated by commas, one tab each' },
+  {
+    name: 'urls',
+    description: 'for opening several pages at once: the addresses, one per line or separated by commas, one tab each',
+    // A list, not a word: it keeps its newlines so the separator survives, and it
+    // carries the whole-request ceiling so ten real addresses are not cut down to
+    // the first two by the single-argument default.
+    maxChars: BROWSER_TABS_LIMITS.maxRequestedUrls * 200,
+    multiline: true,
+  },
   { name: 'tab', description: 'for a request about one tab: which tab id. Omit to mean the tab in front.' },
   { name: 'ref', description: 'for click, type and select: the element number from a snapshot, such as r3' },
   { name: 'revision', description: 'for click, type and select: the revision the snapshot reported, as a number. Both ref and revision are required.' },

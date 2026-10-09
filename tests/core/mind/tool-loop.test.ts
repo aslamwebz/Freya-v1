@@ -731,6 +731,11 @@ describe('a lookup that failed is never a silent downgrade', () => {
     // Not the raw fragment: the model was told its request was unreadable.
     expect(outcome.assistantMessage?.content ?? '').not.toContain('{not json at all}')
     expect(h.provider.requests[1]?.messages.at(-1)?.content ?? '').toContain('could not be read')
+    // And it is told to retry, not merely to apologise.
+    expect(h.provider.requests[1]?.messages.at(-1)?.content ?? '').toContain('Reply again')
+    // The footer says what happened without naming a tool that does not exist.
+    expect(outcome.assistantMessage?.content ?? '').toContain('A lookup request could not be read')
+    expect(outcome.assistantMessage?.content ?? '').not.toContain('the "unknown" lookup')
   })
 
   it('does not list a source it did not read', async () => {
@@ -1044,6 +1049,35 @@ describe('the wire protocol is strict', () => {
       ].join('\n'),
       known,
     )).toEqual({ kind: 'request', tool: 'web_search', arguments: { query: 'q' } })
+  })
+
+  it('reads a request whose JSON is wrapped in a code fence inside the envelope', () => {
+    // Models wrap JSON in ```json habitually, even inside the envelope. The fence
+    // is presentation; losing the request to it is the bug this covers.
+    expect(parseToolResponse(
+      ['FREYA_TOOL_CALL', '```json', '{"tool":"web_search","query":"q"}', '```', 'FREYA_TOOL_CALL_END'].join('\n'),
+      known,
+    )).toEqual({ kind: 'request', tool: 'web_search', arguments: { query: 'q' } })
+  })
+
+  it('strips a closed reasoning block before reading the request', () => {
+    expect(parseToolResponse(
+      [
+        '<think>I should list the tabs first, then snapshot each one.</think>',
+        'FREYA_TOOL_CALL',
+        '{"tool":"web_search","query":"q"}',
+        'FREYA_TOOL_CALL_END',
+      ].join('\n'),
+      known,
+    )).toEqual({ kind: 'request', tool: 'web_search', arguments: { query: 'q' } })
+  })
+
+  it('does not let a reasoning block count as prose around the request', () => {
+    const reasoning = `<think>${'x'.repeat(MIND_TOOL_LIMITS.maxToolCallProseChars + 500)}</think>`
+    expect(parseToolResponse(
+      [reasoning, 'FREYA_TOOL_CALL', '{"tool":"web_search","query":"q"}', 'FREYA_TOOL_CALL_END'].join('\n'),
+      known,
+    ).kind).toBe('request')
   })
 
   it('refuses a reply whose prose around the envelope is over-long', () => {

@@ -9,7 +9,7 @@
 | 3. Research | Complete | 835 focused tests; full TypeScript; scoped lint; both builds; real search, source follow-up and encrypted restart | `87fe9f9` |
 | 4. Right Workspace | Complete | 343 focused tests; full TypeScript; scoped lint; both builds; unified 8-pane workspace with browser/canvas/sources/docs/media/charts/execution/files | `cf495db` |
 | 5. Composer | Complete | 362 focused tests; full TypeScript; scoped lint; both builds; advanced composer with drag-drop, paste, thinking levels, draft preservation | `367529b` |
-| 6. Agentic Execution | Complete | 373 focused tests; full TypeScript; scoped lint; both builds; active turn tracking, approval alerts, retry option, structured execution cards | `pending` |
+| 6. Agentic Execution | Complete | 373 focused tests; full TypeScript; scoped lint; both builds; active turn tracking, approval alerts, retry option, structured execution cards | `7cf3b5c` |
 | 7. Voice & Multimodal | Not started | — | — |
 | 8. Integration | Not started | — | — |
 

@@ -8,8 +8,8 @@
 | 2. Rendering | Complete | 567 focused tests; full TypeScript; scoped lint; renderer/desktop build; live rich formats, copy and encrypted restart | `ec85393` |
 | 3. Research | Complete | 835 focused tests; full TypeScript; scoped lint; both builds; real search, source follow-up and encrypted restart | `87fe9f9` |
 | 4. Right Workspace | Complete | 343 focused tests; full TypeScript; scoped lint; both builds; unified 8-pane workspace with browser/canvas/sources/docs/media/charts/execution/files | `cf495db` |
-| 5. Composer | Complete | 362 focused tests; full TypeScript; scoped lint; both builds; advanced composer with drag-drop, paste, thinking levels, draft preservation | `88ecc44` |
-| 6. Agentic Execution | Not started | — | — |
+| 5. Composer | Complete | 362 focused tests; full TypeScript; scoped lint; both builds; advanced composer with drag-drop, paste, thinking levels, draft preservation | `367529b` |
+| 6. Agentic Execution | Complete | 373 focused tests; full TypeScript; scoped lint; both builds; active turn tracking, approval alerts, retry option, structured execution cards | `pending` |
 | 7. Voice & Multimodal | Not started | — | — |
 | 8. Integration | Not started | — | — |
 
@@ -260,6 +260,18 @@ Upgrade the Chat input experience with complete multimodal, tool-oriented, resil
 - Tests: Added 4 unit tests in `composerDraftStore.test.ts`, 6 unit tests in `composerAttachmentsIngestion.test.ts`, 3 tests in `thinkingSelector.test.tsx`, and extended `globalComposer.test.tsx` (12 tests total).
 - Verification: 37 test files / 362 tests pass (`npm run test:chat`), full TypeScript (`npm run typecheck`), and production builds (`npm run build`).
 
+### Phase 6 audit and implementation sequence
+
+Connect Chat visibly to Freya Mind, Core activities, Guard authorization, and honest verified execution records:
+- Thinking and planning status: `ActiveTurnTracker` displays dynamic status distinguishing "Thinking & planning" (when compiling context/preparing) from "Generating response" (when provider is executing), with live duration ticker (`elapsedSec`).
+- Approval requests: Detects `work.approval.requested` and `cognition.authorization_required` events in real time and renders an alert banner specifying what capability stopped for owner authorization.
+- Active tool calls and cancellation: Stop response action on the active turn tracker and composer triggers scoped abort; cancellation events are reported honestly without leaving stale spinners.
+- Verification results and retry options: Stored failed turns report provider reasons verbatim; 1-click "Retry turn" button resubmits the last user prompt without retyping.
+- Structured execution records: `AssistantMessageView` renders verified tool steps with tool name, capability tag, outcome badge (`Verified OK`, `Failed`, `Blocked`), and executed status (`Executed by Mind` vs `Refused`), with direct navigation to the Right Workspace `Execution` pane.
+- Right Workspace execution filtering: `ExecutionView` supports filtering verified steps by outcome (`All`, `Passed`, `Failed`, `Denied`).
+- Tests: Added 4 unit tests in `activeTurnTracker.test.tsx`, 3 integration tests in `chatsAgenticExecution.test.tsx`, extended `assistantMessageView.test.tsx` (10 tests total), extended `rightWorkspace.test.tsx` (10 tests total), and updated `chatsRightWorkspaceIntegration.test.tsx`.
+- Verification: 39 test files / 373 tests pass (`npm run test:chat`), full TypeScript (`npm run typecheck`), and production builds (`npm run build`).
+
 ## Exact changed-file inventory
 
 Phase 1 (295b436):
@@ -358,4 +370,20 @@ Phase 5 (88ecc44):
 - `tests/unit/app/composerDraftStore.test.ts`
 - `tests/unit/app/globalComposer.test.tsx`
 - `tests/unit/app/thinkingSelector.test.tsx`
+
+Phase 6:
+
+- `docs/chat-evolution-8-phases.md`
+- `src/app/chat/ActiveTurnTracker.tsx`
+- `src/app/chat/AssistantMessageView.tsx`
+- `src/app/chat/Chats.tsx`
+- `src/app/chat/RightWorkspace.tsx`
+- `src/app/chat/chat.css`
+- `src/app/screens/HomeDashboard.tsx`
+- `tests/unit/app/activeTurnTracker.test.tsx`
+- `tests/unit/app/assistantMessageView.test.tsx`
+- `tests/unit/app/chatsAgenticExecution.test.tsx`
+- `tests/unit/app/chatsRightWorkspaceIntegration.test.tsx`
+- `tests/unit/app/rightWorkspace.test.tsx`
+
 

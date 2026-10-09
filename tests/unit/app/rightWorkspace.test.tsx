@@ -343,4 +343,45 @@ describe('UniversalRightWorkspace', () => {
     expect(screen.getByText('No Research Sources Yet')).toBeInTheDocument()
     expect(screen.getByText(/Ask Freya a question with Web Search enabled/)).toBeInTheDocument()
   })
+
+  it('filters execution steps by outcome using toolbar filter buttons', () => {
+    const multiSteps: readonly ToolStepRecord[] = [
+      { index: 1, tool: 'web_search', capability: 'search.web', outcome: 'ok', executed: true, sourceCount: 2 },
+      { index: 2, tool: 'browser_tabs', capability: 'browser.read', outcome: 'failed', executed: true, sourceCount: 0 },
+      { index: 3, tool: 'fs_write', capability: 'work.execute', outcome: 'denied', executed: false, sourceCount: 0 },
+    ]
+    const store = createRightWorkspaceStore('execution')
+    render(
+      <UniversalRightWorkspace
+        open={true}
+        onClose={vi.fn()}
+        store={store}
+        executionSteps={multiSteps}
+      />,
+    )
+
+    // Initially all 3 steps visible
+    expect(screen.getByText('Step #1')).toBeInTheDocument()
+    expect(screen.getByText('Step #2')).toBeInTheDocument()
+    expect(screen.getByText('Step #3')).toBeInTheDocument()
+
+    // Filter to Passed
+    fireEvent.click(screen.getByRole('button', { name: '1 passed' }))
+    expect(screen.getByText('Step #1')).toBeInTheDocument()
+    expect(screen.queryByText('Step #2')).toBeNull()
+    expect(screen.queryByText('Step #3')).toBeNull()
+
+    // Filter to Failed
+    fireEvent.click(screen.getByRole('button', { name: '1 failed' }))
+    expect(screen.queryByText('Step #1')).toBeNull()
+    expect(screen.getByText('Step #2')).toBeInTheDocument()
+    expect(screen.queryByText('Step #3')).toBeNull()
+
+    // Filter to Denied
+    fireEvent.click(screen.getByRole('button', { name: '1 denied' }))
+    expect(screen.queryByText('Step #1')).toBeNull()
+    expect(screen.queryByText('Step #2')).toBeNull()
+    expect(screen.getByText('Step #3')).toBeInTheDocument()
+  })
 })
+

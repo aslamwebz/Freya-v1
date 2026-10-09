@@ -620,6 +620,8 @@ function ChartsView({ charts }: { readonly charts: readonly ChartSpec[] }) {
  * Tab 7: Agent Execution Results View
  * ------------------------------------------------------------------ */
 function ExecutionView({ steps }: { readonly steps: readonly ToolStepRecord[] }) {
+  const [filter, setFilter] = useState<'all' | 'ok' | 'failed' | 'denied'>('all')
+
   if (steps.length === 0) {
     return (
       <div className="chats-rw-empty">
@@ -636,24 +638,50 @@ function ExecutionView({ steps }: { readonly steps: readonly ToolStepRecord[] })
   const successCount = steps.filter((s) => s.outcome === 'ok').length
   const failedCount = steps.filter((s) => s.outcome === 'failed').length
   const deniedCount = steps.filter((s) => s.outcome === 'denied').length
+  const visibleSteps = steps.filter((s) => filter === 'all' || s.outcome === filter)
 
   return (
     <div className="chats-rw-exec-pane">
       <div className="chats-rw-pane-toolbar">
         <span className="chats-rw-badge">{steps.length} verified steps</span>
         <div className="chats-rw-exec-counts">
-          <span className="chats-rw-exec-ok">{successCount} passed</span>
+          <button
+            type="button"
+            className={`chats-rw-exec-filter-btn ${filter === 'all' ? 'active' : ''}`}
+            onClick={() => setFilter('all')}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className={`chats-rw-exec-filter-btn chats-rw-exec-ok ${filter === 'ok' ? 'active' : ''}`}
+            onClick={() => setFilter('ok')}
+          >
+            {successCount} passed
+          </button>
           {failedCount > 0 ? (
-            <span className="chats-rw-exec-fail">{failedCount} failed</span>
+            <button
+              type="button"
+              className={`chats-rw-exec-filter-btn chats-rw-exec-fail ${filter === 'failed' ? 'active' : ''}`}
+              onClick={() => setFilter('failed')}
+            >
+              {failedCount} failed
+            </button>
           ) : null}
           {deniedCount > 0 ? (
-            <span className="chats-rw-exec-denied">{deniedCount} denied</span>
+            <button
+              type="button"
+              className={`chats-rw-exec-filter-btn chats-rw-exec-denied ${filter === 'denied' ? 'active' : ''}`}
+              onClick={() => setFilter('denied')}
+            >
+              {deniedCount} denied
+            </button>
           ) : null}
         </div>
       </div>
 
       <ol className="chats-rw-exec-list" aria-label="Tool execution steps">
-        {steps.map((step) => {
+        {visibleSteps.map((step) => {
           const outcomeClass =
             step.outcome === 'ok'
               ? 'ok'

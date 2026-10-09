@@ -412,6 +412,8 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
             voiceSpeaking={voice.speaking}
             onSpeakTurn={voiceControls?.speak}
             onStopSpeaking={voiceControls?.stopSpeaking}
+            onStopResponse={onStopResponse}
+            onRetryTurn={(text) => { void onSend(text, 'chat') }}
           />
         ) : workspaceId === 'settings' ? (
           <SettingsOverlay

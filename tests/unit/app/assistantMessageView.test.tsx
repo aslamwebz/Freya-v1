@@ -69,3 +69,46 @@ it('keeps typed sources visible but inactive when no browser seam is attached', 
   expect(screen.getByRole('button', { name: 'Typed page' })).toBeDisabled()
   expect(screen.queryByRole('link')).toBeNull()
 })
+
+it('displays thinking scope word count in the reasoning summary', () => {
+  render(<AssistantMessageView content="<think>First plan the steps and verify the facts.</think>\n\nFinal answer." />)
+  expect(screen.getByText('Thinking')).toBeInTheDocument()
+  expect(screen.getByText('8 words')).toBeInTheDocument()
+  expect(screen.getByText(/Final answer\./)).toBeInTheDocument()
+})
+
+it('renders structured tool execution step cards with capabilities and outcomes', () => {
+  const onOpenExecution = vi.fn()
+  const steps: ToolStepRecord[] = [
+    { index: 1, tool: 'web_search', capability: 'search.web', outcome: 'ok', executed: true, sourceCount: 3 },
+    { index: 2, tool: 'browser_tabs', capability: 'browser.read', outcome: 'denied', executed: false, sourceCount: 0 },
+  ]
+  render(<AssistantMessageView content="Done." steps={steps} onOpenExecution={onOpenExecution} />)
+  expect(screen.getByText('What Freya did for this answer')).toBeInTheDocument()
+  expect(screen.getByText('web_search')).toBeInTheDocument()
+  expect(screen.getByText('search.web')).toBeInTheDocument()
+  expect(screen.getByText('browser_tabs')).toBeInTheDocument()
+  expect(screen.getByText('browser.read')).toBeInTheDocument()
+  expect(screen.getByText('Verified OK')).toBeInTheDocument()
+  expect(screen.getByText('Blocked')).toBeInTheDocument()
+  expect(screen.getByText('Refused')).toBeInTheDocument()
+
+  const inspectBtn = screen.getByRole('button', { name: 'Inspect execution steps in right workspace' })
+  fireEvent.click(inspectBtn)
+  expect(onOpenExecution).toHaveBeenCalledTimes(1)
+})
+
+it('reports non-search tool failures and blocked operations accurately', () => {
+  const failedSteps: ToolStepRecord[] = [
+    { index: 1, tool: 'browser_tabs', capability: 'browser.read', outcome: 'failed', executed: true, sourceCount: 0 },
+  ]
+  const { rerender } = render(<AssistantMessageView content="Answer." steps={failedSteps} />)
+  expect(screen.getByText('One or more tool operations failed during execution.')).toBeInTheDocument()
+
+  const deniedSteps: ToolStepRecord[] = [
+    { index: 1, tool: 'canvas_open', capability: 'work.execute', outcome: 'denied', executed: false, sourceCount: 0 },
+  ]
+  rerender(<AssistantMessageView content="Answer." steps={deniedSteps} />)
+  expect(screen.getByText('One or more tool operations were blocked by Core Guard.')).toBeInTheDocument()
+})
+

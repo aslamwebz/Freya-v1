@@ -103,8 +103,14 @@ export function AssistantMessageView({
   const searchStatus = failedSearch ? 'Search failed. No sources were retrieved for the failed step.'
     : deniedSearch ? 'Search was blocked. No sources were retrieved for the blocked step.'
       : searches.length > 0 && searches.every(step => step.sourceCount === 0) ? 'The search returned no sources.' : ''
+  const nonSearches = (steps ?? []).filter(step => step.tool !== 'web_search')
+  const failedTool = nonSearches.some(step => step.outcome === 'failed')
+  const deniedTool = nonSearches.some(step => step.outcome === 'denied')
+  const toolStatus = failedTool ? 'One or more tool operations failed during execution.'
+    : deniedTool ? 'One or more tool operations were blocked by Core Guard.' : ''
   const hasMeta = hasThinking || hasSteps || hasMatched || hasRelated || unverifiedFooter.length > 0
     || (retrieved !== undefined && retrieved > 0) || (mediaCount !== undefined && mediaCount > 0)
+    || toolStatus.length > 0
 
   // Ranks need not be contiguous or arrive in array order. Missing ranks stay
   // literal text in RichMessage; they must not point at another source.
@@ -121,6 +127,8 @@ export function AssistantMessageView({
     onOpenLink?.(url, { kind: 'citation', title })
   }
 
+  const thinkingWordCount = hasThinking ? parts.thinking.trim().split(/\s+/).filter(Boolean).length : 0
+
   return (
     <div className="f-assistant">
       {hasThinking ? (
@@ -128,6 +136,7 @@ export function AssistantMessageView({
           <summary>
             <span className="f-assistant-thinking-dot" aria-hidden="true" />
             <span>Thinking</span>
+            <small className="f-assistant-thinking-scope">{thinkingWordCount} words</small>
           </summary>
           <pre className="f-assistant-thinking-body">{parts.thinking}</pre>
         </details>
@@ -174,6 +183,7 @@ export function AssistantMessageView({
       {hasMeta ? (
         <footer className="f-assistant-meta">
           {searchStatus ? <p className="f-assistant-search-status" role="status">{searchStatus}</p> : null}
+          {toolStatus ? <p className="f-assistant-tool-status" role="status">{toolStatus}</p> : null}
           {hasMatched ? (
             <ol className="f-assistant-sources" aria-label="Sources cited in the answer">
               {parts.matchedSources.map((source) => (
@@ -215,6 +225,23 @@ export function AssistantMessageView({
               <ul>
                 {stepLines.map((line, index) => <li key={index}>{line}</li>)}
               </ul>
+              {steps && steps.length > 0 ? (
+                <div className="f-assistant-steps-cards" aria-label="Verified tool steps">
+                  {steps.map((st) => (
+                    <div key={st.index} className="f-assistant-step-card" data-outcome={st.outcome}>
+                      <span className="f-assistant-step-index">#{st.index}</span>
+                      <span className="f-assistant-step-tool">
+                        <b>{st.tool}</b>
+                        <small>{st.capability}</small>
+                      </span>
+                      <span className={`f-assistant-step-badge ${st.outcome}`}>
+                        {st.outcome === 'ok' ? 'Verified OK' : st.outcome === 'failed' ? 'Failed' : 'Blocked'}
+                      </span>
+                      <span className="f-assistant-step-truth">{st.executed ? 'Executed' : 'Refused'}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </details>
           ) : null}
           {unverifiedFooter ? <details className="f-assistant-unverified">

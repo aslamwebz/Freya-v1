@@ -177,7 +177,7 @@ describe('Chats Universal Right Workspace Integration', () => {
     const execTab = screen.getByRole('tab', { name: /Execution/ })
     expect(execTab).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByText('Step #1')).toBeInTheDocument()
-    expect(screen.getByText('web_search')).toBeInTheDocument()
+    expect(screen.getAllByText('web_search').length).toBeGreaterThanOrEqual(1)
   })
 
   it('opens chart in the right workspace when clicking View in workspace on a chart', async () => {

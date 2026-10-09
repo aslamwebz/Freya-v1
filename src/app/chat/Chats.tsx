@@ -18,7 +18,7 @@ import { MediaGrid } from './MediaCards'
 import type { DockedTabOrigin } from './BrowserWorkspace'
 import { EyeSessionControls } from './EyeSessionControls'
 import { openResearchCitationInDockedBrowser } from './eyeHandoff'
-import { ActivityFeed } from './ActivityFeed'
+import { ActiveTurnTracker } from './ActiveTurnTracker'
 import { UniversalRightWorkspace } from './RightWorkspace'
 import { sharedRightWorkspaceStore } from './rightWorkspaceStore'
 import './chat.css'
@@ -283,6 +283,8 @@ export function Chats({
   voiceSpeaking = false,
   onSpeakTurn,
   onStopSpeaking,
+  onStopResponse,
+  onRetryTurn,
 }: {
   researchView: WorkspaceResearchView | null
   onResearchViewChange?: (view: WorkspaceResearchView) => void
@@ -307,6 +309,10 @@ export function Chats({
   voiceSpeaking?: boolean
   onSpeakTurn?: (turnId: string) => void
   onStopSpeaking?: () => void
+  /** Abort response mid-generation */
+  onStopResponse?: () => void
+  /** Resubmit the last prompt */
+  onRetryTurn?: (text: string) => void
 }) {
   const mirror = conversationMirror()
   const projection = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
@@ -563,8 +569,10 @@ export function Chats({
           {generating ? (
             <article className="chats-turn" data-role="assistant" aria-live="polite">
               <div className="chats-turn-content">
-                <div className="chats-bubble chats-thinking"><i /><i /><i /></div>
-                <ActivityFeed active={generating} />
+                <ActiveTurnTracker
+                  activeTurn={projection?.activeTurn ?? null}
+                  onStopResponse={onStopResponse}
+                />
               </div>
             </article>
           ) : null}
@@ -582,7 +590,24 @@ export function Chats({
                 <b>That did not finish</b>
                 <small>{problems.length === 1 ? 'Show what happened' : `${problems.length} problems`}</small>
               </summary>
-              <div>{problems.map((problem) => <p key={problem}>{problem}</p>)}</div>
+              <div>
+                {problems.map((problem) => <p key={problem}>{problem}</p>)}
+                {onRetryTurn && messages.slice().reverse().find((m) => m.role === 'user')?.content ? (
+                  <div className="chats-issue-actions">
+                    <button
+                      type="button"
+                      className="chats-issue-retry-btn"
+                      onClick={() => {
+                        const last = messages.slice().reverse().find((m) => m.role === 'user')?.content
+                        if (last) onRetryTurn(last)
+                      }}
+                      aria-label="Retry failed turn"
+                    >
+                      Retry turn
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </details>
           ) : null}
         </div>

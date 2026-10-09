@@ -1,11 +1,20 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { ModelSelector } from './ModelSelector'
 import { ModeSelector } from './ModeSelector'
+import { ThinkingSelector, readStoredThinkingLevel, type ThinkingLevel } from './ThinkingSelector'
 import type { ComposerMode } from '../chat/modes'
 import type { VoiceView } from '../voice/useVoiceDock'
-import { attachmentLabel, attachmentTray, pickAttachments } from '../chat/attachments'
+import {
+  attachmentLabel,
+  attachmentTray,
+  ingestBrowserFiles,
+  ingestClipboardData,
+  pickAttachments,
+} from '../chat/attachments'
 import { sharedRightWorkspaceStore } from '../chat/rightWorkspaceStore'
+import { sharedComposerDraftStore } from '../chat/composerDraftStore'
+import { conversationMirror } from '../../platform/conversationClient'
 
 function VoiceDockButton({ voice, onPress, onRelease }: {
   voice: VoiceView
@@ -156,6 +165,7 @@ export function GlobalComposer({
   onVoiceRelease,
   maxMessageCharacters,
   onNotice,
+  conversationId: propConversationId,
 }: {
   generating: boolean
   defaultModel: string | null
@@ -170,37 +180,112 @@ export function GlobalComposer({
   onVoicePress: () => void
   onVoiceRelease: (cancelled?: boolean) => void
   maxMessageCharacters: number | null
-  /**
-   * Where a local problem goes.
-   *
-   * The composer used to print its notices in a panel floating above itself. The
-   * chat now owns the one place a person reads what went wrong, so the composer
-   * reports rather than displays.
-   */
   onNotice?: (message: string) => void
+  conversationId?: string | null
 }) {
-  const [text, setText] = useState('')
+  const projection = useSyncExternalStore(
+    conversationMirror().subscribe,
+    () => conversationMirror().projection,
+    () => conversationMirror().projection,
+  )
+  const activeConversationId =
+    propConversationId !== undefined
+      ? propConversationId
+      : (projection?.activeConversationId ?? null)
+  const draftStore = sharedComposerDraftStore()
+
+  // Initialize draft from store
+  const initialDraft = draftStore.getDraft(activeConversationId)
+  const [text, setText] = useState(initialDraft.text)
   const [sending, setSending] = useState(false)
   const [attaching, setAttaching] = useState(false)
-  const [mode, setMode] = useState<ComposerMode>('chat')
-  // Independent toggles apply to subsequent messages until the owner turns them off.
-  const [wantWeb, setWantWeb] = useState(false)
-  const [wantBrowser, setWantBrowser] = useState(false)
+  const [mode, setMode] = useState<ComposerMode>(initialDraft.mode)
+  const [wantWeb, setWantWeb] = useState(initialDraft.wantWeb)
+  const [wantBrowser, setWantBrowser] = useState(initialDraft.wantBrowser)
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(
+    (initialDraft.thinkingLevel as ThinkingLevel) || readStoredThinkingLevel(),
+  )
+  const [dragOver, setDragOver] = useState(false)
+  const dragCounterRef = useRef(0)
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
+  const prevConvRef = useRef<string | null>(activeConversationId)
+
+  const drafts = useSyncExternalStore(
+    attachmentTray.subscribe,
+    attachmentTray.getSnapshot,
+    attachmentTray.getSnapshot,
+  )
+
+  // Sync draft across conversation switching
+  useEffect(() => {
+    if (prevConvRef.current === activeConversationId) return
+    // Save draft for previous conversation
+    draftStore.setDraft(prevConvRef.current, {
+      text,
+      mode,
+      wantWeb,
+      wantBrowser,
+      thinkingLevel,
+    })
+    // Restore draft for new conversation
+    const saved = draftStore.getDraft(activeConversationId)
+    setText(saved.text)
+    setMode(saved.mode)
+    setWantWeb(saved.wantWeb)
+    setWantBrowser(saved.wantBrowser)
+    if (saved.thinkingLevel) setThinkingLevel(saved.thinkingLevel as ThinkingLevel)
+    prevConvRef.current = activeConversationId
+  }, [activeConversationId, text, mode, wantWeb, wantBrowser, thinkingLevel, draftStore])
+
+  const handleTextChange = useCallback(
+    (value: string) => {
+      setText(value)
+      draftStore.setDraft(activeConversationId, { text: value })
+    },
+    [activeConversationId, draftStore],
+  )
+
+  const handleModeChange = useCallback(
+    (newMode: ComposerMode) => {
+      setMode(newMode)
+      draftStore.setDraft(activeConversationId, { mode: newMode })
+    },
+    [activeConversationId, draftStore],
+  )
+
+  const handleWantWebToggle = useCallback(() => {
+    setWantWeb((prev) => {
+      const next = !prev
+      draftStore.setDraft(activeConversationId, { wantWeb: next })
+      return next
+    })
+  }, [activeConversationId, draftStore])
+
+  const handleWantBrowserToggle = useCallback(() => {
+    setWantBrowser((prev) => {
+      const next = !prev
+      draftStore.setDraft(activeConversationId, { wantBrowser: next })
+      return next
+    })
+  }, [activeConversationId, draftStore])
+
+  const handleThinkingChange = useCallback(
+    (level: ThinkingLevel) => {
+      setThinkingLevel(level)
+      draftStore.setDraft(activeConversationId, { thinkingLevel: level })
+    },
+    [activeConversationId, draftStore],
+  )
 
   useEffect(() => {
     if (voiceTranscript === null) return
-    setText(current => current.trim().length === 0
-      ? voiceTranscript.text
-      : `${current} ${voiceTranscript.text}`)
+    handleTextChange(
+      text.trim().length === 0 ? voiceTranscript.text : `${text} ${voiceTranscript.text}`,
+    )
   }, [voiceTranscript])
 
   /**
-   * Auto-grow the textarea up to the CSS cap, then let the field's own
-   * scrollbar take over so the dock's controls row never moves. The cap lives
-   * in CSS (`max-height: 160px`); once the natural content height crosses it,
-   * `overflow-y: auto` on the field draws the scrollbar and the height stops
-   * growing.
+   * Auto-grow textarea up to cap
    */
   useEffect(() => {
     const field = textAreaRef.current
@@ -209,47 +294,44 @@ export function GlobalComposer({
     field.style.height = `${field.scrollHeight}px`
   }, [text])
 
-  // A turn is in flight from the moment the draft is submitted until Core reports
-  // it finished. `sending` covers only the bridge call; `generating` covers the
-  // provider request that follows. The control has to span both, or the orb
-  // vanishes and is replaced by a stale send button mid-turn.
   const inFlight = sending || generating
-
-  const nearLimit = maxMessageCharacters !== null &&
+  const isOverLimit =
+    maxMessageCharacters !== null &&
+    maxMessageCharacters > 0 &&
+    text.length > maxMessageCharacters
+  const nearLimit =
+    maxMessageCharacters !== null &&
     maxMessageCharacters > 0 &&
     text.length >= Math.floor(maxMessageCharacters * 0.9)
 
   const submit = async () => {
     const value = text.trim()
-    if (value.length === 0 || generating || sending) return
-    // The owner's exact words reach Core as `value`. The two intent buttons
-    // travel as structured metadata only — never as text prefixes. The old
-    // behaviour prefixed "find on the web: " and "use your browser: " onto
-    // the user's text and corrupted the stored message; that class is closed
-    // by passing the text through unchanged and reporting the directives
-    // separately.
-    //
-    // The draft is cleared once Core accepts the turn, so the bar is empty for
-    // the next message. A refusal keeps the words where they are, because a
-    // turn that never went must not silently consume what was typed.
+    if ((value.length === 0 && drafts.length === 0) || generating || sending) return
+    if (isOverLimit) {
+      onNotice?.(`Message exceeds maximum length of ${maxMessageCharacters} characters.`)
+      return
+    }
+
+    const textToSend =
+      value.length > 0
+        ? value
+        : drafts.length === 1
+          ? 'Please review this attached file.'
+          : 'Please review these attached files.'
+
     onNotice?.('')
     setSending(true)
     try {
-      const accepted = await onSend(value, mode, { webSearch: wantWeb, browserUse: wantBrowser })
-      if (accepted) setText('')
+      const accepted = await onSend(textToSend, mode, { webSearch: wantWeb, browserUse: wantBrowser })
+      if (accepted) {
+        setText('')
+        draftStore.clearDraft(activeConversationId)
+      }
     } finally {
       setSending(false)
     }
   }
 
-  /**
-   * Ask the host for files.
-   *
-   * The tray is *not* cleared here. A refusal keeps what the owner picked, and
-   * even a successful pick is cleared by `App.tsx` when the turn that carries it
-   * is accepted — otherwise a turn Core refused would silently consume the
-   * attachments the owner still wanted.
-   */
   const attach = async () => {
     if (attaching) return
     onNotice?.('')
@@ -263,8 +345,6 @@ export function GlobalComposer({
       if (picked.attachments.length === 0) return
 
       const { notices } = attachmentTray.add(picked.attachments)
-      // A file the host refused to read is reported here, in the same sentence the
-      // host wrote, rather than appearing in the tray as a name that leads nowhere.
       const refused = picked.attachments
         .filter((file) => file.detail !== null && file.kind === 'unsupported')
         .map((file) => file.detail as string)
@@ -274,86 +354,236 @@ export function GlobalComposer({
     }
   }
 
-  return <footer className="hd-dock" data-state={voice.capturing ? 'listening' : generating ? 'responding' : 'idle'}>
-    <AttachmentTray />
-    {/*
-      The dock is now a two-row stack with no dividers between the rows. The
-      textarea owns the top row and grows up to a cap before its own scrollbar
-      appears, so a long draft never grows the bar taller than a screen of
-      messages. The controls row beneath it stays fixed regardless of how tall
-      the textarea gets, so the send control never moves while you type.
-    */}
-    <form aria-label="Freya composer" onSubmit={event => { event.preventDefault(); void submit() }} className="hd-dock-form">
-      <label className="hd-input">
-        <span className="hd-sr-only">Ask Freya</span>
-        <textarea
-          ref={textAreaRef}
-          value={text}
-          rows={1}
-          maxLength={maxMessageCharacters && maxMessageCharacters > 0 ? maxMessageCharacters : undefined}
-          onChange={event => setText(event.target.value)}
-          onKeyDown={event => {
-            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
-            event.preventDefault()
-            void submit()
-          }}
-          placeholder={voice.capturing ? 'Listening…' : generating ? 'Freya is responding…' : 'Ask Freya...'}
-        />
-        {nearLimit ? <small className="hd-input-count" aria-live="polite">{text.length} / {maxMessageCharacters}</small> : null}
-      </label>
-      <div className="hd-dock-controls">
-        <VoiceDockButton voice={voice} onPress={onVoicePress} onRelease={onVoiceRelease} />
-        <div className="hd-tools">
-          <button
-            type="button"
-            className="hd-tool"
-            aria-label="Attach a file"
-            disabled={attaching}
-            onClick={() => { void attach() }}
-          ><Glyph name="attach" size={18} /></button>
-          <ModeSelector mode={mode} onChange={setMode} />
-          {/* Toggle state survives sending; press again to turn a capability off. */}
-          <button
-            type="button"
-            className="hd-tool hd-tool-search hd-intent-toggle"
-            role="switch"
-            aria-checked={wantWeb}
-            aria-label="Web search"
-            title={wantWeb ? 'Web search is on. Click to turn off.' : 'Web search is off. Click to turn on.'}
-            onClick={() => setWantWeb((value) => !value)}
-          >
-            <span>Web search</span>
-            <span className="hd-switch-track" aria-hidden="true"><span className="hd-switch-thumb" /></span>
-            <span className="hd-switch-state" aria-hidden="true">{wantWeb ? 'On' : 'Off'}</span>
-          </button>
-          <button
-            type="button"
-            className="hd-tool hd-tool-browser hd-intent-toggle"
-            role="switch"
-            aria-checked={wantBrowser}
-            aria-label="Browser"
-            title={wantBrowser ? 'Browser use is on. Click to turn off.' : 'Browser use is off. Click to turn on.'}
-            onClick={() => setWantBrowser((value) => !value)}
-          >
-            <span>Browser</span>
-            <span className="hd-switch-track" aria-hidden="true"><span className="hd-switch-thumb" /></span>
-            <span className="hd-switch-state" aria-hidden="true">{wantBrowser ? 'On' : 'Off'}</span>
-          </button>
-          <ModelSelector defaultModel={defaultModel} />
-        </div>
-        {inFlight
-          ? <button className="hd-send hd-send-busy" type="button"
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current += 1
+    if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+      setDragOver(true)
+    }
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current -= 1
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0
+      setDragOver(false)
+    }
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current = 0
+    setDragOver(false)
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      onNotice?.('')
+      const outcome = await ingestBrowserFiles(e.dataTransfer.files)
+      if (outcome.notices.length > 0) {
+        onNotice?.(outcome.notices.join(' '))
+      }
+    }
+  }
+
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (e.clipboardData) {
+      const outcome = await ingestClipboardData(e.clipboardData)
+      if (outcome.handled) {
+        e.preventDefault()
+        if (outcome.notices.length > 0) {
+          onNotice?.(outcome.notices.join(' '))
+        }
+      }
+    }
+  }
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // ArrowUp on empty text: recall last user message
+    if (event.key === 'ArrowUp' && text.length === 0) {
+      const messages = projection?.messages ?? []
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i]
+        if (msg && msg.role === 'user' && msg.content) {
+          event.preventDefault()
+          handleTextChange(msg.content)
+          break
+        }
+      }
+      return
+    }
+
+    // Escape: cancel generation if in flight
+    if (event.key === 'Escape') {
+      if (generating) {
+        event.preventDefault()
+        onStopResponse()
+        return
+      }
+    }
+
+    // Ctrl+Enter or Cmd+Enter: send
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault()
+      void submit()
+      return
+    }
+
+    // Plain Enter: send (unless shiftKey or composing)
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault()
+      void submit()
+      return
+    }
+  }
+
+  return (
+    <footer
+      className="hd-dock"
+      data-state={voice.capturing ? 'listening' : generating ? 'responding' : 'idle'}
+    >
+      <AttachmentTray />
+      <form
+        aria-label="Freya composer"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void submit()
+        }}
+        className="hd-dock-form"
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        {dragOver ? (
+          <div className="hd-composer-drop-overlay" aria-live="polite">
+            <Glyph name="attach" size={20} />
+            <span>Drop files or pictures here to attach</span>
+          </div>
+        ) : null}
+        <label className="hd-input">
+          <span className="hd-sr-only">Ask Freya</span>
+          <textarea
+            ref={textAreaRef}
+            aria-label="Ask Freya"
+            value={text}
+            rows={1}
+            maxLength={
+              maxMessageCharacters && maxMessageCharacters > 0 ? maxMessageCharacters : undefined
+            }
+            onChange={(event) => handleTextChange(event.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={
+              voice.capturing
+                ? 'Listening…'
+                : generating
+                  ? 'Freya is responding…'
+                  : 'Ask Freya...'
+            }
+          />
+          {nearLimit || isOverLimit ? (
+            <small
+              className={`hd-input-count ${isOverLimit ? 'over-limit' : 'near-limit'}`}
+              role={isOverLimit ? 'alert' : 'status'}
+              aria-live="polite"
+            >
+              {text.length} / {maxMessageCharacters}
+              {isOverLimit ? ' (limit exceeded)' : ''}
+            </small>
+          ) : null}
+        </label>
+        <div className="hd-dock-controls">
+          <VoiceDockButton voice={voice} onPress={onVoicePress} onRelease={onVoiceRelease} />
+          <div className="hd-tools">
+            <button
+              type="button"
+              className="hd-tool"
+              aria-label="Attach a file"
+              disabled={attaching}
+              onClick={() => {
+                void attach()
+              }}
+            >
+              <Glyph name="attach" size={18} />
+            </button>
+            <ModeSelector mode={mode} onChange={handleModeChange} />
+            <button
+              type="button"
+              className="hd-tool hd-tool-search hd-intent-toggle"
+              role="switch"
+              aria-checked={wantWeb}
+              aria-label="Web search"
+              title={
+                wantWeb
+                  ? 'Web search is on. Click to turn off.'
+                  : 'Web search is off. Click to turn on.'
+              }
+              onClick={handleWantWebToggle}
+            >
+              <span>Web search</span>
+              <span className="hd-switch-track" aria-hidden="true">
+                <span className="hd-switch-thumb" />
+              </span>
+              <span className="hd-switch-state" aria-hidden="true">
+                {wantWeb ? 'On' : 'Off'}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="hd-tool hd-tool-browser hd-intent-toggle"
+              role="switch"
+              aria-checked={wantBrowser}
+              aria-label="Browser"
+              title={
+                wantBrowser
+                  ? 'Browser use is on. Click to turn off.'
+                  : 'Browser use is off. Click to turn on.'
+              }
+              onClick={handleWantBrowserToggle}
+            >
+              <span>Browser</span>
+              <span className="hd-switch-track" aria-hidden="true">
+                <span className="hd-switch-thumb" />
+              </span>
+              <span className="hd-switch-state" aria-hidden="true">
+                {wantBrowser ? 'On' : 'Off'}
+              </span>
+            </button>
+            <ThinkingSelector value={thinkingLevel} onChange={handleThinkingChange} />
+            <ModelSelector defaultModel={defaultModel} />
+          </div>
+          {inFlight ? (
+            <button
+              className="hd-send hd-send-busy"
+              type="button"
               aria-label={generating ? 'Stop response' : 'Sending message'}
-              title={generating ? 'Stop this response' : 'Sending'}
+              title={generating ? 'Stop this response (Escape)' : 'Sending'}
               disabled={!generating}
-              onClick={onStopResponse}>
-            <span className="hd-send-orb" aria-hidden="true" />
-          </button>
-          : <button className="hd-send" type="submit" aria-label="Send message" disabled={!text.trim()}><Glyph name="send" size={20} /></button>}
-      </div>
-      <span className="hd-sr-only" role="status" aria-live="polite">
-        {generating ? 'Freya is responding.' : sending ? 'Sending your message.' : ''}
-      </span>
-    </form>
-  </footer>
+              onClick={onStopResponse}
+            >
+              <span className="hd-send-orb" aria-hidden="true" />
+            </button>
+          ) : (
+            <button
+              className="hd-send"
+              type="submit"
+              aria-label="Send message"
+              disabled={(!text.trim() && drafts.length === 0) || isOverLimit}
+            >
+              <Glyph name="send" size={20} />
+            </button>
+          )}
+        </div>
+        <span className="hd-sr-only" role="status" aria-live="polite">
+          {generating ? 'Freya is responding.' : sending ? 'Sending your message.' : ''}
+        </span>
+      </form>
+    </footer>
+  )
 }

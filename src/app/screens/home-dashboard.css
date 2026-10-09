@@ -522,3 +522,76 @@
 .hd-intent-toggle[aria-checked='true'] .hd-switch-track { background: #67dce5; box-shadow: none; }
 .hd-intent-toggle[aria-checked='true'] .hd-switch-thumb { transform: translateX(12px); background: #082533; }
 @media (prefers-reduced-motion: reduce) { .hd-switch-thumb { transition: none; } }
+
+/* Drag and drop overlay for composer */
+.hd-dock-form { position: relative; }
+.hd-composer-drop-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 20px;
+  background: rgba(14, 25, 36, 0.94);
+  border: 2px dashed #6be4f8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #8ceeff;
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 10;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 0 20px rgba(107, 228, 248, 0.25);
+}
+
+/* Thinking level selector */
+.hd-thinking-select { position: relative; }
+.hd-tool-thinking { display: inline-flex; align-items: center; gap: 6px; }
+.hd-menu-thinking {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 220px;
+  background: #111720;
+  border: 1px solid #2b3a48;
+  border-radius: 12px;
+  padding: 6px;
+  list-style: none;
+  margin: 0;
+  z-index: 50;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+}
+.hd-menu-thinking li { margin: 0; padding: 0; }
+.hd-menu-thinking button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #cfdbe6;
+  cursor: pointer;
+  font: inherit;
+  transition: background 120ms ease;
+}
+.hd-menu-thinking button:hover,
+.hd-menu-thinking button:focus-visible {
+  background: #1a2533;
+  color: #f0f7ff;
+}
+.hd-menu-thinking button[aria-checked='true'] {
+  background: #1c2d3f;
+  color: #79e3f8;
+}
+.hd-thinking-menu-item { display: flex; flex-direction: column; gap: 2px; }
+.hd-thinking-menu-item b { font-size: 12px; font-weight: 600; color: inherit; }
+.hd-thinking-menu-item small { font-size: 10px; opacity: 0.75; color: inherit; }
+.hd-menu-check { font-size: 12px; font-weight: bold; color: #79e3f8; }
+
+/* Character limit count badges */
+.hd-input-count.near-limit { color: #f7b731; }
+.hd-input-count.over-limit { color: #ff5e57; font-weight: 600; }
+

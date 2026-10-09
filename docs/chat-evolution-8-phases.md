@@ -8,7 +8,7 @@
 | 2. Rendering | Complete | 567 focused tests; full TypeScript; scoped lint; renderer/desktop build; live rich formats, copy and encrypted restart | `ec85393` |
 | 3. Research | Complete | 835 focused tests; full TypeScript; scoped lint; both builds; real search, source follow-up and encrypted restart | `87fe9f9` |
 | 4. Right Workspace | Complete | 343 focused tests; full TypeScript; scoped lint; both builds; unified 8-pane workspace with browser/canvas/sources/docs/media/charts/execution/files | `cf495db` |
-| 5. Composer | Not started | — | — |
+| 5. Composer | Complete | 362 focused tests; full TypeScript; scoped lint; both builds; advanced composer with drag-drop, paste, thinking levels, draft preservation | `88ecc44` |
 | 6. Agentic Execution | Not started | — | — |
 | 7. Voice & Multimodal | Not started | — | — |
 | 8. Integration | Not started | — | — |
@@ -243,6 +243,23 @@ Introduce one coherent, reusable right-side workspace supporting all eight requi
 - [x] Tests: Added 9 unit tests in `tests/unit/app/rightWorkspace.test.tsx` and 4 integration tests in `tests/unit/app/chatsRightWorkspaceIntegration.test.tsx`.
 - [x] Verification: 34 test files / 343 tests pass (`npm run test:chat`), full TypeScript (`npm run typecheck`), and production builds (`npm run build`).
 
+### Phase 5 audit and implementation sequence
+
+Upgrade the Chat input experience with complete multimodal, tool-oriented, resilient composer controls:
+- Model and provider selection with searchable catalog, provider labels, and scoped favorites.
+- Thinking level selection (Adaptive / Fast / Low / Balanced / Deep) with `ThinkingSelector` and `localStorage` persistence.
+- Web Search and Browser Use controls with accessible switches, tooltips, and structured intent metadata transmission.
+- Contextual tool toggles for search, browser, thinking effort, and modes.
+- File and image attachments with previews in Right Workspace `Files` tab, chip removal, and format detection.
+- Drag-and-drop attachments with drop overlay, byte bounds (1 MB), character bounds (6,000 chars), and PDF/image multimodal parts.
+- Clipboard paste support on textarea for direct screenshot pasting (`image/png`, `image/jpeg`).
+- Multiline input with auto-growing textarea and keyboard shortcuts (`Enter` to send, `Shift+Enter` for newline, `Ctrl+Enter`/`Cmd+Enter` to force send, `Escape` to cancel generation, `ArrowUp` to recall last user prompt).
+- Send and cancel actions: dynamic Send vs Stop response button (`hd-send-busy` / `onStopResponse`).
+- Proper validation: live character counter (`near-limit` / `over-limit`), max 5 attachments, max 1 MB size checks, refusal notices.
+- Draft preservation across conversations: `composerDraftStore` persists text, mode, web/browser toggles, and thinking level per conversation ID and restores on navigation.
+- Tests: Added 4 unit tests in `composerDraftStore.test.ts`, 6 unit tests in `composerAttachmentsIngestion.test.ts`, 3 tests in `thinkingSelector.test.tsx`, and extended `globalComposer.test.tsx` (12 tests total).
+- Verification: 37 test files / 362 tests pass (`npm run test:chat`), full TypeScript (`npm run typecheck`), and production builds (`npm run build`).
+
 ## Exact changed-file inventory
 
 Phase 1 (295b436):
@@ -328,3 +345,17 @@ Phase 4 (cf495db):
 - `src/app/screens/GlobalComposer.tsx`
 - `tests/unit/app/chatsRightWorkspaceIntegration.test.tsx`
 - `tests/unit/app/rightWorkspace.test.tsx`
+
+Phase 5 (88ecc44):
+
+- `docs/chat-evolution-8-phases.md`
+- `src/app/chat/attachments.ts`
+- `src/app/chat/composerDraftStore.ts`
+- `src/app/screens/GlobalComposer.tsx`
+- `src/app/screens/ThinkingSelector.tsx`
+- `src/app/screens/home-dashboard.css`
+- `tests/unit/app/composerAttachmentsIngestion.test.ts`
+- `tests/unit/app/composerDraftStore.test.ts`
+- `tests/unit/app/globalComposer.test.tsx`
+- `tests/unit/app/thinkingSelector.test.tsx`
+

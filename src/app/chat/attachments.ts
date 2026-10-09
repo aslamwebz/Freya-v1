@@ -8,6 +8,7 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   validateModelAttachments,
   type ModelAttachment,
+  type ImageMimeType,
 } from '../../../core/model/provider'
 
 /** Core's own ceiling, repeated here so the composer's arithmetic matches it. */
@@ -18,6 +19,9 @@ export const PER_ATTACHMENT_MAX_CHARS = 6_000
 
 /** Most files one composer may hold at once, from Core's message contract. */
 export const TRAY_MAX_ATTACHMENTS = MAX_ATTACHMENTS_PER_MESSAGE
+
+/** Maximum file size in bytes for client-side attachments (1 MB). */
+export const ATTACHMENT_MAX_BYTES = 1_000_000
 
 export type AttachmentKind = 'text' | 'image' | 'pdf' | 'unsupported'
 
@@ -532,4 +536,204 @@ export function attachmentLabel(draft: AttachmentDraft): string {
       ? 'picture'
       : 'PDF'
   return `${type} · ${size(draft.sizeBytes)}`
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(buffer).toString('base64')
+  }
+  let binary = ''
+  const bytes = new Uint8Array(buffer)
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]!)
+  }
+  return btoa(binary)
+}
+
+function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+  if (typeof FileReader !== 'undefined') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as ArrayBuffer)
+      reader.onerror = () => reject(reader.error ?? new Error('FileReader failed'))
+      reader.readAsArrayBuffer(file)
+    })
+  }
+  return file.arrayBuffer()
+}
+
+function readFileAsText(file: File): Promise<string> {
+  if (typeof FileReader !== 'undefined') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve((reader.result as string) || '')
+      reader.onerror = () => reject(reader.error ?? new Error('FileReader failed'))
+      reader.readAsText(file)
+    })
+  }
+  return file.text()
+}
+
+/**
+ * Ingest browser File objects (from drag & drop, file input, or clipboard).
+ * Validates file size, file count, and file type before adding to the tray.
+ */
+export async function ingestBrowserFiles(
+  files: readonly File[] | FileList,
+): Promise<{ added: number; notices: readonly string[] }> {
+  const fileArray = Array.from(files)
+  if (fileArray.length === 0) return { added: 0, notices: [] }
+
+  const notices: string[] = []
+  const pickedList: PickedAttachment[] = []
+
+  for (const file of fileArray) {
+    if (file.size > ATTACHMENT_MAX_BYTES) {
+      notices.push(
+        `${file.name} is ${Math.round(file.size / 1000)} KB. Freya reads files up to ${Math.round(ATTACHMENT_MAX_BYTES / 1000)} KB.`,
+      )
+      continue
+    }
+
+    const path =
+      (file as unknown as { path?: string }).path ||
+      `browser:${file.name}:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`
+
+    const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+    const isImage =
+      file.type.startsWith('image/') ||
+      ['.png', '.jpg', '.jpeg', '.webp'].includes(ext)
+    const isPdf = file.type === 'application/pdf' || ext === '.pdf'
+
+    if (isImage) {
+      const mime =
+        file.type === 'image/jpeg' || file.type === 'image/png' || file.type === 'image/webp'
+          ? (file.type as ImageMimeType)
+          : ext === '.png'
+            ? 'image/png'
+            : ext === '.webp'
+              ? 'image/webp'
+              : 'image/jpeg'
+
+      try {
+        const buffer = await readFileAsArrayBuffer(file)
+        const base64 = arrayBufferToBase64(buffer)
+        pickedList.push({
+          name: file.name,
+          path,
+          kind: 'image',
+          contentType: mime,
+          sizeBytes: file.size,
+          text: null,
+          truncated: false,
+          detail: 'Picture attached for multimodal understanding.',
+          modelAttachment: {
+            type: 'image',
+            mimeType: mime,
+            data: base64,
+            filename: file.name,
+          },
+          pdf: null,
+        })
+      } catch (err) {
+        notices.push(`Could not read ${file.name}: ${err instanceof Error ? err.message : 'read failure'}.`)
+      }
+    } else if (isPdf) {
+      try {
+        const buffer = await readFileAsArrayBuffer(file)
+        const base64 = arrayBufferToBase64(buffer)
+        pickedList.push({
+          name: file.name,
+          path,
+          kind: 'pdf',
+          contentType: 'application/pdf',
+          sizeBytes: file.size,
+          text: null,
+          truncated: false,
+          detail: 'PDF document attached for model analysis.',
+          modelAttachment: {
+            type: 'file',
+            mimeType: 'application/pdf',
+            data: base64,
+            filename: file.name,
+          },
+          pdf: { pages: 1, pagesRead: 1, textLayer: true },
+        })
+      } catch (err) {
+        notices.push(`Could not read ${file.name}: ${err instanceof Error ? err.message : 'read failure'}.`)
+      }
+    } else {
+      // Treat as textual file
+      try {
+        const textContent = await readFileAsText(file)
+        const truncated = textContent.length > PER_ATTACHMENT_MAX_CHARS
+        const text = truncated
+          ? `${textContent.slice(0, PER_ATTACHMENT_MAX_CHARS)}\n\n[truncated at ${PER_ATTACHMENT_MAX_CHARS} characters]`
+          : textContent
+        pickedList.push({
+          name: file.name,
+          path,
+          kind: 'text',
+          contentType: file.type || 'text/plain',
+          sizeBytes: file.size,
+          text,
+          truncated,
+          detail: truncated ? `Text file truncated to ${PER_ATTACHMENT_MAX_CHARS} characters.` : null,
+          modelAttachment: null,
+          pdf: null,
+        })
+      } catch {
+        notices.push(`That file is binary or unsupported, so Freya cannot read it as text.`)
+      }
+    }
+  }
+
+  const { added, notices: trayNotices } = attachmentTray.add(pickedList)
+  return {
+    added,
+    notices: [...notices, ...trayNotices],
+  }
+}
+
+/**
+ * Ingest clipboard data (pasted images or files).
+ */
+export async function ingestClipboardData(
+  clipboard: DataTransfer,
+): Promise<{ handled: boolean; notices: readonly string[] }> {
+  // 1. Check for files
+  if (clipboard.files && clipboard.files.length > 0) {
+    const outcome = await ingestBrowserFiles(clipboard.files)
+    if (outcome.added > 0) {
+      return { handled: true, notices: outcome.notices }
+    }
+  }
+
+  // 2. Check for clipboard items (e.g. screenshot paste)
+  if (clipboard.items && clipboard.items.length > 0) {
+    const imageItems: File[] = []
+    for (let i = 0; i < clipboard.items.length; i++) {
+      const item = clipboard.items[i]
+      if (item && item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) {
+          const named = new File(
+            [file],
+            file.name && file.name !== 'image.png' ? file.name : `screenshot-${Date.now()}.png`,
+            { type: file.type || 'image/png' },
+          )
+          imageItems.push(named)
+        }
+      }
+    }
+    if (imageItems.length > 0) {
+      const outcome = await ingestBrowserFiles(imageItems)
+      return {
+        handled: outcome.added > 0,
+        notices: outcome.added > 0 ? ['Picture attached from clipboard.', ...outcome.notices] : outcome.notices,
+      }
+    }
+  }
+
+  return { handled: false, notices: [] }
 }

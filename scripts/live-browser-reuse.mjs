@@ -90,8 +90,14 @@ try {
   catch (e) { record('External DNS ready for ten-site test', false, e.code ?? e.message) }
 } catch(e) { record('Harness setup', false, e.message) }
 finally {
+  // Never leave a short-lived localhost fixture covering the Freya dashboard.
+  // The browser-control API owns docking; CDP must not manipulate the embedded view.
+  if (mode === 'local' && server) {
+    try { await command(['browser', 'undock']); console.log('CLEANUP browser dock released') }
+    catch (error) { console.error('CLEANUP FAILED to undock: ' + error.message); process.exitCode = 1 }
+  }
   if (server) await new Promise(r => server.close(r))
   if (browser) await browser.close().catch(()=>{})
 }
 console.log('SUMMARY ' + JSON.stringify({ mode, pass: results.filter(x=>x.ok).length, fail:results.filter(x=>!x.ok).length }))
-process.exitCode = results.some(x=>!x.ok)?1:0
+process.exitCode = process.exitCode || (results.some(x=>!x.ok) ? 1 : 0)

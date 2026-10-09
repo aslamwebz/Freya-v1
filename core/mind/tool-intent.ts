@@ -1,4 +1,4 @@
-import { routeChatIntent } from '../research/chat-intent'
+import { retrievalRestrictions, routeChatIntent } from '../research/chat-intent'
 /**
  * Core-owned deterministic tool intent for explicit owner requests.
  *
@@ -132,7 +132,7 @@ export function initialToolRequestForOwnerText(
 
   // Explicit browser control is stronger than media retrieval. "Use your browser
   // to find images..." means browser, because that is the capability the owner named.
-  if (EXPLICIT_BROWSER.test(lower)) {
+  if (!retrievalRestrictions(text).browser && EXPLICIT_BROWSER.test(lower)) {
     const match = HTTP_URL.exec(value)
     if (match === null) return search()
     const candidate = cleanUrl(match[0])

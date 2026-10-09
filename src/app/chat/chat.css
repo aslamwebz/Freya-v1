@@ -877,6 +877,11 @@
 .f-assistant-steps > ul { margin:6px 0 0; padding-left:18px; }
 .f-assistant-steps li { margin:2px 0; }
 .f-assistant-source-link:disabled { opacity:.6; cursor:not-allowed; }
+.f-assistant-sources .f-assistant-source-card { flex:1 1 260px; align-items:flex-start; padding:10px 12px; border:1px solid #19303d; border-radius:10px; background:#09151e; }
+.f-assistant-source-card > div { min-width:0; flex:1; }
+.f-assistant-source-origin { display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:4px; color:#8198a9; font-size:11px; }
+.f-assistant-source-snippet { margin:6px 0 0; color:#b0c0cb; font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
+.f-assistant-search-status { margin:0 0 10px; color:#d4ba88; font-size:12px; line-height:1.5; }
 .f-assistant-unverified { color:var(--chat-muted); font-size:11px; }
 .f-assistant-unverified summary { cursor:pointer; color:#d4ba88; }
 .f-assistant-unverified pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; line-height:1.6; }

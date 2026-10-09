@@ -292,6 +292,95 @@ function stubTool(
 const submit = (h: { mind: MindService }, turnId = 't1', text = 'a question') =>
   h.mind.runTurn({ conversationId: CONVERSATION_ID, turnId, text })
 
+describe('research citation continuity', () => {
+  it('keeps citation identity but updates evidence when a new lookup returns the same URL', async () => {
+    let searches = 0
+    const h = await harness({ tools: [createWebSearchTool({ now: () => T0, searchWeb: async () => {
+      searches += 1
+      return [result({ snippet: searches === 1 ? 'Original snippet' : 'Updated snippet' })]
+    } })], script: ['Found [1].', 'The updated source says Updated snippet [1].'] })
+    await submit(h, 't1', 'Search the web for caching sources.')
+    const updated = await submit(h, 't2', 'Search the web again about source 1.')
+    expect(updated.assistantMessage?.sources).toEqual([expect.objectContaining({ rank: 1, url: SOURCE.url, snippet: 'Updated snippet' })])
+    expect(updated.assistantMessage?.steps?.[0]?.executed).toBe(true)
+  })
+  it('does not execute a replacement lookup for an unavailable stored source reference', async () => {
+    let searches = 0
+    const h = await harness({ tools: [createWebSearchTool({ now: () => T0, searchWeb: async () => { searches += 1; return [result()] } })], script: ['Found [1].', toolCall('web_search', { query: 'replace source 99' }), 'Source 99 is not available in the preceding answer.'] })
+    await submit(h, 't1', 'Search the web for caching sources.')
+    const followUp = await submit(h, 't2', 'Summarise source 99.')
+    expect(searches).toBe(1)
+    expect(followUp.assistantMessage?.sources).toBeUndefined()
+    expect(followUp.assistantMessage?.steps).toEqual([expect.objectContaining({ outcome: 'denied', executed: false })])
+  })
+  it('does not let a later search failure deny evidence from an earlier successful search', async () => {
+    let calls = 0
+    const h = await harness({ tools: [stubTool(async () => {
+      calls += 1
+      if (calls === 2) throw new Error('search provider timed out')
+      return { summary: 'One actual source', sources: [SOURCE] }
+    })], script: [toolCall('web_search', { query: 'one' }), toolCall('web_search', { query: 'two' }), 'The first source says the actual finding [1].'] })
+    const turn = await submit(h)
+    expect(turn.assistantMessage?.content).toContain('FAILED')
+    expect(turn.assistantMessage?.content).not.toContain('Nothing in the answer above came from a search')
+    expect(turn.assistantMessage?.sources).toEqual([expect.objectContaining(SOURCE)])
+  })
+  it('assigns distinct citation ranks across two actual searches and reuses ranks for duplicate URLs', async () => {
+    let searches = 0
+    const h = await harness({
+      tools: [createWebSearchTool({ now: () => T0, searchWeb: async () => {
+        searches += 1
+        const second = result({ title: 'Second page', url: 'https://example.org/second', snippet: 'second finding' })
+        return searches === 1 ? [result()] : searches === 2 ? [second] : [result(), second]
+      } })],
+      script: [toolCall('web_search', { query: 'first query' }), toolCall('web_search', { query: 'second query' }), toolCall('web_search', { query: 'repeat query' }), 'Compare the first [1] with the second [2].'],
+    })
+    const turn = await submit(h)
+    expect(turn.outcome).toBe('completed')
+    expect(turn.assistantMessage?.sources?.map(source => [source.rank, source.url])).toEqual([[1, 'https://example.org/real'], [2, 'https://example.org/second']])
+    expect(h.provider.requests[2]?.messages.at(-1)?.content).toContain('[2] Second page')
+    const report = h.provider.requests[3]?.messages.at(-1)?.content ?? ''
+    expect(report).toContain('[1] A real page')
+    expect(report).toContain('[2] Second page')
+  })
+
+  it('blocks a model-requested search when the owner explicitly declined it', async () => {
+    let ran = false
+    const h = await harness({ tools: [stubTool(async () => { ran = true; return { summary: 'lookup', sources: [SOURCE] } })], script: [toolCall('web_search', { query: 'ignored owner restriction' }), 'I used only the supplied values.'] })
+    const turn = await submit(h, 't1', 'Do not use web search. Format A=2.')
+    expect(turn.outcome).toBe('completed')
+    expect(ran).toBe(false)
+    expect(turn.assistantMessage?.steps).toEqual([expect.objectContaining({ tool: 'web_search', outcome: 'denied', executed: false })])
+    expect(turn.assistantMessage?.sources).toBeUndefined()
+  })
+
+  it('carries the selected typed source into a same-thread follow-up without inventing another tool run', async () => {
+    let searches = 0
+    const h = await harness({ tools: [createWebSearchTool({ now: () => T0, searchWeb: async () => { searches += 1; return [result(), result({ title: 'Second page', url: 'https://example.org/second', snippet: 'SECOND STORED FINDING' })] } })], script: ['Found two results [1] [2].', 'The second source says SECOND STORED FINDING [2].'] })
+    await submit(h, 't1', 'Search the web for cache sources.')
+    const turn = await submit(h, 't2', 'Summarise source 2 without searching again.')
+    expect(turn.outcome).toBe('completed')
+    expect(searches).toBe(1)
+    expect(turn.assistantMessage?.sources?.map(source => source.url)).toEqual(['https://example.org/second'])
+    expect(turn.assistantMessage?.steps).toBeUndefined()
+    const carried = h.provider.requests[1]?.messages.find(message => message.content.includes('Stored search evidence'))
+    expect(carried?.role).toBe('user')
+    expect(carried?.content).toContain('SECOND STORED FINDING')
+    expect(carried?.content).not.toContain('https://example.org/real')
+    expect(h.provider.requests[1]?.messages.at(-2)?.content).toBe('Summarise source 2 without searching again.')
+  })
+
+  it('shows an existing numbered source without automatically searching for a replacement', async () => {
+    let searches = 0
+    const h = await harness({ tools: [createWebSearchTool({ now: () => T0, searchWeb: async () => { searches += 1; return [result()] } })], script: ['Found [1].', 'Here is the existing source [1].'] })
+    const first = await submit(h, 't1', 'Search the web for caching sources.')
+    const followUp = await submit(h, 't2', 'Show me source 1.')
+    expect(searches).toBe(1)
+    expect(followUp.assistantMessage?.sources).toEqual(first.assistantMessage?.sources)
+    expect(followUp.assistantMessage?.steps).toBeUndefined()
+  })
+})
+
 /* ------------------------------------------------------- the pinned default */
 
 describe('a turn that needs no tool', () => {

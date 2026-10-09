@@ -22,6 +22,27 @@ import {
 
 const NONE: ChatIntentContext = { activeEyeSession: false }
 
+describe('explicit research restrictions', () => {
+  it.each([
+    'Do not use web search. Format the supplied values.',
+    "Don't search the web for this. Explain the example.",
+    'Answer without searching online, even though I mentioned the latest release.',
+    'No web search; show me sources already in this conversation.',
+    'Do not use your browser. Explain the supplied page text.',
+  ])('keeps a declined lookup in conversation: %s', text => {
+    expect(routeChatIntent(text, NONE).kind).toBe('direct_answer')
+  })
+  it('does not promote a declined deep research mention', () => {
+    expect(routePromptIntent('Do not do deep research. Summarise my notes.', NONE).kind).toBe('chat')
+  })
+  it('does not mistake an empty-result description for a search restriction', () => {
+    expect(routeChatIntent('There are no search results yet. Search the web for caching.', NONE).kind).toBe('web_search')
+  })
+  it('keeps an explicit no-search instruction out of an existing Eye session', () => {
+    expect(routePromptIntent('No web search; summarise the existing results.', { activeEyeSession: true }).kind).toBe('chat')
+  })
+})
+
 function route(text: string, context: ChatIntentContext = NONE): ChatIntent {
   return routeChatIntent(text, context).kind
 }

@@ -42,6 +42,21 @@ export interface AssistantMessageViewProps {
   readonly children?: ReactNode
 }
 
+function SourcePreview({ source, onOpen }: { source: TypedSource; onOpen?: (url: string, title: string) => void }) {
+  return <li className="f-assistant-source-card">
+    <span className="f-assistant-source-rank">[{source.rank}]</span>
+    <div>
+      <button type="button" className="f-assistant-source-link" disabled={onOpen === undefined}
+        onClick={() => onOpen?.(source.url, source.title)} title={source.url}>{source.title}</button>
+      <div className="f-assistant-source-origin"><span>{source.sourceDomain}</span>
+        {source.retrievedAt && Number.isFinite(Date.parse(source.retrievedAt))
+          ? <time dateTime={source.retrievedAt} title={source.retrievedAt}>Retrieved {source.retrievedAt.slice(0, 10)}</time> : null}
+      </div>
+      {source.snippet ? <p className="f-assistant-source-snippet">{source.snippet}</p> : null}
+    </div>
+  </li>
+}
+
 /**
  * Render an assistant message the way a reader actually wants it.
  *
@@ -66,14 +81,22 @@ export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCoun
   const hasSteps = stepLines.length > 0
   const hasMatched = parts.matchedSources.length > 0
   const hasRelated = parts.relatedSources.length > 0
+  const searches = (steps ?? []).filter(step => step.tool === 'web_search')
+  const failedSearch = searches.some(step => step.outcome === 'failed')
+  const deniedSearch = searches.some(step => step.outcome === 'denied')
+  const searchStatus = failedSearch ? 'Search failed. No sources were retrieved for the failed step.'
+    : deniedSearch ? 'Search was blocked. No sources were retrieved for the blocked step.'
+      : searches.length > 0 && searches.every(step => step.sourceCount === 0) ? 'The search returned no sources.' : ''
   const hasMeta = hasThinking || hasSteps || hasMatched || hasRelated || unverifiedFooter.length > 0
     || (retrieved !== undefined && retrieved > 0) || (mediaCount !== undefined && mediaCount > 0)
 
   // Ranks need not be contiguous or arrive in array order. Missing ranks stay
   // literal text in RichMessage; they must not point at another source.
   const typedCitations: RichCitation[] = []
+  const rankCounts = new Map<number, number>()
+  for (const source of sources ?? []) rankCounts.set(source.rank, (rankCounts.get(source.rank) ?? 0) + 1)
   for (const source of sources ?? []) {
-    if (Number.isInteger(source.rank) && source.rank > 0 && source.rank <= 1000) {
+    if (Number.isInteger(source.rank) && source.rank > 0 && source.rank <= 1000 && rankCounts.get(source.rank) === 1) {
       typedCitations[source.rank - 1] = { url: source.url, title: source.title, host: source.sourceDomain }
     }
   }
@@ -118,20 +141,11 @@ export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCoun
 
       {hasMeta ? (
         <footer className="f-assistant-meta">
+          {searchStatus ? <p className="f-assistant-search-status" role="status">{searchStatus}</p> : null}
           {hasMatched ? (
             <ol className="f-assistant-sources" aria-label="Sources cited in the answer">
               {parts.matchedSources.map((source) => (
-                <li key={`m-${source.rank}-${source.url}`}>
-                  <span className="f-assistant-source-rank">[{source.rank}]</span>
-                  <button
-                    type="button"
-                    className="f-assistant-source-link"
-                    disabled={onOpenLink === undefined}
-                    onClick={() => openCitation(source.url, source.title)}
-                  >
-                    {source.title}
-                  </button>
-                </li>
+                <SourcePreview key={`m-${source.rank}-${source.url}`} source={source} onOpen={onOpenLink ? openCitation : undefined} />
               ))}
             </ol>
           ) : null}
@@ -142,17 +156,7 @@ export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCoun
               </summary>
               <ol className="f-assistant-sources f-assistant-related-list" aria-label="Related sources">
                 {parts.relatedSources.map((source) => (
-                  <li key={`r-${source.rank}-${source.url}`}>
-                    <span className="f-assistant-source-rank">[{source.rank}]</span>
-                    <button
-                      type="button"
-                      className="f-assistant-source-link"
-                      disabled={onOpenLink === undefined}
-                      onClick={() => openCitation(source.url, source.title)}
-                    >
-                      {source.title}
-                    </button>
-                  </li>
+                  <SourcePreview key={`r-${source.rank}-${source.url}`} source={source} onOpen={onOpenLink ? openCitation : undefined} />
                 ))}
               </ol>
             </details>

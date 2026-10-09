@@ -170,6 +170,19 @@ const QUESTION =
 const EXPLANATION_FRAME =
   /^\s*(?:please\s+)?(?:can|could|would|will)\s+you\s+(?:explain|describe|teach|walk\s+me)\b|^\s*(?:explain|describe|teach|show)\b|^\s*(?:how|what|why|where)\s+(?:do|can|should|is|are|does)\b/
 
+/** Explicit current-turn restrictions, never inferred from a passing tool mention. */
+export function retrievalRestrictions(text: string): { webSearch: boolean; browser: boolean; deepResearch: boolean } {
+  const lower = text.toLowerCase().replace(/’/g, "'").replace(/\s+/g, ' ')
+  const negative = "\\b(?:do\\s+not|don't|never|avoid|skip|without|no)\\s+"
+  const modifiers = '(?:(?:use|using|do|doing|any|a|the)\\s+){0,3}'
+  const offline = new RegExp(`${negative}${modifiers}(?:internet|online|web)\\s+(?:access|retrieval|lookups?)\\b`).test(lower)
+  return {
+    webSearch: offline || new RegExp(`${negative}${modifiers}(?:(?:web|internet|online)\\s+search(?:ing)?|search(?:ing)?(?!\\s+results?\\b)(?:\\s+(?:on\\s+)?(?:the\\s+)?(?:web|internet|online|again))?|look(?:ing)?\\s+up\\s+(?:on\\s+)?(?:the\\s+)?(?:web|internet|online))\\b`).test(lower),
+    browser: offline || new RegExp(`${negative}(?:(?:use|using|open|opening|launch|launching)\\s+)?(?:(?:your|the|freya's)\\s+)?(?:own\\s+)?browser\\b|${negative}brows(?:e|ing)\\b`).test(lower),
+    deepResearch: offline || new RegExp(`${negative}${modifiers}deep\\s+research\\b`).test(lower),
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Router
  * ------------------------------------------------------------------ */
@@ -178,10 +191,11 @@ export function routeChatIntent(text: string, context: ChatIntentContext): ChatI
   const value = text.trim()
   const lower = value.toLowerCase().replace(/\s+/g, ' ')
   const site = extractSiteConstraint(value)
+  const restrictions = retrievalRestrictions(value)
 
   // Rule 1 — explicit "drive my own browser". Outranks every search intent: if
   // the owner named the browser, the browser is the answer.
-  if (isNativeBrowserRequest(lower)) {
+  if (!restrictions.browser && isNativeBrowserRequest(lower)) {
     return {
       kind: 'native_browser_task',
       reason: 'owner asked Freya to drive its own browser',
@@ -197,6 +211,10 @@ export function routeChatIntent(text: string, context: ChatIntentContext): ChatI
 
   // Rule 3 — nothing typed. Not a search request.
   if (value.length === 0) return { kind: 'direct_answer', reason: 'empty prompt', query: text, site, vertical: 'web' }
+
+  if (restrictions.webSearch || (restrictions.browser && isNativeBrowserRequest(lower))) {
+    return { kind: 'direct_answer', reason: 'owner declined this lookup', query: text, site, vertical: 'web' }
+  }
 
   // Media type is independent of the requested site/search channel.
   const mediaFirst = mediaRequest(lower)
@@ -340,6 +358,12 @@ function isFreshInformationRequest(lower: string): boolean {
   return RETRIEVAL_VERB.test(lower) || QUESTION.test(lower)
 }
 
+/** A new lookup can override a stored-source follow-up, but merely showing a source cannot. */
+export function requestsNewLookup(text: string): boolean {
+  const lower = text.toLowerCase().replace(/\s+/g, ' ')
+  return !retrievalRestrictions(text).webSearch && (/\b(?:search|google|browse|fetch|look\s+up)\b/.test(lower) || isFreshInformationRequest(lower))
+}
+
 /* ------------------------------------------------------------------ *
  * Composer compatibility
  * ------------------------------------------------------------------ */
@@ -365,6 +389,10 @@ export function routePromptIntent(
   context: { readonly activeEyeSession: boolean },
 ): PromptRoute {
   const value = text.trim()
+  const restrictions = retrievalRestrictions(value)
+  if (restrictions.webSearch || (restrictions.browser && isNativeBrowserRequest(value.toLowerCase()))) {
+    return { kind: 'chat', reason: 'conversation' }
+  }
 
   if (isExplicitDeepResearchRequest(value)) {
     return { kind: 'deep-research', reason: 'explicit-deep-research' }
@@ -398,6 +426,8 @@ export function routePromptIntent(
 }
 
 export function isExplicitDeepResearchRequest(text: string): boolean {
+  const restrictions = retrievalRestrictions(text)
+  if (restrictions.deepResearch || restrictions.webSearch) return false
   const lower = text.toLowerCase().replace(/\s+/g, ' ')
   return (
     /\bdeep\s+research\b/.test(lower) ||

@@ -1,4 +1,5 @@
 import type { OwnerAuthority } from '../authority'
+import { SourceLedger } from './source-ledger'
 import type { InitialToolRequest } from './tool-intent'
 import { isTruncationSignal, type ModelFinishReason, type ModelMessage } from '../model/provider'
 import {
@@ -9,6 +10,7 @@ import {
   type MindToolRegistry,
   type ToolObservation,
   type ToolStepRecord,
+  type ToolSource,
 } from './tools'
 
 /**
@@ -157,6 +159,11 @@ export interface ToolLoopDeps {
    * concrete target, so model preference cannot silently override that choice.
    */
   readonly initialToolRequest?: InitialToolRequest | null
+  /** Core-derived restrictions for this turn. Can only narrow the registry. */
+  readonly blockedTools?: readonly string[]
+  readonly blockedToolReason?: string
+  /** Actual evidence supplied by the same conversation's compiled follow-up. */
+  readonly carriedSources?: readonly ToolSource[]
 }
 
 /**
@@ -174,6 +181,16 @@ export async function runToolLoop(
   let messages = baseMessages
   let providerContacted = false
   let toolCallsUsed = 0
+  const ledger = new SourceLedger(deps.carriedSources)
+  const invoke: MindToolRegistry['invoke'] = async request => {
+    if (deps.blockedTools?.includes(request.name)) {
+      return { executed: false, observation: { kind: 'denied', tool: request.name,
+        capability: deps.tools.list().find(tool => tool.name === request.name)?.capability ?? 'search.web',
+        reason: deps.blockedToolReason ?? 'The owner explicitly declined this tool for the current turn.' } }
+    }
+    const invocation = await deps.tools.invoke(request)
+    return { ...invocation, observation: ledger.observation(invocation.observation) }
+  }
 
   // When the owner explicitly chose Freya's own browser and supplied the exact
   // address, do not ask a stochastic model whether it feels like honouring that
@@ -187,7 +204,7 @@ export async function runToolLoop(
       return { kind: 'cancelled', reason: cancellationReason(deps.signal), providerContacted, iterations }
     }
 
-    const invocation = await deps.tools.invoke({
+    const invocation = await invoke({
       name: deps.initialToolRequest.name,
       arguments: deps.initialToolRequest.arguments,
       signal: deps.signal,
@@ -348,7 +365,7 @@ export async function runToolLoop(
       // more than `maxToolCalls` bodies.
       const room = toolCallsUsed < MIND_TOOL_LIMITS.maxToolCalls
       const invocation = room
-        ? await deps.tools.invoke({ name: parsed.tool, arguments: parsed.arguments, signal: deps.signal })
+        ? await invoke({ name: parsed.tool, arguments: parsed.arguments, signal: deps.signal })
         : {
             observation: {
               kind: 'failed' as const,

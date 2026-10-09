@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { initialToolRequestForOwnerText } from '../../../core/mind/tool-intent'
 
 describe('Core-owned initial Chat tool requests', () => {
+  it('does not seed explicitly declined search or browser requests', () => {
+    expect(initialToolRequestForOwnerText('Do not use web search. Format A=2.')).toBeNull()
+    expect(initialToolRequestForOwnerText('Do not use your browser to open https://example.com. Explain my notes.')).toBeNull()
+  })
+  it('keeps an explicit composer search choice stronger than wording', () => {
+    expect(initialToolRequestForOwnerText('No web search', { webSearch: true })).toMatchObject({ name: 'web_search', arguments: { query: 'No web search' } })
+  })
   it('seeds image requests into the images vertical', () => {
     expect(initialToolRequestForOwnerText('show me images of the James Webb telescope')).toEqual({
       name: 'web_search',

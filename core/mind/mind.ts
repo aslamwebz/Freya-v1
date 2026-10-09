@@ -1,4 +1,4 @@
-import { routeChatIntent } from '../research/chat-intent'
+import { requestsNewLookup, retrievalRestrictions, routeChatIntent } from '../research/chat-intent'
 import { validateModelAttachments, type ModelAttachment } from '../model/provider'
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
@@ -538,12 +538,25 @@ function mediaField(observations: readonly ToolObservation[]): { media?: readonl
  * Returns an empty object — not an empty list — when nothing was found, so the
  * field's absence stays distinct from "found an empty list".
  */
-function sourcesField(observations: readonly ToolObservation[], cap: number): { sources?: readonly ToolSource[] } {
+function sourcesField(observations: readonly ToolObservation[], cap: number, carried: readonly ToolSource[] = []): { sources?: readonly ToolSource[] } {
   const seen = new Set<string>()
   const collected: ToolSource[] = []
+  for (const source of carried) {
+    if (collected.length >= cap) break
+    if (seen.has(source.url)) continue
+    seen.add(source.url)
+    collected.push(source)
+  }
   for (const observation of observations) {
     if (observation.kind !== 'ok') continue
     for (const source of observation.sources) {
+      const existing = collected.findIndex(item => item.url === source.url)
+      if (existing !== -1) {
+        // A new successful lookup updates the evidence, retaining the ledger's
+        // citation identity rather than presenting an older carried snippet.
+        collected[existing] = source
+        continue
+      }
       if (collected.length >= cap) return { sources: collected }
       if (seen.has(source.url)) continue
       seen.add(source.url)
@@ -1025,6 +1038,8 @@ export class MindService {
         messages,
         ownerText: text,
         intents: input.intents ?? {},
+        carriedSources: compiled.research?.sources ?? [],
+        researchFollowUp: compiled.researchReference === true,
         perTurnAllowance: maxOutputTokens,
       })
 
@@ -1084,7 +1099,7 @@ export class MindService {
         // What the lookups really returned, kept as typed items beside the prose. The
         // answer is the model's account of the search; this is the search.
         ...mediaField(cognition.steps.map((iteration) => iteration.observation)),
-        ...sourcesField(cognition.steps.map((iteration) => iteration.observation), 100),
+        ...sourcesField(cognition.steps.map((iteration) => iteration.observation), 100, compiled.research?.sources),
         ...chartsField(cognition.steps.map((iteration) => iteration.observation)),
         ...canvasField(cognition.steps.map((iteration) => iteration.observation)),
         // The loop's own record of what it did, carried beside the prose so the
@@ -1188,21 +1203,26 @@ export class MindService {
     messages: readonly ModelMessage[]
     ownerText: string
     intents: TurnIntentHints
+    carriedSources: readonly ToolSource[]
+    researchFollowUp: boolean
     perTurnAllowance: number
   }): Promise<Cognition> {
-    const initialToolRequest = initialToolRequestForOwnerText(input.ownerText, input.intents)
+    const inferredRequest = initialToolRequestForOwnerText(input.ownerText, input.intents)
+    const initialToolRequest = input.researchFollowUp && input.intents.webSearch !== true && input.intents.browserUse !== true
+      && inferredRequest?.name === 'web_search' && !requestsNewLookup(input.ownerText)
+      ? null : inferredRequest
     const modelCapability = input.intents.browserUse === true || initialToolRequest?.name === 'browser_read' || routeChatIntent(input.ownerText, { activeEyeSession: false }).kind === 'native_browser_task' ? 'browser' : 'chat'
 
-    if (!this.toolLoopEnabled) {
-      if (initialToolRequest !== null) {
-        return {
-          kind: 'failed',
-          reason: initialToolRequest.name === 'web_search'
-            ? 'Web search is not available for this turn, so no current sources were retrieved.'
-            : "Freya's own browser is not available for this turn, so it was not opened.",
-          providerContacted: false,
-        }
+    if (initialToolRequest !== null && !this.tools?.has(initialToolRequest.name)) {
+      return {
+        kind: 'failed',
+        reason: initialToolRequest.name === 'web_search'
+          ? 'Web search is not available for this turn, so no current sources were retrieved.'
+          : "Freya's own browser is not available for this turn, so it was not opened.",
+        providerContacted: false,
       }
+    }
+    if (!this.toolLoopEnabled) {
       const outcome = await this.authority.request({
         kind: 'user_turn',
         prompt: input.messages.map((m) => m.content).join('\n\n'),
@@ -1262,6 +1282,13 @@ export class MindService {
     }
 
     const tools = this.tools as MindToolRegistry
+    const restrictions = retrievalRestrictions(input.ownerText)
+    const unresolvedResearch = input.researchFollowUp && input.carriedSources.length === 0
+      && !requestsNewLookup(input.ownerText) && input.intents.webSearch !== true && input.intents.browserUse !== true
+    const blockedTools = tools.list().filter(tool =>
+      (tool.name === 'web_search' && (restrictions.webSearch || unresolvedResearch) && input.intents.webSearch !== true)
+      || (tool.capability.startsWith('browser.') && (restrictions.browser || unresolvedResearch) && input.intents.browserUse !== true),
+    ).map(tool => tool.name)
     const controller = new AbortController()
     this.turnControllers.set(input.turnId, controller)
     try {
@@ -1277,8 +1304,11 @@ export class MindService {
           perTurnAllowance: input.perTurnAllowance,
           signal: controller.signal,
           initialToolRequest,
+          blockedTools,
+          ...(unresolvedResearch ? { blockedToolReason: 'The requested stored source is not available in this turn context. A new lookup cannot substitute for that reference; ask the owner to identify it.' } : {}),
+          carriedSources: input.carriedSources,
         },
-        [...input.messages, tools.instructions()],
+        [...input.messages, tools.instructions(blockedTools)],
       )
       if (outcome.kind === 'denied') return { kind: 'denied', reason: outcome.reason }
       if (outcome.kind === 'cancelled') {
@@ -1319,6 +1349,7 @@ export class MindService {
       const footer = renderToolFooter(
         outcome.iterations.map((iteration) => iteration.step),
         outcome.iterations.map((iteration) => iteration.observation),
+        input.carriedSources,
       )
       return {
         kind: 'answer',

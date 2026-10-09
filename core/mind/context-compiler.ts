@@ -1,6 +1,7 @@
 import type { FreyaIdentity } from '../identity/identity'
 import type { ModelMessage } from '../model/provider'
 import type { ConversationMessage } from '../conversation/types'
+import { researchContextForFollowUp, type ResearchContext } from './research-context'
 
 /**
  * The Context Compiler.
@@ -126,6 +127,10 @@ export interface ReferenceKnowledge {
 }
 
 export interface CompiledContext {
+  /** Same-conversation typed evidence actually included inside this budget. */
+  research?: ResearchContext
+  /** A source reference was detected even if its evidence did not fit. */
+  researchReference?: true
   /** The packet, in provider order. */
   messages: readonly ModelMessage[]
   /** Estimated size of the packet. An estimate, and only ever used for display. */
@@ -200,6 +205,10 @@ export function compileContext(
   const kept: ConversationMessage[] = []
   const dropped: ConversationMessage[] = []
   let running = floor
+  const proposedResearch = researchContextForFollowUp(input.history, current)
+  const researchCost = proposedResearch === null ? 0 : estimateTokens(proposedResearch.message.content)
+  const research = proposedResearch !== null && running + researchCost <= budget.maxEstimatedTokens ? proposedResearch : null
+  if (research !== null) running += researchCost
 
   for (let i = input.history.length - 1; i >= 0; i -= 1) {
     const message = input.history[i]
@@ -237,10 +246,13 @@ export function compileContext(
     // message is instruction by construction; a remembered fact is not an
     // instruction, and rendering it there would grant it authority it has not got.
     ...(reference.rendered === null ? [] : ([{ role: 'user' as const, content: reference.rendered }] as ModelMessage[])),
+    ...(research === null ? [] : [research.message]),
     { role: 'user', content: current.content },
   ]
 
   return {
+    ...(research === null ? {} : { research }),
+    ...(proposedResearch === null ? {} : { researchReference: true as const }),
     messages,
     estimatedTokens: running,
     includedMessageIds: kept.map((message) => message.messageId),

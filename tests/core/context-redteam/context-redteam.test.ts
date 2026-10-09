@@ -755,7 +755,8 @@ describe('attack 7: private context content does not leak', () => {
       if (row === null) continue
       expectNoSecretInText([row.text])
       // The row is a fixed shape with no payload field a body could hide in.
-      expect(Object.keys(row).sort()).toEqual(['at', 'id', 'kind', 'sequence', 'text', 'tone', 'type'])
+      // Chat-scoped activity may also carry opaque conversation/turn identities.
+      expect(Object.keys(row).sort()).toEqual(['at', ...(row.conversationId === undefined ? [] : ['conversationId']), 'id', 'kind', 'sequence', 'text', 'tone', ...(row.turnId === undefined ? [] : ['turnId']), 'type'])
     }
   })
 

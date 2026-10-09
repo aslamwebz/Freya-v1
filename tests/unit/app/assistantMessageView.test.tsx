@@ -5,6 +5,31 @@ import { stepRecordsAsFooterLines } from '../../../src/app/chat/assistantParts'
 import type { ToolStepRecord } from '../../../core/mind/tools'
 
 afterEach(cleanup)
+it('does not silently choose one URL for an ambiguous legacy citation rank', () => {
+  render(<AssistantMessageView content="Fact [1]." onOpenLink={() => {}} sources={[
+    { rank: 1, title: 'One', url: 'https://example.org/one', sourceDomain: 'example.org', snippet: 'One snippet', retrievedAt: null },
+    { rank: 1, title: 'Two', url: 'https://example.org/two', sourceDomain: 'example.org', snippet: 'Two snippet', retrievedAt: null },
+  ]} />)
+  expect(screen.queryByRole('button', { name: /^Source 1:/ })).toBeNull()
+  expect(screen.getByRole('button', { name: 'One' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Two' })).toBeInTheDocument()
+})
+it('previews only typed source snippets, domains and their actual retrieval date', () => {
+  render(<AssistantMessageView content="Finding [2]." sources={[
+    { rank: 2, title: 'Actual page', url: 'https://example.org/page', sourceDomain: 'example.org', snippet: 'A bounded retrieved snippet.', retrievedAt: '2026-10-09T12:00:00Z' },
+  ]} />)
+  expect(screen.getByText('A bounded retrieved snippet.')).toBeInTheDocument()
+  expect(screen.getByText('example.org')).toBeInTheDocument()
+  expect(screen.getByText('Retrieved 2026-10-09')).toBeInTheDocument()
+})
+it('distinguishes empty search results from an actual failed or blocked search', () => {
+  const { rerender } = render(<AssistantMessageView content="No result." steps={[{ index: 1, tool: 'web_search', capability: 'search.web', outcome: 'ok', executed: true, sourceCount: 0 }]} />)
+  expect(screen.getByRole('status')).toHaveTextContent('The search returned no sources.')
+  rerender(<AssistantMessageView content="Could not retrieve." steps={[{ index: 1, tool: 'web_search', capability: 'search.web', outcome: 'failed', executed: true, sourceCount: 0 }]} />)
+  expect(screen.getByRole('status')).toHaveTextContent('Search failed')
+  rerender(<AssistantMessageView content="Blocked." steps={[{ index: 1, tool: 'web_search', capability: 'search.web', outcome: 'denied', executed: false, sourceCount: 0 }]} />)
+  expect(screen.getByRole('status')).toHaveTextContent('Search was blocked')
+})
 const footer = 'Answer.\n—\nWhat Freya did for this answer:\nUsed the "browser_tabs" lookup and read 1 result.\nSources:\n[1] Claimed page — https://example.com/claimed'
 const step: ToolStepRecord = { index: 1, tool: 'browser_tabs', capability: 'browser.read', outcome: 'ok', executed: true, sourceCount: 0 }
 

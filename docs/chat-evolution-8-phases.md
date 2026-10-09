@@ -5,8 +5,8 @@
 | Phase | Status | Tests | Commit |
 |---|---|---|---|
 | 1. Chat Shell | Complete | 372 focused tests; full TypeScript; scoped lint; renderer/desktop build; live provider and restart checks | `295b436` |
-| 2. Rendering | Complete | 567 focused tests; full TypeScript; scoped lint; renderer/desktop build; live rich formats, copy and encrypted restart | Scoped rendering commit |
-| 3. Research | Not started | — | — |
+| 2. Rendering | Complete | 567 focused tests; full TypeScript; scoped lint; renderer/desktop build; live rich formats, copy and encrypted restart | `ec85393` |
+| 3. Research | Complete | 835 focused tests; full TypeScript; scoped lint; both builds; real search, source follow-up and encrypted restart | Scoped research commit |
 | 4. Right Workspace | Not started | — | — |
 | 5. Composer | Not started | — | — |
 | 6. Agentic Execution | Not started | — | — |
@@ -142,6 +142,86 @@ This is an implementation assignment, NOT merely an audit, prompt draft, mockup,
 - Commit scoped verified code on feature/chat-evolution-8-phases. Provide a final concise report with exact changed files, commit(s), passing/failing tests, phase status, and precise next steps for Phase 2.
 - Do NOT interact with the existing user's production Electron instance; if live testing is safe, use an isolated app/profile and don't leave it running.
 
+## Phase 3 design and implementation plan
+
+Execution remains inline in this worktree under the user's implement-now instruction.
+Reusing the compiler and tool loop keeps Guard, grants, cancellation, provider selection,
+encrypted conversation storage and the browser service authoritative. A separate research
+store would duplicate that state; relying only on model prose would leave source identity
+and negation unresolved. The chosen approach adds small pure helpers to those existing seams.
+
+- [x] Intent: add failing cases in `chatIntent.test.ts` and `tool-intent.test.ts` for
+  negated search/browser/deep-research requests, including composer-hint precedence.
+  Implement bounded explicit refusal detection in `core/research/chat-intent.ts` and
+  turn-only restrictions in the existing loop. Tests must show no tool body executed
+  when a scripted provider asks for an explicitly forbidden search.
+- [x] Citation identity: reproduce two searches returning different rank-1 URLs in
+  `tool-loop.test.ts`. Add a per-turn source ledger used before observation rendering;
+  both provider reports and persisted sources must agree on unique ranks, and repeated
+  URLs must retain their assigned rank. No authority or output budget changes.
+- [x] Follow-up context: add compiler and Mind regressions for “summarise source 2”,
+  missing/ambiguous references, unrelated conversation scope, and tight budgets.
+  `core/mind/research-context.ts` will resolve only the preceding assistant's typed
+  sources. Its bounded JSON data enters as user-role reference material, never system
+  instructions, and is counted inside the existing compiler budget. The current owner
+  message stays verbatim. A source-only follow-up can cite retained evidence without
+  inventing a new execution record or fetching a replacement result.
+- [x] Source UI: reuse `AssistantMessageView` and the browser action seam. Add domains,
+  snippets and retrieval times to actual typed sources, with useful empty/failure text
+  driven by tool records. Add renderer regressions, preserving inactive links when
+  the browser seam is absent.
+- [x] Verify the full relevant regression suite, all TypeScript projects, scoped lint,
+  diff checks and both builds. Run a real search and source follow-up in the approved
+  visible feature profile on 9235, verify Core records and restart continuity, then
+  close the test instance. Record any external/provider limitation honestly, review
+  inline, and commit only verified Phase 3 changes.
+
+### Phase 3 evidence and limits
+
+Final focused validation: 69 files / 835 tests pass across Chat, research, tool-loop,
+native Vault, reference compilation, context adversarial checks and cancellation.
+The separate broader `tests/core/mind.test.ts` result is recorded below and is not
+included in that all-passing count. All three TypeScript projects, scoped ESLint,
+diff checks and renderer/desktop builds pass. The isolated feature instance is closed
+after acceptance; the original checkout and instance were not operated.
+
+The guarded real search returned five typed sources. A follow-up summarised source 2
+from its stored snippet with the correct citation, domain and original retrieval time.
+Neither that follow-up nor a subsequent explicitly declined lookup executed a tool.
+A full feature restart preserved the selected conversation, all message identities,
+source records and actual execution records in encrypted Vault storage. Evidence is
+`artifacts/live-visible/chat-evolution/phase3.json` and `chat-research-follow-up.png`.
+The acceptance script polls Core's actual matching turn and terminal outcome, supports
+`--continue` without replacing completed turns, and `--restored` without provider calls.
+It never automates an external website or inserts evidence into the application.
+
+Typed reference resolution binds only the preceding assistant answer in the same
+conversation. It supports numbered/ordinal source references and source-shaped plural
+follow-ups, carries at most five sources under a 4,800-character reference ceiling,
+and counts the whole block in the unchanged 3,000-token compiler budget. Missing,
+ambiguous and oversized references are disclosed; new lookups cannot substitute for
+an unresolved reference unless the owner explicitly requests a new lookup or selects
+a composer tool. Plain code/pronoun follow-ups retain ordinary conversation behavior.
+Source snippets are external reference data, not a claim that a full page was read or
+that its statements were verified. Browser source buttons still use the existing seam;
+full guarded browser-action acceptance remains part of the later integration phase.
+
+Regression coverage includes multi-lookup rank collisions, duplicate URLs, high stored
+ranks, refreshed same-URL snippets, hostile quoted text, scope isolation, context budget,
+missing-reference replacement attempts, and success followed by failed retrieval.
+Stored footers no longer disclaim an earlier successful result when a later lookup fails.
+Legacy duplicate ranks remain literal inline markers instead of silently choosing a URL.
+Empty, failed and blocked searches have distinct renderer notices from typed records.
+
+The separate broader Mind suite passes 38 of 40 tests and has two remaining previously recorded failures: the stale
+one-call grant expectation and concurrent recalled-context metadata. The formerly failing
+fresh-weather test now passes because an absent requested search tool refuses before
+provider contact. An older red-team activity-shape assertion was updated to admit Phase
+1's opaque conversation/turn IDs while retaining its closed metadata shape and private-text
+checks. SQLCipher wrong-key diagnostics are expected negative-test output; existing
+renderer externalization and large-chunk warnings remain. No permission, grant, tool-call,
+output-token, or global context budget was widened. Next: Phase 4 universal right workspace.
+
 ## Exact changed-file inventory
 
 Phase 1 (295b436):
@@ -174,7 +254,7 @@ Phase 1 (295b436):
 - `tests/unit/app/chatSidebarResize.test.tsx`
 - `tests/unit/app/conversationConnection.test.ts`
 
-Phase 2 (scoped rendering commit):
+Phase 2 (ec85393):
 
 - `core/conversation/artifacts.ts`
 - `core/mind/tools.ts`
@@ -194,3 +274,24 @@ Phase 2 (scoped rendering commit):
 - `tests/unit/app/assistantMessageView.test.tsx`
 - `tests/unit/app/chatRendering.test.tsx`
 - `tests/unit/app/richMessage.test.tsx`
+
+Phase 3 (scoped research commit):
+
+- `core/mind/context-compiler.ts`
+- `core/mind/loop.ts`
+- `core/mind/mind.ts`
+- `core/mind/research-context.ts`
+- `core/mind/source-ledger.ts`
+- `core/mind/tool-intent.ts`
+- `core/mind/tools.ts`
+- `core/research/chat-intent.ts`
+- `docs/chat-evolution-8-phases.md`
+- `scripts/chat-research-acceptance.mjs`
+- `src/app/chat/AssistantMessageView.tsx`
+- `src/app/chat/chat.css`
+- `tests/core/context-redteam/context-redteam.test.ts`
+- `tests/core/mind/research-context.test.ts`
+- `tests/core/mind/tool-intent.test.ts`
+- `tests/core/mind/tool-loop.test.ts`
+- `tests/unit/app/assistantMessageView.test.tsx`
+- `tests/unit/chatIntent.test.ts`

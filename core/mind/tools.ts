@@ -612,7 +612,7 @@ export class MindToolRegistry {
    * a failed lookup honest. It grants nothing, and it says so: whether a lookup
    * is permitted is decided by Guard in code, and this text cannot change it.
    */
-  instructions(): ModelMessage {
+  instructions(blockedTools: readonly string[] = []): ModelMessage {
     const lines: string[] = [
       'Optional lookup tools for this turn. You decide whether you need one.',
       '',
@@ -627,7 +627,7 @@ export class MindToolRegistry {
       TOOL_CALL_CLOSE,
       '',
       'Tools available on this turn:',
-      ...this.tools.map((tool) => {
+      ...this.tools.filter(tool => !blockedTools.includes(tool.name)).map((tool) => {
         const args = tool.parameters
           .map((parameter) => `"${parameter.name}" (${parameter.description}${parameter.required === true ? ', required' : ''})`)
           .join(', ')
@@ -904,10 +904,12 @@ function boundObservation(value: string, maxChars: number): string {
  * and what it actually has. A person reading the transcript learns the truth even
  * if the answer above it does not say so.
  */
-export function renderToolFooter(steps: readonly ToolStepRecord[], observations: readonly ToolObservation[]): string {
+export function renderToolFooter(steps: readonly ToolStepRecord[], observations: readonly ToolObservation[], carriedSources: readonly ToolSource[] = []): string {
   if (steps.length === 0) return ''
 
   const lines: string[] = ['', '—', 'What Freya did for this answer:']
+  const hasEvidence = carriedSources.length > 0 || observations.some(observation => observation.kind === 'ok' && observation.sources.length > 0)
+  const noEvidence = hasEvidence ? '' : ' Nothing in the answer above came from a search.'
   for (let i = 0; i < steps.length; i += 1) {
     const step = steps[i]
     const observation = observations[i]
@@ -925,21 +927,18 @@ export function renderToolFooter(steps: readonly ToolStepRecord[], observations:
       }
     } else if (observation.kind === 'denied') {
       lines.push(
-        `Tried to use the "${step.tool}" lookup and was NOT PERMITTED, so nothing was looked up. ` +
-          `Nothing in the answer above came from a search.`,
+        `Tried to use the "${step.tool}" lookup and was NOT PERMITTED; this lookup did not run.${noEvidence}`,
       )
     } else if (step.tool === 'unknown') {
       // A request the parser could not read names no tool, so there is no name to
       // report. "the unknown lookup" read as a broken tool rather than a malformed
       // request; this says what actually happened.
       lines.push(
-        'A lookup request could not be read, so nothing was looked up. ' +
-          'Nothing in the answer above came from a search.',
+        `A lookup request could not be read; this lookup did not run.${noEvidence}`,
       )
     } else {
       lines.push(
-        `Tried to use the "${step.tool}" lookup and it FAILED, so nothing was looked up. ` +
-          `Nothing in the answer above came from a search.`,
+        `Tried to use the "${step.tool}" lookup and it FAILED; this lookup produced no usable evidence.${noEvidence}`,
       )
     }
   }

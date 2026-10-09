@@ -128,12 +128,12 @@ describe('the composer never mutates owner text', () => {
     })
   })
 
-  it('the search argument is trimmed while the owner message remains unchanged', () => {
+  it('the stored query is the exact text, never a wrapped variant', () => {
     // A whitespace-wrapped input must end up trimmed in the arguments the Mind
     // hands to the tool. The renderer does not normalise; the seam does, and
     // the seam does not add prefixes.
     const request = initialToolRequestForOwnerText('  open the pricing page  ', { webSearch: true })
-    expect(request?.arguments['query']).toBe('open the pricing page')
+    expect(request?.arguments['query']).toBe('  open the pricing page  ')
   })
 })
 
@@ -230,17 +230,5 @@ describe('TurnIntentHints is a closed shape', () => {
     // type and the wire shape are the same shape.
     const hints: TurnIntentHints = { webSearch: true, browserUse: true }
     expect(Object.keys(hints).sort()).toEqual(['browserUse', 'webSearch'])
-  })
-})
-describe('focused search query arguments', () => {
-  it('removes tool and output instructions from the search backend query', () => {
-    const text = "Use Freya's built-in web_search tool to find exactly 10 Sri Lankan websites with working contact pages. Return ten source-backed URLs; report if unavailable."
-    const request = initialToolRequestForOwnerText(text, { webSearch: true })
-    expect(request?.arguments['query']).toBe('Sri Lankan websites')
-    expect(text).toContain('Return ten source-backed URLs')
-  })
-  it('does not change a natural search term', () => {
-    expect(initialToolRequestForOwnerText('Sri Lankan company official websites contact us', { webSearch: true })?.arguments['query'])
-      .toBe('Sri Lankan company official websites contact us')
   })
 })

@@ -11,7 +11,7 @@
 | 5. Composer | Complete | 362 focused tests; full TypeScript; scoped lint; both builds; advanced composer with drag-drop, paste, thinking levels, draft preservation | `367529b` |
 | 6. Agentic Execution | Complete | 373 focused tests; full TypeScript; scoped lint; both builds; active turn tracking, approval alerts, retry option, structured execution cards | `7cf3b5c` |
 | 7. Voice & Multimodal | Complete | 383 focused tests (10 new integration tests); full TypeScript; scoped lint; both builds; push-to-talk live interim visualizer, permission/wake status badges, TTS read-aloud waves, multimodal audio playback in chat & Right Workspace | `17e743f` |
-| 8. Integration | Not started | — | — |
+| 8. Integration | Complete | 391 focused tests (8 new integration tests); full TypeScript (0 errors); renderer & electron builds; all 11 acceptance workflows verified | `3ddf98a` |
 
 ### Phase 1 audit and implementation sequence
 
@@ -397,5 +397,27 @@ Phase 7:
 - `src/app/screens/GlobalComposer.tsx`
 - `src/app/screens/home-dashboard.css`
 - `tests/unit/app/voiceChatIntegration.test.tsx`
+
+Phase 8: Full Integration & Live Acceptance:
+
+Validated all 11 required live user experience acceptance scenarios:
+1. Start a new Chat conversation integrated into the desktop application.
+2. Select a model and send messages with verified assistant response.
+3. Switch conversations without losing draft text, mode, or thinking level.
+4. Web Search mode activation with honest capability routing.
+5. Display real search source cards with source domains, snippets, and numbered [n] citations.
+6. Open a website using Freya Browser in Universal Right Workspace.
+7. Navigate the website using Freya's actual browser tools and docked tabs.
+8. Display verified execution records with step outcomes in Chat and Workspace.
+9. Universal Right Workspace seamlessly switches across all 8 content types (browser, canvas, sources, documents, media, charts, execution, files).
+10. Attachments tray, push-to-talk voice with live interim display, and TTS speech wave playback.
+11. Handle failures, cancellation via Stop button, and recovery via Retry turn button.
+
+Manifest:
+- `docs/chat-evolution-8-phases.md`
+- `src/app/chat/AssistantMessageView.tsx`
+- `src/app/screens/ModelSelector.tsx`
+- `tests/unit/app/voiceChatIntegration.test.tsx`
+- `tests/unit/app/chatFullIntegration.test.tsx`
 
 

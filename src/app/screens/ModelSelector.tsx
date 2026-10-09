@@ -130,7 +130,8 @@ export function ModelSelector({ defaultModel }: { defaultModel: string | null })
     }
     const detach = mirror.subscribe(apply)
     void ensureCoreAttached().then(attached => apply(attached.status)).catch(() => {})
-    void hostBridge()?.coreStatus().then(apply).catch(() => {})
+    const bridge = hostBridge()
+    if (typeof bridge?.coreStatus === 'function') void bridge.coreStatus().then(apply).catch(() => {})
     return () => { live = false; detach() }
   }, [])
 

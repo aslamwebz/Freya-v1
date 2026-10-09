@@ -227,19 +227,22 @@ export function AssistantMessageView({
               </ul>
               {steps && steps.length > 0 ? (
                 <div className="f-assistant-steps-cards" aria-label="Verified tool steps">
-                  {steps.map((st) => (
-                    <div key={st.index} className="f-assistant-step-card" data-outcome={st.outcome}>
-                      <span className="f-assistant-step-index">#{st.index}</span>
-                      <span className="f-assistant-step-tool">
-                        <b>{st.tool}</b>
-                        <small>{st.capability}</small>
-                      </span>
-                      <span className={`f-assistant-step-badge ${st.outcome}`}>
-                        {st.outcome === 'ok' ? 'Verified OK' : st.outcome === 'failed' ? 'Failed' : 'Blocked'}
-                      </span>
-                      <span className="f-assistant-step-truth">{st.executed ? 'Executed' : 'Refused'}</span>
-                    </div>
-                  ))}
+                  {steps.map((st, idx) => {
+                    const stepNum = idx + 1
+                    return (
+                      <div key={`${st.tool}-${stepNum}-${idx}`} className="f-assistant-step-card" data-outcome={st.outcome}>
+                        <span className="f-assistant-step-index">#{stepNum}</span>
+                        <span className="f-assistant-step-tool">
+                          <b>{st.tool}</b>
+                          <small>{st.capability}</small>
+                        </span>
+                        <span className={`f-assistant-step-badge ${st.outcome}`}>
+                          {st.outcome === 'ok' ? 'Verified OK' : st.outcome === 'failed' ? 'Failed' : 'Blocked'}
+                        </span>
+                        <span className="f-assistant-step-truth">{st.executed ? 'Executed' : 'Refused'}</span>
+                      </div>
+                    )
+                  })}
                 </div>
               ) : null}
             </details>

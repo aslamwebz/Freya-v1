@@ -242,6 +242,10 @@ describe('Phase 7: Voice & Multimodal Chat Integration', () => {
 
       const { rerender } = render(
         <Chats
+          researchView={null}
+          browserOpen={false}
+          browserPercent={50}
+          browserRequestedUrl={null}
           voiceCanSpeak={true}
           voiceSpeaking={false}
           onSpeakTurn={onSpeakTurn}
@@ -263,6 +267,10 @@ describe('Phase 7: Voice & Multimodal Chat Integration', () => {
       // Rerender as actively speaking
       rerender(
         <Chats
+          researchView={null}
+          browserOpen={false}
+          browserPercent={50}
+          browserRequestedUrl={null}
           voiceCanSpeak={true}
           voiceSpeaking={true}
           onSpeakTurn={onSpeakTurn}
@@ -330,7 +338,7 @@ describe('Phase 7: Voice & Multimodal Chat Integration', () => {
           percent={50}
           onPercentChange={vi.fn()}
           onClose={vi.fn()}
-          onOpenInBrowser={vi.fn()}
+          onBrowserOpenUrl={vi.fn()}
           mediaItems={[sampleAudioItem]}
         />,
       )

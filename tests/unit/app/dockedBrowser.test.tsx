@@ -531,6 +531,26 @@ describe('placing the native view', () => {
     }
   })
 
+  it('releases the native view when the workspace itself closes, not just when its tab goes', async () => {
+    // The reported defect: closing the browser left the front tab's WebContentsView
+    // attached at its last bounds, a blank browser-shaped rectangle over the chat.
+    // Neither of the runs covered here removes the tab first — the whole workspace
+    // unmounts — so the only correct last word on placement is "nothing is attached".
+    const restore = sizeViewport({ x: 400, y: 90, width: 320, height: 240 })
+    try {
+      const { unmount } = render(<DockedBrowser requestedUrl={null} onRequestedUrlHandled={() => {}} onClose={() => {}} />)
+      push(stateWith({ tabs: [tab({ observation: { kind: 'ready', url: 'https://alpha.example.com/', title: null } })], activeTabId: 'tab-1' }))
+      await screen.findByRole('tab')
+      await waitFor(() => expect(bridge.dock).toHaveBeenCalledWith({ sessionId: 'freya-0001', bounds: { x: 400, y: 90, width: 320, height: 240 } }))
+
+      bridge.dock.mockClear()
+      unmount()
+      expect(bridge.dock.mock.calls.at(-1)?.[0]).toEqual({ sessionId: null, bounds: null })
+    } finally {
+      restore()
+    }
+  })
+
   it('treats a zero-area viewport as hidden rather than as a real position', async () => {
     // jsdom reports a zero box for everything, so this is the only honest answer available
     // here — and it is the one that matters: a native view given a zero rect is neither

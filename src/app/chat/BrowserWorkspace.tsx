@@ -244,6 +244,23 @@ export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHan
     }
   }, [tab?.sessionId, tab?.status, status])
 
+  /**
+   * Closing the workspace must remove the native view.
+   *
+   * The placement effect above owns where the view sits while the workspace is
+   * open, and it hides the view when the front tab goes away. Nothing detached it
+   * when the workspace *closes*: the component unmounts, the `ResizeObserver`
+   * disconnects, and the front tab's `WebContentsView` stays attached at whatever
+   * bounds it last had — painting a blank browser-shaped rectangle over the chat
+   * with no panel and no tab to own it. This is the unmount-only half of
+   * placement, so it is its own effect with an empty dependency list rather than
+   * part of the re-runnable one above (a hide sent on every re-run would make the
+   * view flicker as the tab changes).
+   */
+  useEffect(() => () => {
+    void dockBrowserView({ sessionId: null, bounds: null })
+  }, [])
+
   /* ------------------------------------------------------------- the panels */
 
   const empty = useMemo(() => panelFor({ status, reason, tab, journalTrustworthy, busy }), [status, reason, tab, journalTrustworthy, busy])

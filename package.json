@@ -66,7 +66,9 @@
     "test:chat:watch": "node scripts/test-scope.mjs chat --watch",
     "test:legacy-ui": "vitest run tests/unit/ui-v2",
     "build:browser-service-acceptance": "node scripts/build-browser-service-acceptance.mjs",
-    "test:browser-service": "node scripts/build-browser-service-acceptance.mjs && electron dist-electron/acceptance-browser-service.cjs"
+    "test:browser-service": "node scripts/build-browser-service-acceptance.mjs && electron dist-electron/acceptance-browser-service.cjs",
+    "build:chat-missions-acceptance": "node scripts/build-chat-missions-acceptance.mjs",
+    "test:chat-missions": "npm run build:chat-missions-acceptance && electron dist-electron/acceptance-chat-missions.cjs"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1",

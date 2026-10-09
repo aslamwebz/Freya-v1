@@ -833,6 +833,7 @@ const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   'conversation.rename',
   'conversation.turn.submit',
   'conversation.turn.cancel',
+  'conversation.mission.decide',
   // Model catalogue and selection. A window may ask which text models the
   // configured provider can serve, and may name one of them for subsequent
   // turns. Note what neither command reaches: no provider, no grant, no
@@ -1715,6 +1716,14 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       const title = string('title', CONVERSATION_LIMITS.maxTitleCharacters)
       if (!conversationId || !title || !title.trim()) return { ok: false, reason: 'Conversation id and a non-empty title are required.' }
       return { ok: true, payload: { conversationId, title } }
+    }
+
+    case 'conversation.mission.decide': {
+      const conversationId = string('conversationId', MAX_ID_CHARS)
+      const proposalMessageId = string('proposalMessageId', MAX_ID_CHARS)
+      const decision = string('decision', 16)
+      if (!conversationId || !proposalMessageId || !decision || !['approve', 'reject', 'cancel', 'resume'].includes(decision)) return { ok: false, reason: 'A valid Mission proposal decision is required.' }
+      return { ok: true, payload: { conversationId, proposalMessageId, decision } }
     }
 
     case 'conversation.archive': {

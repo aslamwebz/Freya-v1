@@ -2139,3 +2139,8 @@
 }
 
 
+.chat-mission { margin-top: 14px; padding: 12px; border: 1px solid var(--border, #343a46); border-radius: 10px; font-size: 13px; }
+.chat-mission p, .chat-mission ol { margin: 8px 0; }
+.chat-mission-actions { display: flex; gap: 8px; }
+.chat-mission-actions button { padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+.chat-mission-actions button:disabled { opacity: .5; cursor: default; }

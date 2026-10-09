@@ -1,4 +1,8 @@
-import type { VoiceLevels } from './pieces/types'
+export interface VoiceLevels {
+  user: number
+  ai: number
+  morph: number
+}
 
 /**
  * The voice envelope.

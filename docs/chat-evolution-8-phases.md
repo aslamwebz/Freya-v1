@@ -6,8 +6,8 @@
 |---|---|---|---|
 | 1. Chat Shell | Complete | 372 focused tests; full TypeScript; scoped lint; renderer/desktop build; live provider and restart checks | `295b436` |
 | 2. Rendering | Complete | 567 focused tests; full TypeScript; scoped lint; renderer/desktop build; live rich formats, copy and encrypted restart | `ec85393` |
-| 3. Research | Complete | 835 focused tests; full TypeScript; scoped lint; both builds; real search, source follow-up and encrypted restart | Scoped research commit |
-| 4. Right Workspace | Not started | — | — |
+| 3. Research | Complete | 835 focused tests; full TypeScript; scoped lint; both builds; real search, source follow-up and encrypted restart | `87fe9f9` |
+| 4. Right Workspace | Complete | 343 focused tests; full TypeScript; scoped lint; both builds; unified 8-pane workspace with browser/canvas/sources/docs/media/charts/execution/files | `cf495db` |
 | 5. Composer | Not started | — | — |
 | 6. Agentic Execution | Not started | — | — |
 | 7. Voice & Multimodal | Not started | — | — |
@@ -220,7 +220,28 @@ provider contact. An older red-team activity-shape assertion was updated to admi
 1's opaque conversation/turn IDs while retaining its closed metadata shape and private-text
 checks. SQLCipher wrong-key diagnostics are expected negative-test output; existing
 renderer externalization and large-chunk warnings remain. No permission, grant, tool-call,
-output-token, or global context budget was widened. Next: Phase 4 universal right workspace.
+output-token, or global context budget was widened.
+
+### Phase 4 audit and implementation sequence
+
+Introduce one coherent, reusable right-side workspace supporting all eight required content types:
+1. Freya Browser (reusing existing `DockedBrowser` and `BrowserService`).
+2. Web research sources (cards, citations, domain, retrieved date, snippet, "Open in Browser").
+3. Canvas (documents/code, Rendered vs Source modes, sandboxed HTML iframe, Markdown, word/line/char stats, copy).
+4. Documents (PDFs, page metadata, preview, "Open in Browser").
+5. Images and media (gallery, video player, audio player, carousel, zoom/fit).
+6. Generated charts (interactive SVG charts, statistics cards, data table with values and percentages, export JSON/CSV).
+7. Agent execution results (honest verified tool execution step records from Mind/Core, status ok/fail/denied, capability, arguments, duration).
+8. File previews (staged composer drafts from `attachmentTray`, size, kind, text syntax/image preview).
+
+- [x] Create `src/app/chat/rightWorkspaceStore.ts`: Framework-free store with `useSyncExternalStore` subscription managing open state, active tab (`'browser' | 'sources' | 'canvas' | 'documents' | 'media' | 'charts' | 'execution' | 'files'`), percent split, and selections.
+- [x] Create `src/app/chat/RightWorkspace.tsx`: `UniversalRightWorkspace` component with a universal tab strip, count badges, close button, and dedicated subviews for all eight content types.
+- [x] Integrate into `src/app/chat/Chats.tsx`: Single divider resize handle with keyboard accessibility (`ArrowLeft`/`ArrowRight`), header expand/collapse button, seamless grid split synchronization (`data-browser-open`), and direct navigation from message elements to workspace tabs.
+- [x] Connect `AssistantMessageView.tsx`: "Inspect in workspace" on execution steps banner opens Execution tab; "View in workspace" on charts opens Charts tab.
+- [x] Connect `GlobalComposer.tsx`: Clickable attachment chips in `AttachmentTray` preview drafts in the Files tab of Right Workspace.
+- [x] CSS Styling in `src/app/chat/chat.css`: Clean desktop styling for workspace panel, tabs, badge counters, resizer, sub-headers, code blocks, data tables, and empty states.
+- [x] Tests: Added 9 unit tests in `tests/unit/app/rightWorkspace.test.tsx` and 4 integration tests in `tests/unit/app/chatsRightWorkspaceIntegration.test.tsx`.
+- [x] Verification: 34 test files / 343 tests pass (`npm run test:chat`), full TypeScript (`npm run typecheck`), and production builds (`npm run build`).
 
 ## Exact changed-file inventory
 
@@ -295,3 +316,15 @@ Phase 3 (scoped research commit):
 - `tests/core/mind/tool-loop.test.ts`
 - `tests/unit/app/assistantMessageView.test.tsx`
 - `tests/unit/chatIntent.test.ts`
+
+Phase 4 (cf495db):
+
+- `docs/chat-evolution-8-phases.md`
+- `src/app/chat/AssistantMessageView.tsx`
+- `src/app/chat/Chats.tsx`
+- `src/app/chat/RightWorkspace.tsx`
+- `src/app/chat/chat.css`
+- `src/app/chat/rightWorkspaceStore.ts`
+- `src/app/screens/GlobalComposer.tsx`
+- `tests/unit/app/chatsRightWorkspaceIntegration.test.tsx`
+- `tests/unit/app/rightWorkspace.test.tsx`

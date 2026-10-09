@@ -38,6 +38,10 @@ export interface AssistantMessageViewProps {
    * anyway has had the block stripped from the stored content by the Mind.
    */
   readonly steps?: readonly ToolStepRecord[]
+  /** Optional handler to inspect tool execution trace in the right workspace. */
+  readonly onOpenExecution?: () => void
+  /** Optional handler to view a chart in the right workspace. */
+  readonly onOpenChart?: (index: number) => void
   /** Optional children rendered below the answer body, e.g. a media grid. */
   readonly children?: ReactNode
 }
@@ -73,7 +77,19 @@ function SourcePreview({ source, onOpen }: { source: TypedSource; onOpen?: (url:
  * The journal is still the source of truth — nothing here throws the
  * literal text away. The view just shows less of it by default.
  */
-export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCount, sources, citations, charts, steps, children }: AssistantMessageViewProps) {
+export function AssistantMessageView({
+  content,
+  onOpenLink,
+  retrieved,
+  mediaCount,
+  sources,
+  citations,
+  charts,
+  steps,
+  onOpenExecution,
+  onOpenChart,
+  children,
+}: AssistantMessageViewProps) {
   const parts = splitAssistantContent(content, sources)
   const hasThinking = parts.thinking.length > 0
   const stepLines = stepRecordsAsFooterLines(steps ?? [])
@@ -133,7 +149,23 @@ export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCoun
         )}
         {charts !== undefined && charts.length > 0 ? (
           <div className="f-assistant-charts">
-            {charts.map((chart, index) => <ChartView key={`c-${index}-${chart.title}`} chart={chart} />)}
+            {charts.map((chart, index) => (
+              <div key={`c-${index}-${chart.title}`} className="f-assistant-chart-card">
+                <ChartView chart={chart} />
+                {onOpenChart ? (
+                  <div className="f-assistant-chart-actions">
+                    <button
+                      type="button"
+                      className="f-chart-workspace-btn"
+                      onClick={() => onOpenChart(index)}
+                      aria-label={`View ${chart.title} in right workspace`}
+                    >
+                      View in workspace
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ))}
           </div>
         ) : null}
         {children}
@@ -163,7 +195,23 @@ export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCoun
           ) : null}
           {hasSteps ? (
             <details className="f-assistant-steps">
-              <summary>What Freya did for this answer</summary>
+              <summary>
+                <span>What Freya did for this answer</span>
+                {onOpenExecution ? (
+                  <button
+                    type="button"
+                    className="f-assistant-steps-action"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      onOpenExecution()
+                    }}
+                    aria-label="Inspect execution steps in right workspace"
+                  >
+                    Inspect in workspace
+                  </button>
+                ) : null}
+              </summary>
               <ul>
                 {stepLines.map((line, index) => <li key={index}>{line}</li>)}
               </ul>

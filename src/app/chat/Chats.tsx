@@ -14,12 +14,13 @@ import type { WorkspaceResearchView } from './modes'
 import { plainTextFromRich, type RichCitation } from './RichMessage'
 import { copyText } from './clipboard'
 import { AssistantMessageView } from './AssistantMessageView'
-import { CanvasPanel } from './CanvasPanel'
 import { MediaGrid } from './MediaCards'
-import { DockedBrowser, type DockedTabOrigin } from './BrowserWorkspace'
+import type { DockedTabOrigin } from './BrowserWorkspace'
 import { EyeSessionControls } from './EyeSessionControls'
 import { openResearchCitationInDockedBrowser } from './eyeHandoff'
 import { ActivityFeed } from './ActivityFeed'
+import { UniversalRightWorkspace } from './RightWorkspace'
+import { sharedRightWorkspaceStore } from './rightWorkspaceStore'
 import './chat.css'
 
 /**
@@ -367,11 +368,45 @@ export function Chats({
     }
     return null
   })()
-  // When a new canvas arrives, the user has not dismissed it yet.
+  const rwStore = sharedRightWorkspaceStore()
+  const rwSnapshot = useSyncExternalStore(rwStore.subscribe, rwStore.getSnapshot, rwStore.getSnapshot)
+
+  // When a new canvas arrives, open canvas in right workspace if not dismissed.
   useEffect(() => {
     if (latestCanvas === null) return
     setDismissedCanvasId(null)
+    rwStore.openCanvas(latestCanvas)
   }, [latestCanvas?.title, latestCanvas?.content.length])
+
+  // Sync browserOpen prop with right workspace
+  useEffect(() => {
+    if (browserOpen) {
+      rwStore.open('browser')
+    }
+  }, [browserOpen])
+
+  const workspaceOpen = browserOpen || (latestCanvas !== null && dismissedCanvasId === null) || rwSnapshot.open
+
+  const handleWorkspaceClose = () => {
+    if (latestCanvas !== null) {
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i]
+        if (message?.canvas !== undefined) {
+          setDismissedCanvasId(message.messageId)
+          break
+        }
+      }
+    }
+    rwStore.close()
+    onBrowserClose()
+  }
+
+  const handlePercentChange = (nextPercent: number) => {
+    const clamped = Math.max(28, Math.min(72, Math.round(nextPercent)))
+    rwStore.setPercent(clamped)
+    onBrowserPercentChange(clamped)
+  }
+
   const workspaceLabel = researchView?.mode === 'eye' ? 'FREYA · EYE' : researchView?.mode === 'deep-research' ? 'FREYA · DEEP RESEARCH' : 'FREYA · CHAT'
   const workspaceTitle = researchView?.mode === 'eye'
     ? (researchView.outcome.session?.intent.subject ?? "Freya's Eye")
@@ -411,7 +446,7 @@ export function Chats({
   }, [messages.length, generating, problemKey])
 
   return (
-    <div className="chats" data-browser-open={browserOpen || undefined} data-canvas-open={(latestCanvas !== null) || undefined}>
+    <div className="chats" data-workspace-open={workspaceOpen || undefined} data-browser-open={workspaceOpen || undefined} data-canvas-open={(latestCanvas !== null) || undefined}>
       {/*
         Conversation history lives in the left rail. This workspace owns the
         transcript and, when opened, Freya's bounded browser controller.
@@ -423,6 +458,22 @@ export function Chats({
             <span><small>{workspaceLabel}</small><b>{workspaceTitle}</b></span>
           </div>
           {onResearchViewChange ? <button type="button" className="chats-eye-library" onClick={() => { void researchMirror().listSessions().then((outcome) => onResearchViewChange({ mode: 'eye', outcome })) }}>Saved Eye searches</button> : null}
+          <button
+            type="button"
+            className="chats-workspace-toggle"
+            aria-label={workspaceOpen ? 'Collapse right workspace' : 'Expand right workspace'}
+            aria-pressed={workspaceOpen}
+            onClick={() => {
+              if (workspaceOpen) {
+                handleWorkspaceClose()
+              } else {
+                rwStore.open()
+              }
+            }}
+          >
+            <Glyph name="panel" size={14} />
+            <span>Workspace</span>
+          </button>
           <span className="chats-workspace-state" data-busy={workspaceBusy || undefined}>
             <i aria-hidden="true" />{stateLabel}
           </span>
@@ -449,24 +500,51 @@ export function Chats({
                     {message.role === 'assistant'
                       ? <AssistantMessageView
                               content={message.content}
-                              onOpenLink={(url, provenance) => onBrowserOpenUrl(url, { kind: 'link', from: provenance?.kind === 'source' || provenance?.kind === 'citation' ? 'citation' : 'chat', ownerText })}
+                              onOpenLink={(url, provenance) => {
+                                onBrowserOpenUrl(url, { kind: 'link', from: provenance?.kind === 'source' || provenance?.kind === 'citation' ? 'citation' : 'chat', ownerText })
+                                rwStore.open('browser')
+                              }}
                               retrieved={media.length}
                               mediaCount={media.length}
                               sources={message.sources}
                               citations={citations}
                               charts={message.charts}
                               steps={message.steps}
+                              onOpenExecution={() => {
+                                if (message.steps && message.steps.length > 0) {
+                                  rwStore.openExecution(message.steps)
+                                }
+                              }}
+                              onOpenChart={(chartIndex) => {
+                                rwStore.openChart(chartIndex)
+                              }}
                             />
                       : <p className="chats-user-text">{message.content}</p>}
                     {/* What the lookups behind this answer returned. Drawn from the
                         message Core stored, never recovered from the prose: a card needs
                         an address, and an address read out of a sentence is a guess. */}
                     {message.role === 'assistant' && media.length > 0 ? (
-                      <MediaGrid items={media} onOpenBrowserUrl={(url, kind) => onBrowserOpenUrl(url, { kind: 'link', from: 'media', ownerText, mediaKind: kind })} />
+                      <MediaGrid
+                        items={media}
+                        onOpenBrowserUrl={(url, kind) => {
+                          if (kind === 'document' || kind === 'pdf') {
+                            rwStore.openDocument()
+                          } else if (kind === 'image' || kind === 'video' || kind === 'audio') {
+                            rwStore.openMedia()
+                          }
+                          onBrowserOpenUrl(url, { kind: 'link', from: 'media', ownerText, mediaKind: kind })
+                        }}
+                      />
                     ) : null}
                   </div>
                   {message.role === 'assistant' && media.length > 0 ? (
-                    <SourceStrip items={media} onOpen={(url, kind) => onBrowserOpenUrl(url, { kind: 'link', from: 'citation', ownerText, mediaKind: kind })} />
+                    <SourceStrip
+                      items={media}
+                      onOpen={(url, kind) => {
+                        rwStore.openSources()
+                        onBrowserOpenUrl(url, { kind: 'link', from: 'citation', ownerText, mediaKind: kind })
+                      }}
+                    />
                   ) : null}
                   {message.role === 'assistant' ? (
                     <AnswerActions
@@ -481,7 +559,7 @@ export function Chats({
               </article>
             )
           })}
-          {researchView ? <ResearchWorkspace view={researchView} onChange={onResearchViewChange ?? (() => {})} onOpenCitation={(url) => openResearchCitationInDockedBrowser(researchView, url)} /> : null}
+          {researchView ? <ResearchWorkspace view={researchView} onChange={onResearchViewChange ?? (() => {})} onOpenCitation={(url) => { openResearchCitationInDockedBrowser(researchView, url); rwStore.open('browser') }} /> : null}
           {generating ? (
             <article className="chats-turn" data-role="assistant" aria-live="polite">
               <div className="chats-turn-content">
@@ -515,37 +593,51 @@ export function Chats({
           </div>
         ) : null}
       </section>
-      {browserOpen ? <div className="chats-dock-divider" role="separator" aria-label="Resize browser" aria-orientation="vertical" tabIndex={0}
-        onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') onBrowserPercentChange(Math.max(28, Math.min(72, browserPercent + (event.key === 'ArrowLeft' ? 2 : -2)))) }}
-        onPointerDown={(event) => {
-          const divider = event.currentTarget
-          divider.setPointerCapture(event.pointerId)
-          const container = divider.parentElement!
-          const move = (next: PointerEvent) => { const rect = container.getBoundingClientRect(); onBrowserPercentChange(Math.max(28, Math.min(72, 100 * (rect.right - next.clientX) / rect.width))) }
-          const finish = () => { divider.removeEventListener('pointermove', move); divider.removeEventListener('pointerup', finish); divider.removeEventListener('pointercancel', finish) }
-          divider.addEventListener('pointermove', move); divider.addEventListener('pointerup', finish); divider.addEventListener('pointercancel', finish)
-        }} /> : null}
-      {browserOpen ? (
-        <DockedBrowser
-          requestedUrl={browserRequestedUrl}
-          requestedOrigin={{ kind: 'link', from: 'chat', ownerText: 'browser workspace' }}
-          onRequestedUrlHandled={onBrowserRequestedUrlHandled}
-          onClose={onBrowserClose}
-        />
-      ) : null}
-      {latestCanvas !== null ? (
-        <CanvasPanel
-          canvas={latestCanvas}
-          onClose={() => {
-            for (let i = messages.length - 1; i >= 0; i -= 1) {
-              const message = messages[i]
-              if (message?.canvas !== undefined) {
-                setDismissedCanvasId(message.messageId)
-                return
+      {workspaceOpen ? (
+        <>
+          <div
+            className="chats-dock-divider"
+            role="separator"
+            aria-label="Resize workspace"
+            aria-orientation="vertical"
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                handlePercentChange(browserPercent + (event.key === 'ArrowLeft' ? 2 : -2))
               }
-            }
-          }}
-        />
+            }}
+            onPointerDown={(event) => {
+              const divider = event.currentTarget
+              divider.setPointerCapture(event.pointerId)
+              const container = divider.parentElement!
+              const move = (next: PointerEvent) => {
+                const rect = container.getBoundingClientRect()
+                handlePercentChange(100 * (rect.right - next.clientX) / rect.width)
+              }
+              const finish = () => {
+                divider.removeEventListener('pointermove', move)
+                divider.removeEventListener('pointerup', finish)
+                divider.removeEventListener('pointercancel', finish)
+              }
+              divider.addEventListener('pointermove', move)
+              divider.addEventListener('pointerup', finish)
+              divider.addEventListener('pointercancel', finish)
+            }}
+          />
+          <UniversalRightWorkspace
+            open={workspaceOpen}
+            activeTab={rwSnapshot.activeTab}
+            onTabChange={(tab) => rwStore.setTab(tab)}
+            onClose={handleWorkspaceClose}
+            percent={browserPercent}
+            onPercentChange={handlePercentChange}
+            messages={messages}
+            canvas={latestCanvas}
+            browserRequestedUrl={browserRequestedUrl}
+            onBrowserRequestedUrlHandled={onBrowserRequestedUrlHandled}
+            onBrowserOpenUrl={onBrowserOpenUrl}
+          />
+        </>
       ) : null}
     </div>
   )

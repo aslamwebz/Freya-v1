@@ -5,6 +5,7 @@ import { ModeSelector } from './ModeSelector'
 import type { ComposerMode } from '../chat/modes'
 import type { VoiceView } from '../voice/useVoiceDock'
 import { attachmentLabel, attachmentTray, pickAttachments } from '../chat/attachments'
+import { sharedRightWorkspaceStore } from '../chat/rightWorkspaceStore'
 
 function VoiceDockButton({ voice, onPress, onRelease }: {
   voice: VoiceView
@@ -104,9 +105,16 @@ function AttachmentTray() {
   >
     {drafts.map((draft) => <li key={draft.id}>
       <span className="hd-tool" style={{ gap: 6 }} title={draft.detail ?? draft.name}>
-        <Glyph name="attach" size={12} />
-        <span>{draft.name}</span>
-        <small style={{ opacity: 0.7 }}>{attachmentLabel(draft)}</small>
+        <button
+          type="button"
+          style={{ background: 'transparent', border: 0, color: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: 0, font: 'inherit' }}
+          onClick={() => sharedRightWorkspaceStore().openFiles(draft.id)}
+          title={`Preview ${draft.name} in right workspace`}
+        >
+          <Glyph name="attach" size={12} />
+          <span>{draft.name}</span>
+          <small style={{ opacity: 0.7 }}>{attachmentLabel(draft)}</small>
+        </button>
         <button
           type="button"
           aria-label={`Remove ${draft.name}`}

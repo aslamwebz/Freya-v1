@@ -1,6 +1,6 @@
 import type { ModelAttachment } from '../model/provider'
 import type { MediaItem } from '../media/types'
-import type { ToolSource, ChartSpec, CanvasSpec } from '../mind/tools'
+import type { ToolSource, ToolStepRecord, ChartSpec, CanvasSpec } from '../mind/tools'
 import type { TurnIntentHints } from '../mind/tool-intent'
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
@@ -471,6 +471,7 @@ function toMessageView(message: {
   sources?: readonly ToolSource[]
   charts?: readonly ChartSpec[]
   canvas?: CanvasSpec
+  steps?: readonly ToolStepRecord[]
 }): ConversationMessageView {
   return {
     messageId: message.messageId,
@@ -485,6 +486,12 @@ function toMessageView(message: {
     ...(message.sources === undefined || message.sources.length === 0 ? {} : { sources: message.sources }),
     ...(message.charts === undefined || message.charts.length === 0 ? {} : { charts: message.charts }),
     ...(message.canvas === undefined ? {} : { canvas: message.canvas }),
+    // The loop's step records are kept absent on a turn that looked nothing up.
+    // Their presence is the renderer-side signal that the transcript's "What
+    // Freya did" section can be drawn from the loop rather than from the
+    // model's prose, and a turn whose model narrated a tool act but whose
+    // `steps` are absent is a turn the reader can see did not run one.
+    ...(message.steps === undefined || message.steps.length === 0 ? {} : { steps: message.steps }),
   }
 }
 

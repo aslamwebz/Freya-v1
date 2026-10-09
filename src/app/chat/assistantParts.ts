@@ -1,19 +1,43 @@
 /**
- * Split an assistant message's stored `content` into the parts the renderer
- * actually wants to show.
+ * Render the loop's own step records as the lines the chat shows in the
+ * "What Freya did" panel.
  *
- * The journal keeps the literal text the model produced plus the tool footer
- * the Mind appends (see `core/mind/tools.ts` `renderToolFooter`). The visible
- * surface should not dump either of those into the same paragraph as the
- * answer. This function finds them, returns them as named pieces, and leaves
- * a clean prose body in the middle.
- *
- * The parser is deliberately small. It is not Markdown and it is not
- * Markdown-aware: it only looks for the two structural markers Freya itself
- * emits (`<think>…</think>` and the `—\nWhat Freya did for this answer:`
- * footer). Anything that does not match falls through to `body` and is
- * rendered normally.
+ * Preferring the loop's record over the prose-parsed footer is the only way
+ * the chat can be honest about a turn that narrated an act without
+ * performing it: the Mind strips any model-written footer block from the
+ * stored content, so the prose no longer carries a forgery, and the panel is
+ * drawn from the records the tool loop actually produced.
  */
+import type { ToolStepRecord } from '../../../core/mind/tools'
+
+export function stepRecordsAsFooterLines(steps: readonly ToolStepRecord[]): string[] {
+  const lines: string[] = []
+  for (const step of steps) {
+    const count = step.sourceCount
+    const noun = count === 1 ? 'result' : 'results'
+    const verb = step.outcome === 'ok' ? 'ran' : step.outcome === 'denied' ? 'was NOT PERMITTED' : 'FAILED'
+    if (step.outcome === 'ok') {
+      lines.push(`Used the "${step.tool}" lookup and read ${count} ${noun}.`)
+    } else if (step.outcome === 'denied') {
+      lines.push(
+        `Tried to use the "${step.tool}" lookup and was NOT PERMITTED, so nothing was looked up. ` +
+          `Nothing in the answer above came from a search.`,
+      )
+    } else {
+      lines.push(
+        `Tried to use the "${step.tool}" lookup and it FAILED, so nothing was looked up. ` +
+          `Nothing in the answer above came from a search.`,
+      )
+    }
+    // The "verb" branch above is referenced so the helper is honest about a
+    // non-`ok` outcome: the line the user sees already names it, and the
+    // local `verb` is what `renderToolFooter` would have said in the same
+    // situation. Kept here as a no-op read so a refactor of the wording
+    // cannot silently drop the distinction.
+    void verb
+  }
+  return lines
+}
 export interface AssistantParts {
   /** Model reasoning. Empty when the model did not emit a thinking block. */
   readonly thinking: string
@@ -55,10 +79,11 @@ export interface TypedSource {
 }
 
 const THINK_RE = /<think>([\s\S]*?)(?:<\/think>|$)/i
-// The footer may be headed by a bare em-dash and `What Freya did...` either on
-// the next line or on the same line, with any amount of whitespace. The Mind
-// emits `—\nWhat Freya did...`; the model sometimes re-emits it as one paragraph.
-const FOOTER_HEAD = /[ \t]*—[ \t]*(?:\n|\s)+What Freya did for this answer:[ \t]*(?:\n|$)([\s\S]*)$/
+// The footer shape is owned by the Mind and lives in `core/mind/footerGuard.ts`
+// alongside the strip that prevents a model from writing the same shape into its
+// own reply. Importing the shared regex is what makes the two surfaces agree on
+// what a footer is, and a divergence would be a forgery window.
+import { FOOTER_HEAD } from '../../../core/mind/footerGuard'
 const SOURCE_LINE = /^\[(\d+)\]\s+(.+?)\s+—\s+(\S+)\s*$/
 // Same shape, but as an inline run inside a paragraph.
 const SOURCE_INLINE = /\[(\d+)\]\s+(.+?)\s+—\s+(https?:\/\/\S+)/g

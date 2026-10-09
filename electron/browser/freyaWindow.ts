@@ -1,5 +1,6 @@
 import { BrowserWindow, WebContentsView, session as electronSession, type Session, type WebContents } from 'electron'
 import { PUBLIC_BROWSER_DENIED_PERMISSIONS, assertNonPersistentPartition, assertPublicBrowserUrl, BROWSER_LIMITS } from '../../core/browser'
+import { shouldAdoptPageAddress } from '../../core/browser/service'
 import { isPrivateOrLocalHost, utf8Bytes } from '../../core/browserext'
 import type { FieldDescriptor, FreyaBrowserPage, FreyaBrowserPageFactory } from './publicAdapter'
 
@@ -361,6 +362,9 @@ const SIGNATURE_SCRIPT = String.raw`(() => {
   const input = document.querySelector('input, textarea');
   return [location.href, document.title, document.querySelectorAll('*').length, input ? String(input.value || '').length : '0', document.activeElement ? document.activeElement.tagName : ''].join('|');
 })`
+
+/** Where the page itself says it is. The witness for a navigation outcome. */
+const LOCATION_SCRIPT = String.raw`(() => location.href)()`
 
 /** What one page reports about itself. Every field is a fact it can witness. */
 export interface SurfaceReading {
@@ -900,12 +904,48 @@ export class ElectronFreyaBrowserPage implements FreyaBrowserLivePage {
     if (result === null || result.ok !== true) {
       return { ok: false, changed: false, protectedKind: null, code: result?.reason === 'disabled' ? 'element-disabled' : 'click-failed' }
     }
-    if (result.changed === true) return { ok: true, changed: true, protectedKind: null, code: 'clicked' }
-    // Nothing changed synchronously. Pages that navigate or re-render take a moment, so the
-    // change is looked for once more inside a hard bound. Nothing here can hang: two
-    // attempts and a fixed ceiling.
-    const settled = await this.settle(before)
-    return { ok: true, changed: settled, protectedKind: null, code: settled ? 'clicked' : 'click-unobserved' }
+    const changed = await this.settle(before)
+    // A click that navigates must be observed from the page, not only from the window's
+    // navigation event. A click dispatched in the isolated world can commit a navigation
+    // whose `did-navigate` never reaches this class, which left the tab reporting the
+    // address it *used to* be on while the page was already elsewhere. The wait is taken
+    // even when the page changed synchronously: an anchor takes focus the instant it is
+    // clicked and navigates a moment later, so a synchronous change is not evidence that
+    // the act is finished.
+    if (changed) await this.adoptPageAddress()
+    return { ok: true, changed, protectedKind: null, code: changed ? 'clicked' : 'click-unobserved' }
+  }
+
+  /**
+   * Adopt the address the page itself reports.
+   *
+   * The page is the witness for where it is; `this.url` is a cache updated by navigation
+   * events, and an event can be missed — a click dispatched in the isolated world can
+   * commit a navigation whose `did-navigate` never arrives. Reading once is not enough:
+   * an anchor fires its navigation *after* the click call returns, so the address is
+   * only settled a moment later. Polling for it is what makes the observed address the
+   * outcome of the click rather than the state of the page at the instant of the click,
+   * and the loop is bounded by the same settle budget the rest of the act uses.
+   */
+  private async adoptPageAddress(): Promise<void> {
+    const deadline = Date.now() + Math.max(250, this.settleMs)
+    let adopted: string | null = null
+    while (Date.now() < deadline) {
+      const here = await this.eval<string>(LOCATION_SCRIPT)
+      // Only a real, allowed address is adopted. A page that moved itself to about:blank
+      // or a refused scheme has not navigated anywhere this window will report.
+      if (shouldAdoptPageAddress(this.url, here) && this.allowedUrl(here)) {
+        adopted = here
+        break
+      }
+      if (this.closed) return
+      await new Promise<void>((resolve) => { setTimeout(resolve, 100) })
+    }
+    if (adopted === null || adopted === this.url) return
+    this.url = adopted
+    this.title = null
+    this.revision += 1
+    this.publish()
   }
 
   private async settle(before: string | null): Promise<boolean> {

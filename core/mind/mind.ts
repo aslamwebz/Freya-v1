@@ -35,6 +35,7 @@ import type { CueKind, CueUsageLedger, InteractionFact, RelationshipItem } from 
 import { runToolLoop, type ToolIteration } from './loop'
 import { initialToolRequestForOwnerText, type TurnIntentHints } from './tool-intent'
 import { MIND_TOOL_LIMITS, renderToolFooter, type MindToolRegistry, type ToolObservation } from './tools'
+import { iterationsAsStepRecords, stripModelWrittenFooter } from './footerGuard'
 import { mediaFromObservations } from '../media/collect'
 import type { MediaItem } from '../media/types'
 import type { ToolSource, ChartSpec, CanvasSpec } from './tools'
@@ -464,6 +465,14 @@ type Cognition =
       model: string
       providerContacted: true
       steps: readonly ToolIteration[]
+      /**
+       * True when the model's reply contained a block shaped like the code's
+       * footer and the strip removed it before the answer was stored. The flag
+       * rides on the `Cognition` so the turn finish can annotate the stored
+       * message: a turn whose model wrote a footer but whose loop produced no
+       * iterations is a turn that narrated an act the Mind did not perform.
+       */
+      modelWroteFooter: boolean
     }
   /**
    * The provider answered, and its answer did not finish.
@@ -481,6 +490,8 @@ type Cognition =
       /** True: a truncated reply is a reply, so a provider was reached and paid. */
       providerContacted: true
       steps: readonly ToolIteration[]
+      /** See the matching field on `answer`. A truncated reply can be a forgery too. */
+      modelWroteFooter: boolean
     }
   | { kind: 'denied'; reason: string }
   | { kind: 'cancelled'; reason: string; providerContacted: boolean }
@@ -1053,6 +1064,7 @@ export class MindService {
 
       // --- 6. the answer, stored before anyone is told it exists ------------
       const endedAt = this.now().toISOString()
+      const stepRecords = iterationsAsStepRecords(cognition.steps)
       const assistantMessage: ConversationMessage = {
         messageId: this.newId(),
         conversationId: input.conversationId,
@@ -1061,6 +1073,11 @@ export class MindService {
         // turn that looked something up says so in the transcript, and a turn
         // whose lookup was refused or failed says that too — the "no silent
         // downgrade" rule enforced by code rather than by an instruction.
+        //
+        // `cognition.text` is already stripped of any model-written footer block
+        // by the time we reach this branch (see `think`), so the prose stored
+        // here is the model's own words without any block shaped like the
+        // code's footer. A forge is therefore impossible from the store side.
         content: cognition.text,
         createdAt: endedAt,
         turnId,
@@ -1070,6 +1087,10 @@ export class MindService {
         ...sourcesField(cognition.steps.map((iteration) => iteration.observation), 100),
         ...chartsField(cognition.steps.map((iteration) => iteration.observation)),
         ...canvasField(cognition.steps.map((iteration) => iteration.observation)),
+        // The loop's own record of what it did, carried beside the prose so the
+        // renderer can draw the "What Freya did" section from the loop rather
+        // than from the model's text. Absent on a turn that looked nothing up.
+        ...(stepRecords === undefined ? {} : { steps: stepRecords }),
       }
       try {
         await this.store.appendMessage(assistantMessage)
@@ -1217,22 +1238,26 @@ export class MindService {
       // is the whole of what it does about a cut-off reply: refuse to present it
       // as an answer.
       if (cognitionOutcomeTruncated(outcome)) {
+        const cleanedTrunc = stripModelWrittenFooter(outcome.text)
         return {
           kind: 'truncated',
-          text: outcome.text,
+          text: cleanedTrunc.text,
           providerId: outcome.providerId,
           model: outcome.model,
           providerContacted: true,
           steps: [],
+          modelWroteFooter: cleanedTrunc.forgery,
         }
       }
+      const cleanedAnswer = stripModelWrittenFooter(outcome.text)
       return {
         kind: 'answer',
-        text: outcome.text,
+        text: cleanedAnswer.text,
         providerId: outcome.providerId,
         model: outcome.model,
         providerContacted: true,
         steps: [],
+        modelWroteFooter: cleanedAnswer.forgery,
       }
     }
 
@@ -1267,30 +1292,45 @@ export class MindService {
       // it still holds the iterations it had legitimately made before that. The
       // Mind's job is only to render what they did and what is missing.
       if (outcome.kind === 'truncated') {
+        const cleanedTrunc = stripModelWrittenFooter(outcome.text)
         return {
           kind: 'truncated',
-          text: outcome.text,
+          text: cleanedTrunc.text,
           providerId: outcome.providerId,
           model: outcome.model,
           providerContacted: true,
           steps: outcome.iterations,
+          modelWroteFooter: cleanedTrunc.forgery,
         }
       }
       // The footer is appended here, in code, from the loop's own record of what
       // it did. The model's text is stored exactly as it answered; the truth about
       // the tools is added beside it and cannot be edited away by anything the
       // model said.
+      //
+      // The model's text is run through `stripModelWrittenFooter` first because a
+      // model that has seen a previous turn's footer sometimes reproduces the
+      // format in its own reply. Without the strip, a turn whose loop produced no
+      // iterations would store a model-written block that *looks* like a code
+      // footer — the transcript would name an act the loop never performed, and
+      // no reader could tell the difference. The strip removes the forgery so
+      // the code's footer is the only footer the transcript can hold.
+      const cleaned = stripModelWrittenFooter(outcome.text)
       const footer = renderToolFooter(
         outcome.iterations.map((iteration) => iteration.step),
         outcome.iterations.map((iteration) => iteration.observation),
       )
       return {
         kind: 'answer',
-        text: footer === '' ? outcome.text : `${outcome.text}\n${footer}`,
+        text: footer === '' ? cleaned.text : `${cleaned.text}\n${footer}`,
         providerId: outcome.providerId,
         model: outcome.model,
         providerContacted: true,
         steps: outcome.iterations,
+        // Carried so the conversation store can persist the loop's record of
+        // what it did beside the message. The renderer uses this to draw the
+        // "What Freya did" section from the loop, not from the model's prose.
+        modelWroteFooter: cleaned.forgery,
       }
     } finally {
       this.turnControllers.delete(input.turnId)
@@ -1348,6 +1388,7 @@ export class MindService {
       cognition.steps.map((iteration) => iteration.step),
       cognition.steps.map((iteration) => iteration.observation),
     )
+    const stepRecords = iterationsAsStepRecords(cognition.steps)
     const assistantMessage: ConversationMessage = {
       messageId: this.newId(),
       conversationId: input.conversationId,
@@ -1360,6 +1401,10 @@ export class MindService {
       ...sourcesField(cognition.steps.map((iteration) => iteration.observation), 100),
       ...chartsField(cognition.steps.map((iteration) => iteration.observation)),
       ...canvasField(cognition.steps.map((iteration) => iteration.observation)),
+      // A truncated turn's loop record is kept beside the prose for the same
+      // reason a finished answer's is: the renderer draws "What Freya did" from
+      // the loop, not from the model's text.
+      ...(stepRecords === undefined ? {} : { steps: stepRecords }),
     }
 
     try {

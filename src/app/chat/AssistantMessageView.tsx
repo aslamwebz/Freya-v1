@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
 import { RichMessage } from './RichMessage'
-import { splitAssistantContent, type TypedSource } from './assistantParts'
+import { splitAssistantContent, stepRecordsAsFooterLines, type TypedSource } from './assistantParts'
 import { ChartView, type ChartSpec } from './ChartView'
+import type { ToolStepRecord } from '../../../core/mind/tools'
 
 export interface AssistantMessageViewProps {
   /** The literal text the journal stored for this assistant message. */
@@ -25,6 +26,17 @@ export interface AssistantMessageViewProps {
    * guess about numbers. One or many.
    */
   readonly charts?: readonly ChartSpec[]
+  /**
+   * The loop's own record of the tool steps this turn ran, in order.
+   *
+   * When present, the "What Freya did" panel is drawn from these records
+   * rather than from the prose-parsed footer, so a turn that narrated an act
+   * in prose but did not perform it cannot show a fabricated footer. When
+   * absent, the panel is not rendered — a turn that looked nothing up has
+   * nothing to say about what it did, and a model that wrote a footer
+   * anyway has had the block stripped from the stored content by the Mind.
+   */
+  readonly steps?: readonly ToolStepRecord[]
   /** Optional children rendered below the answer body, e.g. a media grid. */
   readonly children?: ReactNode
 }
@@ -45,10 +57,16 @@ export interface AssistantMessageViewProps {
  * The journal is still the source of truth — nothing here throws the
  * literal text away. The view just shows less of it by default.
  */
-export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCount, sources, charts, children }: AssistantMessageViewProps) {
+export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCount, sources, charts, steps, children }: AssistantMessageViewProps) {
   const parts = splitAssistantContent(content, sources)
   const hasThinking = parts.thinking.length > 0
-  const hasSteps = parts.steps.length > 0
+  // The "What Freya did" panel is drawn from the loop's step records when they
+  // are present, and not at all otherwise. The prose-parsed footer is the
+  // fallback for messages that pre-date the change and still carry the code
+  // footer in their `content`; once the Mind is rebuilt, new messages will
+  // have empty `parts.steps` and rely on `steps` instead.
+  const stepLines = steps !== undefined && steps.length > 0 ? stepRecordsAsFooterLines(steps) : parts.steps
+  const hasSteps = stepLines.length > 0
   const hasMatched = parts.matchedSources.length > 0
   const hasRelated = parts.relatedSources.length > 0
   const hasFooterSources = parts.sources.length > 0
@@ -154,7 +172,7 @@ export function AssistantMessageView({ content, onOpenLink, retrieved, mediaCoun
             <details className="f-assistant-steps">
               <summary>What Freya did for this answer</summary>
               <ul>
-                {parts.steps.map((line, index) => <li key={index}>{line}</li>)}
+                {stepLines.map((line, index) => <li key={index}>{line}</li>)}
               </ul>
             </details>
           ) : null}

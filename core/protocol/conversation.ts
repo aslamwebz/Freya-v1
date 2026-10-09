@@ -16,7 +16,7 @@ import type { ConversationPersistenceMode } from '../conversation/store'
 
 /** One rendered message. The full content, because this is the transcript. */
 import type { MediaItem } from '../media/types'
-import type { ToolSource, ChartSpec, CanvasSpec } from '../mind/tools'
+import type { ToolSource, ToolStepRecord, ChartSpec, CanvasSpec } from '../mind/tools'
 export interface ConversationMessageView {
   messageId: string
   role: 'user' | 'assistant'
@@ -54,6 +54,15 @@ export interface ConversationMessageView {
    * the canvas tool.
    */
   canvas?: CanvasSpec
+  /**
+   * The loop's own record of the tool steps this turn ran, in order.
+   *
+   * The renderer prefers this list over the content-parsed footer for the
+   * "What Freya did" section: the loop's record is the truth about what the
+   * Mind did, the model's prose is only its account. Absent on a turn that
+   * looked nothing up and always absent on a user message.
+   */
+  steps?: readonly ToolStepRecord[]
 }
 
 export interface ConversationSummaryView {

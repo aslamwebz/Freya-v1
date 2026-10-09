@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import type { SemanticSnapshot } from '../../../core/browser/service'
-import { auditSemanticBrowserService, SEMANTIC_BROWSER_OPS } from '../../../core/browser/service'
+import { auditSemanticBrowserService, SEMANTIC_BROWSER_OPS, shouldAdoptPageAddress } from '../../../core/browser/service'
 import { auditBrowserTables, BROWSER_COMMANDS } from '../../../core/browser/types'
 import { harness, ScriptedSurfacePage, type Harness } from './service-harness'
 
@@ -549,6 +549,19 @@ describe('semantic snapshots and references', () => {
     // reports a height of 0. That is not "the page is at the top".
     h.page(sessionId).scrollHeight = 0
     await h.refused({ op: 'scroll', to: 'bottom' }, 'surface-unavailable')
+  })
+
+  it('adopts the address the page reports after an act, and only a real http(s) one', () => {
+    // The reported defect: a click committed a navigation the window's `did-navigate`
+    // never delivered, so the tab kept naming the address it had left. The page itself
+    // is the witness, so its address is adopted when it is real and different.
+    expect(shouldAdoptPageAddress('http://127.0.0.1:1/', 'http://127.0.0.1:1/contact')).toBe(true)
+    // Nothing moves when the observation is not a new, real address.
+    expect(shouldAdoptPageAddress('https://a.example/', 'https://a.example/')).toBe(false)
+    expect(shouldAdoptPageAddress('https://a.example/', '')).toBe(false)
+    expect(shouldAdoptPageAddress('https://a.example/', null)).toBe(false)
+    expect(shouldAdoptPageAddress('https://a.example/', 'about:blank')).toBe(false)
+    expect(shouldAdoptPageAddress(null, 'file:///C:/secret')).toBe(false)
   })
 
   it('waits for a settle, and reports the address it settled on', async () => {

@@ -453,6 +453,7 @@ export function Chats({
                               mediaCount={media.length}
                               sources={message.sources}
                               charts={message.charts}
+                              steps={message.steps}
                             />
                           : <RichMessage
                               content={message.content}

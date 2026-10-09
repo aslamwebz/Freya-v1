@@ -350,6 +350,7 @@ export function ChatSurface() {
                       mediaCount={message.media?.length ?? 0}
                       sources={message.sources}
                       charts={message.charts}
+                      steps={message.steps}
                     >
                     </AssistantMessageView>
                   : <p className="chat-turn-text">{message.content}</p>}

@@ -14,7 +14,7 @@ import type { NativeConnection } from './binding'
  * with no extra table to bootstrap.
  */
 
-export const VAULT_SCHEMA_VERSION = 5
+export const VAULT_SCHEMA_VERSION = 6
 
 export interface VaultMigrationContext {
   exec(sql: string): void
@@ -282,6 +282,27 @@ export const VAULT_MIGRATIONS: readonly VaultMigration[] = Object.freeze([
       // Nullable, so a message that found nothing reads back as no column at all and
       // `media` stays absent rather than becoming an empty list.
       context.exec('ALTER TABLE chat_messages ADD COLUMN media TEXT')
+    },
+  },
+  {
+    version: 6,
+    name: 'conversation-steps',
+    up: (context) => {
+      // The loop's own record of the tool steps a turn ran, kept beside the prose.
+      //
+      // The Mind writes this when it stores an assistant message so the renderer
+      // can verify the transcript's "What Freya did" section against the loop,
+      // not against the model. A model that narrates a browser act in prose
+      // cannot forge a `steps` row in the same write — the column is owned by
+      // Core, populated from `outcome.iterations`, and never read back from the
+      // model's text.
+      //
+      // One nullable JSON column, for the same reason `media` is one column:
+      // the list is read whole with its message and never queried across
+      // messages, and the items are typed data whose shape is owned by the Mind.
+      // Nullable so a turn that looked nothing up reads back as no column at all
+      // and `steps` stays absent rather than becoming an empty list.
+      context.exec('ALTER TABLE chat_messages ADD COLUMN steps TEXT')
     },
   },
 

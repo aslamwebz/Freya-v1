@@ -1,5 +1,7 @@
 import { MEDIA_LIMITS, type MediaItem } from '../../media/types'
 import { safeVideoEmbed } from '../../media/collect'
+import type { ToolStepRecord } from '../../mind/tools'
+import { CAPABILITIES } from '../../protocol/core-protocol'
 import {
   ConversationStoreError,
   type ConversationStore,
@@ -99,7 +101,7 @@ export class VaultConversationStore implements ConversationStore {
       const conversation = decodeConversation(row)
       const messages = this.vault
         .all<MessageRow>(
-          `SELECT message_id, conversation_id, role, content, created_at, turn_id, media
+          `SELECT message_id, conversation_id, role, content, created_at, turn_id, media, steps
            FROM chat_messages WHERE conversation_id = ?
            ORDER BY created_at ASC, message_id ASC`,
           [id],
@@ -139,8 +141,8 @@ export class VaultConversationStore implements ConversationStore {
           throw new ConversationStoreError('not-found', `no such conversation: ${value.conversationId}`)
         }
         tx.run(
-          `INSERT INTO chat_messages (message_id, conversation_id, role, content, created_at, turn_id, media)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO chat_messages (message_id, conversation_id, role, content, created_at, turn_id, media, steps)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             value.messageId,
             value.conversationId,
@@ -153,6 +155,13 @@ export class VaultConversationStore implements ConversationStore {
             value.media === undefined || value.media.length === 0
               ? null
               : JSON.stringify(value.media),
+            // The loop's step records travel beside the message. Owned by Core,
+            // populated from the tool loop's iterations, never read back from the
+            // model's prose — a turn that narrated an act in the content column
+            // but did not actually run the tool has no `steps` row.
+            value.steps === undefined || value.steps.length === 0
+              ? null
+              : JSON.stringify(value.steps),
           ],
         )
       })
@@ -311,6 +320,8 @@ interface MessageRow {
   turn_id: string
   /** Nullable JSON: what a search found, when it found anything. */
   media: string | null
+  /** Nullable JSON: the loop's own record of what it did, when it did something. */
+  steps: string | null
 }
 
 interface TurnRow {
@@ -363,6 +374,7 @@ function decodeMessage(row: MessageRow, conversationId: string): ConversationMes
     createdAt: row.created_at,
     turnId: row.turn_id,
     ...decodeMedia(row.media, row.message_id),
+    ...decodeSteps(row.steps, row.message_id),
   })
 }
 
@@ -436,6 +448,61 @@ function decodeMediaItem(value: unknown): MediaItem | null {
     ...(typeof record['embedUrl'] === 'string' && safeVideoEmbed(record['embedUrl']) !== null
       ? { embedUrl: record['embedUrl'] }
       : {}),
+  }
+}
+
+/**
+ * Re-hydrate a list of tool step records the Mind wrote beside the message.
+ *
+ * The list is read whole with its message and never queried across messages,
+ * and each record is a small, fixed-shape object. A row that fails validation
+ * discards the whole column rather than half-keeping it: a step that didn't
+ * survive the round trip cleanly is not a step the renderer can show, and a
+ * turn whose `steps` are absent is read as "the loop produced no iterations",
+ * which is exactly the state a forgery attempts to mimic.
+ */
+function decodeSteps(raw: string | null, messageId: string): { steps?: readonly ToolStepRecord[] } {
+  void messageId
+  if (raw === null || raw === '') return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return {}
+  }
+  if (!Array.isArray(parsed)) return {}
+  const steps: ToolStepRecord[] = []
+  for (const entry of parsed) {
+    const step = decodeStepRecord(entry)
+    if (step === null) return {}
+    steps.push(step)
+  }
+  return steps.length === 0 ? {} : { steps }
+}
+
+/** One step record, or `null` — in which case the whole column is discarded. */
+function decodeStepRecord(value: unknown): ToolStepRecord | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  if (typeof record['index'] !== 'number' || !Number.isInteger(record['index']) || record['index'] < 1) return null
+  if (typeof record['tool'] !== 'string' || record['tool'].length === 0) return null
+  if (record['outcome'] !== 'ok' && record['outcome'] !== 'denied' && record['outcome'] !== 'failed') return null
+  if (typeof record['executed'] !== 'boolean') return null
+  if (typeof record['sourceCount'] !== 'number' || !Number.isInteger(record['sourceCount']) || record['sourceCount'] < 0) return null
+  // `capability` is a closed string union owned by the Mind. Anything outside it
+  // is a row the renderer cannot draw, so the whole column is discarded rather
+  // than half-kept — a turn whose `steps` are absent is read as "the loop
+  // produced no iterations", which is exactly the state a forgery tries to
+  // mimic.
+  if (typeof record['capability'] !== 'string') return null
+  if (!(CAPABILITIES as readonly string[]).includes(record['capability'])) return null
+  return {
+    index: record['index'],
+    tool: record['tool'],
+    capability: record['capability'] as ToolStepRecord['capability'],
+    outcome: record['outcome'],
+    executed: record['executed'],
+    sourceCount: record['sourceCount'],
   }
 }
 

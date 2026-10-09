@@ -29,7 +29,7 @@
  * Conversation Service, not in a type the renderer can satisfy with a string.
  */
 import type { MediaItem } from '../media/types'
-import type { ToolSource, ChartSpec, CanvasSpec } from '../mind/tools'
+import type { ToolSource, ToolStepRecord, ChartSpec, CanvasSpec } from '../mind/tools'
 export type MessageRole = 'user' | 'assistant'
 
 export interface ConversationMessage {
@@ -76,6 +76,19 @@ export interface ConversationMessage {
    * on a turn that did not call the canvas tool.
    */
   canvas?: CanvasSpec
+  /**
+   * The loop's own record of the tool steps this turn ran, in order.
+   *
+   * Beside the prose rather than inside it, so a future reader can verify the
+   * transcript's "What Freya did" section against the loop and not against the
+   * model. A `browser_tabs` step here means the tool body actually ran for
+   * this turn; its absence on a turn that named a browser action in prose is
+   * the honest signal that the action was narrated, not performed.
+   *
+   * Absent on a turn that looked nothing up, which is most turns, and always
+   * absent on a user message.
+   */
+  steps?: readonly ToolStepRecord[]
 }
 
 export interface Conversation {

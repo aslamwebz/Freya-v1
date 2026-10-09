@@ -110,6 +110,21 @@ export interface SurfaceBounds {
   readonly height: number
 }
 
+/**
+ * Whether an address observed from the page should replace a window's cached address.
+ *
+ * The page is the witness for where it is; a window's address is a cache updated by
+ * navigation events, and an event can be missed — a click dispatched in an isolated world
+ * can commit a navigation whose `did-navigate` never arrives, leaving the tab reporting the
+ * address it *used to* be on. This is the rule that reconciles the two after an act: the
+ * observation wins when it is a real, different http(s) address, and nothing moves when it
+ * is empty, equal to what is already held, or a scheme this browser does not navigate to.
+ */
+export function shouldAdoptPageAddress(cached: string | null, observed: unknown): observed is string {
+  if (typeof observed !== 'string' || observed === '' || observed === cached) return false
+  return /^https?:/iu.test(observed)
+}
+
 export interface OpenSurfaceTabRequest {
   readonly sessionId: string
   readonly url: string

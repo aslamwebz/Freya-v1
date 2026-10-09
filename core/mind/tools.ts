@@ -82,6 +82,24 @@ export const MIND_TOOL_LIMITS = Object.freeze({
   /** Results kept from one search. Enough to answer from; not a crawl. */
   maxResultsPerTool: 5,
 
+  /** Data points kept from one chart. A bar per year is a decade, no more. */
+  maxChartPoints: 32,
+
+  /** Characters kept from one chart's title. */
+  maxChartTitleChars: 120,
+
+  /** Characters kept from one chart's unit label. */
+  maxChartUnitChars: 40,
+
+  /** Characters kept from one chart point's label. */
+  maxChartLabelChars: 40,
+
+  /** Characters kept from one canvas document or program. */
+  maxCanvasChars: 64_000,
+
+  /** Characters kept from one canvas title. */
+  maxCanvasTitleChars: 160,
+
   /** Characters kept from one result's snippet. */
   maxSnippetChars: 240,
 
@@ -267,6 +285,22 @@ export type ToolObservation =
       readonly summary: string
       readonly sources: readonly ToolSource[]
       readonly provenance?: ToolProvenance
+      /**
+       * A typed chart payload, when the tool that ran was the chart maker.
+       *
+       * Lives on the observation (not in prose) for the same reason media and
+       * sources do: a chart is a structured artifact whose data must travel
+       * beside the answer as numbers, not as something the renderer has to
+       * re-parse out of the model's paragraph. Absent for every tool that did
+       * not make a chart.
+       */
+      readonly chart?: ChartSpec
+      /**
+       * A typed long-form artifact (document or program), when the tool that
+       * ran was the canvas opener. Like chart, it lives beside the prose so
+       * the chat can say "I made X" without repeating the body.
+       */
+      readonly canvas?: CanvasSpec
     }
   | {
       readonly kind: 'denied'
@@ -280,6 +314,51 @@ export type ToolObservation =
       readonly capability: Capability
       readonly reason: string
     }
+
+/**
+ * A chart the model produced for this answer.
+ *
+ * The schema is deliberately small. Two chart kinds (bars and a line) cover the
+ * "show me the data" use, the data travels as `{ label, value }` pairs so the
+ * renderer never has to parse a number out of prose, and the bounds keep one
+ * answer from turning into a poster of a thousand bars. The kind and unit are
+ * what make the chart honest: a "bar" labelled "USD billion" is a different
+ * thing from a "bar" labelled "% growth", and the unit is what tells the
+ * reader which.
+ */
+export type ChartKind = 'bar' | 'line'
+export interface ChartPoint {
+  /** X-axis label as the model stated it. Not normalised. */
+  readonly label: string
+  /** Y-axis value as the model stated it. A number, not a string. */
+  readonly value: number
+}
+export interface ChartSpec {
+  readonly title: string
+  readonly kind: ChartKind
+  /** Free-text unit, e.g. "USD billion", "%", "million units". */
+  readonly unit: string
+  readonly points: readonly ChartPoint[]
+}
+
+/**
+ * A long-form artifact the model produced for this answer.
+ *
+ * Lives beside the prose rather than inside it because a chart, a report or a
+ * web page is not a paragraph: it is a typed payload the renderer can draw or
+ * open in a side panel. The chat says "I made X" and the canvas carries the
+ * thing, so the transcript stays short and the long content is editable
+ * rather than trapped in a single message bubble.
+ */
+export type CanvasKind = 'document' | 'code'
+export type CanvasLanguage = 'markdown' | 'html' | 'javascript' | 'python' | 'css' | 'json' | 'text'
+export interface CanvasSpec {
+  readonly title: string
+  readonly kind: CanvasKind
+  readonly language: CanvasLanguage
+  /** The full content of the document or program. Bounded. */
+  readonly content: string
+}
 
 /** What one tool step did, for the turn's own metadata. Never content. */
 export interface ToolStepRecord {
@@ -360,6 +439,21 @@ export interface MindTool {
      * penalised; `web_search` has nothing to say beyond its rows.
      */
     readonly provenance?: ToolProvenance
+    /**
+     * A typed chart payload, when the tool that ran is the chart maker.
+     *
+     * Optional. A tool that returns one is the only kind of tool that should, and the
+     * registry is the only place a tool of that kind is admitted. The data is bounded
+     * here, sanitised on the way in, and rendered in the assistant surface — never in
+     * the prose.
+     */
+    readonly chart?: ChartSpec
+    /**
+     * A typed long-form artifact (document or program), when the tool that ran
+     * is the canvas opener. The chat says "I made X" in the prose; the canvas
+     * carries the body.
+     */
+    readonly canvas?: CanvasSpec
   }>
 }
 
@@ -490,6 +584,8 @@ export class MindToolRegistry {
           summary: sanitiseUntrustedText(raw.summary, MIND_TOOL_LIMITS.maxSummaryChars),
           sources: boundSources(raw.sources),
           provenance: boundProvenance(raw.provenance),
+          ...(raw.chart === undefined ? {} : { chart: boundChart(raw.chart) }),
+          ...(raw.canvas === undefined ? {} : { canvas: boundCanvas(raw.canvas) }),
         },
         executed: true,
       }
@@ -918,6 +1014,198 @@ export function createWebSearchTool(options: {
       }
     },
   }
+}
+
+
+/**
+ * The chart maker.
+ *
+ * One tool, two shapes (bar, line), one job: turn the numbers the model can
+ * already see into a typed chart payload that travels beside the prose and
+ * the renderer can draw without re-parsing. The model does not draw the
+ * chart — the renderer does — so the data here is what the chart is, not a
+ * description of one.
+ *
+ * Capability: `search.web`. The same gate that admits web search admits the
+ * chart tool, because both produce visible artifacts from external data and
+ * the owner is the only principal that holds either.
+ */
+export function createChartTool(): MindTool {
+  return {
+    name: 'make_chart',
+    description:
+      'Attach a typed chart to the answer, drawn by the renderer. Use it when the answer '
+      + 'is a series of numbers the reader is going to want to compare — yearly sales, '
+      + 'monthly growth, a survey over time. Two kinds: `bar` for comparing a handful of '
+      + 'values side by side, `line` for showing a trend. The data travels as labelled '
+      + 'points; the renderer never re-parses the prose to find a number.',
+    capability: 'search.web',
+    parameters: [
+      { name: 'title', description: 'A short title for the chart, e.g. "NVIDIA revenue 2010–2020".', required: true },
+      {
+        name: 'kind',
+        description: '`bar` for comparing values, `line` for showing a trend.',
+        required: true,
+      },
+      { name: 'unit', description: 'The unit of the value, e.g. "USD billion", "%", "million units".', required: true },
+      {
+        name: 'points',
+        description: 'The data points as a JSON array of `{ label, value }` pairs, in the order they should be drawn.',
+        required: true,
+      },
+    ],
+    async run(request) {
+      const title = request.arguments['title'] ?? ''
+      if (title.trim().length === 0) throw new Error('the chart title was empty')
+      const kind = readChartKind(request.arguments['kind'])
+      const unit = request.arguments['unit'] ?? ''
+      if (unit.trim().length === 0) throw new Error('the chart unit was empty')
+      const points = parseChartPoints(request.arguments['points'])
+      const chart = boundChart({ title, kind, unit, points })
+      const span = points.length === 0
+        ? 'no points'
+        : points.length === 1
+          ? '1 point'
+          : `${points.length} points`
+      return {
+        summary: `Made a ${kind} chart "${chart.title}" (${chart.unit}) with ${span}.`,
+        sources: [],
+        chart,
+      }
+    },
+  }
+}
+
+function readChartKind(value: unknown): ChartKind {
+  if (typeof value !== 'string') return 'bar'
+  const asked = value.trim().toLowerCase()
+  if (asked === 'bar' || asked === 'bars' || asked === 'column' || asked === 'columns') return 'bar'
+  if (asked === 'line' || asked === 'lines' || asked === 'trend') return 'line'
+  return 'bar'
+}
+
+function parseChartPoints(value: unknown): readonly ChartPoint[] {
+  if (typeof value !== 'string' || value.trim().length === 0) return []
+  // The model hands us a JSON string. If it cannot be parsed, we do not invent one —
+  // a chart with a guessed data set is a chart with a made-up chart, and the journal
+  // gets to record the empty series.
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const out: ChartPoint[] = []
+  for (const entry of parsed) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const record = entry as Record<string, unknown>
+    const label = record['label']
+    const numeric = record['value']
+    if (typeof label !== 'string' || label.length === 0) continue
+    if (typeof numeric !== 'number' || !Number.isFinite(numeric)) continue
+    out.push({ label, value: numeric })
+  }
+  return out
+}
+
+/**
+ * Bound a chart returned by a tool: title and unit are text-bounded, points are
+ * capped, and the kind is closed. The model cannot make an unbounded series,
+ * and the renderer can trust the shape.
+ */
+function boundChart(raw: ChartSpec): ChartSpec {
+  const points = raw.points.slice(0, MIND_TOOL_LIMITS.maxChartPoints).map((point) => ({
+    label: sanitiseUntrustedText(String(point.label), MIND_TOOL_LIMITS.maxChartLabelChars),
+    value: point.value,
+  }))
+  return {
+    title: sanitiseUntrustedText(String(raw.title), MIND_TOOL_LIMITS.maxChartTitleChars),
+    kind: raw.kind === 'line' ? 'line' : 'bar',
+    unit: sanitiseUntrustedText(String(raw.unit), MIND_TOOL_LIMITS.maxChartUnitChars),
+    points,
+  }
+}
+
+/**
+ * Bound a canvas returned by a tool: the content is text-bounded, the title is
+ * text-bounded, the kind is closed (document | code), and the language is
+ * closed to a small set the renderer can handle honestly. A canvas that
+ * exceeds the cap is truncated, with a "…" marker at the end, because a
+ * document half-served is worse than one clearly cut.
+ */
+function boundCanvas(raw: CanvasSpec): CanvasSpec {
+  const content = sanitiseUntrustedText(String(raw.content), MIND_TOOL_LIMITS.maxCanvasChars)
+  return {
+    title: sanitiseUntrustedText(String(raw.title), MIND_TOOL_LIMITS.maxCanvasTitleChars),
+    kind: raw.kind === 'code' ? 'code' : 'document',
+    language: readCanvasLanguage(raw.language),
+    content,
+  }
+}
+
+function readCanvasLanguage(value: unknown): CanvasLanguage {
+  if (typeof value !== 'string') return 'text'
+  const asked = value.trim().toLowerCase()
+  if (asked === 'markdown' || asked === 'md') return 'markdown'
+  if (asked === 'html' || asked === 'htm') return 'html'
+  if (asked === 'javascript' || asked === 'js') return 'javascript'
+  if (asked === 'python' || asked === 'py') return 'python'
+  if (asked === 'css') return 'css'
+  if (asked === 'json') return 'json'
+  return 'text'
+}
+
+/**
+ * The canvas opener.
+ *
+ * A long-form artifact (a report, a plan, a landing page, a small web app) is
+ * not a paragraph. The chat says "I made X" in one or two sentences; the
+ * canvas carries the thing, editable in a side panel. The model passes the
+ * whole content here so the renderer never has to re-parse prose to find a
+ * document body.
+ *
+ * Capability: `search.web`. Same gate as the chart tool: the owner is the only
+ * principal that holds it, and a canvas is a visible artifact produced
+ * alongside an answer.
+ */
+export function createCanvasTool(): MindTool {
+  return {
+    name: 'open_canvas',
+    description:
+      'Open a side canvas beside the chat with something you made, for the person to read, edit and copy. '
+      + 'Use it whenever the answer is a long document, a small web page, a program, or anything longer than '
+      + 'a short paragraph. The chat itself should say in one or two sentences what you made, then refer to '
+      + 'the canvas. Pass the whole body as `content`.',
+    capability: 'search.web',
+    parameters: [
+      { name: 'title', description: 'A short title, e.g. "Q3 sales report" or "Bakery landing page".', required: true },
+      { name: 'kind', description: '`document` for writing; `code` for a program or web page.', required: true },
+      { name: 'language', description: 'The content language: `markdown`, `html`, `javascript`, `python`, `css`, `json` or `text`.', required: true },
+      { name: 'content', description: 'The full body of the document or program.', required: true },
+    ],
+    async run(request) {
+      const title = request.arguments['title'] ?? ''
+      if (title.trim().length === 0) throw new Error('the canvas title was empty')
+      const kind = readCanvasKind(request.arguments['kind'])
+      const language = readCanvasLanguage(request.arguments['language'])
+      const content = request.arguments['content'] ?? ''
+      if (content.trim().length === 0) throw new Error('the canvas content was empty')
+      const canvas = boundCanvas({ title, kind, language, content })
+      return {
+        summary: `Opened a ${kind} canvas "${canvas.title}" (${canvas.content.length} characters).`,
+        sources: [],
+        canvas,
+      }
+    },
+  }
+}
+
+function readCanvasKind(value: unknown): CanvasKind {
+  if (typeof value !== 'string') return 'document'
+  const asked = value.trim().toLowerCase()
+  if (asked === 'code' || asked === 'program' || asked === 'app' || asked === 'page' || asked === 'web' || asked === 'html' || asked === 'javascript' || asked === 'python' || asked === 'css' || asked === 'json') return 'code'
+  return 'document'
 }
 
 

@@ -29,6 +29,7 @@
  * Conversation Service, not in a type the renderer can satisfy with a string.
  */
 import type { MediaItem } from '../media/types'
+import type { ToolSource, ChartSpec, CanvasSpec } from '../mind/tools'
 export type MessageRole = 'user' | 'assistant'
 
 export interface ConversationMessage {
@@ -47,6 +48,34 @@ export interface ConversationMessage {
    * fabrication. Absent on a turn that looked nothing up, which is most turns.
    */
   media?: readonly MediaItem[]
+  /**
+   * Web search results behind this answer, as typed sources.
+   *
+   * Distinguished from `media` because the renderer treats them differently: media
+   * becomes cards, sources become citations. Both travel beside the prose for the
+   * same reason — the journal keeps the literal model text for audit, but the
+   * renderer never re-parses the prose to find structure. The renderer splits this
+   * list into "matched" (cited in the answer body) and "related" (the rest of what
+   * the search returned) at render time.
+   */
+  sources?: readonly ToolSource[]
+  /**
+   * Typed charts the model produced for this answer.
+   *
+   * The renderer draws them; the journal keeps them as data. A chart that came
+   * back from a tool is the only honest way to display a series: a renderer that
+   * read numbers out of prose would be drawing from a guess, not a measurement.
+   * Absent on a turn that did not call the chart tool.
+   */
+  charts?: readonly ChartSpec[]
+  /**
+   * Long-form artifact the model opened beside this answer, if any.
+   *
+   * The chat says "I made X" in one or two sentences; this carries the body
+   * (a document or a program) so the renderer can open a side panel. Absent
+   * on a turn that did not call the canvas tool.
+   */
+  canvas?: CanvasSpec
 }
 
 export interface Conversation {

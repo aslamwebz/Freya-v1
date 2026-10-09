@@ -2523,6 +2523,16 @@ async function main(): Promise<void> {
             'steps verified',
           ),
         )
+        // The run and task projections arrive independently. A completed run is
+        // the prerequisite for the task becoming done, not proof the renderer has
+        // already received that second projection in the same tick.
+        await work.waitForFunction(
+          () =>
+            document.querySelector('[role="dialog"][aria-label="Work"] .work-tasks li')?.getAttribute('data-status') ===
+            'done',
+          undefined,
+          { timeout: 30_000 },
+        )
         check(
           'the task the completed run belonged to is done',
           (await board.locator('.work-tasks li').first().getAttribute('data-status')) === 'done',
@@ -2648,13 +2658,13 @@ async function main(): Promise<void> {
           ),
           bridged.join(', '),
         )
-        // And the voice channel is the exact set Phase 45 declared: a projection, a
-        // fragment feed, a playback instruction and a capability report. Nothing
-        // there can start a capture, open a device or name what Freya says.
+        // Voice keeps its runtime surface narrow: state/fragment/output/capability
+        // plus two bounded preference calls. The settings bridge carries no key,
+        // cannot supply speech text, and cannot start a capture or name authority.
         check(
-          'the voice channel is a projection, fragments, playback and a capability report — nothing more',
+          'the voice channel is runtime projection/output plus bounded settings — nothing more',
           bridged.filter((key) => /voice/i.test(key)).sort().join(', ') ===
-            'coreVoice, onCoreVoice, onCoreVoiceTranscript, onVoiceOutput, reportVoiceCapabilities',
+            'coreVoice, onCoreVoice, onCoreVoiceTranscript, onVoiceOutput, reportVoiceCapabilities, saveVoiceConfig, voiceConfig',
           bridged.filter((key) => /voice/i.test(key)).sort().join(', '),
         )
 

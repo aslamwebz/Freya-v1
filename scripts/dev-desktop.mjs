@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const VITE_PORT = Number(process.env.FREYA_DEV_PORT ?? 5273)
-const DEV_SERVER = `http://localhost:${VITE_PORT}`
+const DEV_SERVER = `http://127.0.0.1:${VITE_PORT}`
 const READY_TIMEOUT_MS = 30_000
 
 function run(command, args) {
@@ -52,7 +52,7 @@ run(process.execPath, [join(ROOT, 'scripts', 'build-electron.mjs')])
 
 const vite = spawn(
   process.execPath,
-  [join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js'), '--port', String(VITE_PORT), '--strictPort'],
+  [join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js'), '--port', String(VITE_PORT), '--strictPort', '--host', '127.0.0.1'],
   { cwd: ROOT, stdio: 'inherit', shell: false },
 )
 

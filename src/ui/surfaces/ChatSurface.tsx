@@ -11,7 +11,8 @@ import { readModelCatalog, selectModel } from '../../platform/modelClient'
 import type { ModelView } from '../../../core/protocol/core-protocol'
 import type { ConversationProjection, VoiceProjection } from '../../../core/protocol/conversation'
 import { MicButton } from './MicButton'
-import { RichMessage } from '../../app/chat/RichMessage'
+import { AssistantMessageView } from '../../app/chat/AssistantMessageView'
+import { CanvasPanel } from '../../app/chat/CanvasPanel'
 import { MediaGrid } from '../../app/chat/MediaCards'
 import { ActivityFeed } from '../../app/chat/ActivityFeed'
 import '../../app/chat/chat.css'
@@ -102,6 +103,16 @@ export function ChatSurface() {
   const stopped = projection?.stopAll.active === true
   const canThink = projection?.cognition.available === true
   const persistence = projection?.persistence
+  const [dismissedCanvasId, setDismissedCanvasId] = useState<string | null>(null)
+  const latestCanvas = (() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i]
+      if (message === undefined || message.role !== 'assistant') continue
+      if (message.messageId === dismissedCanvasId) return null
+      if (message.canvas !== undefined) return message.canvas
+    }
+    return null
+  })()
 
   const ensureConversation = useCallback(async (): Promise<string | null> => {
     const existing = projection?.activeConversationId
@@ -233,7 +244,7 @@ export function ChatSurface() {
   }, [activeTurn?.turnId, generating, mirror])
 
   return (
-    <div className="chat" ref={rootElRef}>
+    <div className="chat" ref={rootElRef} data-canvas-open={(latestCanvas !== null) || undefined}>
       <div className="chat-side">
         <button
           type="button"
@@ -333,17 +344,14 @@ export function ChatSurface() {
                     text. The reader closes its token set to code, strong/emphasis
                     and explicit http(s) links; HTML tags arrive as text. */}
                 {message.role === 'assistant'
-                  ? <RichMessage
+                  ? <AssistantMessageView
                       content={message.content}
-                      enableCodeCopy
-                      enableToc
-                      collapseAbove={2400}
-                      provenance={
-                        message.media && message.media.length > 0
-                          ? { retrieved: message.media.length }
-                          : undefined
-                      }
-                    />
+                      retrieved={message.media?.length ?? 0}
+                      mediaCount={message.media?.length ?? 0}
+                      sources={message.sources}
+                      charts={message.charts}
+                    >
+                    </AssistantMessageView>
                   : <p className="chat-turn-text">{message.content}</p>}
                 {message.role === 'assistant' && message.media && message.media.length > 0 ? (
                   <MediaGrid items={message.media} />
@@ -442,6 +450,20 @@ export function ChatSurface() {
           )}
         </form>
       </div>
+      {latestCanvas !== null ? (
+        <CanvasPanel
+          canvas={latestCanvas}
+          onClose={() => {
+            for (let i = messages.length - 1; i >= 0; i -= 1) {
+              const message = messages[i]
+              if (message?.canvas !== undefined) {
+                setDismissedCanvasId(message.messageId)
+                return
+              }
+            }
+          }}
+        />
+      ) : null}
     </div>
   )
 }

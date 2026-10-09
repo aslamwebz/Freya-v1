@@ -76,6 +76,8 @@ export interface AttentionEngineOptions {
   focus: () => FocusState
   /** Read fresh at each decision; never copied into state. */
   stopAll: () => boolean
+  /** Optional Core-owned observer. It receives the decision only, never event text. */
+  onDecision?: (decision: AttentionDecision) => void
   /** The folded attention state, owned by Core's reducer. */
   getState: () => AttentionState
   /** Whether a referenced goal is still open in Core's own Mission/Work state. */
@@ -114,6 +116,7 @@ export class AttentionEngine {
   private readonly onChange: () => void
   private readonly focus: () => FocusState
   private readonly stopAll: () => boolean
+  private readonly onDecision: (decision: AttentionDecision) => void
   private readonly getState: () => AttentionState
   private readonly goalOpen: (goalRef: string) => boolean
 
@@ -129,6 +132,7 @@ export class AttentionEngine {
     this.onChange = options.onChange ?? (() => {})
     this.focus = options.focus
     this.stopAll = options.stopAll
+    this.onDecision = options.onDecision ?? (() => {})
     this.getState = options.getState
     this.goalOpen = options.goalOpen ?? (() => false)
   }
@@ -355,6 +359,12 @@ export class AttentionEngine {
       },
       { actor, correlationId: decision.decisionId },
     )
+    try {
+      this.onDecision(decision)
+    } catch (error) {
+      console.error('[freya.attention] decision observer threw', error)
+    }
+
     if (result.reason === 'budget') {
       const limit: AttentionBudgetLimit =
         decision.outcome === 'subtle-cue' && result.urgency !== 'urgent'

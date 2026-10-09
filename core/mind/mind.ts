@@ -37,6 +37,7 @@ import { initialToolRequestForOwnerText, type TurnIntentHints } from './tool-int
 import { MIND_TOOL_LIMITS, renderToolFooter, type MindToolRegistry, type ToolObservation } from './tools'
 import { mediaFromObservations } from '../media/collect'
 import type { MediaItem } from '../media/types'
+import type { ToolSource, ChartSpec, CanvasSpec } from './tools'
 
 /**
  * The Mind.
@@ -513,6 +514,69 @@ export interface OwnerMessageEvent {
 function mediaField(observations: readonly ToolObservation[]): { media?: readonly MediaItem[] } {
   const media = mediaFromObservations(observations)
   return media.length === 0 ? {} : { media }
+}
+
+/**
+ * The web search sources behind this turn, as typed rows beside the prose.
+ *
+ * Every observation the tools returned contributes its `sources`; the list is
+ * flattened, de-duplicated by URL, and capped so an unusually rich search does
+ * not blow up the journal. The renderer splits it at draw time into "matched"
+ * (cited in the answer prose) and "related" (the rest of what came back).
+ *
+ * Returns an empty object — not an empty list — when nothing was found, so the
+ * field's absence stays distinct from "found an empty list".
+ */
+function sourcesField(observations: readonly ToolObservation[], cap: number): { sources?: readonly ToolSource[] } {
+  const seen = new Set<string>()
+  const collected: ToolSource[] = []
+  for (const observation of observations) {
+    if (observation.kind !== 'ok') continue
+    for (const source of observation.sources) {
+      if (collected.length >= cap) return { sources: collected }
+      if (seen.has(source.url)) continue
+      seen.add(source.url)
+      collected.push(source)
+    }
+  }
+  return collected.length === 0 ? {} : { sources: collected }
+}
+
+/**
+ * The typed charts the model produced for this turn.
+ *
+ * Like `media` and `sources`, the data travels beside the prose as a typed
+ * artifact the renderer can draw without re-parsing. The journal keeps the
+ * literal model text; the chart is the only honest way to display the
+ * numbers, because a renderer that read numbers out of a paragraph would be
+ * drawing from a guess, not a measurement.
+ */
+function chartsField(observations: readonly ToolObservation[]): { charts?: readonly ChartSpec[] } {
+  const collected: ChartSpec[] = []
+  for (const observation of observations) {
+    if (observation.kind !== 'ok') continue
+    if (observation.chart === undefined) continue
+    collected.push(observation.chart)
+  }
+  return collected.length === 0 ? {} : { charts: collected }
+}
+
+/**
+ * The long-form artifact the model opened beside this turn, if any.
+ *
+ * Only one canvas per turn is kept — the chat says "I made X" and the canvas
+ * carries the thing, so a turn that opened more than one is the kind of
+ * answer that does not know what it is. The renderer opens a side panel for
+ * the latest one, so the chat and the panel stay in sync.
+ */
+function canvasField(observations: readonly ToolObservation[]): { canvas?: CanvasSpec } {
+  let latest: CanvasSpec | null = null
+  for (const observation of observations) {
+    if (observation.kind !== 'ok') continue
+    if (observation.canvas === undefined) continue
+    latest = observation.canvas
+  }
+  return latest === null ? {} : { canvas: latest }
 }
 
 export class MindService {
@@ -1003,6 +1067,9 @@ export class MindService {
         // What the lookups really returned, kept as typed items beside the prose. The
         // answer is the model's account of the search; this is the search.
         ...mediaField(cognition.steps.map((iteration) => iteration.observation)),
+        ...sourcesField(cognition.steps.map((iteration) => iteration.observation), 100),
+        ...chartsField(cognition.steps.map((iteration) => iteration.observation)),
+        ...canvasField(cognition.steps.map((iteration) => iteration.observation)),
       }
       try {
         await this.store.appendMessage(assistantMessage)
@@ -1290,6 +1357,9 @@ export class MindService {
       turnId: turn.turnId,
       // A cut-off answer still looked things up, and the cards it earned are still real.
       ...mediaField(cognition.steps.map((iteration) => iteration.observation)),
+      ...sourcesField(cognition.steps.map((iteration) => iteration.observation), 100),
+      ...chartsField(cognition.steps.map((iteration) => iteration.observation)),
+      ...canvasField(cognition.steps.map((iteration) => iteration.observation)),
     }
 
     try {

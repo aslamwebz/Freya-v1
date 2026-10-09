@@ -3,13 +3,27 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { VoiceSettings, describeVoiceState } from '../../../src/app/voice/VoiceSettings'
 import type { VoiceDock, VoiceView } from '../../../src/app/voice/useVoiceDock'
 import { absentVoiceProjection } from '../../core/voice/fixture'
+import type { VoiceConfig } from '../../../electron/voiceConfig'
+
+const DEFAULT_TEST_VOICE_CONFIG: VoiceConfig = {
+  version: 1,
+  sttProvider: 'nanogpt',
+  sttModel: 'Whisper-Large-V3',
+  remoteSttEnabled: true,
+  ttsProvider: 'platform',
+  ttsVoiceId: null,
+  ttsModel: 'system',
+  wakeProvider: 'off',
+  autoSpeak: true,
+  proactiveAlerts: false,
+}
 
 /**
  * The voice settings row.
  *
  * The properties worth pinning are all about *truthfulness of the control*, since
  * a switch that renders the wrong state is worse than no switch: a person who has
- * been told "send what I say" is on has made a different decision from one who has
+ * been told "send push-to-talk transcripts automatically" is on has made a different decision from one who has
  * been told it is off.
  */
 
@@ -47,6 +61,8 @@ function dock(overrides: Partial<VoiceView> & { autoSubmit?: boolean } = {}): Vo
       capabilities: { capture: true, recognition: { available: false, local: false, detail: 'no API' } },
       voices: [],
       ...overrides,
+      config: overrides.config ?? DEFAULT_TEST_VOICE_CONFIG,
+      configBusy: overrides.configBusy ?? false,
     },
     pressed,
     press: () => pressed.push('press'),
@@ -59,6 +75,7 @@ function dock(overrides: Partial<VoiceView> & { autoSubmit?: boolean } = {}): Vo
     stopSpeaking: () => pressed.push('stopSpeaking'),
     chooseVoice: () => pressed.push('chooseVoice'),
     speak: () => pressed.push('speak'),
+    saveConfig: () => pressed.push('saveConfig'),
   }
 }
 
@@ -82,7 +99,7 @@ describe('the microphone switch', () => {
     fireEvent.click(screen.getByRole('button', { name: /voice/i }))
     const row = screen.getByRole('checkbox', { name: /microphone/i }) as HTMLInputElement
     expect(row.checked).toBe(true)
-    expect(screen.getByText(/only listens between a press and its release/i)).toBeTruthy()
+    expect(screen.getByText(/Freya only listens between a press and its release/i)).toBeTruthy()
   })
 })
 
@@ -91,27 +108,27 @@ describe('the send-what-I-say switch', () => {
     const d = dock()
     render(<VoiceSettings voice={d} />)
     fireEvent.click(screen.getByRole('button', { name: /voice/i }))
-    const row = screen.getByRole('checkbox', { name: /send what I say/i }) as HTMLInputElement
+    const row = screen.getByRole('checkbox', { name: /send push-to-talk transcripts automatically/i }) as HTMLInputElement
     expect(row.checked).toBe(false)
-    expect(screen.getByText(/waits in the composer until you send it/i)).toBeTruthy()
+    expect(screen.getByText(/waits for review before it is sent/i)).toBeTruthy()
   })
 
   it('when on, says it enters the same conversation path as typing', () => {
     const d = dock({ autoSubmit: true })
     render(<VoiceSettings voice={d} />)
     fireEvent.click(screen.getByRole('button', { name: /voice/i }))
-    const row = screen.getByRole('checkbox', { name: /send what I say/i }) as HTMLInputElement
+    const row = screen.getByRole('checkbox', { name: /send push-to-talk transcripts automatically/i }) as HTMLInputElement
     expect(row.checked).toBe(true)
-    expect(screen.getByText(/same conversation path as typing/i)).toBeTruthy()
+    expect(screen.getByText(/same Conversation\/Mind path as typing/i)).toBeTruthy()
   })
 })
 
-describe('hands-free', () => {
+describe('wake on "Freya"', () => {
   it('is disabled and says why on a build with no local gate', () => {
     const d = dock()
     render(<VoiceSettings voice={d} />)
     fireEvent.click(screen.getByRole('button', { name: /voice/i }))
-    const row = screen.getByRole('checkbox', { name: /hands-free/i }) as HTMLInputElement
+    const row = screen.getByRole('checkbox', { name: /wake on "Freya"/i }) as HTMLInputElement
     // Disabled rather than merely ineffective: a control that cannot work must not
     // look like one that can.
     expect(row.disabled).toBe(true)
@@ -124,7 +141,7 @@ describe('an unavailable engine', () => {
     const d = dock()
     render(<VoiceSettings voice={d} />)
     fireEvent.click(screen.getByRole('button', { name: /voice/i }))
-    const row = screen.getByRole('checkbox', { name: /freya speaks/i }) as HTMLInputElement
+    const row = screen.getByRole('checkbox', { name: /Freya answers aloud/i }) as HTMLInputElement
     expect(row.disabled).toBe(true)
     expect(screen.getAllByText(/does not read replies aloud/i).length).toBeGreaterThan(0)
   })
@@ -140,16 +157,35 @@ describe('a window that cannot reach Core', () => {
   })
 })
 
+describe('separate voice provider settings', () => {
+  it('shows NanoGPT STT separately from the Chat model and exposes its own model field', () => {
+    const d = dock()
+    render(<VoiceSettings voice={d} />)
+    fireEvent.click(screen.getByRole('button', { name: /voice/i }))
+    expect((screen.getByRole('combobox', { name: /speech recognition provider/i }) as HTMLSelectElement).value).toBe('nanogpt')
+    expect((screen.getByRole('textbox', { name: /speech recognition model/i }) as HTMLInputElement).value).toBe('Whisper-Large-V3')
+    expect(screen.getByText(/does not change Freya's Chat model/i)).toBeTruthy()
+  })
+
+  it('keeps proactive Attention speech off by default', () => {
+    const d = dock()
+    render(<VoiceSettings voice={d} />)
+    fireEvent.click(screen.getByRole('button', { name: /voice/i }))
+    const row = screen.getByRole('checkbox', { name: /speak important alerts/i }) as HTMLInputElement
+    expect(row.checked).toBe(false)
+  })
+})
+
 describe('the state sentence', () => {
   it('names each state a person could be in', () => {
     expect(describeVoiceState('unsupported')).toMatch(/no microphone capture/i)
-    expect(describeVoiceState('permission-required')).toMatch(/no permission has been asked/i)
+    expect(describeVoiceState('permission-required')).toMatch(/waiting for operating-system permission/i)
     expect(describeVoiceState('permission-denied')).toMatch(/was denied/i)
     expect(describeVoiceState('ready')).toMatch(/nothing is being recorded/i)
-    expect(describeVoiceState('listening')).toMatch(/recording locally/i)
-    expect(describeVoiceState('transcribing')).toMatch(/reading the recording/i)
-    expect(describeVoiceState('submitting')).toMatch(/sending what you said/i)
-    expect(describeVoiceState('speaking')).toMatch(/^speaking/i)
+    expect(describeVoiceState('listening')).toMatch(/bounded utterance/i)
+    expect(describeVoiceState('transcribing')).toMatch(/transcribing/i)
+    expect(describeVoiceState('submitting')).toMatch(/Conversation\/Mind path/i)
+    expect(describeVoiceState('speaking')).toMatch(/Freya is speaking/i)
     expect(describeVoiceState('interrupted')).toMatch(/interrupted/i)
     expect(describeVoiceState('degraded')).toMatch(/partly working/i)
     expect(describeVoiceState('failed')).toMatch(/failed/i)
@@ -162,10 +198,23 @@ describe('the state sentence', () => {
     expect(describeVoiceState('something-new')).toMatch(/not known/i)
   })
 
-  it('never calls the wake gate a wake word', () => {
-    const d = dock()
+  it('names the real Freya wake phrase and explains the remote fallback', () => {
+    const d = dock({
+      config: { ...DEFAULT_TEST_VOICE_CONFIG, remoteSttEnabled: true },
+      projection: absentVoiceProjection({
+        wake: {
+          armed: false,
+          available: true,
+          gate: 'local-energy',
+          kind: 'wake-phrase',
+          detail: 'wake phrase available',
+          maxArmedMs: 60_000,
+        },
+      }),
+    })
     render(<VoiceSettings voice={d} />)
     fireEvent.click(screen.getByRole('button', { name: /voice/i }))
-    expect(screen.queryByText(/wake word/i)).toBeNull()
+    expect(screen.getByRole('checkbox', { name: /wake on "Freya"/i })).toBeTruthy()
+    expect(screen.getByText(/nearby speech clips can leave the device/i)).toBeTruthy()
   })
 })

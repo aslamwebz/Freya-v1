@@ -6,7 +6,9 @@ import { isSttUnavailable, SttTimeout, withTimeout } from './stt'
 import { VoiceAttention } from './attention'
 import { boundUtterance, clampSpeakingTuning, isTtsUnavailable } from './tts'
 import { LOCAL_ENERGY_WAKE_GATE, crossesWakeThreshold } from './wake'
+import { DEFAULT_FOLLOW_UP_WINDOW_MS, DEFAULT_WAKE_PHRASE, VoiceAttentionSession, interpretVoiceAddress } from './attention'
 import type { VoiceProjection } from '../protocol/conversation'
+import type { AttentionEventKind, AttentionOutcome } from '../attention/types'
 import {
   VOICE_FORMAT,
   VOICE_LIMITS,
@@ -114,6 +116,14 @@ export interface VoiceServiceOptions {
   transcriptionTimeoutMs?: number
   attentionTimeoutMs?: () => number
   interruptTurn?: () => Promise<void>
+  /** Read completed voice turns aloud after they are stored. */
+  autoSpeak?: boolean
+  /** Bounded follow-up window after the wake phrase. */
+  followUpWindowMs?: number
+  /** Allow deterministic Attention speak/interrupt decisions to reach TTS. */
+  proactiveAlerts?: boolean
+  /** Initial persisted output mute. */
+  initialMuted?: boolean
 
   now?: () => Date
   newId?: () => string
@@ -174,6 +184,7 @@ export class VoiceService {
   private readonly timeoutMs: number
   private readonly now: () => Date
   private readonly newId: () => string
+  private proactiveAlerts: boolean
 
   private state: VoiceState
   private session: VoiceCaptureSession | null = null
@@ -190,10 +201,17 @@ export class VoiceService {
   private micEnabled = false
 
   private permission: 'unknown' | VoicePermissionOutcome = 'unknown'
+  private permissionRequestUntilMs: number | null = null
   private muted = false
   private autoSubmit = false
+  private autoSpeak: boolean
   private selectedVoiceId: string | null = null
   private wakeArmedAt: string | null = null
+  private readonly voiceAttention: VoiceAttentionSession
+  private cueSpeaking: {
+    utteranceId: string
+    purpose: 'wake-ack' | 'standby-ack' | 'attention'
+  } | null = null
 
   private queue: QueuedUtterance[] = []
   private speaking: QueuedUtterance | null = null
@@ -218,7 +236,17 @@ export class VoiceService {
     this.timeoutMs = Math.max(1, Math.min(options.transcriptionTimeoutMs ?? VOICE_LIMITS.transcriptionTimeoutMs, VOICE_LIMITS.transcriptionTimeoutMs))
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => randomUUID())
-    this.attention = new VoiceAttention(() => this.now().getTime(), options.attentionTimeoutMs)
+    this.autoSpeak = options.autoSpeak ?? false
+    this.proactiveAlerts = options.proactiveAlerts ?? false
+    this.muted = options.initialMuted ?? false
+    this.attention = new VoiceAttention(
+      () => this.now().getTime(),
+      options.attentionTimeoutMs ?? (() => options.followUpWindowMs ?? DEFAULT_FOLLOW_UP_WINDOW_MS),
+    )
+    this.voiceAttention = new VoiceAttentionSession(
+      Math.max(5_000, Math.min(options.followUpWindowMs ?? DEFAULT_FOLLOW_UP_WINDOW_MS, 5 * 60_000)),
+      this.now,
+    )
     this.interruptTurn = options.interruptTurn
     // Derived, never assigned from outside: a build with no capture path starts
     // in `unsupported` and no command can talk it out of it.
@@ -289,10 +317,29 @@ export class VoiceService {
     return { ok: true, state: this.state }
   }
 
+  /**
+   * Open a short-lived OS permission acquisition window.
+   *
+   * This is not a capture and carries no audio. It exists solely to break the
+   * first-use deadlock where Core needs the OS verdict before a real capture can
+   * begin. The host reads this projection synchronously and the window expires
+   * even if the renderer disappears without reporting a result.
+   */
+  requestPermissionWindow(): { ok: true; expiresAt: string } | { ok: false; reason: string } {
+    if (!this.captureSupported) return { ok: false, reason: 'this platform offers no microphone capture' }
+    if (this.stopAllLatch()) return { ok: false, reason: 'Freya is stopped; resume before using the microphone' }
+    if (!this.micEnabled) return { ok: false, reason: MIC_OFF_REASON }
+    const expiresAtMs = this.now().getTime() + 10_000
+    this.permissionRequestUntilMs = expiresAtMs
+    this.publish()
+    return { ok: true, expiresAt: new Date(expiresAtMs).toISOString() }
+  }
+
   /** Turn the microphone off. Idempotent, and safe at any point in the machine. */
   async disableMic(reason = 'the owner turned the microphone off'): Promise<void> {
     this.attention.close()
     this.micEnabled = false
+    this.permissionRequestUntilMs = null
     this.wakeArmedAt = null
     await this.releaseSession(reason)
     this.move(this.baseState())
@@ -310,6 +357,7 @@ export class VoiceService {
    * from this flag.
    */
   async reportPermission(outcome: VoicePermissionOutcome): Promise<VoiceState> {
+    this.permissionRequestUntilMs = null
     this.permission = outcome
     await this.record(
       'voice.permission.changed',
@@ -340,7 +388,7 @@ export class VoiceService {
    * Explicit, bounded, and one at a time: a second press while one is open is
    * refused rather than interleaving two microphones.
    */
-  async beginCapture(): Promise<
+  async beginCapture(activation: 'explicit' | 'wake' = 'explicit'): Promise<
     { ok: true; session: VoiceCaptureSession } | { ok: false; reason: string }
   > {
     if (!this.captureSupported) return { ok: false, reason: 'this platform offers no microphone capture' }
@@ -363,6 +411,7 @@ export class VoiceService {
     const session: VoiceCaptureSession = {
       sessionId: this.newId(),
       startedAt: this.now().toISOString(),
+      activation,
       format: VOICE_FORMAT,
       sampleRate: VOICE_LIMITS.sampleRate,
       channels: VOICE_LIMITS.channels,
@@ -379,7 +428,7 @@ export class VoiceService {
         format: session.format,
         sampleRate: session.sampleRate,
         channels: session.channels,
-        activation: 'explicit',
+        activation,
       },
       session.sessionId,
     )
@@ -635,7 +684,7 @@ export class VoiceService {
     }
 
     let bounded = clipText(text, VOICE_LIMITS.maxTranscriptCharacters)
-    if (bounded.length > 0 && this.wakeArmedAt !== null) {
+    if (bounded.length > 0 && this.wakeArmedAt !== null && session.activation !== 'wake') {
       const alreadyActive = this.attention.active
       const decision = this.attention.receive(bounded)
       if (decision.kind !== 'turn') {
@@ -653,12 +702,11 @@ export class VoiceService {
       await this.cancelSpeaking('the owner addressed Freya')
       bounded = decision.text
     }
-    const finalAt = this.now().toISOString()
     this.abort = null
-    this.lastFinal = bounded
-    this.lastFinalAt = finalAt
-    this.pushTranscript({ sessionId: session.sessionId, kind: 'final', text: bounded, at: finalAt })
 
+    // A wake capture is still a completed capture. Record only bounded metadata
+    // before deciding whether the words addressed Freya; neither raw audio nor
+    // transcript text ever enters the journal.
     await this.record(
       'voice.transcribe.completed',
       {
@@ -682,6 +730,23 @@ export class VoiceService {
       },
       session.sessionId,
     )
+
+    // Hands-free audio is not a user message merely because it was transcribed.
+    // Core decides whether it addressed Freya before the words reach a composer,
+    // Conversation, Mind, memory, or the transcript channel.
+    if (session.activation === 'wake') {
+      return await this.handleWakeTranscript(
+        session.sessionId,
+        bounded,
+        audio.bytes.byteLength,
+        audio.durationMs,
+      )
+    }
+
+    const finalAt = this.now().toISOString()
+    this.lastFinal = bounded
+    this.lastFinalAt = finalAt
+    this.pushTranscript({ sessionId: session.sessionId, kind: 'final', text: bounded, at: finalAt })
 
     if (bounded.length === 0) {
       this.move(this.baseState())
@@ -718,6 +783,143 @@ export class VoiceService {
 
     const submitted = await this.submitConfirmed(session.sessionId, bounded, audio.bytes.byteLength, audio.durationMs)
     return submitted
+  }
+
+  private async handleWakeTranscript(
+    sessionId: string,
+    transcript: string,
+    byteLength: number,
+    durationMs: number,
+  ): Promise<VoiceEndResult> {
+    const addressed = interpretVoiceAddress(
+      transcript,
+      this.voiceAttention.isAttentive(),
+      DEFAULT_WAKE_PHRASE,
+    )
+
+    if (addressed.kind === 'ignore') {
+      this.move(this.baseState())
+      this.publish()
+      return {
+        sessionId,
+        reason: 'completed',
+        text: null,
+        detail: 'Speech was heard, but it did not address Freya.',
+        byteLength,
+        durationMs,
+        transcribed: true,
+        turnId: null,
+      }
+    }
+
+    if (addressed.kind === 'standby') {
+      this.voiceAttention.standby()
+      this.attention.close()
+      await this.speakCue('standby-ack')
+      this.publish()
+      return {
+        sessionId,
+        reason: 'completed',
+        text: null,
+        detail: 'Freya returned to standby.',
+        byteLength,
+        durationMs,
+        transcribed: true,
+        turnId: null,
+      }
+    }
+
+    this.voiceAttention.activate()
+
+    if (addressed.kind === 'wake-only') {
+      await this.speakCue('wake-ack')
+      this.publish()
+      return {
+        sessionId,
+        reason: 'completed',
+        text: null,
+        detail: 'Freya is listening for a follow-up.',
+        byteLength,
+        durationMs,
+        transcribed: true,
+        turnId: null,
+      }
+    }
+
+    const command = clipText(addressed.text, VOICE_LIMITS.maxTranscriptCharacters)
+    const finalAt = this.now().toISOString()
+    this.lastFinal = command
+    this.lastFinalAt = finalAt
+    this.pushTranscript({ sessionId, kind: 'final', text: command, at: finalAt })
+
+    const submitted = await this.submitConfirmed(sessionId, command, byteLength, durationMs)
+    if (submitted.turnId !== null) {
+      this.voiceAttention.activate()
+      if (this.autoSpeak) await this.speakTurn({ turnId: submitted.turnId })
+    }
+    this.publish()
+    return submitted
+  }
+
+  /**
+   * Speak one closed Core-owned cue. A renderer never supplies these words.
+   *
+   * This intentionally is not journalled as a stored-answer utterance: it is
+   * ephemeral interaction chrome, not a conversation turn.
+   */
+  private async speakCue(cue: 'wake-ack' | 'standby-ack'): Promise<void> {
+    await this.speakCorePhrase(cue === 'wake-ack' ? 'Yes?' : 'Okay.', cue)
+  }
+
+  /**
+   * Let Freya proactively speak only after Attention chose `speak` or
+   * `interrupt`. Raw event text is intentionally absent here.
+   */
+  async announceAttention(
+    kind: AttentionEventKind,
+    outcome: Extract<AttentionOutcome, 'speak' | 'interrupt'>,
+  ): Promise<void> {
+    if (!this.proactiveAlerts || this.muted || this.stopAllLatch()) return
+    if (this.tts === undefined || this.tts.availability !== 'available') return
+
+    if (outcome === 'interrupt') {
+      await this.cancelSpeaking('Attention required an interruption.')
+    } else if (this.isSpeaking) {
+      return
+    }
+
+    await this.speakCorePhrase(attentionPhrase(kind), 'attention')
+  }
+
+  private async speakCorePhrase(
+    text: string,
+    purpose: 'wake-ack' | 'standby-ack' | 'attention',
+  ): Promise<void> {
+    if (this.muted || this.stopAllLatch()) return
+    if (this.tts === undefined || this.tts.availability !== 'available') return
+    const utteranceId = this.newId()
+    this.cueSpeaking = { utteranceId, purpose }
+    this.move('speaking')
+    this.publish()
+    const controller = new AbortController()
+    this.speakAbort = controller
+    try {
+      await this.tts.speak({
+        utteranceId,
+        text,
+        voiceId: this.selectedVoiceId,
+        rate: 1,
+        pitch: 1,
+        signal: controller.signal,
+      })
+    } catch {
+      // Attention already retained the decision, so failed playback loses no fact.
+    } finally {
+      if (this.cueSpeaking?.utteranceId === utteranceId) this.cueSpeaking = null
+      if (this.speakAbort === controller) this.speakAbort = null
+      this.move(this.baseState())
+      this.publish()
+    }
   }
 
   /**
@@ -884,9 +1086,10 @@ export class VoiceService {
 
   /** End the current utterance cleanly and drop the rest. */
   async stopSpeaking(): Promise<void> {
-    if (this.speaking === null && this.queue.length === 0) return
+    if (this.speaking === null && this.cueSpeaking === null && this.queue.length === 0) return
     const current = this.speaking
     this.queue = []
+    this.speakAbort?.abort(new Error('speech was stopped'))
     await this.tts?.stop()
     if (current !== null) {
       await this.record(
@@ -896,6 +1099,7 @@ export class VoiceService {
       )
     }
     this.speaking = null
+    this.cueSpeaking = null
     this.move(this.baseState())
     this.publish()
   }
@@ -924,12 +1128,19 @@ export class VoiceService {
       )
     }
     this.speaking = null
+    this.cueSpeaking = null
     this.move(this.stopAllLatch() ? 'stopped-by-STOP-ALL' : 'interrupted')
     this.publish()
   }
 
   /** The renderer reports that playback actually finished (or failed). */
   async settleSpeech(utteranceId: unknown, outcome: 'completed' | 'failed'): Promise<void> {
+    if (this.cueSpeaking?.utteranceId === utteranceId) {
+      this.cueSpeaking = null
+      this.move(outcome === 'completed' ? this.baseState() : 'failed')
+      this.publish()
+      return
+    }
     const current = this.speaking
     if (current === null || current.utteranceId !== utteranceId) return
     await this.record(
@@ -946,7 +1157,7 @@ export class VoiceService {
 
   /** Whether the output adapter currently has the floor. */
   get isSpeaking(): boolean {
-    return this.speaking !== null
+    return this.speaking !== null || this.cueSpeaking !== null
   }
 
   async listVoices(): Promise<VoiceOption[]> {
@@ -984,6 +1195,18 @@ export class VoiceService {
   async setAutoSubmit(enabled: boolean): Promise<VoiceState> {
     this.autoSubmit = enabled
     this.move(this.baseState())
+    this.publish()
+    return this.state
+  }
+
+  async setAutoSpeak(enabled: boolean): Promise<VoiceState> {
+    this.autoSpeak = enabled
+    this.publish()
+    return this.state
+  }
+
+  async setProactiveAlerts(enabled: boolean): Promise<VoiceState> {
+    this.proactiveAlerts = enabled
     this.publish()
     return this.state
   }
@@ -1049,6 +1272,10 @@ export class VoiceService {
     { fired: boolean; reason?: string }
   > {
     if (this.wakeArmedAt === null) return { fired: false, reason: 'hands-free is not armed' }
+    if (this.wakeExpired(this.now())) {
+      await this.disarmWake('hands-free safety window expired')
+      return { fired: false, reason: 'hands-free returned to standby after its safety window expired' }
+    }
     if (!Number.isFinite(sustainedMs) || sustainedMs < this.wakeGate.sustainMs) return { fired: false }
     if (!crossesWakeThreshold(typeof level === 'number' ? level : 0, this.wakeGate)) return { fired: false }
     await this.record(
@@ -1056,7 +1283,7 @@ export class VoiceService {
       { gate: this.wakeGate.id, sustainedMs: Math.round(sustainedMs) },
       this.wakeGate.id,
     )
-    const started = await this.beginCapture()
+    const started = await this.beginCapture('wake')
     if (!started.ok) return { fired: false, reason: started.reason }
     this.publish()
     return { fired: true }
@@ -1133,6 +1360,9 @@ export class VoiceService {
       )
     }
     this.speaking = null
+    this.cueSpeaking = null
+    this.voiceAttention.standby()
+    this.permissionRequestUntilMs = null
     this.wakeArmedAt = null
     void this.tts?.cancel()
     await this.record('voice.stopped', { scope: 'all', reason }, this.newId())
@@ -1154,11 +1384,13 @@ export class VoiceService {
   /* ---------------------------------------------------------- projection */
 
   projection(): VoiceProjection {
+    const attentionActive = this.attention.active || this.voiceAttention.isAttentive()
     return {
       state: this.state,
       micEnabled: this.micEnabled,
-      attention: { active: this.attention.active },
       permission: this.permission,
+      permissionRequestOpen:
+        this.permissionRequestUntilMs !== null && this.now().getTime() < this.permissionRequestUntilMs,
       capturing: this.session !== null,
       sessionId: this.session?.sessionId ?? null,
       interim: this.session?.interim ?? '',
@@ -1187,11 +1419,19 @@ export class VoiceService {
         availability: this.tts?.availability ?? 'unavailable',
         detail: this.tts?.detail ?? NO_OUTPUT_DETAIL,
       },
-      speaking: this.speaking !== null,
+      speaking: this.speaking !== null || this.cueSpeaking !== null,
       queued: this.queue.length,
       muted: this.muted,
       selectedVoiceId: this.selectedVoiceId,
       autoSubmit: this.autoSubmit,
+      autoSpeak: this.autoSpeak,
+      attention: {
+        active: attentionActive,
+        state: attentionActive ? 'attentive' : 'standby',
+        wakePhrase: DEFAULT_WAKE_PHRASE,
+        attentiveUntil: this.voiceAttention.attentiveUntil ?? this.attention.attentiveUntil,
+        followUpWindowMs: Math.max(this.voiceAttention.windowMs, this.attention.windowMs),
+      },
       wake: {
         armed: this.wakeArmedAt !== null,
         available: this.wakeGate.availability === 'available',
@@ -1412,6 +1652,33 @@ function readNumber(input: unknown, key: string): number | undefined {
   if (typeof input !== 'object' || input === null) return undefined
   const value = (input as Record<string, unknown>)[key]
   return typeof value === 'number' ? value : undefined
+}
+
+function attentionPhrase(kind: AttentionEventKind): string {
+  switch (kind) {
+    case 'deadline':
+      return 'A deadline needs your attention.'
+    case 'work-failed':
+      return 'A run failed.'
+    case 'mission-failed':
+      return 'A mission needs your attention.'
+    case 'system-health':
+      return 'There is a system health alert.'
+    case 'work-finished':
+      return 'A run finished.'
+    case 'mission-finished':
+      return 'A mission was completed.'
+    case 'research-finished':
+      return 'Research finished.'
+    case 'message':
+      return 'You have a new message.'
+    case 'calendar':
+      return 'You have an upcoming calendar event.'
+    case 'reminder':
+      return 'You have a reminder.'
+    case 'context-change':
+      return 'Your active context changed.'
+  }
 }
 
 function describe(error: unknown): string {

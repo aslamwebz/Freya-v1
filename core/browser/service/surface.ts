@@ -45,6 +45,33 @@ export type SurfaceReading<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly code: string; readonly reason: string }
 
+/**
+ * A page capture: the visible pixels as PNG bytes, plus the surface's own facts
+ * about the moment of capture so a caller can decide whether the bytes are still
+ * the page it is looking at.
+ */
+export interface SurfaceScreenshot {
+  /**
+   * The captured pixels. PNG-encoded, bounded by the surface at or below
+   * {@link BROWSER_SERVICE_LIMITS.maxScreenshotBytes}. The bytes cross the IPC
+   * boundary as a `Buffer` and are returned to the model as a base64
+   * `data:image/png` URL when the protocol is asked for the image as an asset.
+   */
+  readonly png: Uint8Array
+  /** A path the renderer can fetch to display the bytes (a `freya-browser://` URL). */
+  readonly mediaUrl: string
+  /** Width of the captured image, in pixels. */
+  readonly width: number
+  /** Height of the captured image, in pixels. */
+  readonly height: number
+  /** Surface's own revision at the moment of capture. May be older than the tab's live revision. */
+  readonly revision: number
+  /** The page URL at the moment of capture, never empty. */
+  readonly url: string
+  /** The page title at the moment of capture, may be empty. */
+  readonly title: string
+}
+
 /** Where a scroll should end up. Both forms are bounded by the surface. */
 export type ScrollRequest =
   | { readonly kind: 'bottom' }
@@ -135,6 +162,17 @@ export interface BrowserSurfacePort {
   select(sessionId: string, selector: string, index: number): Promise<SurfaceReading<{ readonly selected: string | null }>>
 
   scroll(sessionId: string, request: ScrollRequest): Promise<SurfaceReading<{ readonly top: number; readonly height: number }>>
+
+  /**
+   * Capture the visible pixels of a tab as PNG.
+   *
+   * The surface may refuse (`surface-unavailable`, `tab-unknown`, `page-missing`)
+   * or succeed with bytes that are bound by the surface's own ceiling. The bytes
+   * are kept by the surface and surfaced later through the URL in
+   * {@link SurfaceScreenshot.mediaUrl}, which the renderer fetches when it
+   * wants to show the image to the owner.
+   */
+  screenshot(sessionId: string): Promise<SurfaceReading<SurfaceScreenshot>>
 
   /**
    * Wait for the tab to stop changing, or for a URL substring to appear.

@@ -136,7 +136,8 @@ function MediaCard({ item, index, onOpen }: {
 
 export function MediaGrid({ items, onOpenBrowserUrl }: {
   readonly items: readonly MediaItem[]
-  readonly onOpenBrowserUrl?: (url: string, kind?: 'video' | 'image' | 'pdf' | 'document' | 'page') => void
+  readonly onOpenBrowserUrl?: (url: string, kind?: 'video' | 'image' | 'pdf' | 'document' | 'page' | 'audio') => void
+
 }) {
   const [openIndex, setOpenIndex] = useState<number | null>(null)
   if (items.length === 0) return null
@@ -180,7 +181,8 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
   readonly index: number
   readonly onIndex: (next: number) => void
   readonly onClose: () => void
-  readonly onOpenBrowserUrl?: (url: string, kind?: 'video' | 'image' | 'pdf' | 'document' | 'page') => void
+  readonly onOpenBrowserUrl?: (url: string, kind?: 'video' | 'image' | 'pdf' | 'document' | 'page' | 'audio') => void
+
 }) {
   const item = items[index] ?? items[0]!
   const many = items.length > 1

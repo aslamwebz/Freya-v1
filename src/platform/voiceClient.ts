@@ -50,6 +50,7 @@ export interface VoiceMirror {
 
   micEnable(): Promise<{ ok: boolean; reason: string | null }>
   micDisable(): Promise<void>
+  requestPermission(): Promise<{ ok: boolean; reason: string | null }>
   reportPermission(outcome: 'granted' | 'denied' | 'revoked'): Promise<void>
 
   startCapture(): Promise<VoiceStartOutcome>
@@ -224,6 +225,11 @@ export function createVoiceMirror(): VoiceMirror {
 
     async micDisable() {
       await submit('voice.mic.disable', { reason: 'the owner turned the microphone off' })
+    },
+
+    async requestPermission() {
+      const outcome = await submit('voice.permission.request')
+      return { ok: outcome.ok, reason: reasonOf(outcome) }
     },
 
     async reportPermission(outcome) {

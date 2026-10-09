@@ -1,0 +1,122 @@
+/* Mind — the cognitive control room.
+
+   Same instrument language as the rest of App Mode: the shared card, row, chip
+   and meter primitives, plus a handful of local pieces for facts a card grid
+   needs. Nothing here decorates a number: a fact row is a label and a value,
+   and a value Core never measured is an em dash from the component, not a
+   styled zero. */
+
+.m-provenance {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  flex-wrap: wrap;
+  margin: 0 0 .55rem;
+  padding: .4rem .6rem;
+  border: 1px solid var(--f-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--f-panel) 55%, transparent);
+  font-size: .8rem;
+  color: var(--f-muted);
+}
+.m-provenance b {
+  color: var(--f-heading);
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  font-size: .72rem;
+}
+.m-provenance-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--f-muted);
+  flex: none;
+  align-self: center;
+}
+.m-provenance[data-state='ready'] .m-provenance-dot { background: var(--f-positive); box-shadow: 0 0 7px color-mix(in srgb, var(--f-positive) 70%, transparent); }
+.m-provenance[data-state='stale'] .m-provenance-dot { background: var(--f-attention); }
+.m-provenance[data-state='loading'] .m-provenance-dot { background: var(--f-cognition); }
+.m-provenance[data-state='unavailable'] .m-provenance-dot,
+.m-provenance[data-state='error'] .m-provenance-dot { background: var(--f-danger); }
+
+/* The one word Core chose for how it is holding itself. */
+.m-mode {
+  margin: 0;
+  color: var(--f-ink);
+  font-size: .88rem;
+  line-height: 1.45;
+}
+.m-mode b { color: var(--f-heading); font-weight: 600; }
+
+.m-lead { margin: 0; font-family: var(--f-narrative); font-size: 1.2rem; line-height: 1.2; font-weight: 400; color: var(--f-ink); }
+.m-sub { margin: .1rem 0 0; color: var(--f-muted); font-size: .84rem; }
+.m-quote {
+  margin: .55rem 0 0;
+  padding-left: .7rem;
+  border-left: 2px solid var(--f-cognition);
+  font-family: var(--f-narrative);
+  font-style: italic;
+  color: var(--f-muted);
+  font-size: .92rem;
+  line-height: 1.4;
+}
+
+.m-subhead {
+  margin-top: .5rem;
+  color: var(--f-heading);
+  font-size: .68rem;
+  font-weight: 600;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+}
+.m-note { margin: .35rem 0 0; color: var(--f-muted); font-size: .78rem; line-height: 1.45; }
+
+/* A grid of labelled facts. The label is Core's field; the value is Core's. */
+.m-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  gap: .45rem .8rem;
+  margin-top: .55rem;
+}
+.m-fact { display: grid; gap: .1rem; min-width: 0; }
+.m-fact small { color: var(--f-muted); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; }
+.m-fact b { color: var(--f-ink); font-size: .9rem; font-weight: 500; overflow-wrap: anywhere; }
+
+.m-counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+  gap: .5rem;
+  margin-top: .5rem;
+}
+.m-count { display: grid; gap: .1rem; }
+.m-count b { color: var(--f-heading); font-size: 1.05rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+.m-count small { color: var(--f-muted); font-size: .68rem; }
+
+/* Compartment rows: a label, a value, and an optional second line. */
+.m-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: .5rem; margin-top: .45rem; }
+.m-mini { display: grid; gap: .12rem; min-width: 0; padding: .4rem .55rem; border: 1px solid color-mix(in srgb, var(--f-line) 60%, transparent); border-radius: 8px; }
+.m-mini small { color: var(--f-muted); font-size: .68rem; }
+.m-mini b { color: var(--f-ink); font-size: .82rem; font-weight: 500; overflow-wrap: anywhere; }
+
+.m-faults { display: grid; gap: .3rem; margin-top: .5rem; }
+.m-faults small { color: var(--f-muted); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; }
+
+/* The status chip. A closed word from Core, never a rewritten one. */
+.m-status {
+  display: inline-block;
+  padding: .1rem .45rem;
+  border: 1px solid var(--f-line);
+  border-radius: 999px;
+  color: var(--f-muted);
+  font-size: .68rem;
+  letter-spacing: .06em;
+  white-space: nowrap;
+}
+.m-status[data-tone='accent'] { color: var(--f-heading); border-color: var(--f-action); background: color-mix(in srgb, var(--f-action) 12%, transparent); }
+.m-status[data-tone='positive'] { color: var(--f-positive); border-color: color-mix(in srgb, var(--f-positive) 50%, transparent); }
+.m-status[data-tone='attention'] { color: var(--f-attention); border-color: color-mix(in srgb, var(--f-attention) 50%, transparent); }
+.m-status[data-tone='danger'] { color: var(--f-danger); border-color: color-mix(in srgb, var(--f-danger) 50%, transparent); }
+
+/* A row whose end holds more than one word. */
+.c-row-end { display: inline-flex; align-items: center; gap: .3rem; }

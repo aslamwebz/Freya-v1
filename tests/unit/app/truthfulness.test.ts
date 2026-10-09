@@ -7,11 +7,11 @@ import { join } from 'node:path'
  *
  * ## Why this is a source scan and not a render test
  *
- * Nine of the twelve App Mode screens take **no props**. `Focus()`, `World()`,
- * `Workforce()`, `Life()`, `Memory()`, `Mind()`, `People()`, `Foundry()` and
- * `Relay()` are pure functions of a module-level constant table, so there is no
- * snapshot for them to be truthful *about*. A render assertion cannot fix that —
- * there is nothing to pass in and nothing to vary.
+ * Eight of the twelve App Mode screens take **no props**. `Focus()`, `World()`,
+ * `Workforce()`, `Life()`, `Memory()`, `People()`, `Foundry()` and `Relay()` are
+ * pure functions of a module-level constant table, so there is no snapshot for
+ * them to be truthful *about*. A render assertion cannot fix that — there is
+ * nothing to pass in and nothing to vary.
  *
  * That is the actual defect, and it is why the previous test in this directory
  * asserted only `textContent.length > 0`. It passed for a screen that printed
@@ -27,7 +27,7 @@ import { join } from 'node:path'
  *      person scrolling the screen will see it.
  *
  * (2) is what makes (1) workable. Without it the only options would be to wire all
- * nine screens to real projections at once or to delete them; with it, a screen can
+ * eight screens to real projections at once or to delete them; with it, a screen can
  * honestly say "sample" until its projection is bound. The marker is asserted here, so
  * it cannot be quietly dropped.
  *
@@ -35,8 +35,8 @@ import { join } from 'node:path'
  *
  *   - Layout and design constants (`3px`, `0.5rem`, `translateX(-50%)`).
  *   - Design labels in copy (`'FREYA'`, `'Key People'`, `'Sample timeline'`).
- *   - Real values that arrive as props — Home and Settings take a snapshot, and their
- *     numbers are rendered from it.
+ *   - Real values that arrive as props — Home, Settings and Mind take a snapshot, and
+ *     their numbers are rendered from it.
  *   - The dressing store, which is presentation state and says so.
  *
  * The rule is: a number or status word describing Freya's *operational condition*
@@ -62,7 +62,6 @@ const SAMPLE_SCREENS = [
   'Foundry.tsx',
   'Life.tsx',
   'Memory.tsx',
-  'Mind.tsx',
   'People.tsx',
   'Relay.tsx',
   'Workforce.tsx',
@@ -220,12 +219,14 @@ const declares = /sample: \s*'/.test(source) || /data-sample=/.test(source)
 })
 
 describe('screens that do read a projection are not caught by the sample rules', () => {
-  it('Home and Settings take a snapshot, so they are not sample screens', () => {
+  it('Home, Settings and Mind take a snapshot, so they are not sample screens', () => {
     // If this ever fails, the sample-screen rules no longer describe the codebase and
     // the honest response is to move the screen, not to widen the patterns.
     expect(SAMPLE_SCREENS).not.toContain('Home.tsx')
     expect(SAMPLE_SCREENS).not.toContain('Settings.tsx')
+    expect(SAMPLE_SCREENS).not.toContain('Mind.tsx')
     expect(screenSource['Home.tsx']).toMatch(/snapshot/)
     expect(screenSource['Settings.tsx']).toMatch(/snapshot/)
+    expect(screenSource['Mind.tsx']).toMatch(/snapshot/)
   })
 })

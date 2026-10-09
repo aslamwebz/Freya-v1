@@ -7,7 +7,7 @@ afterEach(cleanup)
 const core: CoreView = { lifecycle: 'degraded', operational: true, sequence: 5, activeRequests: 0,
   stopped: false, integrity: 'ok', faultCount: 2, persistenceDurable: false, persistenceMode: 'ephemeral-fallback',
   persistenceReason: 'disk unavailable', diagnosticsPath: 'runtime.jsonl', faults: ['disk unavailable', 'Brain damaged'],
-  diagnosticsWriteFailures: 1 }
+  diagnosticsWriteFailures: 1, governorStatus: 'unknown', grantsActive: 0 }
 
 it('shows temporary event history and every fault without marking Core offline', () => {
   render(<CoreHealth core={core} />)

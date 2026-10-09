@@ -1,4 +1,4 @@
-import type { Resource, UiAdapter, UiSnapshot } from './contract'
+import type { MindView, Resource, UiAdapter, UiSnapshot } from './contract'
 function freeze<T>(value: T): T {
   if (value && typeof value === 'object') {
     for (const child of Object.values(value)) freeze(child)
@@ -28,7 +28,7 @@ export function createPreviewAdapter(): UiAdapter {
         { id: 'innovation', title: 'Innovation', detail: 'Breakthroughs worth understanding.', icon: 'create' },
         { id: 'opportunity', title: 'Opportunities', detail: 'New possibilities for connection.', icon: 'world' }],
     }),
-    core: sample({ lifecycle: 'ready', sequence: 19, activeRequests: 0, stopped: false, integrity: 'ok', faultCount: 0, operational: true, persistenceDurable: true, persistenceMode: 'durable', persistenceReason: null, diagnosticsPath: null, diagnosticsWriteFailures: 0, faults: [] }),
+    core: sample({ lifecycle: 'ready', sequence: 19, activeRequests: 0, stopped: false, integrity: 'ok', faultCount: 0, operational: true, persistenceDurable: true, persistenceMode: 'durable', persistenceReason: null, diagnosticsPath: null, diagnosticsWriteFailures: 0, faults: [], governorStatus: 'ready', grantsActive: 0 }),
     attention: sample({ focus: 'focused', ingested: 42, decisions: 18, cued: 12, spoke: 4, interrupted: 1, budgetExceeded: 0, inboxCount: 3 }),
     provider: sample({ connected: true, baseUrl: 'https://nano-gpt.com/api/v1', model: 'openai/gpt-4.1-nano', liveEnabled: true, hasKey: true, credentialState: 'stored', credentialReason: null, endpointApproved: true, detail: 'preview — sample provider configuration' }),
     mission: sample({
@@ -54,6 +54,102 @@ export function createPreviewAdapter(): UiAdapter {
       { id: 'a5', text: 'Created visual concepts for the new workspace', at: 1790942400000, sequence: 15, tone: 'good' },
       { id: 'a3', text: 'Noted a new project connection', at: 1790949600000, sequence: 17, tone: 'good' },
     ]),
+    /*
+     * The Mind's design preview is built out of Core's own *absent* projections,
+     * not out of invented ones.
+     *
+     * That is the deliberate difference between this fixture and the Home one
+     * beside it. Home is a marketing composition whose whole job is to look like
+     * something; the Mind is a control room whose whole job is to tell the truth
+     * about what is running. A preview Mind filled with fabricated traits,
+     * thoughts and goal dates would teach the exact lie the screen exists to
+     * prevent — so the preview shows the *unavailable* states instead, which is
+     * both what a browser actually has and the state a real window spends most
+     * of its life in. The shell still announces `ui-mode="preview"` for it.
+     */
+    mind: sample(previewMind()),
   })
   return { getSnapshot: () => snapshot, subscribe: () => () => {} }
+}
+
+/** The Mind a browser sees: Core's own absences, assembled and labelled. */
+function previewMind(): MindView {
+  return {
+    overview: {
+      lifecycle: 'ready',
+      operational: true,
+      stopped: false,
+      governorStatus: 'ready',
+      grantsActive: 0,
+      activeProviderCalls: 0,
+      journalIntegrity: 'ok',
+      persistenceMode: 'durable',
+      persistenceReason: null,
+      faults: [],
+      sequence: 0,
+      mode: 'idle',
+      modeDetail: 'Preview fixture. Nothing here is running.',
+      providers: [],
+      sessionCalls: 0,
+      sessionInputTokens: null,
+      sessionOutputTokens: null,
+      sessionUnknownUsageCalls: 0,
+    },
+    threads: [],
+    attention: {
+      health: 'unavailable',
+      reason: 'preview: the Attention domain is not projected in a browser window',
+      focus: 'unknown',
+      counts: null,
+      inboxCount: 0,
+      lastDecision: null,
+    },
+    self: {
+      name: null,
+      role: null,
+      purpose: null,
+      claimCount: 0,
+      complete: false,
+      claims: [],
+      capabilities: [],
+      limitations: [],
+      durable: false,
+      reason: 'preview: the Brain is not projected in a browser window',
+      world: null,
+      worldSelf: null,
+    },
+    missions: [],
+    missionsTotal: 0,
+    missionsHidden: 0,
+    owner: {
+      personalityHealth: 'unavailable',
+      personalityReason: 'preview: no Personality projection exists in a browser window',
+      continuity: null,
+      formality: null,
+      temperament: [],
+      relationshipItems: 0,
+      admittedItems: 0,
+      cuesAdmitted: 0,
+      relationshipDurable: null,
+      contextHealth: 'unavailable',
+      contextReason: 'preview: no Context projection exists in a browser window',
+      contextItems: 0,
+      contextCurrent: 0,
+      contextScopes: [],
+      contextUnresolvedReferences: 0,
+      contextDurable: null,
+    },
+    uncertainties: [],
+    uncertaintiesOmitted: 0,
+    nextActions: [],
+    recentChanges: [],
+    waiting: { pendingApprovals: 0, waitingRuns: [], blockedAgents: [], unfulfilledPresenceRequests: 0 },
+    provenance: null,
+    consciousHealth: 'unavailable',
+    consciousReason: 'preview: no conscious context is projected in a browser window',
+    absentSections: [
+      'self', 'posture', 'focus', 'attention', 'waiting', 'agents', 'practice',
+      'world', 'life', 'continuity', 'recent changes', 'uncertainty', 'next actions',
+    ],
+  }
 }

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { VoiceProjection } from '../../../core/protocol/conversation'
 import type { VoiceOption } from '../../../core/voice/types'
 import { voiceMirror } from '../../platform/voiceClient'
+import { hostBridge } from '../../platform/host'
+import type { VoiceConfig, VoiceConfigPatch } from '../../../electron/voiceConfig'
 import { VoiceRuntime } from '../../voice/runtime'
 import { detectRecognitionSupport, type RecognitionSupport } from '../../voice/recognition'
 
@@ -42,6 +44,9 @@ export interface VoiceView {
   unavailableReason: string | null
   capabilities: { capture: boolean; recognition: RecognitionSupport }
   voices: readonly VoiceOption[]
+  /** Persistent voice configuration, separate from Chat/model settings. */
+  config: VoiceConfig | null
+  configBusy: boolean
 }
 
 export interface VoiceDock {
@@ -56,6 +61,7 @@ export interface VoiceDock {
   stopSpeaking: () => void
   chooseVoice: (voiceId: string) => void
   speak: (turnId: string) => void
+  saveConfig: (patch: VoiceConfigPatch) => void
 }
 
 /**
@@ -87,6 +93,8 @@ export function useVoiceDock(
   const [interim, setInterim] = useState(mirror.interim)
   const [notice, setNotice] = useState('')
   const [voices, setVoices] = useState<readonly VoiceOption[]>([])
+  const [config, setConfig] = useState<VoiceConfig | null>(null)
+  const [configBusy, setConfigBusy] = useState(false)
   const [reach, setReach] = useState<'ok' | 'unreachable'>('ok')
 
   // The transcript and notice sinks are held on the runtime rather than captured,
@@ -119,6 +127,40 @@ export function useVoiceDock(
   useEffect(() => {
     setReach(projection === null && mirror.projection === null ? 'unreachable' : 'ok')
   }, [projection, mirror])
+
+  useEffect(() => {
+    const bridge = hostBridge()
+    if (typeof bridge?.voiceConfig !== 'function') return
+    let disposed = false
+    void bridge.voiceConfig()
+      .then((value) => {
+        if (!disposed) setConfig(value)
+      })
+      .catch(() => {
+        if (!disposed) setNotice('Voice settings could not be loaded in this window.')
+      })
+    return () => {
+      disposed = true
+    }
+  }, [])
+
+  const saveConfig = useCallback((patch: VoiceConfigPatch) => {
+    const bridge = hostBridge()
+    if (typeof bridge?.saveVoiceConfig !== 'function') {
+      setNotice('Voice settings cannot be saved in this window.')
+      return
+    }
+    setConfigBusy(true)
+    void bridge.saveVoiceConfig(patch)
+      .then((value) => {
+        setConfig(value)
+        setNotice('')
+      })
+      .catch((error) => {
+        setNotice(error instanceof Error ? error.message : 'Voice settings could not be saved.')
+      })
+      .finally(() => setConfigBusy(false))
+  }, [])
 
   const capabilities = useMemo(
     () => runtime.instance.capabilities(),
@@ -158,9 +200,14 @@ export function useVoiceDock(
   }, [mirror, runtime])
 
   const toggleWake = useCallback(() => {
-    if (mirror.projection?.wake.armed === true) void runtime.instance.disarmWake()
-    else void runtime.instance.armWake()
-  }, [mirror, runtime])
+    if (mirror.projection?.wake.armed === true) {
+      saveConfig({ wakeProvider: 'off' })
+      void runtime.instance.disarmWake()
+      return
+    }
+    saveConfig({ wakeProvider: 'selected-stt' })
+    void runtime.instance.armWake()
+  }, [mirror, runtime, saveConfig])
 
   const toggleAutoSubmit = useCallback(() => {
     void runtime.instance.setAutoSubmit(!(mirror.projection?.autoSubmit ?? false))
@@ -179,9 +226,10 @@ export function useVoiceDock(
 
   const chooseVoice = useCallback(
     (voiceId: string) => {
-      void runtime.instance.selectVoice(voiceId)
+      saveConfig({ ttsVoiceId: voiceId === '' ? null : voiceId })
+      if (voiceId !== '') void runtime.instance.selectVoice(voiceId)
     },
-    [runtime],
+    [runtime, saveConfig],
   )
 
   const unavailableReason = useMemo(() => {
@@ -212,8 +260,10 @@ export function useVoiceDock(
       unavailableReason,
       capabilities,
       voices,
+      config,
+      configBusy,
     }
-  }, [capabilities, interim, notice, projection, reach, unavailableReason, voices])
+  }, [capabilities, config, configBusy, interim, notice, projection, reach, unavailableReason, voices])
 
   // Voices are read when a voice picker could plausibly be opened, and not before:
   // it is a `speechSynthesis.getVoices()` call in the window, and asking at
@@ -243,6 +293,7 @@ export function useVoiceDock(
     stopSpeaking,
     chooseVoice,
     speak,
+    saveConfig,
   }
 }
 

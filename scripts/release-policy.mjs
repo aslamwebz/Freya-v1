@@ -1,4 +1,4 @@
-ï»¿import { stat, readdir, readFile } from 'node:fs/promises'
+import { stat, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export const ALLOWED_INSTALL_SCRIPT_PACKAGES = new Set([
@@ -8,15 +8,15 @@ export const ALLOWED_INSTALL_SCRIPT_PACKAGES = new Set([
 ])
 
 export const PERFORMANCE_BUDGETS = Object.freeze({
-  // Phases 20â€“31 moved durable Vault, Context, Life, learning, acquisition and
+  // Phases 20–31 moved durable Vault, Context, Life, learning, acquisition and
   // long-horizon assembly into the Electron host. The Phase 18 main/preload ceilings
   // no longer describe the canonical Phase 31 binary. These bounds retain only
   // modest headroom over the measured Phase 31 artifacts (~1.76MB / ~109KB), so
   // future growth still has to be explained rather than silently accumulating.
   //
   // Phase 42 Device Hands is the next explained growth: activating Phase 35 in the
-  // main process bundles its runtime â€” the ten-gate pipeline, the fold, the four
-  // surface policies and the host adapters â€” into `main.cjs`, measured at ~2.10MB.
+  // main process bundles its runtime — the ten-gate pipeline, the fold, the four
+  // surface policies and the host adapters — into `main.cjs`, measured at ~2.10MB.
   // The bound keeps modest headroom over that, and the host stays unminified on
   // purpose so its security-critical source can be audited in the shipped artifact.
   //

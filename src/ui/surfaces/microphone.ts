@@ -62,9 +62,31 @@ export class MicrophoneError extends Error {
   }
 }
 
-/** Owner activation allows the initial device prompt; the probe retains no audio. */
+/**
+ * Ask the operating system for microphone access and release the probe
+ * immediately. Core must already have opened its short-lived permission window;
+ * this helper never records or retains a sample.
+ */
 export async function requestMicrophonePermission(): Promise<void> {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    throw new MicrophoneError('unsupported', 'this environment has no microphone API')
+  }
+  let stream: MediaStream
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: false,
+    })
+  } catch (error) {
+    const name = (error as { name?: string } | null)?.name
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      throw new MicrophoneError('permission-denied', 'microphone permission was not granted')
+    }
+    if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+      throw new MicrophoneError('no-device', 'no microphone was found')
+    }
+    throw new MicrophoneError('capture-failed', 'the microphone permission check failed')
+  }
   releaseStream(stream)
 }
 
@@ -262,6 +284,32 @@ export async function openMicrophone(limits: CaptureLimits): Promise<MicCapture>
     try { await cleanupContext?.close() } catch { /* already closed */ }
     throw error
   }
+}
+
+export function resampleFloat32ToInt16(
+  input: Float32Array,
+  sourceRate: number,
+  targetRate: number,
+): Int16Array {
+  if (input.length === 0) return new Int16Array(0)
+  if (!Number.isFinite(sourceRate) || !Number.isFinite(targetRate) || sourceRate <= 0 || targetRate <= 0) {
+    throw new MicrophoneError('capture-failed', 'the microphone reported an invalid sample rate')
+  }
+
+  const outputLength = Math.max(1, Math.round(input.length * targetRate / sourceRate))
+  const output = new Int16Array(outputLength)
+  const ratio = sourceRate / targetRate
+
+  for (let index = 0; index < outputLength; index += 1) {
+    const position = index * ratio
+    const left = Math.min(input.length - 1, Math.floor(position))
+    const right = Math.min(input.length - 1, left + 1)
+    const fraction = position - left
+    const sample = (input[left] ?? 0) * (1 - fraction) + (input[right] ?? 0) * fraction
+    const bounded = Math.max(-1, Math.min(1, sample))
+    output[index] = bounded < 0 ? Math.round(bounded * 0x8000) : Math.round(bounded * 0x7fff)
+  }
+  return output
 }
 
 function releaseStream(stream: MediaStream): void {

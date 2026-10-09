@@ -19,7 +19,7 @@ import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
 import { buildConfiguredModelProviders, modelCapabilityPreference, type CapabilityEnv } from './model/capability-runtime'
 import type { CapabilityPreferences } from './capabilities'
 import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
-import { createWebSearchTool, MindToolRegistry } from './mind/tools'
+import { createWebSearchTool, createChartTool, createCanvasTool, MindToolRegistry } from './mind/tools'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
 import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
 import type { ReferenceKnowledge } from './mind/context-compiler'
@@ -635,6 +635,14 @@ export interface CoreOptions {
   /** Tightens the transcription deadline. Cannot raise it past the hard limit. */
   voiceTranscriptionTimeoutMs?: number
   voiceAttentionTimeoutMs?: () => number
+  /** Whether voice-submitted answers are read aloud after they are stored. */
+  voiceAutoSpeak?: boolean
+  /** Let deterministic Attention speak/interrupt decisions use Voice output. */
+  voiceProactiveAlerts?: boolean
+  /** Initial output mute from the persisted TTS provider preference. */
+  voiceMuted?: boolean
+  /** Bounded follow-up window after the wake phrase is heard. */
+  voiceFollowUpWindowMs?: number
   /** Overrides the conversation context budget. For tests. */
   contextBudget?: ContextBudget
   /**
@@ -2171,6 +2179,13 @@ class FreyaCore implements Core {
               searchWeb: (query, vertical, signal, site) => this.researchIntegration!.searchWeb(query, vertical, signal, site),
             })]
             : []),
+          // The chart tool does not talk to the network; it returns a typed artifact
+          // that the renderer draws. Always available alongside the other tools so a
+          // turn that does not look anything up can still produce a chart.
+          createChartTool(),
+          // The canvas tool returns a long-form artifact the renderer opens in a
+          // side panel. Always available, for the same reason as the chart tool.
+          createCanvasTool(),
           ...(this.dualBrowser
             ? [createBrowserTaskTool({ browser: this.dualBrowser })]
             : []),
@@ -2217,6 +2232,10 @@ class FreyaCore implements Core {
       captureSupported: this.options.voiceCaptureSupported ?? true,
       transcriptionTimeoutMs: this.options.voiceTranscriptionTimeoutMs,
       attentionTimeoutMs: this.options.voiceAttentionTimeoutMs,
+      autoSpeak: this.options.voiceAutoSpeak,
+      proactiveAlerts: this.options.voiceProactiveAlerts,
+      initialMuted: this.options.voiceMuted,
+      followUpWindowMs: this.options.voiceFollowUpWindowMs,
       interruptTurn: async () => {
         const active = (await this.conversations.projection()).activeTurn
         if (active) {
@@ -2434,6 +2453,11 @@ class FreyaCore implements Core {
       now: this.options.now,
       newId: this.options.newId,
       onChange: () => this.publishAttention(),
+      onDecision: (decision) => {
+        if (decision.outcome === 'speak' || decision.outcome === 'interrupt') {
+          void this.voiceService.announceAttention(decision.kind, decision.outcome)
+        }
+      },
       focus: () => this.attentionFocus(),
       stopAll: () => this.state.stopAll.active,
       getState: () => this.state.attention,
@@ -7641,6 +7665,21 @@ state: {
           return { requestId, ok: true, status: this.status(), voice: { operation: 'state', state: this.voice().state } }
         }
 
+        case 'voice.permission.request': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const opened = this.voiceService.requestPermissionWindow()
+          return opened.ok
+            ? { requestId, ok: true, status: this.status(), voice: { operation: 'state', state: this.voice().state } }
+            : {
+                requestId,
+                ok: false,
+                refusal: { reason: opened.reason },
+                status: this.status(),
+                voice: { operation: 'refused', reason: opened.reason },
+              }
+        }
+
         case 'voice.permission.report': {
           const outcome = readString(envelope.payload, 'outcome')
           if (outcome !== 'granted' && outcome !== 'denied' && outcome !== 'revoked') {
@@ -7736,6 +7775,33 @@ state: {
           }
           await this.voiceService.setAutoSubmit(enabled)
           return { requestId, ok: true, status: this.status(), voice: { operation: 'auto-submit', enabled } }
+        }
+
+        case 'voice.auto-speak.set': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const enabled = readRaw(envelope.payload, 'enabled')
+          if (typeof enabled !== 'boolean') {
+            return { requestId, ok: false, refusal: { reason: 'auto-speak is a true or false setting' } }
+          }
+          await this.voiceService.setAutoSpeak(enabled)
+          return { requestId, ok: true, status: this.status(), voice: { operation: 'auto-speak', enabled } }
+        }
+
+        case 'voice.proactive-alerts.set': {
+          const guarded = await this.guardVoice(requestId)
+          if (guarded !== null) return guarded
+          const enabled = readRaw(envelope.payload, 'enabled')
+          if (typeof enabled !== 'boolean') {
+            return { requestId, ok: false, refusal: { reason: 'proactive alerts is a true or false setting' } }
+          }
+          await this.voiceService.setProactiveAlerts(enabled)
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            voice: { operation: 'proactive-alerts', enabled },
+          }
         }
 
         case 'voice.tts.speak': {
@@ -10034,6 +10100,7 @@ case 'forge.run': {
         state: 'unsupported',
         micEnabled: false,
         permission: 'unknown',
+        permissionRequestOpen: false,
         capturing: false,
         sessionId: null,
         interim: '',
@@ -10047,6 +10114,14 @@ case 'forge.run': {
         muted: false,
         selectedVoiceId: null,
         autoSubmit: false,
+        autoSpeak: false,
+        attention: {
+          active: false,
+          state: 'standby',
+          wakePhrase: 'Freya',
+          attentiveUntil: null,
+          followUpWindowMs: 45_000,
+        },
         wake: {
           armed: false,
           available: false,

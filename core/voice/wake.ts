@@ -5,15 +5,18 @@ import { VOICE_LIMITS, type WakeAvailability, type WakeGate } from './types'
  *
  * ## What this is, stated precisely
  *
- * A **local energy gate**. The owner turns it on, the platform measures how loud
- * the room is, and sustained speech-level energy arms an ordinary capture. It is
- * not a wake word. There is no wake-word model in this build, and there is no
- * code path that pretends there is: naming this feature "wake word" would be the
- * one dishonest word in an otherwise honest subsystem.
+ * A **local speech-activity gate**, and deliberately only that.
  *
- * So the projection says `speech-activity wake`, the detail says it responds to
- * sustained local speech rather than to a name, and a person who needs a wake
- * *phrase* learns from the UI that this is not one.
+ * The gate itself does not recognise words. When the owner explicitly arms
+ * hands-free, the renderer keeps a tiny bounded in-memory pre-roll. Sustained
+ * local speech asks Core for one ordinary wake capture; the configured STT then
+ * transcribes that single clip, and Core's voice-attention layer decides whether
+ * it began with the wake phrase "Freya" or belongs to an already-open follow-up
+ * window.
+ *
+ * That distinction matters: local VAD is the cheap sensor, STT is hearing, and
+ * Core owns the address/attention decision. This module never claims that energy
+ * alone heard a name and never creates a conversation turn.
  *
  * ## Why that is still worth shipping
  *
@@ -28,9 +31,10 @@ import { VOICE_LIMITS, type WakeAvailability, type WakeGate } from './types'
  *
  * Three bounds, all fixed here rather than negotiated:
  *
- * - **Local only.** The measurement is an RMS of samples already in memory for a
- *   capture that is about to happen anyway. Nothing is transmitted, and there is
- *   no streaming recogniser sitting behind it.
+ * - **Local pre-filter.** The continuous part is only RMS/VAD plus the bounded
+ *   pre-roll. There is no continuous cloud recogniser. When speech fires the gate,
+ *   one bounded clip may be sent to the explicitly configured STT provider, and
+ *   the Settings surface says that plainly.
  * - **No persistence.** A gate that fired leaves an event carrying a duration and
  *   nothing else. The audio it measured is dropped.
  * - **Self-disarming.** `maxArmedMs` is a ceiling on how long the machine can sit

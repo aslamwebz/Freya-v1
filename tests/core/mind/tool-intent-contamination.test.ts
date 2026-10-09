@@ -81,21 +81,32 @@ describe('the composer never mutates owner text', () => {
     })
   })
 
-  it('browserUse hint with an http address seeds browser_read for the unmutated text', () => {
+  it('browserUse hint with an http address seeds browser_tabs for the unmutated text', () => {
     const text = 'check https://example.com/pricing and tell me what it says'
     const request = initialToolRequestForOwnerText(text, { browserUse: true })
     expect(request).toEqual({
-      name: 'browser_read',
-      arguments: Object.freeze({ url: 'https://example.com/pricing' }),
+      name: 'browser_tabs',
+      arguments: Object.freeze({ op: 'open', urls: 'https://example.com/pricing' }),
     })
-    expect(request?.arguments['url']).not.toMatch(/use your browser/i)
+    expect(request?.arguments['urls']).not.toMatch(/use your browser/i)
   })
 
-  it('browserUse without an address discovers a source without inventing a URL', () => {
-    // No URL → no `browser_read`. A browser call with no address is the shape
-    // of a bug, and the loop already has its own path for "the model wants to
-    // browse". The hint is a true rather than a forged URL.
-    expect(initialToolRequestForOwnerText('what does the page say about pricing', { browserUse: true })).toEqual({ name: 'web_search', arguments: { query: 'what does the page say about pricing', type: 'web' } })
+  it('browserUse opens a concrete list of bare domains instead of silently web-searching it', () => {
+    const request = initialToolRequestForOwnerText(
+      'open dailynews.lk, dailymirror.lk, and island.lk in separate tabs',
+      { browserUse: true },
+    )
+    expect(request).toEqual({
+      name: 'browser_tabs',
+      arguments: Object.freeze({
+        op: 'open',
+        urls: 'https://dailynews.lk/\nhttps://dailymirror.lk/\nhttps://island.lk/',
+      }),
+    })
+  })
+
+  it('browserUse without an address does not downgrade to web search or invent a URL', () => {
+    expect(initialToolRequestForOwnerText('what does the page say about pricing', { browserUse: true })).toBeNull()
   })
 
   it('an empty hint set is identical to no hint at all', () => {

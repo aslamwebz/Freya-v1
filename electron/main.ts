@@ -1,7 +1,7 @@
 import { CapabilitySettingsStore } from './capabilitySettings'
 import { readRuntimeCapabilityRegistry } from '../core/model/capability-runtime'
 import type { CapabilityPreferences } from '../core/capabilities'
-import { app, BrowserWindow, WebContentsView, ipcMain, screen, shell, safeStorage, Notification } from 'electron'
+import { app, BrowserWindow, WebContentsView, ipcMain, protocol, screen, shell, safeStorage, Notification } from 'electron'
 import { join, resolve } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
@@ -31,7 +31,7 @@ import { voiceCapabilityReadiness, effectiveVoiceSettings, gateVoiceInput, gateV
 import { LocalWhisperHost } from './localWhisper'
 import { LocalWakeHost } from './localWake'
 import { MicrophoneGate } from './microphoneGate'
-import { VoiceConfigStore } from './voiceConfig'
+import { DEFAULT_VOICE_CONFIG, VOICE_FOLLOW_UP_WINDOW_MS, VoiceConfigStore, type VoiceConfigPatch } from './voiceConfig'
 import { DEFAULT_VOICE_SETTINGS } from '../core/voice/settings'
 import { buildLocalWakeGate } from '../core/voice/wake'
 import {
@@ -49,6 +49,7 @@ import type { GrantFact } from '../core/devicehands'
 import type { BrowserResult } from '../core/browser'
 import { normaliseBrowserDockRequest, normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
 import { createEmbeddedBrowserSurface } from './browser/embeddedSurface'
+import { createScreenshotResource } from './browser/screenshotResource'
 import { normaliseSemanticBrowserRequest } from './browser/semanticRequest'
 import { clampSurfaceBounds, createBrowserService, type BrowserService } from '../core/browser/service'
 import { EncryptedConversationStore } from '../core/conversation/encrypted-store'
@@ -92,6 +93,7 @@ let coreHost: ElectronCoreHost | null = null
  */
 let voiceConfig: VoiceConfigStore | null = null
 const rawVoicePreferences = () => voiceConfig?.current ?? DEFAULT_VOICE_SETTINGS
+const legacyVoicePreferences = () => voiceConfig?.legacyCurrent ?? DEFAULT_VOICE_CONFIG
 const voiceReadiness = (): CapabilityReadiness => voiceCapabilityReadiness({ platformAvailable: voiceOutput.platformAvailable, localInstalled: localWhisper.installed, nanoKeyPresent: !!process.env.NANOGPT_API_KEY?.trim(), remoteAudioEnabled: rawVoicePreferences().remoteAudioEnabled })
 const selectedVoice = (): EffectiveVoiceSettings => effectiveVoiceSettings(rawVoicePreferences(), capabilityPreferences, voiceReadiness())
 const voicePreferences = (): VoiceSettings => selectedVoice().settings
@@ -360,6 +362,20 @@ function mountBrowserService(seam: DualBrowserActivation): void {
     console.warn('[freya] the browser service did not mount: no embedded page factory')
     return
   }
+  // The screenshot resource is a per-session PNG store, served over the
+  // `freya-browser://` custom protocol. We register it on the *renderer* session
+  // (the one the chat surface fetches from), not the Freya Browser session,
+  // because the renderer is what draws the screenshot card.
+  const screenshotResource = createScreenshotResource()
+  if (mainWindow !== null && !mainWindow.isDestroyed()) {
+    try {
+      screenshotResource.register(mainWindow.webContents.session)
+    } catch (error) {
+      // The protocol can already be registered on this session; we ignore that
+      // because the previous instance went away with the previous app launch.
+      void error
+    }
+  }
   const surface = createEmbeddedBrowserSurface({
     create: async (sessionId, partition) => await factory.create(sessionId, partition),
     // The factory docks exactly one view and undocks the rest, so "the front tab" is a fact
@@ -367,6 +383,16 @@ function mountBrowserService(seam: DualBrowserActivation): void {
     place: (sessionId, bounds) => factory.dock(sessionId, bounds),
     partitionFor: (sessionId) => `freya-public-${sessionId}`,
     canEmbed: () => mainWindow !== null && !mainWindow.isDestroyed(),
+    // A capture needs a rect to place the view in. The window's own content
+    // bounds are the honest default: it is the largest area a tab can occupy,
+    // and it is re-derived per capture so a resize or a display move is not
+    // answered with a stale rectangle.
+    contentBounds: () => {
+      const window = mainWindow
+      if (window === null || window.isDestroyed()) return null
+      return clampSurfaceBounds({ x: 0, y: 0, width: window.getContentBounds().width, height: window.getContentBounds().height }, window.getContentBounds())
+    },
+    screenshotResource,
   })
   const journal = coreHost?.deviceHandsJournal() ?? null
   browserService = createBrowserService({
@@ -741,6 +767,11 @@ function requireCore(): ElectronCoreHost {
 function requireProviderConfig(): ProviderConfigStore {
   if (!providerStore) throw new Error('provider config used before the app was ready')
   return providerStore
+}
+
+function requireVoiceConfig(): VoiceConfigStore {
+  if (!voiceConfig) throw new Error('voice config used before the app was ready')
+  return voiceConfig
 }
 
 /**
@@ -1390,6 +1421,44 @@ function registerIpc(): void {
     return saved
   })
 
+  ipcMain.handle('freya:voice-config:read', () => requireVoiceConfig().readLegacy())
+  ipcMain.handle('freya:voice-config:write', async (_event, input: VoiceConfigPatch) => {
+    const saved = await requireVoiceConfig().writeLegacy(input)
+
+    const host = coreHost
+    if (host !== null) {
+      await host.submit({
+        command: 'voice.auto-speak.set',
+        requestId: `voice-config-auto-speak-${Date.now()}`,
+        payload: { enabled: saved.autoSpeak },
+      })
+      await host.submit({
+        command: 'voice.proactive-alerts.set',
+        requestId: `voice-config-proactive-${Date.now()}`,
+        payload: { enabled: saved.proactiveAlerts },
+      })
+      await host.submit({
+        command: 'voice.mute.set',
+        requestId: `voice-config-tts-${Date.now()}`,
+        payload: { muted: saved.ttsProvider === 'off' },
+      })
+      if (saved.ttsVoiceId !== null) {
+        await host.submit({
+          command: 'voice.tts.voice.select',
+          requestId: `voice-config-voice-${Date.now()}`,
+          payload: { voiceId: saved.ttsVoiceId },
+        })
+      }
+      if (saved.wakeProvider === 'off') {
+        await host.submit({
+          command: 'voice.wake.disarm',
+          requestId: `voice-config-wake-${Date.now()}`,
+        })
+      }
+    }
+    return saved
+  })
+
   ipcMain.handle('freya:workspace:load', () => requireWorkspace().load())
   // The whole privileged act of "attach a file": a dialog in this process, a
   // bounded read behind it, and a typed outcome in front of it.
@@ -1675,6 +1744,19 @@ function registerIpc(): void {
   })
 }
 
+// The `freya-browser://` scheme is the only path a window has to fetch a screenshot the
+// main process just captured. It must be registered as privileged before `app.ready`,
+// because the renderer that asks for the screenshot loads over http and a non-privileged
+// custom scheme is rejected by Electron's CORS layer. `standard: true` makes it a same-origin
+// scheme; `supportFetchAPI: true` is what `fetch()` needs; `secure: true` keeps CSP
+// happy on a renderer that ships one.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'freya-browser',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false, codeCache: false },
+  },
+])
+
 app.whenReady().then(async () => {
   if (!ownsProfile) return
   workspace = new WorkspaceFile({
@@ -1866,6 +1948,10 @@ app.whenReady().then(async () => {
         voiceStt: gateVoiceInput(voiceInput, selectedVoice),
         voiceWake: buildLocalWakeGate(),
         voiceAttentionTimeoutMs: () => voicePreferences().attentionTimeoutMs,
+        voiceAutoSpeak: legacyVoicePreferences().autoSpeak,
+        voiceProactiveAlerts: legacyVoicePreferences().proactiveAlerts,
+        voiceMuted: legacyVoicePreferences().ttsProvider === 'off',
+        voiceFollowUpWindowMs: VOICE_FOLLOW_UP_WINDOW_MS,
       },
     )
     registerIpc()
@@ -2083,10 +2169,11 @@ app.on('before-quit', (event) => {
  *   - the browser raised it as a direct result of the user pressing the
  *     microphone control, which is the only code path that calls `getUserMedia`.
  *
- * That is what explicit push-to-talk means at this layer: no ambient recording,
- * no always-on stream, and no way for a window to hold a microphone open between
- * captures. A request at any other time, or for anything other than audio, is
- * refused.
+ * Push-to-talk remains capture-scoped. Hands-free is the one explicit ambient
+ * exception: while the owner has armed it, a local Web Audio meter may keep an
+ * audio stream open for bounded wake detection. No audio leaves that stream until
+ * local speech activity produces one bounded wake clip for Core to transcribe.
+ * A request at any other time, or for anything other than audio, is refused.
  *
  * ## Why there are two handlers
  *
@@ -2128,9 +2215,10 @@ app.on('web-contents-created', (_event, contents) => {
  *
  * Set from **Core's answer**, never from a renderer claim. The renderer opens and
  * closes the device itself — that is where the Web Audio API is — but the host
- * only relaxes the permission gate once the trusted half has agreed a capture is
- * running *and* that the owner turned the microphone on, so a compromised window
- * cannot open a stream by asking nicely and cannot hold one open by asking again.
+ * only relaxes the permission gate once the trusted half has agreed either a
+ * bounded capture is running or the owner explicitly armed hands-free, and the
+ * microphone is enabled. Disarming hands-free or STOP ALL closes that ambient
+ * permission again immediately.
  */
 
 const microphoneGate = new MicrophoneGate()
@@ -2155,6 +2243,7 @@ function trackVoiceCapture(envelope: CoreCommandEnvelope, _result: { ok: boolean
     case 'voice.capture.cancel':
     case 'voice.mic.enable':
     case 'voice.mic.disable':
+    case 'voice.permission.request':
     case 'voice.permission.report':
     case 'voice.tts.cancel':
     case 'voice.wake.arm':

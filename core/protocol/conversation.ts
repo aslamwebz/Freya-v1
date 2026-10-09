@@ -16,6 +16,7 @@ import type { ConversationPersistenceMode } from '../conversation/store'
 
 /** One rendered message. The full content, because this is the transcript. */
 import type { MediaItem } from '../media/types'
+import type { ToolSource, ChartSpec, CanvasSpec } from '../mind/tools'
 export interface ConversationMessageView {
   messageId: string
   role: 'user' | 'assistant'
@@ -30,6 +31,29 @@ export interface ConversationMessageView {
    * reader must not treat "absent" as "empty" without saying which it means.
    */
   media?: readonly MediaItem[]
+  /**
+   * Web search sources behind this answer, as typed rows.
+   *
+   * The renderer splits this into "matched" (cited in the answer prose) and
+   * "related" (the rest of what the search returned) at draw time. Absent when
+   * the turn did not call the web search tool.
+   */
+  sources?: readonly ToolSource[]
+  /**
+   * Typed charts the model produced for this answer.
+   *
+   * The renderer draws these; the journal keeps them as data. A chart that came
+   * back from a tool is the only honest way to display a series: a renderer that
+   * read numbers out of prose would be drawing from a guess, not a measurement.
+   */
+  charts?: readonly ChartSpec[]
+  /**
+   * Long-form artifact the model opened beside this answer, if any.
+   *
+   * The renderer opens a side panel for it. Absent on a turn that did not call
+   * the canvas tool.
+   */
+  canvas?: CanvasSpec
 }
 
 export interface ConversationSummaryView {
@@ -155,13 +179,14 @@ export interface ConversationProjection {
  * host-side matter and does not cross.
  */
 export interface VoiceProjection {
-  attention?: { active: boolean }
   /** The machine's actual position. Never inferred by the renderer. */
   state: VoiceStateView
   /** Whether the owner has turned the microphone on. False from construction. */
   micEnabled: boolean
   /** What the operating system last reported. `unknown` until it reports at all. */
   permission: 'unknown' | 'granted' | 'denied' | 'revoked'
+  /** True only inside Core's short-lived permission acquisition window. */
+  permissionRequestOpen: boolean
   capturing: boolean
   sessionId: string | null
   /**
@@ -204,6 +229,19 @@ export interface VoiceProjection {
    * and nothing else. Turning voice on does not turn this on.
    */
   autoSubmit: boolean
+  /** Whether a stored answer should be read after a voice-submitted turn. */
+  autoSpeak: boolean
+  /**
+   * Conversational attention is process-local. A restart always returns to
+   * standby; the follow-up window only exists after the wake phrase was heard.
+   */
+  attention: {
+    active: boolean
+    state: 'standby' | 'attentive'
+    wakePhrase: 'Freya'
+    attentiveUntil: string | null
+    followUpWindowMs: number
+  }
   wake: {
     armed: boolean
     available: boolean
@@ -215,7 +253,7 @@ export interface VoiceProjection {
      * speech-activity gate and no wake-phrase model, and the type is where that
      * fact is written down.
      */
-    kind: 'speech-activity' | 'keyword'
+    kind: 'speech-activity' | 'keyword' | 'wake-phrase'
     detail: string
     maxArmedMs: number
   }
@@ -294,4 +332,6 @@ export type VoiceCommandOutcome =
   | { operation: 'voice-selected'; voiceId: string }
   | { operation: 'voices'; voices: readonly { voiceId: string; label: string; language: string | null; isDefault: boolean | null }[] }
   | { operation: 'auto-submit'; enabled: boolean }
+  | { operation: 'auto-speak'; enabled: boolean }
+  | { operation: 'proactive-alerts'; enabled: boolean }
   | { operation: 'refused'; reason: string }

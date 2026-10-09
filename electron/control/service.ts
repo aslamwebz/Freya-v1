@@ -23,6 +23,7 @@
 import type { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import type { ElectronCoreHost } from '../coreHost'
+import type { TurnIntentHints } from '../../core/mind/tool-intent'
 import type { BrowserService } from '../../core/browser/service/service'
 import {
   ALL_METHODS,
@@ -92,6 +93,26 @@ function payloadObject(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>
 }
 
+/**
+ * Read the owner's tool directives off an external request.
+ *
+ * The same closed shape the renderer sends, read the same way Core reads it: a
+ * malformed value returns `undefined` and the turn is routed from its own words,
+ * rather than being refused or silently rewritten. An external caller that
+ * names either directive is making the same choice the composer's two buttons
+ * make, and nothing more: Guard still decides whether the tool is allowed.
+ */
+function readIntentHints(value: unknown): TurnIntentHints | undefined {
+  const obj = payloadObject(value)
+  if (obj === null) return undefined
+  let webSearch: boolean | undefined
+  let browserUse: boolean | undefined
+  if (typeof obj['webSearch'] === 'boolean') webSearch = obj['webSearch']
+  if (typeof obj['browserUse'] === 'boolean') browserUse = obj['browserUse']
+  if (webSearch === undefined && browserUse === undefined) return undefined
+  return { ...(webSearch === undefined ? {} : { webSearch }), ...(browserUse === undefined ? {} : { browserUse }) }
+}
+
 function asCaller(value: unknown): CallerIdentity {
   const obj = payloadObject(value)
   if (obj === null) return { kind: 'unspecified' }
@@ -158,7 +179,12 @@ export class ControlService {
           if (conversationId === null || text === null) {
             return err(id, structured('INVALID_REQUEST', 'conversationId and text are required'))
           }
-          return ok(id, await this.sendTurn(conversationId, text, caller))
+          // The owner's tool directives, forwarded rather than derived. Without this the
+          // external plane can only say the words a turn would need to trip the router;
+          // with it, "use the browser" travels as the explicit decision it is, exactly as
+          // the composer's two buttons send it from inside Freya.
+          const intents = readIntentHints(params.intents)
+          return ok(id, await this.sendTurn(conversationId, text, caller, intents))
         }
 
         case 'browser.status':
@@ -177,6 +203,29 @@ export class ControlService {
           const tabId = payloadString(params.tabId, 'tabId', 128)
           if (tabId === null) return err(id, structured('INVALID_REQUEST', 'tabId is required'))
           return ok(id, await this.activateBrowserTab(tabId))
+        }
+        case 'browser.screenshot': {
+          // The bytes stay in the host: what crosses the pipe is the capture's
+          // own facts, so a shell caller learns the same thing the model does.
+          const tabId = typeof params.tabId === 'string' && params.tabId !== '' ? payloadString(params.tabId, 'tabId', 128) : undefined
+          if (tabId === null) return err(id, structured('INVALID_REQUEST', 'tabId is invalid'))
+          const capture = await this.screenshotBrowserTab(tabId ?? undefined)
+          if (capture.ok !== true) return ok(id, capture)
+          return ok(id, {
+            ok: true,
+            op: 'screenshot',
+            data: {
+              tabId: capture.data.tabId,
+              url: capture.data.url,
+              title: capture.data.title,
+              revision: capture.data.revision,
+              width: capture.data.width,
+              height: capture.data.height,
+              bytes: capture.data.bytes,
+              mediaUrl: capture.data.mediaUrl,
+              pngBase64: capture.data.pngBase64,
+            },
+          })
         }
 
         case 'mission.list':
@@ -319,7 +368,7 @@ export class ControlService {
     return result
   }
 
-  private async sendTurn(conversationId: string, text: string, caller: CallerIdentity) {
+  private async sendTurn(conversationId: string, text: string, caller: CallerIdentity, intents?: TurnIntentHints) {
     const result = await this.deps.coreHost.submit({
       command: 'conversation.turn.submit',
       requestId: `ctrl-${randomUUID()}`,
@@ -331,6 +380,7 @@ export class ControlService {
         // The field is dropped by Core today; it is kept here as a future hook
         // and as documentation of the caller's intent.
         ...attributionField(caller),
+        ...(intents === undefined ? {} : { intents }),
       },
     })
     return result
@@ -359,6 +409,23 @@ export class ControlService {
       return { ok: false, code: 'BROWSE_DENIED', reason: 'the browser service is not mounted' }
     }
     return service.run({ op: 'activate', tabId })
+  }
+
+  /**
+   * Capture the front tab as PNG.
+   *
+   * A read, not an action: the pixels exist either way, and the STOP-ALL gate is
+   * about stopping acts. It routes through the same service the renderer and the
+   * Mind use, so a capture from the shell is the same capture the model asks for,
+   * with the same refusals — including the one that matters most, that a tab
+   * whose view is not on screen has no pixels to capture.
+   */
+  private screenshotBrowserTab(tabId?: string) {
+    const service = this.deps.getBrowserService()
+    if (service === null) {
+      return Promise.resolve({ ok: false, code: 'BROWSE_DENIED', reason: 'the browser service is not mounted' } as const)
+    }
+    return service.run({ op: 'screenshot', ...(tabId === undefined ? {} : { tabId }) })
   }
 }
 

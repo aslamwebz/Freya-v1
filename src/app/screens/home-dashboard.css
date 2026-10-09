@@ -383,12 +383,12 @@
     `max-height + overflow-y: auto` and a small JS resize hook elsewhere. */
 .hd-dashboard .hd-input textarea {
   display: block; width: 100%; min-height: 22px; max-height: 160px; overflow-y: auto;
-  color: #edf6ff; border: 0; outline: none; background: none; resize: none;
+  color: #eaf2fb; border: 0; outline: none; background: none; resize: none;
   font: inherit; font-size: 15px; line-height: 20px; padding: 4px 0;
 }
-.hd-dashboard .hd-input textarea::placeholder { color: #c0cada; opacity: .9; }
-.hd-input-count { position: absolute; right: 0; top: -18px; font-size: 10px; color: #8fb4c9; }
-.hd-input:focus-within { border-color: #bafaff; }
+.hd-dashboard .hd-input textarea::placeholder { color: #7c93a8; opacity: .9; }
+.hd-input-count { position: absolute; right: 0; top: -18px; font-size: 10px; color: #7c93a8; }
+.hd-input:focus-within { border-color: var(--chat-heading); }
 .hd-tools { display: flex; align-items: center; gap: 5px; }
 .hd-dashboard .hd-tool { display: flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; font-size: 10px; border: 1px solid #54789080; border-radius: 14px; background: #06111b80; color: #c9dced; white-space: nowrap; }
 .hd-dashboard .hd-tool:hover { color: #fff; border-color: #73bad9b0; }

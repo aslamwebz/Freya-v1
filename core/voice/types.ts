@@ -211,9 +211,13 @@ export interface VoiceTranscriptFragment {
 }
 
 /** One open capture. At most one exists at a time. */
+export type VoiceCaptureActivation = 'explicit' | 'wake'
+
 export interface VoiceCaptureSession {
   sessionId: string
   startedAt: string
+  /** Explicit push-to-talk, or a hands-free speech clip after the owner armed wake. */
+  activation: VoiceCaptureActivation
   format: typeof VOICE_FORMAT
   sampleRate: number
   channels: number

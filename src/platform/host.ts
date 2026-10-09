@@ -13,6 +13,7 @@ import type { ConversationProjection, VoiceProjection } from '../../core/protoco
 import type { VoiceTranscriptFragment } from '../../core/voice/types'
 import type { VoiceOutputInstruction } from '../../electron/voiceHost'
 import type { VoiceSettings } from '../../core/voice/settings'
+import type { VoiceConfig, VoiceConfigPatch } from '../../electron/voiceConfig'
 import type { BrainProjection } from '../../core/brain/brain'
 import type { WorkProjection } from '../../core/work/projection'
 import type { MissionProjection } from '../../core/missions/types'
@@ -197,6 +198,15 @@ export interface FreyaHostBridge {
    */
   providerConfig(): Promise<ProviderConfigView>
   saveProviderConfig(input: ProviderConfigPatch): Promise<ProviderConfigView>
+
+  /**
+   * Voice has its own configuration, independent of the Chat model selector.
+   *
+   * No key crosses here. NanoGPT STT reuses the main-process NanoGPT credential;
+   * this surface chooses only voice provider/model/privacy/output preferences.
+   */
+  voiceConfig(): Promise<VoiceConfig>
+  saveVoiceConfig(input: VoiceConfigPatch): Promise<VoiceConfig>
 
   coreSubmit(command: CoreCommandName, payload?: unknown): Promise<CoreCommandResult>
   coreStatus(): Promise<CoreStatus>

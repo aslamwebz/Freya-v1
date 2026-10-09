@@ -274,3 +274,25 @@ Browser Service acceptance:
 Freya's answer is not the source of truth. Core state, Browser Service state, the conversation journal, and the actual visible UI are the source of truth.
 
 A live acceptance task succeeds only when the state confirms the claimed action happened.
+
+## Reuse a running Electron instance for fast live checks
+
+Use the existing isolated Freya Electron instance on localhost CDP 9234. Do not
+rebuild or relaunch Electron for each browser check. From Freya-main:
+
+    node scripts/live-browser-reuse.mjs
+    node scripts/live-browser-reuse.mjs --local
+
+The default checks CDP connectivity, the actual Freya renderer, the isolated
+control profile, Browser Service status/tabs, and external DNS readiness.
+`--local` starts an ephemeral localhost HTML fixture (no external DNS), then
+asks the real Browser Service to open, dock, scroll, snapshot, and click its
+Contact Us link. Playwright CDP is used only to attach to the existing Freya
+renderer; it does not fake service actions or start a new Electron process.
+
+The runner deliberately marks Contact navigation as failed if Browser Service
+never reports the final /contact URL, even when click reports ok. It also
+reports DNS lookup failures independently, so a local integration pass is not
+mistaken for the ten-Sri-Lankan-site acceptance. A new fixture tab is created
+on each --local invocation and remains in the current Browser Service; running
+this check repeatedly is not a substitute for a clean acceptance profile.

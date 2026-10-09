@@ -11,7 +11,8 @@ import { coreMirror, ensureActivityAttached } from '../../platform/coreClient'
 import { researchMirror } from '../../platform/researchClient'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import type { WorkspaceResearchView } from './modes'
-import { RichMessage, plainTextFromRich, type RichCitation } from './RichMessage'
+import { plainTextFromRich, type RichCitation } from './RichMessage'
+import { copyText } from './clipboard'
 import { AssistantMessageView } from './AssistantMessageView'
 import { CanvasPanel } from './CanvasPanel'
 import { MediaGrid } from './MediaCards'
@@ -113,6 +114,7 @@ function AnswerActions({ content, canSpeak, speaking, onSpeak, onStop }: {
   readonly onStop: () => void
 }) {
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
   const timer = useRef<number | null>(null)
   useEffect(() => () => {
     if (timer.current !== null) window.clearTimeout(timer.current)
@@ -120,31 +122,18 @@ function AnswerActions({ content, canSpeak, speaking, onSpeak, onStop }: {
 
   const copy = async (): Promise<void> => {
     const text = plainTextFromRich(content)
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text)
-      } else {
-        const area = document.createElement('textarea')
-        area.value = text
-        area.setAttribute('readonly', '')
-        area.style.position = 'fixed'
-        area.style.opacity = '0'
-        document.body.appendChild(area)
-        area.select()
-        document.execCommand('copy')
-        document.body.removeChild(area)
-      }
-      setCopied(true)
-      if (timer.current !== null) window.clearTimeout(timer.current)
+    const succeeded = await copyText(text)
+    setCopied(succeeded)
+    setCopyFailed(!succeeded)
+    if (timer.current !== null) window.clearTimeout(timer.current)
+    if (succeeded) {
       timer.current = window.setTimeout(() => setCopied(false), 1500)
-    } catch {
-      // A failed copy is not a render error; the reader will retry.
     }
   }
 
   return (
     <div className="chats-actions">
-      <button type="button" onClick={() => void copy()} aria-label="Copy answer">{copied ? 'Copied' : 'Copy'}</button>
+      <button type="button" onClick={() => void copy()} aria-label="Copy answer" aria-live="polite">{copied ? 'Copied' : copyFailed ? 'Copy failed' : 'Copy'}</button>
       {canSpeak ? (
         <button
           type="button"
@@ -458,25 +447,16 @@ export function Chats({
                 <div className="chats-turn-content">
                   <div className="chats-bubble">
                     {message.role === 'assistant'
-                      ? ((message.sources?.length ?? 0) > 0 || (message.charts?.length ?? 0) > 0
-                          ? <AssistantMessageView
+                      ? <AssistantMessageView
                               content={message.content}
                               onOpenLink={(url, provenance) => onBrowserOpenUrl(url, { kind: 'link', from: provenance?.kind === 'source' || provenance?.kind === 'citation' ? 'citation' : 'chat', ownerText })}
                               retrieved={media.length}
                               mediaCount={media.length}
                               sources={message.sources}
+                              citations={citations}
                               charts={message.charts}
                               steps={message.steps}
                             />
-                          : <RichMessage
-                              content={message.content}
-                              citations={citations}
-                              onOpenLink={(url, provenance) => onBrowserOpenUrl(url, { kind: 'link', from: provenance?.kind === 'source' || provenance?.kind === 'citation' ? 'citation' : 'chat', ownerText })}
-                              enableCodeCopy
-                              enableToc
-                              collapseAbove={2400}
-                              provenance={media.length > 0 ? { retrieved: media.length } : undefined}
-                            />)
                       : <p className="chats-user-text">{message.content}</p>}
                     {/* What the lookups behind this answer returned. Drawn from the
                         message Core stored, never recovered from the prose: a card needs

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { copyText } from './clipboard'
 
 /**
  * One numbered source an answer can cite inline.
@@ -303,31 +304,18 @@ export function inlineRichText(text: string, onOpenLink?: (url: string, provenan
 
 function CodeBlock({ language, text, enableCopy }: { language?: string; text: string; enableCopy: boolean }) {
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
   const timer = useRef<number | null>(null)
   useEffect(() => () => {
     if (timer.current !== null) window.clearTimeout(timer.current)
   }, [])
   const onCopy = async () => {
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text)
-      } else {
-        // Fallback for environments without the clipboard API (older WebViews, some tests).
-        const area = document.createElement('textarea')
-        area.value = text
-        area.setAttribute('readonly', '')
-        area.style.position = 'fixed'
-        area.style.opacity = '0'
-        document.body.appendChild(area)
-        area.select()
-        document.execCommand('copy')
-        document.body.removeChild(area)
-      }
-      setCopied(true)
-      if (timer.current !== null) window.clearTimeout(timer.current)
+    const succeeded = await copyText(text)
+    setCopied(succeeded)
+    setCopyFailed(!succeeded)
+    if (timer.current !== null) window.clearTimeout(timer.current)
+    if (succeeded) {
       timer.current = window.setTimeout(() => setCopied(false), 1500)
-    } catch {
-      // A failed copy is not a render error; the user will retry.
     }
   }
   return (
@@ -343,7 +331,7 @@ function CodeBlock({ language, text, enableCopy }: { language?: string; text: st
               aria-live="polite"
               data-copied={copied || undefined}
             >
-              {copied ? 'Copied' : 'Copy'}
+              {copied ? 'Copied' : copyFailed ? 'Copy failed' : 'Copy'}
             </button>
           ) : null}
         </figcaption>

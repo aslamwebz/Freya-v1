@@ -4,8 +4,8 @@
 
 | Phase | Status | Tests | Commit |
 |---|---|---|---|
-| 1. Chat Shell | Complete | 372 focused tests; full TypeScript; scoped lint; renderer/desktop build; live provider and restart checks | `feat(chat): complete shell navigation and durable selection` |
-| 2. Rendering | Not started | — | — |
+| 1. Chat Shell | Complete | 372 focused tests; full TypeScript; scoped lint; renderer/desktop build; live provider and restart checks | `295b436` |
+| 2. Rendering | Complete | 567 focused tests; full TypeScript; scoped lint; renderer/desktop build; live rich formats, copy and encrypted restart | Scoped rendering commit |
 | 3. Research | Not started | — | — |
 | 4. Right Workspace | Not started | — | — |
 | 5. Composer | Not started | — | — |
@@ -54,6 +54,61 @@ original Mind source via a scratch transform, so they are recorded as baseline f
 They are not counted as passing. Renderer build also retains existing `node:net`
 externalization and large-chunk warnings.
 
+### Phase 2 audit and implementation sequence
+
+Reuse `RichMessage`, `AssistantMessageView`, typed `MediaGrid`/`ChartView`,
+`AnswerActions`, and the existing browser link seam. Markdown/code/table/TOC,
+copy/read-aloud, role styling, images and chart payloads already exist. Core does
+not currently project token chunks; preserve its real working state rather than
+simulate streaming.
+
+- [x] Add failing renderer regressions for steps-only turns and unverified prose footers.
+- [x] Use the existing assistant renderer for every assistant message, retaining media citations.
+- [x] Build execution trace exclusively from typed steps, honoring executed/outcome without calling every tool a lookup.
+- [x] Show old prose footers as unverified text, never trusted execution or source cards.
+- [x] Wire numbered citations to actual typed source ranks and keep source actions in Freya's browser seam.
+- [x] Preserve typed sources/charts/canvas in the existing Vault message transaction; migrate existing rows without recovering claims from prose.
+- [x] Verify rich formats, real provider rendering, copy, typechecks, scoped lint and build; review inline and commit.
+
+Live acceptance exposed Vault's missing artifact columns. Migration 7 adds one nullable
+typed-artifacts column inside the existing encrypted database. Its decoder checks
+closed field shapes, URLs, numeric points and existing Mind size limits. Old messages
+retain null metadata. A SQL round-trip/reopen regression and a version-6 migration
+check cover this gap. The first live formatting prompt also exposed a separate
+research-router limitation: a negated “web search” phrase triggers a search. Track
+negation handling in Phase 3; do not claim that request avoided retrieval.
+
+### Phase 2 evidence and limitations
+
+The real provider produced a heading, fenced JSON and table in one turn, followed
+by an actual `make_chart` call with A=2, B=4, C=3 in the same conversation. Core's
+typed execution record reports that tool ran successfully; the UI renders three
+bars. Missing or malformed chart input now records a failed call rather than a
+successful empty chart. Valid point arrays retain the existing request-size budget
+instead of being truncated at the shorter default argument limit.
+
+The feature browser denies the Clipboard API even with focus. Answer/code actions
+now try their existing selection-based fallback on that denial and confirm success
+only when a copy method succeeds. Regression tests cover denial with both successful
+and refused fallback, and the live application confirms both answer and code copy.
+No permission policy was changed.
+
+`scripts/chat-rendering-acceptance.mjs` supports a new real-provider conversation,
+`--existing` verification without sending a replacement turn, and `--restored`
+verification after a full feature restart. The final restart preserves the selected
+conversation, every message identity, chart values and actual tool records in the
+encrypted Vault. Evidence: `artifacts/live-visible/chat-evolution/phase2.json`,
+`chat-rendering.png`, and `chat-rendering-chart.png` (ignored local artifacts).
+
+Validation: 53 files / 567 tests pass across UI, chat semantics, native Vault,
+tool-loop truth and chart tools; all three TypeScript projects, scoped ESLint,
+diff checks and both builds pass. SQLCipher wrong-key diagnostics occur in expected
+negative tests. The three previously recorded broader Mind failures and build
+warnings remain baseline limitations. Live media/attachments, research context,
+and browser execution integration belong to the later phases; this iteration does
+not claim full eight-phase acceptance. Next: Phase 3 research context resolution,
+negation routing, typed source continuity and real retrieval failure handling.
+
 You are Codex WORKING DIRECTLY on the Windows local repo in this newly created dedicated worktree:
 C:\Users\you\Desktop\AI\Freya-chat-evolution
 Branch: feature/chat-evolution-8-phases, derived from local main at commit 8b4aed6 (the latest at task start).
@@ -86,3 +141,56 @@ This is an implementation assignment, NOT merely an audit, prompt draft, mockup,
 - Run focused tests, full relevant typechecks, and build if feasible. CI may have baseline lint errors; distinguish pre-existing errors from regressions.
 - Commit scoped verified code on feature/chat-evolution-8-phases. Provide a final concise report with exact changed files, commit(s), passing/failing tests, phase status, and precise next steps for Phase 2.
 - Do NOT interact with the existing user's production Electron instance; if live testing is safe, use an isolated app/profile and don't leave it running.
+
+## Exact changed-file inventory
+
+Phase 1 (295b436):
+
+- `FreyaChatDebug.cmd`
+- `core/conversation/service.ts`
+- `core/events/envelope.ts`
+- `core/events/validate.ts`
+- `core/index.ts`
+- `core/mind/mind.ts`
+- `core/protocol/activity.ts`
+- `core/protocol/conversation.ts`
+- `core/protocol/core-protocol.ts`
+- `docs/chat-evolution-8-phases.md`
+- `electron/preload.ts`
+- `scripts/chat-shell-acceptance.mjs`
+- `src/app/App.tsx`
+- `src/app/chat/ChatHistory.tsx`
+- `src/app/chat/ChatSidebarResize.tsx`
+- `src/app/chat/Chats.tsx`
+- `src/app/entry.tsx`
+- `src/app/screens/HomeDashboard.tsx`
+- `src/app/screens/home-dashboard.css`
+- `src/platform/conversationClient.ts`
+- `startup.md`
+- `tests/core/chat-session-semantics.test.ts`
+- `tests/unit/app/chatAvailability.test.tsx`
+- `tests/unit/app/chatFailures.test.tsx`
+- `tests/unit/app/chatHistory.test.tsx`
+- `tests/unit/app/chatSidebarResize.test.tsx`
+- `tests/unit/app/conversationConnection.test.ts`
+
+Phase 2 (scoped rendering commit):
+
+- `core/conversation/artifacts.ts`
+- `core/mind/tools.ts`
+- `core/protocol/conversation.ts`
+- `core/vault/repositories/conversation-store.ts`
+- `core/vault/schema.ts`
+- `docs/chat-evolution-8-phases.md`
+- `scripts/chat-rendering-acceptance.mjs`
+- `src/app/chat/AssistantMessageView.tsx`
+- `src/app/chat/assistantParts.ts`
+- `src/app/chat/chat.css`
+- `src/app/chat/Chats.tsx`
+- `src/app/chat/clipboard.ts`
+- `src/app/chat/RichMessage.tsx`
+- `tests/core/mind/chart-tool.test.ts`
+- `tests/core/vault/vault-conversation-sql.test.ts`
+- `tests/unit/app/assistantMessageView.test.tsx`
+- `tests/unit/app/chatRendering.test.tsx`
+- `tests/unit/app/richMessage.test.tsx`

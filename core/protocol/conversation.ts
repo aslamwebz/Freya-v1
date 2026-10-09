@@ -57,8 +57,8 @@ export interface ConversationMessageView {
   /**
    * The loop's own record of the tool steps this turn ran, in order.
    *
-   * The renderer prefers this list over the content-parsed footer for the
-   * "What Freya did" section: the loop's record is the truth about what the
+   * The renderer uses only this list for the "What Freya did" section:
+   * the loop's record is the truth about what the
    * Mind did, the model's prose is only its account. Absent on a turn that
    * looked nothing up and always absent on a user message.
    */

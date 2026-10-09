@@ -1,8 +1,13 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { RichMessage, parseRichBlocks } from '../../../src/app/chat/RichMessage'
 
-afterEach(cleanup)
+const originalExecCommand = Object.getOwnPropertyDescriptor(document, 'execCommand')
+afterEach(() => {
+  cleanup()
+  if (originalExecCommand) Object.defineProperty(document, 'execCommand', originalExecCommand)
+  else Reflect.deleteProperty(document, 'execCommand')
+})
 
 /**
  * jsdom does not implement `navigator.clipboard`. The copy handler in
@@ -20,6 +25,26 @@ function clipboardSpy(): ReturnType<typeof vi.fn> {
 }
 
 describe('RichMessage', () => {
+  it('copies code through the existing browser fallback when clipboard permission is denied', async () => {
+    clipboardSpy().mockRejectedValue(new Error('Write permission denied'))
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: () => {
+      expect(document.querySelector('textarea')?.value).toBe('{"A":2}')
+      return true
+    } })
+    render(<RichMessage enableCodeCopy content={'```json\n{"A":2}\n```'} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument())
+    expect(document.querySelector('textarea')).toBeNull()
+  })
+
+  it('reports failed copy when neither clipboard method succeeds', async () => {
+    clipboardSpy().mockRejectedValue(new Error('Write permission denied'))
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: () => false })
+    render(<RichMessage enableCodeCopy content={'```text\nAnswer\n```'} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy failed' })).toBeInTheDocument())
+    expect(document.querySelector('textarea')).toBeNull()
+  })
   it('renders the supported rich subset as real nodes without interpreting HTML', () => {
     render(<RichMessage content={'# Heading\n\n**bold** and `code`\n\n- one\n- two\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n<script>danger()</script>'} />)
 

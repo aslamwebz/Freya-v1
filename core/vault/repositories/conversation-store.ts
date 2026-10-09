@@ -2,6 +2,7 @@ import { MEDIA_LIMITS, type MediaItem } from '../../media/types'
 import { safeVideoEmbed } from '../../media/collect'
 import type { ToolStepRecord } from '../../mind/tools'
 import { CAPABILITIES } from '../../protocol/core-protocol'
+import { decodeMessageArtifacts, encodeMessageArtifacts } from '../../conversation/artifacts'
 import {
   ConversationStoreError,
   type ConversationStore,
@@ -101,7 +102,7 @@ export class VaultConversationStore implements ConversationStore {
       const conversation = decodeConversation(row)
       const messages = this.vault
         .all<MessageRow>(
-          `SELECT message_id, conversation_id, role, content, created_at, turn_id, media, steps
+          `SELECT message_id, conversation_id, role, content, created_at, turn_id, media, steps, artifacts
            FROM chat_messages WHERE conversation_id = ?
            ORDER BY created_at ASC, message_id ASC`,
           [id],
@@ -141,8 +142,8 @@ export class VaultConversationStore implements ConversationStore {
           throw new ConversationStoreError('not-found', `no such conversation: ${value.conversationId}`)
         }
         tx.run(
-          `INSERT INTO chat_messages (message_id, conversation_id, role, content, created_at, turn_id, media, steps)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO chat_messages (message_id, conversation_id, role, content, created_at, turn_id, media, steps, artifacts)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             value.messageId,
             value.conversationId,
@@ -162,6 +163,7 @@ export class VaultConversationStore implements ConversationStore {
             value.steps === undefined || value.steps.length === 0
               ? null
               : JSON.stringify(value.steps),
+            encodeMessageArtifacts(value),
           ],
         )
       })
@@ -322,6 +324,7 @@ interface MessageRow {
   media: string | null
   /** Nullable JSON: the loop's own record of what it did, when it did something. */
   steps: string | null
+  artifacts: string | null
 }
 
 interface TurnRow {
@@ -375,6 +378,7 @@ function decodeMessage(row: MessageRow, conversationId: string): ConversationMes
     turnId: row.turn_id,
     ...decodeMedia(row.media, row.message_id),
     ...decodeSteps(row.steps, row.message_id),
+    ...decodeMessageArtifacts(row.artifacts),
   })
 }
 

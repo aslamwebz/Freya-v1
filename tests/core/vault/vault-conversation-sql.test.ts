@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { Vault, VaultTransaction } from '../../../core/vault'
 import { VaultConversationStore } from '../../../core/vault'
 import { VAULT_MIGRATIONS, VAULT_SCHEMA_VERSION, applyMigrations } from '../../../core/vault/schema'
-import type { ConversationTurn } from '../../../core/conversation/types'
+import type { ConversationMessage, ConversationTurn } from '../../../core/conversation/types'
 import { openMemoryConnection } from './sql-adapter'
 
 let connection: ReturnType<typeof openMemoryConnection>
@@ -74,6 +74,56 @@ describe('Vault conversation schema', () => {
 })
 
 describe('VaultConversationStore', () => {
+  it('retains typed sources, charts and canvas across a repository reopen', async () => {
+    const vault = harnessVault()
+    const store = new VaultConversationStore(vault)
+    await store.putConversation({ conversationId: 'c1', title: 'Artifact chat', createdAt: '2026-10-05T12:00:00Z', updatedAt: '2026-10-05T12:00:00Z' })
+    const message: ConversationMessage = {
+      messageId: 'm1', conversationId: 'c1', role: 'assistant', content: 'Fact [3] and a chart.', turnId: 't1', createdAt: '2026-10-05T12:00:01Z',
+      sources: [{ title: 'Retrieved page', url: 'https://example.com/source', sourceDomain: 'example.com', snippet: 'Retrieved fact', rank: 3, retrievedAt: null }],
+      charts: [{ title: 'Supplied values', kind: 'bar', unit: 'count', points: [{ label: 'A', value: 2 }, { label: 'B', value: 4 }] }],
+      canvas: { title: 'Report', kind: 'document', language: 'markdown', content: '# Report\nSupplied values.' },
+    }
+    await store.appendMessage(message)
+    await store.close()
+    const reopened = new VaultConversationStore(vault)
+    expect((await reopened.readConversation('c1'))?.messages[0]).toMatchObject({ sources: message.sources, charts: message.charts, canvas: message.canvas })
+  })
+
+  it('omits malformed stored artifacts while preserving the written answer', async () => {
+    const store = new VaultConversationStore(harnessVault())
+    await store.putConversation({ conversationId: 'c1', title: 'Corrupt metadata', createdAt: '2026-10-05T12:00:00Z', updatedAt: '2026-10-05T12:00:00Z' })
+    await store.appendMessage({ messageId: 'm1', conversationId: 'c1', role: 'assistant', content: 'Written answer retained.', turnId: 't1', createdAt: '2026-10-05T12:00:01Z' })
+    for (const raw of ['not json', JSON.stringify({ sources: [{ title: 'Unsafe', url: 'javascript:alert(1)', sourceDomain: 'invalid', snippet: '', rank: 1, retrievedAt: null }], charts: [{ title: 'Bad chart', kind: 'bar', unit: 'count', points: [{ label: 'A', value: 'made up' }] }], canvas: { title: 'Too large', kind: 'document', language: 'markdown', content: 'x'.repeat(64_001) } })]) {
+      connection.prepare('UPDATE chat_messages SET artifacts = ? WHERE message_id = ?').run([raw, 'm1'])
+      const message = (await store.readConversation('c1'))?.messages[0]
+      expect(message?.content).toBe('Written answer retained.')
+      expect(message?.sources).toBeUndefined()
+      expect(message?.charts).toBeUndefined()
+      expect(message?.canvas).toBeUndefined()
+    }
+  })
+
+  it('upgrades a version 6 conversation without inventing artifacts from its prose', async () => {
+    connection = openMemoryConnection()
+    applyMigrations(connection as never, VAULT_MIGRATIONS.filter(item => item.version <= 6), () => new Date())
+    connection.exec("INSERT INTO chat_conversations VALUES ('c1', 'Existing chat', '2026-10-05T12:00:00Z', '2026-10-05T12:00:00Z', NULL)")
+    connection.exec("INSERT INTO chat_messages (message_id, conversation_id, role, content, created_at, turn_id) VALUES ('m1', 'c1', 'assistant', 'Sources: a claim in old prose', '2026-10-05T12:00:01Z', 't1')")
+    applyMigrations(connection as never, VAULT_MIGRATIONS, () => new Date())
+    const store = new VaultConversationStore(harnessVault())
+    const record = await store.readConversation('c1')
+    expect(record?.conversation.title).toBe('Existing chat')
+    expect(record?.messages[0]?.content).toBe('Sources: a claim in old prose')
+    expect(record?.messages[0]?.sources).toBeUndefined()
+  })
+
+  it('refuses an oversized typed artifact rather than silently losing it', async () => {
+    const store = new VaultConversationStore(harnessVault())
+    await store.putConversation({ conversationId: 'c1', title: 'Bounds', createdAt: '2026-10-05T12:00:00Z', updatedAt: '2026-10-05T12:00:00Z' })
+    await expect(store.appendMessage({ messageId: 'm1', conversationId: 'c1', role: 'assistant', content: 'A report', turnId: 't1', createdAt: '2026-10-05T12:00:01Z', canvas: { title: 'Oversized', kind: 'document', language: 'markdown', content: 'x'.repeat(64_001) } })).rejects.toThrow()
+    expect((await store.readConversation('c1'))?.messages).toHaveLength(0)
+  })
+
   it('round-trips the media an answer carried', async () => {
     // This is the round-trip that was silently lossy. `chat_messages` had no column for
     // media, so a card drew from the live in-memory view and then vanished on the next

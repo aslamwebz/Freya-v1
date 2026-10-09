@@ -876,6 +876,10 @@
 .f-assistant-steps > summary::marker { content:''; }
 .f-assistant-steps > ul { margin:6px 0 0; padding-left:18px; }
 .f-assistant-steps li { margin:2px 0; }
+.f-assistant-source-link:disabled { opacity:.6; cursor:not-allowed; }
+.f-assistant-unverified { color:var(--chat-muted); font-size:11px; }
+.f-assistant-unverified summary { cursor:pointer; color:#d4ba88; }
+.f-assistant-unverified pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; line-height:1.6; }
 
 .f-assistant-related { color:#7c93a8; font-size:11px; }
 .f-assistant-related > summary {

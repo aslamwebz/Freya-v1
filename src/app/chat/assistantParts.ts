@@ -2,7 +2,7 @@
  * Render the loop's own step records as the lines the chat shows in the
  * "What Freya did" panel.
  *
- * Preferring the loop's record over the prose-parsed footer is the only way
+ * Using only the loop's record, never a prose-parsed footer, is the only way
  * the chat can be honest about a turn that narrated an act without
  * performing it: the Mind strips any model-written footer block from the
  * stored content, so the prose no longer carries a forgery, and the panel is
@@ -11,47 +11,27 @@
 import type { ToolStepRecord } from '../../../core/mind/tools'
 
 export function stepRecordsAsFooterLines(steps: readonly ToolStepRecord[]): string[] {
-  const lines: string[] = []
-  for (const step of steps) {
-    const count = step.sourceCount
-    const noun = count === 1 ? 'result' : 'results'
-    const verb = step.outcome === 'ok' ? 'ran' : step.outcome === 'denied' ? 'was NOT PERMITTED' : 'FAILED'
-    if (step.outcome === 'ok') {
-      lines.push(`Used the "${step.tool}" lookup and read ${count} ${noun}.`)
-    } else if (step.outcome === 'denied') {
-      lines.push(
-        `Tried to use the "${step.tool}" lookup and was NOT PERMITTED, so nothing was looked up. ` +
-          `Nothing in the answer above came from a search.`,
-      )
-    } else {
-      lines.push(
-        `Tried to use the "${step.tool}" lookup and it FAILED, so nothing was looked up. ` +
-          `Nothing in the answer above came from a search.`,
-      )
-    }
-    // The "verb" branch above is referenced so the helper is honest about a
-    // non-`ok` outcome: the line the user sees already names it, and the
-    // local `verb` is what `renderToolFooter` would have said in the same
-    // situation. Kept here as a no-op read so a refactor of the wording
-    // cannot silently drop the distinction.
-    void verb
-  }
-  return lines
+  return steps.map(step => {
+    const tool = step.tool.replace(/_/g, ' ')
+    const status = step.outcome === 'denied' ? 'Blocked' : step.outcome === 'failed' ? 'Failed' : 'Completed'
+    const execution = step.executed ? 'tool ran' : 'tool did not run'
+    const sources = step.sourceCount > 0 ? `; ${step.sourceCount} source${step.sourceCount === 1 ? '' : 's'} returned` : ''
+    return `${tool}: ${status} — ${execution}${sources}.`
+  })
 }
 export interface AssistantParts {
   /** Model reasoning. Empty when the model did not emit a thinking block. */
   readonly thinking: string
   /** The actual answer prose, with thinking + steps + sources removed. */
   readonly body: string
-  /** Lines from the "What Freya did for this answer" footer, excluding the
-   *  sources list. Empty when the turn did not run any lookups. */
+  /** Original stored footer text. Parsing it provides no proof of execution. */
+  readonly footer: string
+  /** Unverified lines parsed from the stored footer, excluding its source list. */
   readonly steps: readonly string[]
-  /** Sources the footer listed, as `{ rank, title, url }` triples. Empty
-   *  when the turn had no successful lookups. */
+  /** Unverified source claims parsed from the stored footer. */
   readonly sources: readonly { rank: number; title: string; url: string }[]
   /** The typed sources the Mind attached to this turn. When present, the
-   *  renderer prefers these over the footer-derived `sources` (which can
-   *  drift if the model omits or reorders a line). */
+   *  renderer uses these as evidence rather than footer-derived claims. */
   readonly typedSources?: readonly TypedSource[]
   /** Ranks cited in the answer body, in the order they appear. Used to
    *  split the typed sources into matched and related at render time. */
@@ -109,9 +89,11 @@ export function splitAssistantContent(
 
   // 2. Pull the trailing footer, if present, off the tail.
   let steps: string[] = []
+  let footer = ''
   let sources: { rank: number; title: string; url: string }[] = []
   const footerMatch = working.match(FOOTER_HEAD)
   if (footerMatch !== null && (footerMatch.index ?? -1) >= 0) {
+    footer = footerMatch[0].trim()
     const footerText = footerMatch[1] ?? ''
     const lines = footerText.split('\n')
     const collectedSteps: string[] = []
@@ -186,5 +168,5 @@ export function splitAssistantContent(
     }
   }
 
-  return { thinking, body, steps, sources, typedSources, citedRanks, matchedSources, relatedSources }
+  return { thinking, body, footer, steps, sources, typedSources, citedRanks, matchedSources, relatedSources }
 }

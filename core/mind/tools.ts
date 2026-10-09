@@ -1069,8 +1069,9 @@ export function createChartTool(): MindTool {
       { name: 'unit', description: 'The unit of the value, e.g. "USD billion", "%", "million units".', required: true },
       {
         name: 'points',
-        description: 'The data points as a JSON array of `{ label, value }` pairs, in the order they should be drawn.',
+        description: 'A JSON-encoded string containing an array of `{ label, value }` pairs; value is a finite number. Encode this argument as a string, like every other tool argument.',
         required: true,
+        maxChars: MIND_TOOL_LIMITS.maxRequestChars,
       },
     ],
     async run(request) {
@@ -1104,25 +1105,23 @@ function readChartKind(value: unknown): ChartKind {
 }
 
 function parseChartPoints(value: unknown): readonly ChartPoint[] {
-  if (typeof value !== 'string' || value.trim().length === 0) return []
-  // The model hands us a JSON string. If it cannot be parsed, we do not invent one —
-  // a chart with a guessed data set is a chart with a made-up chart, and the journal
-  // gets to record the empty series.
+  if (typeof value !== 'string' || value.trim().length === 0) throw new Error('Chart points must be supplied as a JSON-encoded array string.')
+  // A malformed series is a failed tool call, not a successful empty chart.
+  // An explicitly supplied [] remains a valid empty series.
   let parsed: unknown
   try {
     parsed = JSON.parse(value)
   } catch {
-    return []
+    throw new Error('Chart points were not valid JSON. Supply a JSON-encoded array string.')
   }
-  if (!Array.isArray(parsed)) return []
+  if (!Array.isArray(parsed)) throw new Error('Chart points must be an array of label/value pairs.')
   const out: ChartPoint[] = []
   for (const entry of parsed) {
-    if (typeof entry !== 'object' || entry === null) continue
+    if (typeof entry !== 'object' || entry === null) throw new Error('Each chart point must contain a label and numeric value.')
     const record = entry as Record<string, unknown>
     const label = record['label']
     const numeric = record['value']
-    if (typeof label !== 'string' || label.length === 0) continue
-    if (typeof numeric !== 'number' || !Number.isFinite(numeric)) continue
+    if (typeof label !== 'string' || label.length === 0 || typeof numeric !== 'number' || !Number.isFinite(numeric)) throw new Error('Each chart point must contain a non-empty label and finite numeric value.')
     out.push({ label, value: numeric })
   }
   return out

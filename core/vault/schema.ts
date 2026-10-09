@@ -14,7 +14,7 @@ import type { NativeConnection } from './binding'
  * with no extra table to bootstrap.
  */
 
-export const VAULT_SCHEMA_VERSION = 6
+export const VAULT_SCHEMA_VERSION = 7
 
 export interface VaultMigrationContext {
   exec(sql: string): void
@@ -306,4 +306,13 @@ export const VAULT_MIGRATIONS: readonly VaultMigration[] = Object.freeze([
     },
   },
 
+  {
+    version: 7,
+    name: 'conversation-artifacts',
+    up: (context) => {
+      // Typed sources/charts/canvas share their message's encrypted transaction.
+      // Existing messages retain null; historical prose cannot manufacture data.
+      context.exec('ALTER TABLE chat_messages ADD COLUMN artifacts TEXT')
+    },
+  },
 ])

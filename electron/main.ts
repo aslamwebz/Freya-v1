@@ -1,7 +1,7 @@
 import { CapabilitySettingsStore } from './capabilitySettings'
 import { readRuntimeCapabilityRegistry } from '../core/model/capability-runtime'
 import type { CapabilityPreferences } from '../core/capabilities'
-import { app, BrowserWindow, WebContentsView, ipcMain, protocol, screen, shell, safeStorage, Notification } from 'electron'
+import { app, BrowserWindow, WebContentsView, ipcMain, protocol, screen, shell, safeStorage, Notification, Tray, Menu } from 'electron'
 import { join, resolve } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
@@ -20,7 +20,7 @@ import { createConnectorRuntime } from './connectors/runtime'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import { pickAttachments } from './attachments'
-import { PresenceHost } from './presence/host'
+import type { PresenceHost } from './presence/host'
 import { createBrowserExtensionHost, type BrowserExtensionHost } from './browserext'
 import { HostVoiceOutput, registerVoiceOutputIpc } from './voiceHost'
 import { HostVoiceInput } from './voiceInput'
@@ -41,7 +41,7 @@ import {
   type DualBrowserActivation,
 } from './browser'
 import { startControl, type ControlHandle } from './control'
-import { installSingleInstanceGuard } from './startup/singleInstance'
+import { focusPrimaryWindow, installSingleInstanceGuard } from './startup/singleInstance'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ProviderConfigInput } from './providerConfig'
 import type { ModelProvider } from '../core/model/provider'
@@ -72,6 +72,12 @@ const EXPLICIT_ENV: NodeJS.ProcessEnv = { ...process.env }
 loadLocalEnv(join(ROOT, '.env'))
 
 let mainWindow: BrowserWindow | null = null
+let adultWindow: BrowserWindow | null = null
+// Keep a process-lifetime reference so the native tray cannot be collected.
+let freyaTray: Tray | null = null
+let desktopMode: 'dashboard' | 'adult' | 'mini-chat' | 'hidden' = 'dashboard'
+let miniChatTransition = 0
+let dashboardRestore: { bounds: Electron.Rectangle; fullscreen: boolean } | null = null
 let dockedBrowserFactory: ElectronFreyaWindowFactory | null = null
 /** Null until the app is ready; every handler that needs it is registered after. */
 let workspace: WorkspaceFile | null = null
@@ -172,6 +178,7 @@ let attentionTimer: ReturnType<typeof setInterval> | null = null
 /** Resolves when the renderer has answered the closing-time request. */
 let pendingCollect: (() => void) | null = null
 let quitting = false
+let quitRequested = false
 
 /**
  * Phase 42 Device Hands: the production composition.
@@ -595,15 +602,15 @@ const ownsProfile = allowsParallelInstances || installSingleInstanceGuard(
     quit: () => app.quit(),
     onSecondInstance: (handler) => { app.on('second-instance', handler) },
   },
-  () => mainWindow,
+  // A hidden dashboard needs the mode transition, rather than a direct show.
+  () => desktopMode === 'dashboard' && !quitRequested ? mainWindow : null,
   () => {
     // A second launch during early boot simply yields to the primary process; its
     // normal startup will create the first window. Once Core exists, a missing
     // window is safe to recreate without constructing another Core or touching a
     // second copy of the durable stores.
-    if (!app.isReady() || quitting || workspace === null || coreHost === null) return
-    mainWindow = createWindow()
-    startPresenceFor(mainWindow)
+    if (!app.isReady() || quitRequested || workspace === null || coreHost === null) return
+    showDashboard()
   },
 )
 
@@ -1015,6 +1022,7 @@ function createWindow(): BrowserWindow {
     minWidth: 1024,
     minHeight: 680,
     show: false,
+    skipTaskbar: false,
     // Freya always opens filling its screen.
     fullscreen: true,
     backgroundColor: '#050608',
@@ -1031,6 +1039,7 @@ function createWindow(): BrowserWindow {
   })
 
   window.once('ready-to-show', () => {
+    if (quitRequested || (desktopMode !== 'dashboard' && desktopMode !== 'mini-chat')) return
     if (process.argv.includes('--freya-no-focus')) window.showInactive()
     else window.show()
   })
@@ -1306,42 +1315,154 @@ function createWindow(): BrowserWindow {
     if (mainWindow === window) mainWindow = null
   })
 
-  /**
-   * The user closed the window. Hold it open just long enough to collect the
-   * layout, then let it go.
-   */
+  // Closing the dashboard selects the desktop character; the renderer and
+  // workspace stay alive. Only the existing Quit path stops Core.
   window.on('close', (event) => {
-    if (quitting || !workspace) return
+    if (quitting) return
     event.preventDefault()
-    // A window closing is not the app quitting. Core keeps running, and a new
-    // window will attach to this same instance.
-    collectWorkspaceAndThen(() => window.destroy())
+    window.hide()
+    window.setSkipTaskbar(true)
+    if (!quitRequested) {
+      desktopMode = 'adult'
+      showAdultFreya()
+    }
   })
 
   return window
 }
 
-/** Start a Presence companion for this dashboard window and prime it from Core. */
-function startPresenceFor(window: BrowserWindow): void {
-  window.once('ready-to-show', () => {
-    if (window.isDestroyed()) return
-    presenceHost?.stop()
-    const next = new PresenceHost({
-      displayNumber: requestedDisplayNumber(),
-      dev: Boolean(DEV_SERVER),
-    })
-    presenceHost = next
-    next.start(window)
-
-    const host = coreHost
-    if (host !== null) {
-      next.updateCore(host.status())
-      next.updateAttention(host.attention())
-      next.updateWork(host.work())
-      next.updatePersonality(host.personality())
-      next.updateVoice(host.voice())
+function showDashboard(): void {
+  if (quitRequested) return
+  desktopMode = 'dashboard'
+  if (adultWindow && !adultWindow.isDestroyed()) adultWindow.hide()
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (dashboardRestore) {
+      mainWindow.setAlwaysOnTop(false)
+      mainWindow.setResizable(true)
+      mainWindow.setMinimumSize(1024, 680)
+      mainWindow.setBounds(dashboardRestore.bounds)
+      mainWindow.setFullScreen(dashboardRestore.fullscreen)
+      dashboardRestore = null
     }
+    mainWindow.webContents.send('freya:desktop:view', 'dashboard')
+    mainWindow.setSkipTaskbar(false)
+  }
+  if (!focusPrimaryWindow(mainWindow)) mainWindow = createWindow()
+}
+
+/** Reuse the dashboard renderer and composer as a compact tray chat surface. */
+function showMiniChat(): void {
+  if (quitRequested) return
+  const transition = ++miniChatTransition
+  if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow()
+  const window = mainWindow
+  const area = screen.getDisplayMatching(window.getBounds()).workArea
+  if (!dashboardRestore) dashboardRestore = { bounds: window.getNormalBounds(), fullscreen: window.isFullScreen() }
+  desktopMode = 'mini-chat'
+  window.hide()
+  window.webContents.send('freya:desktop:view', 'mini-chat')
+  const showBar = (): void => {
+    if (quitRequested || window.isDestroyed() || desktopMode !== 'mini-chat' || transition !== miniChatTransition) return
+    window.setResizable(true)
+    window.setMinimumSize(480, 144)
+    window.setBounds({ x: area.x + Math.round((area.width - Math.min(760, area.width)) / 2), y: area.y + area.height - 160, width: Math.min(760, area.width), height: 144 })
+    window.setResizable(false)
+    window.setAlwaysOnTop(false)
+    window.setSkipTaskbar(true)
+    focusPrimaryWindow(window)
+  }
+  if (window.isFullScreen()) {
+    // Windows briefly ignores bounds changes while restoring from fullscreen.
+    // Keep the window hidden until its native transition has settled.
+    window.once('leave-full-screen', () => setTimeout(showBar, 100))
+    window.setFullScreen(false)
+  } else showBar()
+}
+
+/** A static presentation surface in the existing Electron process. */
+function showAdultFreya(): void {
+  if (quitRequested) return
+  if (desktopMode !== 'mini-chat') desktopMode = 'adult'
+  if (desktopMode !== 'mini-chat' && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.hide()
+    mainWindow.setSkipTaskbar(true)
+  }
+  if (focusPrimaryWindow(adultWindow)) return
+  const area = (mainWindow && !mainWindow.isDestroyed()
+    ? screen.getDisplayMatching(mainWindow.getBounds())
+    : screen.getPrimaryDisplay()).workArea
+  const width = Math.min(400, area.width)
+  const height = Math.min(480, area.height)
+  const window = new BrowserWindow({
+    title: 'Adult Freya',
+    x: area.x + area.width - width,
+    y: area.y + area.height - height,
+    width, height,
+    show: false,
+    skipTaskbar: true,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    resizable: false,
+    movable: false,
+    maximizable: false,
+    fullscreenable: false,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
   })
+  adultWindow = window
+  window.setMenu(null)
+  window.on('show', updateTrayMenu)
+  window.on('hide', updateTrayMenu)
+  window.once('ready-to-show', () => { if (!quitRequested && (desktopMode === 'adult' || desktopMode === 'mini-chat')) window.show() })
+  window.on('close', (event) => {
+    if (quitting) return
+    event.preventDefault()
+    hideAdultFreya()
+  })
+  window.on('closed', () => {
+    if (adultWindow === window) adultWindow = null
+    updateTrayMenu()
+  })
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.webContents.on('will-navigate', (event, url) => {
+    if (url !== window.webContents.getURL()) event.preventDefault()
+  })
+  const loaded = DEV_SERVER
+    ? window.loadURL(new URL('adult.html', DEV_SERVER.endsWith('/') ? DEV_SERVER : `${DEV_SERVER}/`).toString())
+    : window.loadFile(join(ROOT, 'dist', 'adult.html'))
+  void loaded.catch((error: unknown) => {
+    console.error('[freya] Adult image window failed to load', error)
+    window.destroy()
+  })
+}
+
+function createTray(): void {
+  if (freyaTray) return
+  freyaTray = new Tray(join(ROOT, DEV_SERVER ? 'public' : 'dist', 'freya-tray.png'))
+  freyaTray.setToolTip('Freya')
+  // Character visibility is controlled by right-click, independently of chat.
+  freyaTray.on('double-click', showMiniChat)
+  updateTrayMenu()
+}
+
+function hideAdultFreya(): void {
+  if (quitRequested) return
+  if (desktopMode === 'adult') desktopMode = 'hidden'
+  if (adultWindow && !adultWindow.isDestroyed()) adultWindow.hide()
+  updateTrayMenu()
+}
+
+function updateTrayMenu(): void {
+  if (!freyaTray || freyaTray.isDestroyed()) return
+  const adultVisible = adultWindow !== null && !adultWindow.isDestroyed() && adultWindow.isVisible()
+  freyaTray.setContextMenu(Menu.buildFromTemplate([
+    adultVisible
+      ? { label: 'Hide Adult Freya', click: hideAdultFreya }
+      : { label: 'Show Adult Freya', click: showAdultFreya },
+    { label: 'Open Dashboard', click: showDashboard },
+    { label: 'Quit Freya', click: () => app.quit() },
+  ]))
 }
 
 /* ------------------------------------------------------------------ *
@@ -1349,6 +1470,10 @@ function startPresenceFor(window: BrowserWindow): void {
  * ------------------------------------------------------------------ */
 
 function registerIpc(): void {
+  ipcMain.handle('freya:desktop:view:get', (event) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('Desktop view is only available in the main window.')
+    return desktopMode === 'mini-chat' ? 'mini-chat' : 'dashboard'
+  })
   // Speech capability reporting. The only message a window may send about voice
   // that is not a Core command, and it carries no words and no authority — just
   // what the platform's speech engine turned out to be.
@@ -2068,7 +2193,7 @@ app.whenReady().then(async () => {
     }
 
     mainWindow = createWindow()
-    startPresenceFor(mainWindow)
+    createTray()
 
     // The external control plane. Started after the window so any first peer
     // that connects can immediately focus the existing instance; stopped
@@ -2082,12 +2207,9 @@ app.whenReady().then(async () => {
           getBrowserService: () => browserService,
           getMainWindow: () => mainWindow,
           focusWindow: () => {
-            const win = mainWindow
-            if (win === null || win.isDestroyed()) return false
-            if (win.isMinimized()) win.restore()
-            win.show()
-            win.focus()
-            return true
+            if (quitRequested) return false
+            showDashboard()
+            return mainWindow !== null && !mainWindow.isDestroyed()
           },
           stopAllActive: () => requireCore().status().stopAll.active,
           hostPrincipalId: () => 'owner',
@@ -2136,16 +2258,12 @@ app.whenReady().then(async () => {
   })
 
   app.on('activate', () => {
-    if (mainWindow === null || mainWindow.isDestroyed()) {
-      mainWindow = createWindow()
-      startPresenceFor(mainWindow)
-    }
+    showDashboard()
   })
 })
 
 app.on('window-all-closed', () => {
-  if (!ownsProfile) return
-  if (process.platform !== 'darwin') app.quit()
+  // Freya's lifetime belongs to the tray; closing windows never requests Quit.
 })
 
 app.on('before-quit', (event) => {
@@ -2153,7 +2271,14 @@ app.on('before-quit', (event) => {
   // A quit can arrive without the window's close event ever firing, so this
   // hook has to do the collect itself and then re-enter the quit.
   event.preventDefault()
+  if (quitRequested) return
+  quitRequested = true
   shutdownCoreAndThen(() => app.quit())
+})
+
+app.on('will-quit', () => {
+  freyaTray?.destroy()
+  freyaTray = null
 })
 
 /**

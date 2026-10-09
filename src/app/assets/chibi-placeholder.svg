@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="140" viewBox="0 0 120 140">
+  <title>Chibi Freya — temporary placeholder</title>
+  <g stroke="#94dfff" stroke-width="2" stroke-linejoin="round">
+    <path fill="#bacbdf" d="M22 64C10 8 100 0 100 54L106 91 88 85 32 85 14 91Z"/>
+    <ellipse fill="#f7dfd9" cx="60" cy="51" rx="33" ry="31"/>
+    <path fill="#bacbdf" d="M27 44C25 9 92 8 94 43L76 27 58 39 42 29Z"/>
+    <path fill="#17344e" d="M44 82 76 82 86 118 34 118Z"/>
+    <path fill="#f7dfd9" d="m38 89-13 18 7 5 13-17m37-6 13 18-7 5-13-17"/>
+    <path fill="#17344e" d="m45 118-3 9h14v-9m9 0v9h14l-3-9"/>
+  </g>
+  <ellipse fill="#4c87a8" cx="45" cy="53" rx="5" ry="8"/>
+  <ellipse fill="#4c87a8" cx="75" cy="53" rx="5" ry="8"/>
+  <circle fill="#fff" cx="46" cy="50" r="2"/><circle fill="#fff" cx="76" cy="50" r="2"/>
+  <path d="M54 67q6 5 12 0" fill="none" stroke="#a46b80" stroke-width="2" stroke-linecap="round"/>
+  <circle fill="#83e7ff" cx="60" cy="96" r="4"/>
+  <text x="60" y="138" text-anchor="middle" font-family="sans-serif" font-size="8" fill="#a9c5dc">TEMP PLACEHOLDER</text>
+</svg>

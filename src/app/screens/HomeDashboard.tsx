@@ -17,8 +17,10 @@ import { SettingsOverlay, type SettingsCategory } from './Settings'
 import { GlobalComposer } from './GlobalComposer'
 import { CoreHealth } from './CoreHealth'
 import { hostBridge } from '../../platform/host'
+import { conversationMirror } from '../../platform/conversationClient'
 import type { DressingStore, DressingState } from '../dressing/store'
 import { PersistentWorkspaceLayers } from './PersistentWorkspaceLayers'
+import chibiPlaceholder from '../assets/chibi-placeholder.svg'
 import type { PreferencesStore } from '../../ui-v2/theme/preferences'
 import type { DockedTabOrigin } from '../chat/BrowserWorkspace'
 import './home-dashboard.css'
@@ -41,6 +43,7 @@ interface Props {
     text: string,
     mode: ComposerMode,
     intents?: { readonly webSearch?: boolean; readonly browserUse?: boolean },
+    conversationId?: string | null,
   ) => Promise<boolean>
   onStopResponse: () => void
   researchView: WorkspaceResearchView | null
@@ -131,6 +134,24 @@ function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: Dr
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
 export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onResearchViewChange, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserPercent, onBrowserPercentChange, browserRequestedUrl, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
+  const [desktopView, setDesktopView] = useState<'dashboard' | 'mini-chat'>('dashboard')
+  useEffect(() => {
+    const bridge = hostBridge()
+    let active = true
+    let received = false
+    const off = bridge?.onDesktopView?.((view) => { received = true; if (active) setDesktopView(view) })
+    void bridge?.getDesktopView?.().then(view => { if (active && !received) setDesktopView(view) }).catch(() => {})
+    return () => { active = false; off?.() }
+  }, [])
+  useEffect(() => {
+    if (desktopView !== 'mini-chat') return
+    viewport.current?.querySelector<HTMLTextAreaElement>('.hd-input textarea')?.focus()
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && !event.defaultPrevented) void hostBridge()?.windowClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [desktopView])
   const design = useSyncExternalStore(dressing.subscribe, dressing.getSnapshot, dressing.getSnapshot)
   /*
    * Narrow viewports start collapsed. This used to live in a CSS media query that
@@ -245,7 +266,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
   useEffect(() => { if (notice) setComposerIssue('') }, [notice])
   const issue = [notice, voice.notice, composerIssue].filter(Boolean).join(' ')
 
-  return <div className="freya-v2 hd-viewport" data-theme="abyss" ref={viewport}>
+  return <div className="freya-v2 hd-viewport" data-theme="abyss" data-desktop-view={desktopView} ref={viewport}>
     {/*
       The conversation is the whole window on its screen: no top bar, no rail, no
       board gutter. The one number both the workspace columns and the composer
@@ -329,6 +350,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
           ))}
         </div>
         <div className="hd-rail-foot">
+          {screen === 'home' ? <img className="hd-chibi" src={chibiPlaceholder} alt="Chibi Freya — temporary placeholder" draggable={false} /> : null}
           <div className="hd-online" title={preview ? 'Design preview · Sample data' : undefined}><span className="hd-status-dot" /><span>{online ? 'Freya Online' : 'Freya Offline'}</span><small>Phase 19<br />Build 19.0.1</small></div>
           <div className="hd-profile" ref={menuRef}>
             <button className="hd-user" aria-label="Open your account menu" aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => setMenuOpen((value) => !value)}>
@@ -428,11 +450,14 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
         />
       </main>
       <GlobalComposer
+        miniChat={desktopView === 'mini-chat'}
         generating={generating}
         defaultModel={provider?.model ?? null}
         voice={voice}
         voiceTranscript={voiceTranscript}
-        onSend={onSend}
+        onSend={desktopView === 'mini-chat'
+          ? (text, mode, intents) => onSend(text, mode, intents, conversationMirror().projection?.activeConversationId ?? null)
+          : onSend}
         onStopResponse={onStopResponse}
         onVoicePress={onVoicePress}
         onVoiceRelease={onVoiceRelease}

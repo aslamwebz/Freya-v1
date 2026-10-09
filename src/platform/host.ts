@@ -109,6 +109,8 @@ export interface AttachmentResult {
 }
 
 export interface FreyaHostBridge {
+  getDesktopView?(): Promise<'dashboard' | 'mini-chat'>
+  onDesktopView?(handler: (view: 'dashboard' | 'mini-chat') => void): () => void
   voiceWakeStatus?(): Promise<{ ready: boolean; frames: number; detections: number; peak: number }>
   voiceWakeAudio?(audio: Uint8Array): void
   voiceSettingsRead?(): Promise<VoiceSettings>

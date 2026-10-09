@@ -114,6 +114,7 @@ export function App({
     text: string,
     mode: ComposerMode,
     hints?: { readonly webSearch?: boolean; readonly browserUse?: boolean },
+    selectedConversationId?: string | null,
   ): Promise<boolean> => {
     setNoticeConversationId(null)
     if (!text.trim()) return false
@@ -179,7 +180,9 @@ export function App({
       setResearchView(null)
       const result = await sendMessage(
         mirror,
-        screen === 'chat' ? (conversation?.activeConversationId ?? null) : null,
+        selectedConversationId !== undefined
+          ? selectedConversationId
+          : screen === 'chat' ? (conversation?.activeConversationId ?? null) : null,
         composed.text,
         Object.keys(intents).length > 0 ? intents : undefined,
         payload.attachments,

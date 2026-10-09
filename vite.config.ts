@@ -20,6 +20,7 @@ export default defineConfig({
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
         presence: fileURLToPath(new URL('./presence.html', import.meta.url)),
+        adult: fileURLToPath(new URL('./adult.html', import.meta.url)),
       },
     },
   },

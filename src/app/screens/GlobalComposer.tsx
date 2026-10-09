@@ -15,6 +15,7 @@ import {
 import { sharedRightWorkspaceStore } from '../chat/rightWorkspaceStore'
 import { sharedComposerDraftStore } from '../chat/composerDraftStore'
 import { conversationMirror } from '../../platform/conversationClient'
+import { MiniChatControls } from '../chat/MiniChatControls'
 
 function VoiceDockButton({ voice, onPress, onRelease }: {
   voice: VoiceView
@@ -184,6 +185,7 @@ export function GlobalComposer({
   maxMessageCharacters,
   onNotice,
   conversationId: propConversationId,
+  miniChat = false,
 }: {
   generating: boolean
   defaultModel: string | null
@@ -200,6 +202,7 @@ export function GlobalComposer({
   maxMessageCharacters: number | null
   onNotice?: (message: string) => void
   conversationId?: string | null
+  miniChat?: boolean
 }) {
   const projection = useSyncExternalStore(
     conversationMirror().subscribe,
@@ -216,6 +219,12 @@ export function GlobalComposer({
   const initialDraft = draftStore.getDraft(activeConversationId)
   const [text, setText] = useState(initialDraft.text)
   const [sending, setSending] = useState(false)
+  const [sessionPending, setSessionPending] = useState(false)
+  const sessionPendingRef = useRef(false)
+  const onSessionPendingChange = useCallback((pending: boolean) => {
+    sessionPendingRef.current = pending
+    setSessionPending(pending)
+  }, [])
   const [attaching, setAttaching] = useState(false)
   const [mode, setMode] = useState<ComposerMode>(initialDraft.mode)
   const [wantWeb, setWantWeb] = useState(initialDraft.wantWeb)
@@ -324,7 +333,7 @@ export function GlobalComposer({
 
   const submit = async () => {
     const value = text.trim()
-    if ((value.length === 0 && drafts.length === 0) || generating || sending) return
+    if ((value.length === 0 && drafts.length === 0) || generating || sending || (miniChat && sessionPendingRef.current)) return
     if (isOverLimit) {
       onNotice?.(`Message exceeds maximum length of ${maxMessageCharacters} characters.`)
       return
@@ -342,7 +351,7 @@ export function GlobalComposer({
     try {
       const accepted = await onSend(textToSend, mode, { webSearch: wantWeb, browserUse: wantBrowser })
       if (accepted) {
-        setText('')
+        if (prevConvRef.current === activeConversationId) setText('')
         draftStore.clearDraft(activeConversationId)
       }
     } finally {
@@ -470,6 +479,7 @@ export function GlobalComposer({
       className="hd-dock"
       data-state={voice.capturing ? 'listening' : generating ? 'responding' : 'idle'}
     >
+      {miniChat ? <MiniChatControls busy={inFlight || sessionPending} onPendingChange={onSessionPendingChange} /> : null}
       <AttachmentTray />
       <form
         aria-label="Freya composer"
@@ -515,6 +525,7 @@ export function GlobalComposer({
           <textarea
             ref={textAreaRef}
             aria-label="Ask Freya"
+            disabled={miniChat && sessionPending}
             value={text}
             rows={1}
             maxLength={
@@ -618,7 +629,7 @@ export function GlobalComposer({
               className="hd-send"
               type="submit"
               aria-label="Send message"
-              disabled={(!text.trim() && drafts.length === 0) || isOverLimit}
+              disabled={(!text.trim() && drafts.length === 0) || isOverLimit || (miniChat && sessionPending)}
             >
               <Glyph name="send" size={20} />
             </button>

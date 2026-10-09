@@ -201,6 +201,8 @@
 
 /* ---- the rail's foot: status and the account ---- */
 .hd-rail-foot { flex-shrink: 0; display: grid; gap: 8px; padding: 12px 10px 12px; border-top: 1px solid #8db7d326; }
+.hd-chibi { display: block; width: 72px; height: 84px; justify-self: center; object-fit: contain; pointer-events: none; user-select: none; }
+.hd-rail[data-collapsed] .hd-chibi { width: 48px; height: 56px; }
 .hd-online { display: grid; grid-template-columns: 9px 1fr; gap: 5px 7px; font-size: 12px; color: #6fffe0; }
 .hd-status-dot, .hd-meta i { width: 9px; height: 9px; margin-top: 4px; border-radius: 50%; background: #6cffd5; box-shadow: 0 0 12px #52f2c7b0; }
 .hd-online small { grid-column: 2; margin-top: -3px; font-size: 10px; line-height: 1.45; color: #7f97ad; }
@@ -364,6 +366,24 @@
 .hd-memory-icon-3 { color: #ffddb3; background: #a7672c66; }
 .hd-memory-icon-4 { color: #b7d6ff; background: #516bb566; }
 .hd-dock { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(960px, 60vw); min-height: 54px; }
+
+/* The tray chat bar is the same composer, within the same renderer. */
+.hd-viewport[data-desktop-view='mini-chat'] .hd-dashboard { background: #050608; }
+.hd-viewport[data-desktop-view='mini-chat'] ~ [data-app-shell='app'] { display: none; }
+.hd-viewport[data-desktop-view='mini-chat'] .hd-dashboard > :not(.hd-dock) { display: none; }
+.hd-viewport[data-desktop-view='mini-chat'] .hd-dashboard .hd-dock { inset: 62px 12px 12px; width: auto; transform: none; min-height: 0; }
+.hd-viewport[data-desktop-view='mini-chat'] .hd-dock-form { display: flex; align-items: center; min-height: 54px; }
+.hd-viewport[data-desktop-view='mini-chat'] .hd-dock-controls { display: contents; }
+.hd-viewport[data-desktop-view='mini-chat'] .hd-mic,
+.hd-viewport[data-desktop-view='mini-chat'] .hd-tools { display: none; }
+.hd-viewport[data-desktop-view='mini-chat'] .hd-input textarea { max-height: 54px; }
+.hd-mini-controls { position: absolute; left: 0; right: 0; bottom: calc(100% + 18px); display: flex; align-items: center; gap: 8px; height: 32px; }
+.hd-mini-controls select, .hd-mini-controls button { height: 32px; border: 1px solid #2b3a48; border-radius: 8px; color: #eaf2fb; background: #101418; font: inherit; font-size: 12px; }
+.hd-mini-controls select { flex: 1; min-width: 0; padding: 0 8px; }
+.hd-mini-controls button { flex: none; padding: 0 12px; cursor: pointer; }
+.hd-mini-controls button:last-of-type { font-size: 20px; width: 32px; padding: 0; }
+.hd-mini-controls :disabled { opacity: .5; cursor: default; }
+.hd-mini-error { position: absolute; top: 34px; left: 0; right: 0; color: #ffb8b8; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* The composer follows the conversation.
     The dock is one global bar, but the browser takes the right of the window, so

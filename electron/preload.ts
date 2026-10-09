@@ -77,6 +77,14 @@ export interface RuntimeInfo {
  */
 const api = {
   isDesktop: true as const,
+  getDesktopView: (): Promise<'dashboard' | 'mini-chat'> => ipcRenderer.invoke('freya:desktop:view:get'),
+  onDesktopView: (handler: (view: 'dashboard' | 'mini-chat') => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, view: unknown): void => {
+      if (view === 'dashboard' || view === 'mini-chat') handler(view)
+    }
+    ipcRenderer.on('freya:desktop:view', listener)
+    return () => ipcRenderer.removeListener('freya:desktop:view', listener)
+  },
   getRuntimeInfo: (): Promise<RuntimeInfo> => ipcRenderer.invoke('freya:runtime'),
   loadWorkspace: (): Promise<unknown> => ipcRenderer.invoke('freya:workspace:load'),
   saveWorkspace: (payload: unknown): Promise<boolean> =>

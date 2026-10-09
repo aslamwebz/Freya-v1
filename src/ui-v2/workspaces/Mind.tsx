@@ -68,7 +68,7 @@ function Section({ health, reason, title, missing, children }: {
   reason: string | null
   title: string
   missing: string
-  children: ReactNode
+  children?: ReactNode
 }) {
   if (health !== 'ready') {
     return <Panel title={title}><EmptyState title={missing} detail={reason ?? 'Core has not reported this domain.'} /></Panel>

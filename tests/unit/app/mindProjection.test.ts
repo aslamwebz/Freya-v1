@@ -13,6 +13,7 @@ import { resetPersonalityMirror } from '../../../src/platform/personalityClient'
 import { resetContextMirror } from '../../../src/platform/contextClient'
 import { buildCapabilityRegistry } from '../../../core/capabilities'
 import type { FreyaHostBridge } from '../../../src/platform/host'
+import { DEFAULT_VOICE_CONFIG } from '../../../electron/voiceConfig'
 import type { CoreStatus } from '../../../core/protocol/core-protocol'
 import type { BrainProjection } from '../../../core/brain/brain'
 import type { WorkProjection } from '../../../core/work/projection'
@@ -72,7 +73,7 @@ function coreStatus(over: Partial<CoreStatus> = {}): CoreStatus {
 }
 
 const brainProjection: BrainProjection = {
-  health: 'ready',
+  health: 'healthy',
   reason: null,
   persistence: 'encrypted',
   durable: true,
@@ -88,7 +89,7 @@ const brainProjection: BrainProjection = {
   self: {
     complete: true,
     capabilities: [
-      { capability: 'conversation.turn', state: 'seeded', cannot: ['choose a provider', 'raise a budget'] },
+      { capability: 'conversation.turn', state: 'available', cannot: ['choose a provider', 'raise a budget'] },
     ],
     limitations: [{ limitationId: 'lim-1', statement: 'I cannot remember without an encrypted Brain.' }],
   },
@@ -107,14 +108,14 @@ const workProjection: WorkProjection = {
   detailAvailable: true,
   runs: [
     {
-      runId: 'run-live-1', kind: 'mission', status: 'running', createdAt: NOW, startedAt: NOW,
+      runId: 'run-live-1', kind: 'deterministic', status: 'running', createdAt: NOW, startedAt: NOW,
       completedAt: null, cancelledAt: null, failure: null, waitingOn: null, taskId: null,
       parentKind: 'mission', parentId: 'mission-real-1',
       progress: { stepsTotal: 3, verified: 1, failed: 0, cancelled: 0, skipped: 0, remaining: 2, actions: 1, attempts: 1, percent: null, summary: '1 of 3 steps verified' }, limitHit: null,
       steps: [], actions: [], observations: [], verifications: [], live: true,
     },
     {
-      runId: 'run-done-1', kind: 'mission', status: 'completed', createdAt: NOW, startedAt: NOW,
+      runId: 'run-done-1', kind: 'deterministic', status: 'completed', createdAt: NOW, startedAt: NOW,
       completedAt: NOW, cancelledAt: null, failure: null, waitingOn: null, taskId: null,
       parentKind: 'mission', parentId: 'mission-real-1',
       progress: { stepsTotal: 2, verified: 2, failed: 0, cancelled: 0, skipped: 0, remaining: 0, actions: 2, attempts: 2, percent: 100, summary: 'every step verified' }, limitHit: null,
@@ -154,8 +155,8 @@ const missionProjection: MissionProjection = {
         planSteps: 3, observed: 2, reported: 1, requestedQuantity: null, quantitySatisfied: null,
       },
       currentStep: null,
-      nextAction: { decision: 'continue', reason: 'the plan has an unverified step' },
-      blockers: ['approval-required'], pendingApproval: null,
+      nextAction: { decision: 'continue', reason: 'dependency_unverified' },
+      blockers: ['dependency_unverified'], pendingApproval: null,
       evidence: { total: 4, observed: 2, reported: 1, expired: 0, uncertain: 1 },
       nextWake: null, lastUpdatedAt: NOW, awaitingOwner: false,
       budgetRemaining: {
@@ -165,9 +166,10 @@ const missionProjection: MissionProjection = {
     },
   ],
   counts: {
-    total: 1, active: 1, needsAttention: 1,
-    draft: 0, planned: 0, paused: 0, cancelled: 0, failed: 0, concluded: 0,
-  } as MissionProjection['counts'],
+    total: 1, needsAttention: 1, active: 1, draft: 0, ready: 0,
+    planning: 0, waiting: 0, blocked: 0, 'approval-required': 0,
+    verifying: 0, stopped: 0, completed: 0, failed: 0, cancelled: 0,
+  },
   limits: {
     maxChildRuns: 64, maxConcurrentChildRuns: 8, lifetimeMs: 2592000000,
     verificationDeadlineMs: 30000, maxRetainedMissions: 100, maxTitleChars: 160,
@@ -201,7 +203,7 @@ const attentionProjection: AttentionProjection = {
   counts: { ingested: 42, decisions: 18, doNothing: 5, remembered: 0, cued: 12, spoke: 4, interrupted: 1, budgetExceeded: 0 },
   lastDecision: {
     decisionId: 'd-1', eventId: 'attn-1', source: 'owner', kind: 'message', outcome: 'remember',
-    importance: 'normal', urgency: 'routine', reason: 'no_action_needed', cueCode: null,
+    importance: 'normal', urgency: 'normal', reason: 'remembered', cueCode: null,
     focus: 'focused', decidedAt: NOW,
   },
   directive: null,
@@ -253,7 +255,7 @@ const consciousContext: ConsciousContextProjection = {
     role: 'a persistent Core with replaceable embodiments',
     purpose: 'to be a durable, honest intelligence the owner can rely on',
     claimCount: 3,
-    capabilities: [{ capability: 'conversation.turn', state: 'seeded', cannot: ['choose a provider', 'raise a budget'] }],
+    capabilities: [{ capability: 'conversation.turn', state: 'available', cannot: ['choose a provider', 'raise a budget'] }],
     limitations: [{ limitationId: 'lim-1', statement: 'I cannot remember without an encrypted Brain.' }],
     complete: true,
   },
@@ -268,7 +270,7 @@ const consciousContext: ConsciousContextProjection = {
     counts: { ingested: 42, decisions: 18, doNothing: 5, remembered: 0, cued: 12, spoke: 4, interrupted: 1, budgetExceeded: 0 },
     lastDecision: {
       decisionId: 'd-1', source: 'owner', kind: 'message', outcome: 'remember',
-      importance: 'normal', urgency: 'routine', reason: 'no_action_needed', cueCode: null, decidedAt: NOW,
+      importance: 'normal', urgency: 'normal', reason: 'remembered', cueCode: null, decidedAt: NOW,
     },
     directive: null, inbox: [], schedulesDue: 0, schedulesPending: 0,
   },
@@ -295,7 +297,7 @@ const consciousContext: ConsciousContextProjection = {
   },
   recentChanges: {
     state: 'available', note: null,
-    items: [{ id: 'evt-42', kind: 'mission.plan.committed', sequence: 42, at: 1790956800000, tone: 'busy' }],
+    items: [{ id: 'evt-42', kind: 'mission.activated', sequence: 42, at: 1790956800000, tone: 'busy' }],
     listed: 1, omitted: 0,
   },
   provenance: {
@@ -385,7 +387,9 @@ function installFakeBridge(status: CoreStatus): void {
     mediaDocument: async () => null,
     mediaVideo: async () => null,
     browserState: async () => ({ available: false, active: false, reason: '', publicAvailable: false, extensionPaired: false, extensionLive: false, journalTrustworthy: true, runtimeStatus: 'surfaceUnavailable', activeTabId: null, tabs: [], tabCount: 0, recovery: null, summary: '', sessions: [], phase51: [], described: 0, staleRefs: 0, mediaObserved: 0, refusals: 0 }),
-    browserExecute: async () => ({ ok: false, command: 'navigate', target: null, code: 'disabled', reason: '', escalation: null }),
+    browserExecute: async () => ({ ok: false, command: 'page.navigate', target: null, code: 'subsystem-disabled', reason: '', escalation: null }),
+    voiceConfig: async () => DEFAULT_VOICE_CONFIG,
+    saveVoiceConfig: async (patch) => ({ ...DEFAULT_VOICE_CONFIG, ...patch }),
     coreSubmit: async (command) => command === 'self.status.read'
       ? { requestId: 'r-1', ok: true, world: { operation: 'self', ok: true, self: selfStatus } }
       : { requestId: 'r-1', ok: false, refusal: { reason: 'not allowed in this test' } },
@@ -449,6 +453,12 @@ async function attachWith(status: CoreStatus) {
   return { adapter, disposer }
 }
 
+function readyMind(adapter: ReturnType<typeof createLiveAdapter>) {
+  const mind = adapter.getSnapshot().mind
+  if (mind.status !== 'ready') throw new Error('expected ready')
+  return mind.data
+}
+
 describe('the Mind projection reports only what Core carries', () => {
   it('is live and derived from the projections Core published', async () => {
     const { adapter, disposer } = await attachWith(coreStatus())
@@ -467,26 +477,26 @@ describe('the Mind projection reports only what Core carries', () => {
   it('derives one mode word, and STOP ALL outranks everything', async () => {
     const idle = await attachWith(coreStatus())
     if (idle.adapter.getSnapshot().mind.status !== 'ready') throw new Error('expected ready')
-    expect(idle.adapter.getSnapshot().mind.data.overview.mode).toBe('idle')
+    expect(readyMind(idle.adapter).overview.mode).toBe('idle')
     idle.disposer()
 
     const busy = await attachWith(coreStatus({ activeProviderCalls: 2 }))
     if (busy.adapter.getSnapshot().mind.status !== 'ready') throw new Error('expected ready')
-    expect(busy.adapter.getSnapshot().mind.data.overview.mode).toBe('working')
-    expect(busy.adapter.getSnapshot().mind.data.overview.activeProviderCalls).toBe(2)
+    expect(readyMind(busy.adapter).overview.mode).toBe('working')
+    expect(readyMind(busy.adapter).overview.activeProviderCalls).toBe(2)
     busy.disposer()
 
     const stopped = await attachWith(coreStatus({ stopAll: { active: true, activatedAt: NOW, activatedBy: 'owner' }, activeProviderCalls: 2, faults: ['a fault'] }))
     if (stopped.adapter.getSnapshot().mind.status !== 'ready') throw new Error('expected ready')
-    expect(stopped.adapter.getSnapshot().mind.data.overview.mode).toBe('stopped')
-    expect(stopped.adapter.getSnapshot().mind.data.overview.stopped).toBe(true)
+    expect(readyMind(stopped.adapter).overview.mode).toBe('stopped')
+    expect(readyMind(stopped.adapter).overview.stopped).toBe(true)
     stopped.disposer()
   })
 
   it('lists live threads and settled runs are not among them', async () => {
     const { adapter, disposer } = await attachWith(coreStatus())
     if (adapter.getSnapshot().mind.status !== 'ready') throw new Error('expected ready')
-    const threads = adapter.getSnapshot().mind.data.threads
+    const threads = readyMind(adapter).threads
     const ids = threads.map((thread) => thread.id)
     expect(ids).toContain('run-live-1')
     expect(ids).toContain('mission-real-1')
@@ -503,11 +513,11 @@ describe('the Mind projection reports only what Core carries', () => {
   it('reports attention as a closed focus word and closed counts', async () => {
     const { adapter, disposer } = await attachWith(coreStatus())
     if (adapter.getSnapshot().mind.status !== 'ready') throw new Error('expected ready')
-    const attention = adapter.getSnapshot().mind.data.attention
+    const attention = readyMind(adapter).attention
     expect(attention.health).toBe('ready')
     expect(attention.focus).toBe('focused')
     expect(attention.counts?.ingested).toBe(42)
-    expect(attention.lastDecision?.reason).toBe('no_action_needed')
+    expect(attention.lastDecision?.reason).toBe('remembered')
     // No denominator exists for a focus reading, so there is no percentage.
     expect(JSON.stringify(attention)).not.toMatch(/\d\s*%/)
     disposer()
@@ -516,7 +526,7 @@ describe('the Mind projection reports only what Core carries', () => {
   it('projects the self model from Core\'s own statements and invents no trait', async () => {
     const { adapter, disposer } = await attachWith(coreStatus())
     if (adapter.getSnapshot().mind.status !== 'ready') throw new Error('expected ready')
-    const self = adapter.getSnapshot().mind.data.self
+    const self = readyMind(adapter).self
     expect(self.name).toBe('Freya')
     expect(self.claims.map((claim) => claim.claimId)).toEqual(['claim-1', 'claim-2'])
     expect(self.limitations[0]?.statement).toBe('I cannot remember without an encrypted Brain.')
@@ -537,12 +547,12 @@ describe('the Mind projection reports only what Core carries', () => {
   it('projects Missions as status and counts, never as titles or roadmap dates', async () => {
     const { adapter, disposer } = await attachWith(coreStatus())
     if (adapter.getSnapshot().mind.status !== 'ready') throw new Error('expected ready')
-    const mind = adapter.getSnapshot().mind.data
+    const mind = readyMind(adapter)
     expect(mind.missions).toHaveLength(1)
     expect(mind.missions[0]?.id).toBe('mission-real-1')
     expect(mind.missions[0]?.status).toBe('active')
     expect(mind.missions[0]?.nextDecision).toBe('continue')
-    expect(mind.missions[0]?.blockers).toEqual(['approval-required'])
+    expect(mind.missions[0]?.blockers).toEqual(['dependency_unverified'])
     expect(mind.missions[0]?.verifiedRuns).toBe(5)
     // No title, intent or date field exists to be filled in.
     expect(Object.keys(mind.missions[0] ?? {})).not.toContain('title')
@@ -554,7 +564,7 @@ describe('the Mind projection reports only what Core carries', () => {
   it('shows owner context as unavailable when the domains report absent', async () => {
     const { adapter, disposer } = await attachWith(coreStatus())
     if (adapter.getSnapshot().mind.status !== 'ready') throw new Error('expected ready')
-    const owner = adapter.getSnapshot().mind.data.owner
+    const owner = readyMind(adapter).owner
     expect(owner.personalityHealth).toBe('unavailable')
     expect(owner.personalityReason).toContain('no Personality domain')
     expect(owner.continuity).toBeNull()
@@ -569,7 +579,7 @@ describe('the Mind projection reports only what Core carries', () => {
   it('reports uncertainties as closed codes and never as sentences', async () => {
     const { adapter, disposer } = await attachWith(coreStatus())
     if (adapter.getSnapshot().mind.status !== 'ready') throw new Error('expected ready')
-    const mind = adapter.getSnapshot().mind.data
+    const mind = readyMind(adapter)
     expect(mind.uncertainties.map((item) => item.code)).toEqual(['mission.needs-attention', 'journal.integrity'])
     expect(mind.absentSections).toContain('life')
     expect(mind.provenance?.sources.map((source) => source.domain)).toEqual(['work', 'mission'])
@@ -596,7 +606,7 @@ describe('the Mind projection reports only what Core carries', () => {
   it('carries no hidden reasoning, prompt or model output anywhere in the shape', async () => {
     const { adapter, disposer } = await attachWith(coreStatus())
     if (adapter.getSnapshot().mind.status !== 'ready') throw new Error('expected ready')
-    const mind = adapter.getSnapshot().mind.data
+    const mind = readyMind(adapter)
 
     /**
      * Every key in the projection, at every depth.
@@ -626,7 +636,7 @@ describe('the Mind projection reports only what Core carries', () => {
   it('prints no percentage for anything nothing measured', async () => {
     const { adapter, disposer } = await attachWith(coreStatus())
     if (adapter.getSnapshot().mind.status !== 'ready') throw new Error('expected ready')
-    const mind = adapter.getSnapshot().mind.data
+    const mind = readyMind(adapter)
     // Attention focus has no denominator, so there is no percentage to print.
     expect(JSON.stringify(mind.attention)).not.toMatch(/\d\s*%/)
     // The self model carries no trait meter, so there is no percentage there either.

@@ -3,6 +3,7 @@
  */
 
 import type { CandidateStatus, StrategyCandidate } from './strategy'
+import type { PromotionRecord, RollbackRecord, StrategyPromotionApproval } from './approval'
 
 export interface EvolutionStoreHealth {
   readonly mode: 'encrypted' | 'ephemeral'
@@ -25,6 +26,17 @@ export interface EvolutionStore {
   ): Promise<boolean>
   deleteCandidate(candidateId: string): Promise<boolean>
 
+  // Approvals (Finding 1 & 6)
+  readApprovals(): Promise<readonly StrategyPromotionApproval[]>
+  writeApproval(approval: StrategyPromotionApproval): Promise<void>
+  getApproval(approvalId: string): Promise<StrategyPromotionApproval | null>
+
+  // Promotion & Rollback Lifecycle Records (Finding 6)
+  readPromotionHistory(): Promise<readonly PromotionRecord[]>
+  writePromotionRecord(record: PromotionRecord): Promise<void>
+  readRollbackHistory(): Promise<readonly RollbackRecord[]>
+  writeRollbackRecord(record: RollbackRecord): Promise<void>
+
   close(): Promise<void>
 }
 
@@ -34,6 +46,9 @@ export class MemoryEvolutionStore implements EvolutionStore {
   readonly faultReason: string | null
 
   private readonly candidates = new Map<string, StrategyCandidate>()
+  private readonly approvals = new Map<string, StrategyPromotionApproval>()
+  private readonly promotions: PromotionRecord[] = []
+  private readonly rollbacks: RollbackRecord[] = []
 
   constructor(options?: { faultReason?: string | null }) {
     this.faultReason = options?.faultReason ?? null
@@ -70,6 +85,34 @@ export class MemoryEvolutionStore implements EvolutionStore {
 
   async deleteCandidate(candidateId: string): Promise<boolean> {
     return this.candidates.delete(candidateId)
+  }
+
+  async readApprovals(): Promise<readonly StrategyPromotionApproval[]> {
+    return [...this.approvals.values()]
+  }
+
+  async writeApproval(approval: StrategyPromotionApproval): Promise<void> {
+    this.approvals.set(approval.approvalId, approval)
+  }
+
+  async getApproval(approvalId: string): Promise<StrategyPromotionApproval | null> {
+    return this.approvals.get(approvalId) ?? null
+  }
+
+  async readPromotionHistory(): Promise<readonly PromotionRecord[]> {
+    return [...this.promotions]
+  }
+
+  async writePromotionRecord(record: PromotionRecord): Promise<void> {
+    this.promotions.push(record)
+  }
+
+  async readRollbackHistory(): Promise<readonly RollbackRecord[]> {
+    return [...this.rollbacks]
+  }
+
+  async writeRollbackRecord(record: RollbackRecord): Promise<void> {
+    this.rollbacks.push(record)
   }
 
   async close(): Promise<void> {

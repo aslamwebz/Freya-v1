@@ -232,20 +232,37 @@ describe('Phase 7D — End-to-End Multi-Session Verified Evolution Acceptance', 
     // -------------------------------------------------------------------------
     // STAGE 4 — Promotion: Strict Owner Authorization Required
     // -------------------------------------------------------------------------
-    // 1. Attempt unauthorized promotion (e.g. model or automatic without approval) -> Refused!
+    // 1. Attempt unauthorized promotion (fabricated approval ID) -> Refused!
     const unauthResult = await evolution!.promoteCandidate(candidate.candidateId, {
       authorizedBy: 'owner',
-      approvalId: '', // Missing approval ID
+      approvalId: 'appr-fabricated-non-existent',
     })
     expect(unauthResult.ok).toBe(false)
     if (!unauthResult.ok) {
       expect(unauthResult.code).toBe('unauthorized')
     }
 
-    // 2. Authorized promotion by owner -> Accepted!
+    // 2. Request genuine promotion approval
+    const apprReq = await evolution!.requestPromotionApproval(candidate.candidateId, {
+      requestedBy: 'system',
+      justification: 'Candidate demonstrated statistically significant improvement in controlled experiment',
+    })
+    expect(apprReq.ok).toBe(true)
+    if (!apprReq.ok) throw new Error('Failed to request approval')
+
+    // 3. Authenticated owner decides and approves the exact candidate
+    const apprDecision = await evolution!.decidePromotionApproval({
+      approvalId: apprReq.approval.approvalId,
+      decision: 'approved',
+      decidedBy: 'owner',
+      reason: 'Owner reviewed experiment report and approved production activation',
+    })
+    expect(apprDecision.ok).toBe(true)
+
+    // 4. Authorized promotion with genuine owner approval -> Accepted!
     const authResult = await evolution!.promoteCandidate(candidate.candidateId, {
       authorizedBy: 'owner',
-      approvalId: 'appr-owner-promote-p7-001',
+      approvalId: apprReq.approval.approvalId,
       timestamp: '2026-10-10T12:00:00Z',
     })
     expect(authResult.ok).toBe(true)

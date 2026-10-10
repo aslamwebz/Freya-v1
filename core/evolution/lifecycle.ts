@@ -6,8 +6,10 @@
  *
  * Invariants:
  * 1. Owner authorization is strictly required for production strategy promotion.
- * 2. Automatic or governed rollback restores known-good baseline upon regression.
- * 3. Rollback never destroys audit trails, ongoing missions, or historical telemetries.
+ * 2. Self-promotion is structurally impossible.
+ * 3. Automatic or governed rollback restores known-good baseline upon regression.
+ * 4. Rollback never destroys audit trails, ongoing missions, or historical telemetries.
+ * 5. Lifecycle history (promotions, rollbacks, approvals) is durably stored in encrypted storage.
  */
 
 import type { ExperimentEvaluationReport } from './experiment'
@@ -18,27 +20,22 @@ import type {
   PerformanceTelemetry,
 } from '../metacognition/types'
 import type { MetacognitionStore } from '../metacognition/store'
+import type { PrincipalId } from '../protocol/core-protocol'
+import {
+  type PromotionRecord,
+  type RollbackRecord,
+  type StrategyPromotionApproval,
+  computeCandidateDigest,
+  validatePromotionApproval,
+} from './approval'
+
+export type { PromotionRecord, RollbackRecord, StrategyPromotionApproval }
 
 export interface PromotionAuthorization {
-  readonly authorizedBy: 'owner'
+  readonly authorizedBy?: PrincipalId
   readonly approvalId: string
+  readonly callerPrincipal?: PrincipalId
   readonly timestamp?: string
-}
-
-export interface PromotionRecord {
-  readonly candidateId: string
-  readonly version: string
-  readonly previousStrategyId: string
-  readonly approvalId: string
-  readonly activatedAt: string
-  readonly rollbackTargetId: string
-}
-
-export interface RollbackRecord {
-  readonly candidateId: string
-  readonly restoredStrategyId: string
-  readonly reason: string
-  readonly rolledBackAt: string
 }
 
 export type PromotionResult =
@@ -64,14 +61,37 @@ export class StrategyLifecycleManager {
   ) {}
 
   async initialize(): Promise<void> {
+    // Restore promotion and rollback histories from durable store (Finding 6)
+    const promotions = await this.evolutionStore.readPromotionHistory()
+    this.promotionHistory.length = 0
+    this.promotionHistory.push(...promotions)
+
+    const rollbacks = await this.evolutionStore.readRollbackHistory()
+    this.rollbackHistory.length = 0
+    this.rollbackHistory.push(...rollbacks)
+
+    // Restore active strategy
     const activeList = await this.metacognitionStore.readActiveStrategies()
     const current = activeList.find((s: ActiveStrategyRecord) => s.status === 'active')
+
     if (current) {
-      this.activeStrategy = current
+      // Safety check: ensure the candidate was not rolled back
+      const isRolledBack = this.rollbackHistory.some((r) => r.candidateId === current.strategyId)
+      const cand = await this.evolutionStore.getCandidate(current.strategyId)
+      if (isRolledBack || cand?.status === 'rolled_back') {
+        // Do NOT restore a rolled-back strategy as active
+        this.activeStrategy = null
+      } else {
+        this.activeStrategy = current
+      }
     }
   }
 
-  getActiveStrategy(): ActiveStrategyRecord | null {
+  getActiveStrategy(scope?: string): ActiveStrategyRecord | null {
+    if (!this.activeStrategy) return null
+    if (scope && this.activeStrategy.kind !== scope && this.activeStrategy.kind !== 'general') {
+      return null
+    }
     return this.activeStrategy
   }
 
@@ -134,20 +154,123 @@ export class StrategyLifecycleManager {
     }
   }
 
+  /**
+   * Request formal owner approval for strategy promotion.
+   */
+  async requestPromotionApproval(
+    candidateId: string,
+    options?: {
+      readonly requestedBy?: PrincipalId
+      readonly ttlMs?: number
+      readonly justification?: string
+    },
+  ): Promise<
+    | { readonly ok: true; readonly approval: StrategyPromotionApproval }
+    | { readonly ok: false; readonly reason: string }
+  > {
+    const candidate = await this.evolutionStore.getCandidate(candidateId)
+    if (!candidate) {
+      return { ok: false, reason: `Candidate ${candidateId} does not exist.` }
+    }
+    if (candidate.status !== 'eligible_for_promotion') {
+      return {
+        ok: false,
+        reason: `Candidate ${candidateId} is not in eligible_for_promotion status (current: ${candidate.status}).`,
+      }
+    }
+
+    const approvalId = `appr-evo-${candidateId}-${Date.now()}`
+    const requestedAt = new Date().toISOString()
+    const ttl = options?.ttlMs ?? 24 * 60 * 60_000
+    const expiresAt = new Date(Date.now() + ttl).toISOString()
+
+    const approval: StrategyPromotionApproval = {
+      approvalId,
+      candidateId,
+      candidateDigest: computeCandidateDigest(candidate),
+      strategyVersion: candidate.version,
+      category: candidate.category,
+      authorityScope: 'evolution.strategy.promote',
+      requestedPurpose: 'production_promotion',
+      status: 'pending',
+      requestedBy: options?.requestedBy ?? 'system',
+      requestedAt,
+      expiresAt,
+      decidedBy: null,
+      decidedAt: null,
+      decisionReason: options?.justification ?? null,
+      consumed: false,
+    }
+
+    await this.evolutionStore.writeApproval(approval)
+    return { ok: true, approval }
+  }
+
+  /**
+   * Decide an existing strategy promotion approval request.
+   */
+  async decidePromotionApproval(input: {
+    readonly approvalId: string
+    readonly decision: 'approved' | 'denied' | 'revoked'
+    readonly decidedBy: PrincipalId
+    readonly reason?: string
+  }): Promise<
+    | { readonly ok: true; readonly approval: StrategyPromotionApproval }
+    | { readonly ok: false; readonly reason: string }
+  > {
+    const approval = await this.evolutionStore.getApproval(input.approvalId)
+    if (!approval) {
+      return { ok: false, reason: `Approval ${input.approvalId} does not exist.` }
+    }
+    if (approval.status !== 'pending' && input.decision !== 'revoked') {
+      return {
+        ok: false,
+        reason: `Approval ${input.approvalId} is already in terminal status ${approval.status}.`,
+      }
+    }
+    if (input.decision === 'approved' && input.decidedBy !== 'owner') {
+      return { ok: false, reason: 'Only the authenticated owner may approve strategy promotion.' }
+    }
+
+    const now = new Date().toISOString()
+    const updated: StrategyPromotionApproval = {
+      ...approval,
+      status: input.decision,
+      decidedBy: input.decidedBy,
+      decidedAt: now,
+      decisionReason: input.reason ?? approval.decisionReason,
+    }
+
+    await this.evolutionStore.writeApproval(updated)
+    return { ok: true, approval: updated }
+  }
+
+  /**
+   * Promote an evaluated candidate strategy to active production status.
+   * Strictly enforces all 10 owner authorization checks via validatePromotionApproval.
+   */
   async promoteCandidate(
     candidateId: string,
     auth: PromotionAuthorization,
   ): Promise<PromotionResult> {
-    // 1. Authorization check: must be owner
-    if (auth.authorizedBy !== 'owner' || !auth.approvalId) {
+    // 1. Retrieve approval record from durable store (check authorization first)
+    const approval = await this.evolutionStore.getApproval(auth.approvalId)
+    if (!approval) {
       return {
         ok: false,
         code: 'unauthorized',
-        reason: 'Promotion to active production strategy strictly requires explicit owner approval.',
+        reason: 'Approval request does not exist.',
+      }
+    }
+    if (approval.consumed) {
+      return {
+        ok: false,
+        code: 'unauthorized',
+        reason: 'Approval request has already been consumed and cannot be reused.',
       }
     }
 
-    // 2. Candidate check
+    // 2. Candidate existence check
     const candidate = await this.evolutionStore.getCandidate(candidateId)
     if (!candidate) {
       return {
@@ -157,6 +280,22 @@ export class StrategyLifecycleManager {
       }
     }
 
+    // 3. Authenticate approval against candidate specifications
+    const callerPrincipal = auth.callerPrincipal ?? (auth.authorizedBy === 'owner' ? 'owner' : undefined)
+    const verdict = validatePromotionApproval(approval, candidate, {
+      callerPrincipal,
+      now: auth.timestamp,
+    })
+
+    if (!verdict.valid) {
+      return {
+        ok: false,
+        code: verdict.code,
+        reason: verdict.reason,
+      }
+    }
+
+    // 4. Candidate evaluation status check
     if (candidate.status !== 'eligible_for_promotion') {
       return {
         ok: false,
@@ -165,7 +304,7 @@ export class StrategyLifecycleManager {
       }
     }
 
-    // 3. Rollback specification check
+    // 5. Rollback specification check
     if (!candidate.rollbackMechanism?.targetStrategyId) {
       return {
         ok: false,
@@ -177,6 +316,14 @@ export class StrategyLifecycleManager {
     const previousStrategyId = this.activeStrategy?.strategyId ?? candidate.baselineStrategyId
     const now = auth.timestamp ?? new Date().toISOString()
 
+    // 6. Atomically consume the approval so it cannot be reused
+    const consumedApproval: StrategyPromotionApproval = {
+      ...verdict.approval,
+      consumed: true,
+      consumedAt: now,
+    }
+    await this.evolutionStore.writeApproval(consumedApproval)
+
     const promoRecord: PromotionRecord = {
       candidateId,
       version: candidate.version,
@@ -187,6 +334,7 @@ export class StrategyLifecycleManager {
     }
 
     this.promotionHistory.push(promoRecord)
+    await this.evolutionStore.writePromotionRecord(promoRecord)
 
     // Archive previous active strategy if exists
     if (this.activeStrategy) {
@@ -228,7 +376,9 @@ export class StrategyLifecycleManager {
     }
 
     // 1. Security violation check: instant rollback trigger
-    const securityFailures = relevant.filter((t) => t.failureAttribution?.category === 'external_denial')
+    const securityFailures = relevant.filter(
+      (t) => t.failureAttribution?.category === 'external_denial',
+    )
     if (securityFailures.length > 0) {
       const reason = `Security violation detected under active strategy ${this.activeStrategy.version}: ${securityFailures[0]?.failureAttribution?.reason}`
       await this.rollbackStrategy(this.activeStrategy.strategyId, reason)
@@ -255,7 +405,16 @@ export class StrategyLifecycleManager {
     reason: string,
   ): Promise<{ readonly ok: boolean; readonly restoredStrategyId: string }> {
     const candidate = await this.evolutionStore.getCandidate(strategyId)
-    const fallbackTargetId = candidate?.rollbackMechanism.targetStrategyId ?? 'strat-baseline-default'
+    const fallbackTargetId =
+      candidate?.rollbackMechanism.targetStrategyId ?? 'strat-baseline-default'
+
+    // Idempotency: if already rolled back and restored, do not create duplicate records
+    if (
+      this.rollbackHistory.some((r) => r.candidateId === strategyId) &&
+      this.activeStrategy?.strategyId === fallbackTargetId
+    ) {
+      return { ok: true, restoredStrategyId: fallbackTargetId }
+    }
 
     const now = new Date().toISOString()
     const rbRecord: RollbackRecord = {
@@ -265,6 +424,7 @@ export class StrategyLifecycleManager {
       rolledBackAt: now,
     }
     this.rollbackHistory.push(rbRecord)
+    await this.evolutionStore.writeRollbackRecord(rbRecord)
 
     // Mark current candidate as rolled_back
     await this.evolutionStore.updateCandidateStatus(strategyId, 'rolled_back', reason)

@@ -131,4 +131,5 @@ export {
 export * from './strategy'
 export * from './store'
 export * from './experiment'
+export * from './approval'
 export * from './lifecycle'

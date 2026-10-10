@@ -100,11 +100,23 @@ import {
   VaultMissionStore,
   VaultGoalStore,
   VaultProactiveStore,
+  VaultMetacognitionStore,
+  VaultEvolutionStore,
   VaultResearchSessionStore,
   VaultWorldStore,
   type VaultBinding,
   type VaultKeyProvider,
 } from './vault'
+import {
+  MetacognitionEngine,
+  type MetacognitionStore,
+  MemoryMetacognitionStore,
+} from './metacognition'
+import {
+  StrategyLifecycleManager,
+  type EvolutionStore,
+  MemoryEvolutionStore,
+} from './evolution'
 import {
   ProactiveEngine,
   type ProactiveStore,
@@ -572,6 +584,10 @@ export interface CoreOptions {
   goalStore?: GoalStore
   /** Overrides the Proactive content store wholesale. For tests. */
   proactiveStore?: ProactiveStore
+  /** Overrides the Metacognition content store wholesale. For tests. */
+  metacognitionStore?: MetacognitionStore
+  /** Overrides the Evolution content store wholesale. For tests. */
+  evolutionStore?: EvolutionStore
   /**
    * Life History's own independent secure key, from the keyring.
    *
@@ -1078,6 +1094,18 @@ export interface Core {
    * Read recent normalized observations (Phase 6A).
    */
   recentObservations(limit?: number): readonly NormalizedObservation[]
+  /**
+   * Metacognition engine (Phase 7A).
+   */
+  metacognition(): MetacognitionEngine | undefined
+  /**
+   * Strategy lifecycle manager (Phase 7D).
+   */
+  evolution(): StrategyLifecycleManager | undefined
+  /**
+   * Evolution store (Phase 7B).
+   */
+  evolutionStore(): EvolutionStore | undefined
   /**
    * Core's account of the workforce: workers, teams, and what each is doing.
    *
@@ -1668,6 +1696,10 @@ class FreyaCore implements Core {
   private learningStore: LearningStore | undefined
   private proactiveEngine: ProactiveEngine | undefined
   private proactiveStore: ProactiveStore | undefined
+  private metacognitionEngine: MetacognitionEngine | undefined
+  private metacognitionStore: MetacognitionStore | undefined
+  private strategyLifecycle: StrategyLifecycleManager | undefined
+  private evolutionStoreInstance: EvolutionStore | undefined
   /**
    * The canonical encrypted Vault, or null when the host supplied none or it could
    * not be opened. Held privately so that Mission content has one owner of the
@@ -2768,6 +2800,12 @@ class FreyaCore implements Core {
       }
     })
 
+    this.metacognitionStore = await this.buildMetacognitionStore()
+    this.metacognitionEngine = new MetacognitionEngine({ store: this.metacognitionStore })
+    this.evolutionStoreInstance = await this.buildEvolutionStore()
+    this.strategyLifecycle = new StrategyLifecycleManager(this.evolutionStoreInstance, this.metacognitionStore)
+    await this.strategyLifecycle.initialize()
+
     // Context sits beside Missions rather than above them: it reads which Mission is
     // current and nothing else, and it is built here so the two are wired in one place.
     //
@@ -3249,6 +3287,9 @@ class FreyaCore implements Core {
       await this.learningStore?.close()
       await this.proactiveEngine?.close()
       await this.proactiveStore?.close()
+      await this.metacognitionEngine?.close()
+      await this.metacognitionStore?.close()
+      await this.evolutionStoreInstance?.close()
       // The Vault owns the Mission store's connection, so it closes after the engine
       // has flushed. Closing it here keeps the one encrypted database's lifetime
       // inside Core's own.
@@ -5870,6 +5911,18 @@ private async buildForge(): Promise<void> {
 
   recentObservations(limit?: number): readonly NormalizedObservation[] {
     return this.proactiveEngine?.recentObservations(limit) ?? []
+  }
+
+  metacognition(): MetacognitionEngine | undefined {
+    return this.metacognitionEngine
+  }
+
+  evolution(): StrategyLifecycleManager | undefined {
+    return this.strategyLifecycle
+  }
+
+  evolutionStore(): EvolutionStore | undefined {
+    return this.evolutionStoreInstance
   }
 
   goals(): GoalProjectionView {
@@ -11019,6 +11072,34 @@ case 'forge.run': {
 
   private publishProactive(): void {
     this.publishConsciousness()
+  }
+
+  /**
+   * Build the Metacognition content store (Phase 7 Metacognition & Performance Awareness).
+   */
+  private async buildMetacognitionStore(): Promise<MetacognitionStore> {
+    if (this.options.metacognitionStore) return this.options.metacognitionStore
+    const vault = await this.ensureVault()
+    if (vault !== null) return new VaultMetacognitionStore(vault)
+    return new MemoryMetacognitionStore({
+      faultReason: this.options.vault !== undefined
+        ? `Metacognition content is held in memory only: ${this.vaultFault ?? 'the encrypted Vault is not configured'}`
+        : 'the encrypted Vault is not configured',
+    })
+  }
+
+  /**
+   * Build the Evolution content store (Phase 7 Verified Evolution).
+   */
+  private async buildEvolutionStore(): Promise<EvolutionStore> {
+    if (this.options.evolutionStore) return this.options.evolutionStore
+    const vault = await this.ensureVault()
+    if (vault !== null) return new VaultEvolutionStore(vault)
+    return new MemoryEvolutionStore({
+      faultReason: this.options.vault !== undefined
+        ? `Evolution content is held in memory only: ${this.vaultFault ?? 'the encrypted Vault is not configured'}`
+        : 'the encrypted Vault is not configured',
+    })
   }
 
   /**

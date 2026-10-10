@@ -78,6 +78,24 @@ export interface GoalTruthPort {
   totalCheckpoints(goalId: string): number
   /** The goal's retry count for the current checkpoint. */
   retryCount(goalId: string): number
+  /** Whether the goal's budget is exhausted. */
+  isBudgetExhausted?(goalId: string): boolean
+  /** Whether the goal has eligible milestones or checkpoints ready to pursue. */
+  hasEligibleMilestone?(goalId: string): boolean
+}
+
+export const CONTINUATION_WAKE_CAUSES = [
+  'scheduled_review',
+  'external_event',
+  'approval_granted',
+  'prerequisite_finished',
+  'restart_recovery',
+] as const
+
+export type ContinuationWakeCause = (typeof CONTINUATION_WAKE_CAUSES)[number]
+
+export function isContinuationWakeCause(value: unknown): value is ContinuationWakeCause {
+  return typeof value === 'string' && (CONTINUATION_WAKE_CAUSES as readonly string[]).includes(value as ContinuationWakeCause)
 }
 
 /** A wake as the continuation engine receives it. */
@@ -85,6 +103,8 @@ export interface ContinuationWake {
   readonly wakeId: string
   readonly source: string
   readonly goalId: string | null
+  readonly cause?: ContinuationWakeCause | string
+  readonly authorized?: boolean
 }
 
 export interface ContinuationEngineOptions {
@@ -139,6 +159,18 @@ export class ContinuationEngine {
     if (this.closed) return this.idleDecision('the continuation engine is shutting down')
     if (this.stopped()) return this.idleDecision('STOP ALL is active')
 
+    // Refuse unauthorized or spurious wake sources (model hallucinations)
+    if (wake.authorized === false) {
+      return this.decide(this.expiresNow('wait', 'unauthorized wake source rejected'), wake.goalId)
+    }
+
+    if (wake.cause !== undefined && !isContinuationWakeCause(wake.cause)) {
+      return this.decide(
+        this.expiresNow('wait', `unregistered wake cause rejected: ${String(wake.cause)}`),
+        wake.goalId,
+      )
+    }
+
     // A wake with no goal reference is an idle wake: it asks whether anything
     // needs doing, and the honest answer from IDLE is "wait".
     if (wake.goalId === null) {
@@ -150,15 +182,21 @@ export class ContinuationEngine {
       return this.decide(this.expiresNow('wait', 'the goal is not open'), goalId)
     }
 
+    // Budget hierarchy check
+    if (this.options.goals.isBudgetExhausted?.(goalId)) {
+      return this.decide({ decision: 'pause', reason: 'budget_exhausted' }, goalId)
+    }
+
     const status = this.options.goals.goalState(goalId)
     if (status === 'paused') {
       return this.decide({ decision: 'pause', reason: 'the goal is paused' }, goalId)
     }
 
+    const hasEligible = this.options.goals.hasEligibleMilestone?.(goalId) ?? false
     const verified = this.options.goals.verifiedCheckpoints(goalId)
     const total = this.options.goals.totalCheckpoints(goalId)
 
-    if (total > 0 && verified >= total) {
+    if (!hasEligible && total > 0 && verified >= total) {
       return this.decide({ decision: 'complete', reason: 'every checkpoint has been verified' }, goalId)
     }
 
@@ -175,10 +213,19 @@ export class ContinuationEngine {
       )
     }
 
-    return this.decide(
-      { decision: 'continue', reason: 'the goal is open and has unverified checkpoints' },
-      goalId,
-    )
+    // If milestone checks are active, verify prerequisite readiness
+    if (this.options.goals.hasEligibleMilestone && !hasEligible) {
+      return this.decide(
+        this.expiresNow('wait', 'waiting on milestone dependencies or external conditions'),
+        goalId,
+      )
+    }
+
+    const reason = wake.cause
+      ? `the goal is open and eligible on cause: ${wake.cause}`
+      : 'the goal is open and has unverified checkpoints'
+
+    return this.decide({ decision: 'continue', reason }, goalId)
   }
 
   /**

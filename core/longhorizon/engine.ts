@@ -4,6 +4,26 @@ import type { PrincipalId } from '../protocol/core-protocol'
 import { reduceGoalState, initialGoalState } from './state'
 import type { GoalStore } from './store'
 import {
+  ProgressiveRoadmapPlanner,
+  validateRoadmap,
+  type GoalRoadmapInput,
+} from './decomposition'
+import {
+  DEFAULT_GOAL_BUDGET,
+  ZERO_GOAL_SPEND,
+  calculateRemainingGoalBudget,
+  checkBudgetExhaustion,
+  deriveMilestoneMissionBudget,
+  recordGoalSpend,
+  validateGoalBudget,
+  type GoalBudgetPolicy,
+  type GoalBudgetRemaining,
+  type GoalSpend,
+  type MissionBudgetDerivationResult,
+} from './budget'
+import type { GoalTruthPort } from './continuation'
+import type { MissionBudget } from '../missions/autonomy/types'
+import {
   DEFAULT_GOAL_LIMITS,
   GOAL_REASONS,
   canTransitionGoal,
@@ -97,8 +117,12 @@ export class GoalEngine {
   private goalState: GoalState = initialGoalState()
   private readonly locks = new Map<string, Promise<unknown>>()
   private readonly inflight = new Set<Promise<unknown>>()
+  private readonly planner: ProgressiveRoadmapPlanner
+  private readonly contentCache = new Map<string, GoalContent>()
 
-  constructor(private readonly options: GoalEngineOptions) {}
+  constructor(private readonly options: GoalEngineOptions) {
+    this.planner = new ProgressiveRoadmapPlanner(() => this.now())
+  }
 
   /* -------------------------------------------------------------- lifecycle */
 
@@ -106,6 +130,12 @@ export class GoalEngine {
     this.goalState = await this.options.fabric.replay(initialGoalState(), (draft, event) =>
       reduceGoalState(draft, event),
     )
+    for (const goalId of this.goalState.goals.keys()) {
+      const read = await this.options.store.read(goalId)
+      if (read.ok) {
+        this.contentCache.set(goalId, read.value)
+      }
+    }
     // Live appends fold through the *same* reducer as replay, so the state a
     // window sees cannot drift from the state a restart would rebuild.
     this.dispose = this.options.fabric.subscribe((event) => {
@@ -197,14 +227,31 @@ export class GoalEngine {
 
     const goalId = this.newId()
     const now = this.nowIso()
+
+    let roadmap = undefined
+    if (input.roadmap) {
+      const validated = validateRoadmap({ ...input.roadmap, goalId }, 0, undefined, now)
+      if (!validated.ok) return this.refused('created', validated.reason)
+      roadmap = validated.value
+    }
+
+    const validatedBudget = validateGoalBudget(input.budget ?? {})
+    if (!validatedBudget.ok) return this.refused('created', validatedBudget.reason)
+    const budget = validatedBudget.value
+    const spend = { ...ZERO_GOAL_SPEND }
+
     const content: GoalContent = {
       goalId,
       ...normalised.value,
       createdAt: now,
+      ...(roadmap ? { roadmap } : {}),
+      budget,
+      spend,
     }
 
     try {
       await this.options.store.write(content)
+      this.contentCache.set(goalId, content)
     } catch (error) {
       return this.refused('created', this.describe(error))
     }
@@ -317,6 +364,222 @@ export class GoalEngine {
       this.onChange()
       return { ok: true, goalId, checkpointId }
     })
+  }
+
+  /* -------------------------------------------------------------- decomposition */
+
+  getPlanner(): ProgressiveRoadmapPlanner {
+    return this.planner
+  }
+
+  async setRoadmap(goalId: string, input: GoalRoadmapInput): Promise<GoalCommandOutcome> {
+    if (this.stopped()) return this.refused('roadmap-updated', 'STOP ALL is active')
+
+    return this.lock(goalId, async () => {
+      const goal = this.goalState.goals.get(goalId)
+      if (goal === undefined) return this.refused('roadmap-updated', 'no such goal')
+      if (isTerminalGoalStatus(goal.state)) {
+        return this.refused('roadmap-updated', `a ${goal.state} goal cannot update roadmap`)
+      }
+
+      const read = await this.options.store.read(goalId)
+      if (!read.ok) return this.refused('roadmap-updated', read.reason)
+
+      const currentRevision = read.value.roadmap?.revision ?? 0
+      const validated = validateRoadmap(input, currentRevision, undefined, this.nowIso())
+      if (!validated.ok) return this.refused('roadmap-updated', validated.reason)
+
+      const updatedContent: GoalContent = {
+        ...read.value,
+        roadmap: validated.value,
+      }
+
+      try {
+        await this.options.store.write(updatedContent)
+        this.contentCache.set(goalId, updatedContent)
+      } catch (error) {
+        return this.refused('roadmap-updated', this.describe(error))
+      }
+
+      await this.emit('longhorizon.goal.roadmap-updated', {
+        goalId,
+        revision: validated.value.revision,
+        milestoneCount: validated.value.milestones.length,
+      })
+
+      this.onChange()
+      return {
+        operation: 'roadmap-updated',
+        ok: true,
+        goalId,
+        revision: validated.value.revision,
+      }
+    })
+  }
+
+  async settleMilestone(
+    goalId: string,
+    milestoneId: string,
+    outcome: 'completed' | 'failed',
+    evidence: { readonly reason?: string; readonly missionId?: string } = {},
+  ): Promise<GoalCommandOutcome> {
+    if (this.stopped()) return this.refused('milestone-settled', 'STOP ALL is active')
+
+    return this.lock(goalId, async () => {
+      const goal = this.goalState.goals.get(goalId)
+      if (goal === undefined) return this.refused('milestone-settled', 'no such goal')
+      if (isTerminalGoalStatus(goal.state)) {
+        return this.refused('milestone-settled', `a ${goal.state} goal cannot settle a milestone`)
+      }
+
+      const read = await this.options.store.read(goalId)
+      if (!read.ok) return this.refused('milestone-settled', read.reason)
+      if (!read.value.roadmap) {
+        return this.refused('milestone-settled', 'goal has no roadmap')
+      }
+
+      const targetMilestone = read.value.roadmap.milestones.find((m) => m.milestoneId === milestoneId)
+      if (!targetMilestone) {
+        return this.refused('milestone-settled', `milestone ${milestoneId} not found in roadmap`)
+      }
+
+      const updatedRoadmap = this.planner.settleMilestone(read.value.roadmap, milestoneId, outcome, evidence)
+      const updatedContent: GoalContent = {
+        ...read.value,
+        roadmap: updatedRoadmap,
+      }
+
+      try {
+        await this.options.store.write(updatedContent)
+        this.contentCache.set(goalId, updatedContent)
+      } catch (error) {
+        return this.refused('milestone-settled', this.describe(error))
+      }
+
+      await this.emit('longhorizon.goal.milestone-settled', {
+        goalId,
+        milestoneId,
+        outcome,
+        revision: updatedRoadmap.revision,
+      })
+
+      this.onChange()
+      return {
+        operation: 'milestone-settled',
+        ok: true,
+        goalId,
+        milestoneId,
+      }
+    })
+  }
+
+  /* ----------------------------------------------------------------- budget */
+
+  updateContent(content: GoalContent): void {
+    this.contentCache.set(content.goalId, content)
+  }
+
+  async recordSpend(goalId: string, incremental: Partial<GoalSpend>): Promise<GoalCommandOutcome> {
+    if (this.stopped()) return this.refused('budget-updated', 'STOP ALL is active')
+
+    return this.lock(goalId, async () => {
+      const goal = this.goalState.goals.get(goalId)
+      if (goal === undefined) return this.refused('budget-updated', 'no such goal')
+      if (isTerminalGoalStatus(goal.state)) {
+        return this.refused('budget-updated', `a ${goal.state} goal cannot record spend`)
+      }
+
+      const read = await this.options.store.read(goalId)
+      if (!read.ok) return this.refused('budget-updated', read.reason)
+
+      const currentSpend = read.value.spend ?? { ...ZERO_GOAL_SPEND }
+      const newSpend = recordGoalSpend(currentSpend, incremental)
+      const policy = read.value.budget ?? DEFAULT_GOAL_BUDGET
+      const exhaustion = checkBudgetExhaustion(policy, newSpend)
+
+      const updatedContent: GoalContent = {
+        ...read.value,
+        budget: policy,
+        spend: newSpend,
+      }
+
+      try {
+        await this.options.store.write(updatedContent)
+        this.contentCache.set(goalId, updatedContent)
+      } catch (error) {
+        return this.refused('budget-updated', this.describe(error))
+      }
+
+      if (exhaustion.exhausted && goal.state === 'active') {
+        await this.emit('longhorizon.goal.state-changed', {
+          goalId,
+          from: goal.state,
+          to: 'paused',
+          reason: GOAL_REASONS.budget_exhausted,
+        })
+      }
+
+      this.onChange()
+      return {
+        operation: 'budget-updated',
+        ok: true,
+        goalId,
+        budgetExhausted: exhaustion.exhausted,
+      }
+    })
+  }
+
+  isBudgetExhausted(goalId: string): boolean {
+    const content = this.contentCache.get(goalId)
+    if (!content) return false
+    const budget = content.budget ?? DEFAULT_GOAL_BUDGET
+    const spend = content.spend ?? ZERO_GOAL_SPEND
+    return checkBudgetExhaustion(budget, spend).exhausted
+  }
+
+  getBudget(goalId: string): { budget: GoalBudgetPolicy; spend: GoalSpend; remaining: GoalBudgetRemaining } | null {
+    const content = this.contentCache.get(goalId)
+    if (!content) return null
+    const budget = content.budget ?? DEFAULT_GOAL_BUDGET
+    const spend = content.spend ?? ZERO_GOAL_SPEND
+    const remaining = calculateRemainingGoalBudget(budget, spend)
+    return { budget, spend, remaining }
+  }
+
+  deriveMissionBudget(goalId: string, requested?: Partial<MissionBudget>): MissionBudgetDerivationResult {
+    const content = this.contentCache.get(goalId)
+    const policy = content?.budget ?? DEFAULT_GOAL_BUDGET
+    const spend = content?.spend ?? ZERO_GOAL_SPEND
+    return deriveMilestoneMissionBudget(policy, spend, requested)
+  }
+
+  hasEligibleMilestone(goalId: string): boolean {
+    const content = this.contentCache.get(goalId)
+    if (content?.roadmap && content.roadmap.milestones.length > 0) {
+      return this.planner.nextEligibleMilestone(content.roadmap) !== null
+    }
+    const goal = this.goalState.goals.get(goalId)
+    if (!goal) return false
+    return goal.checkpoints.length === 0 || goal.verifiedCheckpoints < goal.checkpoints.length
+  }
+
+  getContent(goalId: string): GoalContent | null {
+    return this.contentCache.get(goalId) ?? null
+  }
+
+  toTruthPort(): GoalTruthPort {
+    return {
+      isGoalOpen: (goalId: string) => {
+        const goal = this.goalState.goals.get(goalId)
+        return goal !== undefined && !isTerminalGoalStatus(goal.state)
+      },
+      goalState: (goalId: string) => this.goalState.goals.get(goalId)?.state ?? null,
+      verifiedCheckpoints: (goalId: string) => this.goalState.goals.get(goalId)?.verifiedCheckpoints ?? 0,
+      totalCheckpoints: (goalId: string) => this.goalState.goals.get(goalId)?.checkpoints.length ?? 0,
+      retryCount: (goalId: string) => this.goalRetryCount(goalId),
+      isBudgetExhausted: (goalId: string) => this.isBudgetExhausted(goalId),
+      hasEligibleMilestone: (goalId: string) => this.hasEligibleMilestone(goalId),
+    }
   }
 
   /* -------------------------------------------------------------- internal */
@@ -472,7 +735,7 @@ export class GoalEngine {
       const goal = this.goalState.goals.get(goalId)
       if (checkpoint === undefined || goal === undefined) return
       if (checkpoint.goalId !== goalId) return
-      if (checkpoint.status !== 'in-progress') return
+      if (checkpoint.status === 'verified') return
       if (outcome === 'passed') {
         await this.emit('longhorizon.checkpoint.verified', {
           goalId,
@@ -577,10 +840,20 @@ export class GoalEngine {
     const goal = this.goalState.goals.get(goalId)
     if (goal === undefined) return null
     const content = await this.options.store.read(goalId)
+    if (content.ok) {
+      this.contentCache.set(goalId, content.value)
+    }
+    const budget = content.ok ? (content.value.budget ?? DEFAULT_GOAL_BUDGET) : null
+    const spend = content.ok ? (content.value.spend ?? ZERO_GOAL_SPEND) : null
+    const budgetRemaining = budget && spend ? calculateRemainingGoalBudget(budget, spend) : null
     return {
       ...this.summarise(goal),
       content: content.ok ? content.value : null,
       contentReason: content.ok ? null : content.reason,
+      roadmap: content.ok ? (content.value.roadmap ?? null) : null,
+      budget,
+      spend,
+      budgetRemaining,
     }
   }
 

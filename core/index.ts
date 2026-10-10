@@ -77,7 +77,7 @@ import { isAssignableToWorker, isTerminalAssignmentStatus, workerPrincipalId } f
 import type { WORKFORCE_LIMITS } from './workforce/types'
 import type { WorkforceProjection, WorkforceWorkerDetail } from './workforce/types'
 import { MissionEngine, type WorkPort } from './missions/engine'
-import type { MissionCapabilityPort, MissionPriority } from './missions/autonomy/types'
+import type { MissionBudget, MissionCapabilityPort, MissionPriority } from './missions/autonomy/types'
 import type { MissionAuthorityPort } from './missions/autonomy/authority'
 import type { WorkRisk } from './work/types'
 import {
@@ -98,11 +98,75 @@ import {
   Vault,
   VaultConversationStore,
   VaultMissionStore,
+  VaultGoalStore,
+  VaultProactiveStore,
+  VaultMetacognitionStore,
+  VaultEvolutionStore,
   VaultResearchSessionStore,
   VaultWorldStore,
   type VaultBinding,
   type VaultKeyProvider,
 } from './vault'
+import {
+  MetacognitionEngine,
+  type MetacognitionStore,
+  MemoryMetacognitionStore,
+} from './metacognition'
+import {
+  StrategyLifecycleManager,
+  type EvolutionStore,
+  MemoryEvolutionStore,
+} from './evolution'
+import {
+  ProactiveEngine,
+  type ProactiveStore,
+  MemoryProactiveStore,
+  type NormalizedObservation,
+  type ObservationSubscription,
+  type ObservationSubscriptionInput,
+  type ObservationIngestResult,
+  type RawObservationInput,
+} from './proactive'
+import { GoalEngine } from './longhorizon/engine'
+import type { GoalStore } from './longhorizon/store'
+import { MemoryGoalStore } from './longhorizon/memory-store'
+import { VerificationEngine } from './longhorizon/verification'
+import {
+  ContinuationEngine,
+  type ContinuationWake,
+  type ContinuationDecisionOutcome,
+} from './longhorizon/continuation'
+import {
+  validateGoalBudget,
+  checkBudgetExhaustion,
+  ZERO_GOAL_SPEND,
+  type GoalBudgetPolicy,
+  type GoalSpend,
+  type MissionBudgetDerivationResult,
+} from './longhorizon/budget'
+import {
+  GOAL_REASONS,
+  type GoalCommandOutcome,
+  type GoalContent,
+  type GoalDetail,
+  type GoalReason,
+  type GoalVerifier,
+} from './longhorizon/types'
+import {
+  type AdvisoryLessonInput,
+  type DecompositionOptions,
+  type RoadmapValidationResult,
+  type BoundedMissionProposal,
+  type GoalMilestone,
+  type GoalMilestoneInput,
+  type GoalRoadmapInput,
+} from './longhorizon/decomposition'
+import {
+  ABSENT_GOAL_PROJECTION,
+  type GoalProjectionView,
+  type GoalCommandOperation,
+  type GoalCommandOutcomeView,
+} from './protocol/longhorizon'
 import { WorkEngine, type WorkCommandOutcome } from './work/engine'
 import { ABSENT_WORK_PROJECTION, type WorkProjection } from './work/projection'
 import {
@@ -516,6 +580,14 @@ export interface CoreOptions {
   personalityLimits?: { maxRelationshipItems?: number }
   /** Overrides the Mission content store wholesale. For tests. */
   missionStore?: MissionStore
+  /** Overrides the Goal content store wholesale. For tests. */
+  goalStore?: GoalStore
+  /** Overrides the Proactive content store wholesale. For tests. */
+  proactiveStore?: ProactiveStore
+  /** Overrides the Metacognition content store wholesale. For tests. */
+  metacognitionStore?: MetacognitionStore
+  /** Overrides the Evolution content store wholesale. For tests. */
+  evolutionStore?: EvolutionStore
   /**
    * Life History's own independent secure key, from the keyring.
    *
@@ -928,6 +1000,7 @@ export interface Core {
    */
   onWork(listener: (projection: WorkProjection) => void): () => void
   onMission(listener: (projection: MissionProjection) => void): () => void
+  onGoals(listener: (projection: GoalProjectionView) => void): () => void
   /**
    * The current Work projection.
    *
@@ -949,6 +1022,10 @@ export interface Core {
    * guess which one it is looking at.
    */
   mission(): MissionProjection
+  /**
+   * Core's account of long-horizon Goals (Phase 5). Derived from the journal, content encrypted.
+   */
+  goals(): GoalProjectionView
   /**
    * Mark a Mission's goal as ready to be planned.
    *
@@ -988,6 +1065,66 @@ export interface Core {
    * journal.
    */
   missionDetail(missionId: string): Promise<MissionDetail | null>
+  /**
+   * One Goal's private content, decrypted from the Goal store (Phase 5).
+   */
+  goalDetail(goalId: string): Promise<GoalDetail | null>
+  /**
+   * Propose a structured milestone roadmap for a long-term goal informed by learning (Phase 5B).
+   */
+  proposeGoalRoadmap(goalId: string, options?: DecompositionOptions): Promise<RoadmapValidationResult>
+  /**
+   * Elaborate an eligible milestone into a bounded Mission specification (Phase 5B).
+   */
+  elaborateMilestoneMission(goalId: string, milestoneId?: string): Promise<BoundedMissionProposal | null>
+  /**
+   * Set or update a goal's budget policy (Phase 5C).
+   */
+  setGoalBudget(goalId: string, budget: Partial<GoalBudgetPolicy>): Promise<GoalCommandOutcome>
+  /**
+   * Record spend against a goal's budget policy (Phase 5C).
+   */
+  recordGoalSpend(goalId: string, incremental: Partial<GoalSpend>): Promise<GoalCommandOutcome>
+  /**
+   * Derive a strictly bounded MissionBudget for an eligible milestone Mission (Phase 5C).
+   */
+  deriveMilestoneMissionBudget(goalId: string, requested?: Partial<MissionBudget>): MissionBudgetDerivationResult
+  /**
+   * Handle an authorized continuation wake (Phase 5C).
+   */
+  handleContinuationWake(wake: ContinuationWake): Promise<ContinuationDecisionOutcome>
+  /**
+   * Ingest and normalize an event observation (Phase 6A).
+   */
+  ingestObservation(input: RawObservationInput): Promise<ObservationIngestResult>
+  /**
+   * Register an authorized external observation source subscription (Phase 6A).
+   */
+  subscribeObservationSource(input: ObservationSubscriptionInput): Promise<ObservationSubscription>
+  /**
+   * Revoke an observation source subscription (Phase 6A).
+   */
+  revokeObservationSource(subscriptionId: string): Promise<boolean>
+  /**
+   * List active observation source subscriptions (Phase 6A).
+   */
+  observationSubscriptions(): readonly ObservationSubscription[]
+  /**
+   * Read recent normalized observations (Phase 6A).
+   */
+  recentObservations(limit?: number): readonly NormalizedObservation[]
+  /**
+   * Metacognition engine (Phase 7A).
+   */
+  metacognition(): MetacognitionEngine | undefined
+  /**
+   * Strategy lifecycle manager (Phase 7D).
+   */
+  evolution(): StrategyLifecycleManager | undefined
+  /**
+   * Evolution store (Phase 7B).
+   */
+  evolutionStore(): EvolutionStore | undefined
   /**
    * Core's account of the workforce: workers, teams, and what each is doing.
    *
@@ -1341,6 +1478,7 @@ class FreyaCore implements Core {
   private readonly brainListeners = new Set<(projection: BrainProjection) => void>()
   private readonly workListeners = new Set<(projection: WorkProjection) => void>()
   private readonly missionListeners = new Set<(projection: MissionProjection) => void>()
+  private readonly goalListeners = new Set<(projection: GoalProjectionView) => void>()
   private readonly workforceListeners = new Set<(projection: WorkforceMirror) => void>()
   private readonly contextListeners = new Set<(projection: ContextProjectionView) => void>()
   private readonly learningListeners = new Set<(projection: LearningProjection) => void>()
@@ -1569,9 +1707,18 @@ class FreyaCore implements Core {
    */
   private workEngine: WorkEngine | undefined
   private missionEngine: MissionEngine | undefined
+  private goalEngine: GoalEngine | undefined
+  private goalStore: GoalStore | undefined
+  private continuationEngine: ContinuationEngine | undefined
   private chatMissions: ChatMissionIntegration | undefined
   private learningEngine: LearningEngine | undefined
   private learningStore: LearningStore | undefined
+  private proactiveEngine: ProactiveEngine | undefined
+  private proactiveStore: ProactiveStore | undefined
+  private metacognitionEngine: MetacognitionEngine | undefined
+  private metacognitionStore: MetacognitionStore | undefined
+  private strategyLifecycle: StrategyLifecycleManager | undefined
+  private evolutionStoreInstance: EvolutionStore | undefined
   /**
    * The canonical encrypted Vault, or null when the host supplied none or it could
    * not be opened. Held privately so that Mission content has one owner of the
@@ -2434,6 +2581,16 @@ class FreyaCore implements Core {
     if (this.options.missionReadRoots?.length) registerFileInspection(this.workRegistry, [...this.options.missionReadRoots])
     if (this.researchIntegration) registerResearchInspection(this.workRegistry, {
       research: this.researchIntegration,
+      resolveStrategy: (scope: string) => {
+        const strat = this.strategyLifecycle?.getActiveStrategy(scope)
+        if (!strat) return null
+        return {
+          strategyId: strat.strategyId,
+          version: strat.version,
+          kind: strat.kind,
+          parameters: strat.parameters,
+        }
+      },
       admit: async (runId, stepKey, signal) => {
         signal?.throwIfAborted()
         const id = this.workEngine?.snapshot().runs.get(runId)?.parentId
@@ -2530,6 +2687,57 @@ class FreyaCore implements Core {
     })
     await this.missionEngine.open()
 
+    const goalVerificationEngine = new VerificationEngine({
+      fabric: this.fabric,
+      goals: {
+        recordCheckpointOutcome: (goalId, checkpointId, outcome, reason, attempts) =>
+          this.goalEngine?.recordCheckpointOutcome(goalId, checkpointId, outcome, reason, attempts) ?? Promise.resolve(),
+        checkpointAttempts: (goalId, checkpointId) =>
+          this.goalEngine?.checkpointAttempts(goalId, checkpointId) ?? 0,
+        goalRetryCount: (goalId) =>
+          this.goalEngine?.goalRetryCount(goalId) ?? 0,
+      },
+      principalId: this.owner.id,
+      now: this.options.now,
+      stopAll: () => this.state.stopAll.active,
+    })
+
+    this.goalStore = await this.buildGoalStore()
+    this.goalEngine = new GoalEngine({
+      fabric: this.fabric,
+      store: this.goalStore,
+      continuation: {
+        verifyCheckpoint: async (goalId, checkpointId, signal) => {
+          const defaultVerifier: GoalVerifier = {
+            id: 'default',
+            verify: async () => ({ established: true, reason: GOAL_REASONS.verification_passed }),
+          }
+          const res = await goalVerificationEngine.verify(goalId, checkpointId, defaultVerifier, signal)
+          return {
+            established: res.outcome === 'passed',
+            reason: res.reason ?? (res.outcome === 'passed' ? GOAL_REASONS.verification_passed : GOAL_REASONS.verification_not_established),
+          }
+        },
+      },
+      principalId: this.owner.id,
+      now: this.options.now,
+      newId: this.options.newId,
+      onChange: () => this.publishGoals(),
+      stopAll: () => this.state.stopAll.active,
+    })
+    await this.goalEngine.open()
+
+    this.continuationEngine = new ContinuationEngine({
+      fabric: this.fabric,
+      goals: this.goalEngine.toTruthPort(),
+      principalId: this.owner.id,
+      now: this.options.now,
+      newId: this.options.newId,
+      onChange: () => this.publishGoals(),
+      stopAll: () => this.state.stopAll.active,
+    })
+    await this.continuationEngine.open()
+
     this.learningStore = await this.buildLearningStore()
     this.learningEngine = new LearningEngine({
       store: this.learningStore,
@@ -2538,6 +2746,155 @@ class FreyaCore implements Core {
       stopped: () => this.state.stopAll.active,
       onChange: () => this.publishLearning(),
     })
+
+    this.proactiveStore = await this.buildProactiveStore()
+    this.proactiveEngine = new ProactiveEngine({
+      fabric: this.fabric,
+      store: this.proactiveStore,
+      modelProvider: this.options.providers?.[0],
+      getGoal: (goalId) => {
+        if (!this.goalEngine) return null
+        const record = this.goalEngine.state().goals.get(goalId)
+        if (!record) return null
+        const content = this.goalEngine.getContent(goalId)
+        return {
+          goalId: record.goalId,
+          state: record.state,
+          title: content?.title ?? record.goalId,
+          milestones: (content?.roadmap?.milestones ?? []).map((m) => ({
+            milestoneId: m.milestoneId,
+            status: m.status,
+            criteria: m.acceptanceCriteria,
+          })),
+        }
+      },
+      activeGoals: () => {
+        if (!this.goalEngine) return []
+        return [...this.goalEngine.state().goals.values()]
+          .filter((g) => g.state === 'active')
+          .map((g) => {
+            const content = this.goalEngine?.getContent(g.goalId)
+            return {
+              goalId: g.goalId,
+              state: g.state,
+              title: content?.title ?? g.goalId,
+              milestones: (content?.roadmap?.milestones ?? []).map((m) => ({
+                milestoneId: m.milestoneId,
+                status: m.status,
+                criteria: m.acceptanceCriteria,
+              })),
+            }
+          })
+      },
+      activeMissions: () => {
+        if (!this.missionEngine) return []
+        return this.missionEngine.projection().missions
+          .filter((m) => m.status === 'active')
+          .map((m) => ({
+            missionId: m.missionId,
+            state: m.status,
+          }))
+      },
+      recallLearning: (query) => {
+        if (!this.learningEngine) return ''
+        const advice = recallRelevantLearning(this.learningEngine, query)
+        return advice.promptSection
+      },
+      notifyAttention: async (notification) => {
+        if (!this.attentionEngine) return
+        await this.attentionEngine.ingestInternal('system', {
+          kind: notification.kind,
+          text: notification.text,
+          goalRef: notification.goalRef ?? null,
+          sourceRef: notification.sourceRef ?? null,
+          severityHint: notification.severityHint ?? 'none',
+        })
+      },
+      handleContinuation: async (goalId, _missionId) => {
+        if (!this.continuationEngine) return
+        await this.handleContinuationWake({
+          goalId,
+          wakeId: `wake-proactive-${this.options.newId?.() ?? Date.now()}`,
+          source: 'proactive',
+          cause: 'external_event',
+          authorized: true,
+        })
+      },
+      checkContinuationPrerequisites: (goalId, missionId) => {
+        const goal = goalId && this.goalEngine ? this.goalEngine.state().goals.get(goalId) : null
+        const mission = missionId && this.missionEngine ? this.missionEngine.projection().missions.find((m) => m.missionId === missionId) : null
+        const remainingBudget = goalId && this.goalEngine ? this.goalEngine.getBudget(goalId)?.remaining.remainingMissions ?? 1 : 1
+        return {
+          goalIsActive: goal?.state === 'active',
+          missionIsWaiting: mission?.status === 'waiting' || mission?.status === 'stopped' || mission?.status === 'ready',
+          milestonePreconditionsMet: true,
+          budgetRemaining: remainingBudget,
+          principalAuthorized: true,
+          stopAllActive: this.state.stopAll.active,
+        }
+      },
+      now: this.options.now,
+      newId: this.options.newId,
+      stopAll: () => this.state.stopAll.active,
+      onChange: () => this.publishProactive(),
+    })
+    await this.proactiveEngine.open()
+
+    // Internal observation listener
+    this.fabric.subscribe((event) => {
+      if (this.proactiveEngine === undefined) return
+      if (event.type === 'longhorizon.goal.milestone-settled') {
+        const p = event.payload as Record<string, unknown>
+        const goalId = typeof p.goalId === 'string' ? p.goalId : null
+        const milestoneId = typeof p.milestoneId === 'string' ? p.milestoneId : null
+        const outcome = typeof p.outcome === 'string' ? p.outcome : 'unknown'
+        if (milestoneId) {
+          void this.proactiveEngine.ingest({
+            sourceType: 'internal',
+            sourceId: 'longhorizon',
+            sourceRef: milestoneId,
+            rawSummary: `Milestone ${milestoneId} settled as ${outcome}`,
+            goalId,
+            milestoneId,
+            predicate: 'milestone-settled',
+          })
+        }
+      } else if (event.type === 'mission.step.transitioned') {
+        const p = event.payload as Record<string, unknown>
+        const stepId = typeof p.stepId === 'string' ? p.stepId : null
+        const missionId = typeof p.missionId === 'string' ? p.missionId : null
+        const to = typeof p.to === 'string' ? p.to : 'unknown'
+        if (stepId) {
+          void this.proactiveEngine.ingest({
+            sourceType: 'internal',
+            sourceId: 'missions',
+            sourceRef: stepId,
+            rawSummary: `Mission step ${stepId} transitioned to ${to}`,
+            missionId,
+            predicate: 'step-transitioned',
+          })
+        }
+      } else if (event.type === 'workforce.worker.transitioned') {
+        const p = event.payload as Record<string, unknown>
+        const workerId = typeof p.workerId === 'string' ? p.workerId : null
+        const to = typeof p.to === 'string' ? p.to : 'unknown'
+        if (workerId) {
+          void this.proactiveEngine.ingest({
+            sourceType: 'internal',
+            sourceId: 'workforce',
+            sourceRef: workerId,
+            rawSummary: `Worker ${workerId} status transitioned to ${to}`,
+            predicate: 'worker-availability-changed',
+          })
+        }
+      }
+    })
+
+    this.metacognitionStore = await this.buildMetacognitionStore()
+    this.metacognitionEngine = new MetacognitionEngine({ store: this.metacognitionStore })
+    this.evolutionStoreInstance = await this.buildEvolutionStore()
+    this.strategyLifecycle = new StrategyLifecycleManager(this.evolutionStoreInstance, this.metacognitionStore)
+    await this.strategyLifecycle.initialize()
 
     // Context sits beside Missions rather than above them: it reads which Mission is
     // current and nothing else, and it is built here so the two are wired in one place.
@@ -3014,7 +3371,15 @@ class FreyaCore implements Core {
       // into a closed journal. Closing after Work is deliberate: the Mission may want
       // to consult a Run that Work has just finished recording.
       await this.missionEngine?.close()
+      await this.continuationEngine?.close()
+      await this.goalEngine?.close()
+      await this.goalStore?.close()
       await this.learningStore?.close()
+      await this.proactiveEngine?.close()
+      await this.proactiveStore?.close()
+      await this.metacognitionEngine?.close()
+      await this.metacognitionStore?.close()
+      await this.evolutionStoreInstance?.close()
       // The Vault owns the Mission store's connection, so it closes after the engine
       // has flushed. Closing it here keeps the one encrypted database's lifetime
       // inside Core's own.
@@ -5578,6 +5943,200 @@ private async buildForge(): Promise<void> {
     }
   }
 
+  async goalDetail(goalId: string): Promise<GoalDetail | null> {
+    if (this.goalEngine === undefined) return null
+    return await this.goalEngine.detail(goalId)
+  }
+
+  async proposeGoalRoadmap(
+    goalId: string,
+    options: DecompositionOptions = {},
+  ): Promise<RoadmapValidationResult> {
+    if (this.goalEngine === undefined) return { ok: false, reason: 'goal engine unavailable' }
+    const detail = await this.goalEngine.detail(goalId)
+    if (!detail || !detail.content) return { ok: false, reason: 'goal content unavailable' }
+
+    let advisoryLessons: AdvisoryLessonInput[] | undefined
+    if (this.learningEngine) {
+      const recalled = recallRelevantLearning(this.learningEngine, {
+        capabilities: ['work.execute', 'mission.manage'],
+        goal: `${detail.content.title} ${detail.content.description}`,
+      })
+      advisoryLessons = recalled.lessons.map((l) => ({
+        recordId: l.recordId,
+        claim: l.text,
+        confidence: l.confidence,
+        sourceDomain: l.scope,
+      }))
+    }
+
+    return this.goalEngine.getPlanner().proposeRoadmap(
+      detail.content,
+      detail.roadmap ?? undefined,
+      { advisoryLessons, ...options },
+    )
+  }
+
+  async elaborateMilestoneMission(
+    goalId: string,
+    milestoneId?: string,
+  ): Promise<BoundedMissionProposal | null> {
+    if (this.goalEngine === undefined) return null
+    const detail = await this.goalEngine.detail(goalId)
+    if (!detail || !detail.content || !detail.roadmap) return null
+
+    const targetMilestone: GoalMilestone | null = milestoneId
+      ? (detail.roadmap.milestones.find((m) => m.milestoneId === milestoneId) ?? null)
+      : this.goalEngine.getPlanner().nextEligibleMilestone(detail.roadmap)
+
+    if (!targetMilestone) return null
+    return this.goalEngine.getPlanner().createMissionForMilestone(targetMilestone, detail.content)
+  }
+
+  async setGoalBudget(goalId: string, budgetInput: Partial<GoalBudgetPolicy>): Promise<GoalCommandOutcome> {
+    if (this.state.stopAll.active) return { operation: 'budget-updated', ok: false, reason: 'STOP ALL is active' }
+    if (this.goalEngine === undefined) return { operation: 'budget-updated', ok: false, reason: 'goal engine unavailable' }
+
+    const validated = validateGoalBudget(budgetInput)
+    if (!validated.ok) return { operation: 'budget-updated', ok: false, reason: validated.reason }
+
+    const store = this.goalStore
+    if (store === undefined) return { operation: 'budget-updated', ok: false, reason: 'goal store unavailable' }
+    const read = await store.read(goalId)
+    if (!read.ok) return { operation: 'budget-updated', ok: false, reason: read.reason }
+
+    const currentSpend = read.value.spend ?? { ...ZERO_GOAL_SPEND }
+    const updatedContent: GoalContent = {
+      ...read.value,
+      budget: validated.value,
+      spend: currentSpend,
+    }
+
+    try {
+      await store.write(updatedContent)
+      this.goalEngine.updateContent(updatedContent)
+    } catch (error) {
+      return { operation: 'budget-updated', ok: false, reason: error instanceof Error ? error.message : String(error) }
+    }
+
+    const exhaustion = checkBudgetExhaustion(validated.value, currentSpend)
+    if (exhaustion.exhausted) {
+      await this.goalEngine.pauseGoal(goalId, GOAL_REASONS.budget_exhausted)
+    }
+
+    this.publishGoals()
+    return {
+      operation: 'budget-updated',
+      ok: true,
+      goalId,
+      budgetExhausted: exhaustion.exhausted,
+    }
+  }
+
+  async recordGoalSpend(goalId: string, incremental: Partial<GoalSpend>): Promise<GoalCommandOutcome> {
+    if (this.goalEngine === undefined) return { operation: 'refused', ok: false, reason: 'goal engine unavailable' }
+    return await this.goalEngine.recordSpend(goalId, incremental)
+  }
+
+  deriveMilestoneMissionBudget(goalId: string, requested?: Partial<MissionBudget>): MissionBudgetDerivationResult {
+    if (this.goalEngine === undefined) return { ok: false, reason: 'goal engine unavailable' }
+    return this.goalEngine.deriveMissionBudget(goalId, requested)
+  }
+
+  async handleContinuationWake(wake: ContinuationWake): Promise<ContinuationDecisionOutcome> {
+    if (this.continuationEngine === undefined) {
+      return {
+        decision: {
+          decision: 'wait',
+          reason: 'continuation engine unavailable',
+          deadline: (this.options.now?.() ?? new Date()).toISOString(),
+        },
+        goalId: wake.goalId,
+      }
+    }
+    return await this.continuationEngine.handleWake(wake)
+  }
+
+  async ingestObservation(input: RawObservationInput): Promise<ObservationIngestResult> {
+    if (this.proactiveEngine === undefined) {
+      return { ok: false, reason: 'proactive engine unavailable' }
+    }
+    return this.proactiveEngine.ingest(input)
+  }
+
+  async subscribeObservationSource(input: ObservationSubscriptionInput): Promise<ObservationSubscription> {
+    if (this.proactiveEngine === undefined) {
+      throw new Error('proactive engine unavailable')
+    }
+    return this.proactiveEngine.subscribe(input)
+  }
+
+  async revokeObservationSource(subscriptionId: string): Promise<boolean> {
+    if (this.proactiveEngine === undefined) {
+      return false
+    }
+    return this.proactiveEngine.revoke(subscriptionId)
+  }
+
+  observationSubscriptions(): readonly ObservationSubscription[] {
+    return this.proactiveEngine?.subscriptions() ?? []
+  }
+
+  recentObservations(limit?: number): readonly NormalizedObservation[] {
+    return this.proactiveEngine?.recentObservations(limit) ?? []
+  }
+
+  metacognition(): MetacognitionEngine | undefined {
+    return this.metacognitionEngine
+  }
+
+  evolution(): StrategyLifecycleManager | undefined {
+    return this.strategyLifecycle
+  }
+
+  evolutionStore(): EvolutionStore | undefined {
+    return this.evolutionStoreInstance
+  }
+
+  goals(): GoalProjectionView {
+    if (this.goalEngine === undefined) {
+      return {
+        ...ABSENT_GOAL_PROJECTION,
+        persistence: { mode: 'ephemeral', durable: false, reason: 'Goals are not available' },
+      }
+    }
+    return this.goalEngine.projection()
+  }
+
+  onGoals(listener: (projection: GoalProjectionView) => void): () => void {
+    this.goalListeners.add(listener)
+    listener(this.goals())
+    return () => {
+      this.goalListeners.delete(listener)
+    }
+  }
+
+  private publishGoals(): void {
+    this.publishConsciousness()
+    if (this.goalListeners.size === 0) return
+    const projection = this.goals()
+    for (const listener of [...this.goalListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Goal listener threw', describe(error))
+        this.goalListeners.delete(listener)
+      }
+    }
+  }
+
+  private requireGoal(): GoalEngine {
+    if (this.goalEngine === undefined) {
+      throw new Error('the Goal engine is not available')
+    }
+    return this.goalEngine
+  }
+
   /**
    * Point "here" at the current Mission, if there is one.
    *
@@ -7077,6 +7636,19 @@ state: {
       ok: false,
       refusal: { reason },
       mission: { operation, ok: false, reason },
+    }
+  }
+
+  private goalRefusal(
+    requestId: string,
+    operation: GoalCommandOperation,
+    reason: string,
+  ): CoreCommandResult {
+    return {
+      requestId,
+      ok: false,
+      refusal: { reason },
+      goal: { operation, ok: false, reason },
     }
   }
 
@@ -9320,6 +9892,288 @@ state: {
           }
         }
 
+        /* ----------------------------------------------------------- goals (longhorizon) */
+
+        case 'goal.create': {
+          const decision = this.guard.evaluate(this.owner, 'goal.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.manage', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          const title = readString(envelope.payload, 'title')
+          if (title === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal title is missing')
+          }
+          const description = readString(envelope.payload, 'description')
+          if (description === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal needs a description as well as a title')
+          }
+          const criteria = readStringArray(envelope.payload, 'completionCriteria')
+          const roadmap = typeof envelope.payload === 'object' && envelope.payload !== null && 'roadmap' in envelope.payload
+            ? (envelope.payload as { roadmap?: GoalRoadmapInput }).roadmap
+            : undefined
+          const budget = typeof envelope.payload === 'object' && envelope.payload !== null && 'budget' in envelope.payload
+            ? (envelope.payload as { budget?: Partial<GoalBudgetPolicy> }).budget
+            : undefined
+          const outcome = await this.requireGoal().createGoal({
+            title,
+            description,
+            ...(criteria === undefined ? {} : { completionCriteria: criteria }),
+            ...(roadmap === undefined ? {} : { roadmap }),
+            ...(budget === undefined ? {} : { budget }),
+          })
+          this.publishGoals()
+          return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
+        }
+
+        case 'goal.roadmap.set': {
+          const decision = this.guard.evaluate(this.owner, 'goal.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.manage', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          const goalId = readString(envelope.payload, 'goalId')
+          if (goalId === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal id is missing')
+          }
+          const payload = envelope.payload as Record<string, unknown>
+          const milestones = Array.isArray(payload?.milestones) ? payload.milestones : []
+          const advisoryNotes = Array.isArray(payload?.advisoryNotes)
+            ? (payload.advisoryNotes as string[])
+            : undefined
+          const outcome = await this.requireGoal().setRoadmap(goalId, {
+            goalId,
+            milestones: milestones as unknown as readonly GoalMilestoneInput[],
+            advisoryNotes,
+          })
+          this.publishGoals()
+          return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
+        }
+
+        case 'goal.milestone.settle': {
+          const decision = this.guard.evaluate(this.owner, 'goal.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.manage', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          const goalId = readString(envelope.payload, 'goalId')
+          if (goalId === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal id is missing')
+          }
+          const milestoneId = readString(envelope.payload, 'milestoneId')
+          if (milestoneId === null) {
+            return this.goalRefusal(requestId, 'refused', 'a milestone id is missing')
+          }
+          const outcomeStr = readString(envelope.payload, 'outcome')
+          if (outcomeStr !== 'completed' && outcomeStr !== 'failed') {
+            return this.goalRefusal(requestId, 'refused', 'milestone outcome must be completed or failed')
+          }
+          const payload = envelope.payload as Record<string, unknown>
+          const evidence = typeof payload?.evidence === 'object' && payload.evidence !== null
+            ? (payload.evidence as { reason?: string; missionId?: string })
+            : {}
+          const outcome = await this.requireGoal().settleMilestone(goalId, milestoneId, outcomeStr, evidence)
+          this.publishGoals()
+          return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
+        }
+
+        case 'goal.budget.set': {
+          const decision = this.guard.evaluate(this.owner, 'goal.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.manage', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          const goalId = readString(envelope.payload, 'goalId')
+          if (goalId === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal id is missing')
+          }
+          const payload = envelope.payload as Record<string, unknown>
+          const budget = typeof payload?.budget === 'object' && payload.budget !== null
+            ? (payload.budget as Partial<GoalBudgetPolicy>)
+            : (payload as Partial<GoalBudgetPolicy>)
+          const outcome = await this.setGoalBudget(goalId, budget)
+          this.publishGoals()
+          return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
+        }
+
+        case 'goal.activate':
+        case 'goal.pause':
+        case 'goal.resume':
+        case 'goal.cancel':
+        case 'goal.fail':
+        case 'goal.requestCompletion': {
+          const decision = this.guard.evaluate(this.owner, 'goal.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.manage', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          const goalId = readString(envelope.payload, 'goalId')
+          if (goalId === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal id is missing')
+          }
+          const engine = this.requireGoal()
+          const operations: Partial<Record<CoreCommandName, () => Promise<GoalCommandOutcome>>> = {
+            'goal.activate': () => engine.activateGoal(goalId),
+            'goal.pause': () => engine.pauseGoal(goalId),
+            'goal.resume': () => engine.resumeGoal(goalId),
+            'goal.cancel': () => engine.cancelGoal(goalId),
+            'goal.fail': () => {
+              const reasonStr = readString(envelope.payload, 'reason')
+              const reason = (reasonStr && reasonStr in GOAL_REASONS) ? (reasonStr as GoalReason) : GOAL_REASONS.owner
+              return engine.failGoal(goalId, reason)
+            },
+            'goal.requestCompletion': () => engine.completeGoal(goalId),
+          }
+          const run = operations[envelope.command]
+          if (run === undefined) {
+            return this.goalRefusal(requestId, 'refused', 'that Goal command is not recognised')
+          }
+          const outcome = await run()
+          this.publishGoals()
+          return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
+        }
+
+        case 'goal.status.read': {
+          const decision = this.guard.evaluate(this.owner, 'goal.status.read')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.status.read', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            goal: { operation: 'status', ok: true },
+          }
+        }
+
+        /* ---------------------------------------------------- proactive */
+
+        case 'proactive.status.read': {
+          const decision = this.guard.evaluate(this.owner, 'proactive.status.read')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'proactive.status.read', requestId)
+            return {
+              requestId,
+              ok: false,
+              status: this.status(),
+              refusal: { reason: decision.reason },
+              proactive: { operation: 'refused', ok: false, reason: decision.reason },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            proactive: {
+              operation: 'status',
+              ok: true,
+              subscriptions: this.observationSubscriptions(),
+              recentObservations: this.recentObservations(),
+            },
+          }
+        }
+
+        case 'proactive.observation.ingest': {
+          const decision = this.guard.evaluate(this.owner, 'proactive.ingest')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'proactive.ingest', requestId)
+            return {
+              requestId,
+              ok: false,
+              status: this.status(),
+              refusal: { reason: decision.reason },
+              proactive: { operation: 'refused', ok: false, reason: decision.reason },
+            }
+          }
+          const payload = envelope.payload as Record<string, unknown>
+          const sourceType = typeof payload?.sourceType === 'string' ? payload.sourceType : null
+          const sourceId = typeof payload?.sourceId === 'string' ? payload.sourceId : null
+          const rawSummary = typeof payload?.rawSummary === 'string' ? payload.rawSummary : null
+          if (!sourceType || !sourceId || !rawSummary) {
+            return {
+              requestId,
+              ok: false,
+              status: this.status(),
+              refusal: { reason: 'malformed observation input: sourceType, sourceId, and rawSummary are required' },
+              proactive: { operation: 'refused', ok: false, reason: 'malformed observation input' },
+            }
+          }
+          const result = await this.ingestObservation(payload as unknown as RawObservationInput)
+          return {
+            requestId,
+            ok: result.ok,
+            status: this.status(),
+            refusal: result.ok ? undefined : { reason: result.reason ?? 'ingest failed' },
+            proactive: {
+              operation: 'ingest',
+              ok: result.ok,
+              reason: result.reason,
+              observationId: result.observation?.observationId,
+            },
+          }
+        }
+
+        case 'proactive.subscription.manage': {
+          const decision = this.guard.evaluate(this.owner, 'proactive.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'proactive.manage', requestId)
+            return {
+              requestId,
+              ok: false,
+              status: this.status(),
+              refusal: { reason: decision.reason },
+              proactive: { operation: 'refused', ok: false, reason: decision.reason },
+            }
+          }
+          const payload = envelope.payload as Record<string, unknown>
+          const action = typeof payload?.action === 'string' ? payload.action : null
+          if (action === 'revoke') {
+            const subscriptionId = typeof payload?.subscriptionId === 'string' ? payload.subscriptionId : null
+            if (!subscriptionId) {
+              return {
+                requestId,
+                ok: false,
+                status: this.status(),
+                refusal: { reason: 'subscriptionId required for revoke' },
+                proactive: { operation: 'refused', ok: false, reason: 'subscriptionId required' },
+              }
+            }
+            const revoked = await this.revokeObservationSource(subscriptionId)
+            return {
+              requestId,
+              ok: revoked,
+              status: this.status(),
+              proactive: { operation: 'revoke', ok: revoked, subscriptionId },
+            }
+          } else if (action === 'subscribe') {
+            try {
+              const sub = await this.subscribeObservationSource(payload as unknown as ObservationSubscriptionInput)
+              return {
+                requestId,
+                ok: true,
+                status: this.status(),
+                proactive: { operation: 'subscribe', ok: true, subscriptionId: sub.subscriptionId },
+              }
+            } catch (err) {
+              return {
+                requestId,
+                ok: false,
+                status: this.status(),
+                refusal: { reason: (err as Error).message },
+                proactive: { operation: 'refused', ok: false, reason: (err as Error).message },
+              }
+            }
+          }
+          return {
+            requestId,
+            ok: false,
+            status: this.status(),
+            refusal: { reason: 'unrecognised action for proactive.subscription.manage' },
+            proactive: { operation: 'refused', ok: false, reason: 'unknown action' },
+          }
+        }
+
         /* --------------------------------------------------------- life */
 
         case 'life.status.read': {
@@ -10410,6 +11264,70 @@ case 'forge.run': {
   }
 
   /**
+   * Build the Goal content store (Phase 5 LongHorizon).
+   *
+   * Persists private goal content (title, description, criteria) to the encrypted Vault.
+   * If the Vault is not configured or fails to open, falls back to MemoryGoalStore reporting
+   * why it is ephemeral.
+   */
+  private async buildGoalStore(): Promise<GoalStore> {
+    if (this.options.goalStore) return this.options.goalStore
+    const vault = await this.ensureVault()
+    if (vault !== null) return new VaultGoalStore(vault)
+    return new MemoryGoalStore({
+      faultReason: this.options.vault !== undefined
+        ? `Goal content is held in memory only: ${this.vaultFault ?? 'the encrypted Vault is not configured'}`
+        : 'the encrypted Vault is not configured',
+    })
+  }
+
+  /**
+   * Build the Proactive content store (Phase 6 Proactive Intelligence).
+   */
+  private async buildProactiveStore(): Promise<ProactiveStore> {
+    if (this.options.proactiveStore) return this.options.proactiveStore
+    const vault = await this.ensureVault()
+    if (vault !== null) return new VaultProactiveStore(vault)
+    return new MemoryProactiveStore({
+      faultReason: this.options.vault !== undefined
+        ? `Proactive content is held in memory only: ${this.vaultFault ?? 'the encrypted Vault is not configured'}`
+        : 'the encrypted Vault is not configured',
+    })
+  }
+
+  private publishProactive(): void {
+    this.publishConsciousness()
+  }
+
+  /**
+   * Build the Metacognition content store (Phase 7 Metacognition & Performance Awareness).
+   */
+  private async buildMetacognitionStore(): Promise<MetacognitionStore> {
+    if (this.options.metacognitionStore) return this.options.metacognitionStore
+    const vault = await this.ensureVault()
+    if (vault !== null) return new VaultMetacognitionStore(vault)
+    return new MemoryMetacognitionStore({
+      faultReason: this.options.vault !== undefined
+        ? `Metacognition content is held in memory only: ${this.vaultFault ?? 'the encrypted Vault is not configured'}`
+        : 'the encrypted Vault is not configured',
+    })
+  }
+
+  /**
+   * Build the Evolution content store (Phase 7 Verified Evolution).
+   */
+  private async buildEvolutionStore(): Promise<EvolutionStore> {
+    if (this.options.evolutionStore) return this.options.evolutionStore
+    const vault = await this.ensureVault()
+    if (vault !== null) return new VaultEvolutionStore(vault)
+    return new MemoryEvolutionStore({
+      faultReason: this.options.vault !== undefined
+        ? `Evolution content is held in memory only: ${this.vaultFault ?? 'the encrypted Vault is not configured'}`
+        : 'the encrypted Vault is not configured',
+    })
+  }
+
+  /**
    * The Life History store.
    *
    * The canonical path is the one encrypted Vault: when a Vault is configured,
@@ -11173,6 +12091,19 @@ function missionResult(outcome: MissionCommandOutcome): MissionCommandOutcomeVie
     ...(outcome.missionId === undefined ? {} : { missionId: outcome.missionId }),
     ...(outcome.status === undefined ? {} : { status: outcome.status }),
     ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+  }
+}
+
+function goalResult(outcome: GoalCommandOutcome): GoalCommandOutcomeView {
+  return {
+    operation: outcome.operation,
+    ok: outcome.ok,
+    ...(outcome.goalId === undefined ? {} : { goalId: outcome.goalId }),
+    ...(outcome.state === undefined ? {} : { state: outcome.state }),
+    ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+    ...(outcome.revision === undefined ? {} : { revision: outcome.revision }),
+    ...(outcome.milestoneId === undefined ? {} : { milestoneId: outcome.milestoneId }),
+    ...(outcome.budgetExhausted === undefined ? {} : { budgetExhausted: outcome.budgetExhausted }),
   }
 }
 

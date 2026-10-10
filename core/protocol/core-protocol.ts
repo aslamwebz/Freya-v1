@@ -20,6 +20,7 @@ import type { SkillCommandOutcome } from './skills'
 import type { ForgeCommandOutcome } from './forge'
 import type { LifeCommandOutcome } from './life'
 import type { WorldCommandOutcome } from './world'
+import type { GoalCommandOutcomeView } from './longhorizon'
 
 /* ------------------------------------------------------------ identity */
 
@@ -95,6 +96,15 @@ export const CAPABILITIES = [
   // which is the one thing nobody should reach by accident.
   'mission.status.read',
   'mission.manage',
+
+  // Long-Horizon Goals (Phase 5).
+  'goal.status.read',
+  'goal.manage',
+
+  // Proactive Intelligence (Phase 6).
+  'proactive.status.read',
+  'proactive.manage',
+  'proactive.ingest',
 
   /**
    * Skills (Phase 17). Two, and the split is the same one `work.*` and `mission.*`
@@ -710,6 +720,22 @@ export type CoreCommandName =
   | 'mission.cancel'
   | 'mission.fail'
   | 'mission.requestCompletion'
+  /* -------------------------------------------------------- longhorizon */
+  | 'goal.status.read'
+  | 'goal.create'
+  | 'goal.activate'
+  | 'goal.pause'
+  | 'goal.resume'
+  | 'goal.cancel'
+  | 'goal.fail'
+  | 'goal.requestCompletion'
+  | 'goal.roadmap.set'
+  | 'goal.milestone.settle'
+  | 'goal.budget.set'
+  /* ------------------------------------------------------------ proactive */
+  | 'proactive.status.read'
+  | 'proactive.observation.ingest'
+  | 'proactive.subscription.manage'
   /* -------------------------------------------------------------- life */
   /**
    * Phase 21. Three reads and nothing else.
@@ -1013,6 +1039,10 @@ export interface CoreCommandResult {
    */
   mission?: MissionCommandOutcomeView
   /**
+   * The Goal view of a Goal command's result.
+   */
+  goal?: GoalCommandOutcomeView
+  /**
    * The research view of a research command's result.
    *
    * Its own slot for the same reason the conversation, voice and Brain slots exist:
@@ -1186,6 +1216,24 @@ export interface CoreCommandResult {
    * projection. The projection itself arrives on its own channel.
    */
   connectors?: ConnectorCommandOutcome
+
+  /**
+   * The proactive view of a proactive command's result (Phase 6).
+   */
+  proactive?: ProactiveCommandOutcome
+}
+
+/**
+ * What a Proactive command produced (Phase 6A).
+ */
+export interface ProactiveCommandOutcome {
+  operation: 'status' | 'ingest' | 'subscribe' | 'revoke' | 'refused'
+  ok: boolean
+  reason?: string
+  observationId?: string
+  subscriptionId?: string
+  subscriptions?: readonly unknown[]
+  recentObservations?: readonly unknown[]
 }
 
 /**

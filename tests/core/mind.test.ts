@@ -17,6 +17,7 @@ import { EncryptedConversationStore } from '../../core/conversation/encrypted-st
 import { testConversationKey } from './testKey'
 import { FREYA_IDENTITY, identityDigest } from '../../core/identity/identity'
 import { compileContext, ContextBudgetExceeded, renderIdentity } from '../../core/mind/context-compiler'
+import { MIND_TOOL_LIMITS } from '../../core/mind/tools'
 import type { ConversationCommandOutcome, VoiceCommandOutcome } from '../../core/protocol/conversation'
 import type { MessageRole } from '../../core/conversation/types'
 
@@ -174,7 +175,7 @@ describe('A — an explicit user turn', () => {
     expect(read.conversation?.lastTurnOutcome).toBe('completed')
   })
 
-  it('authorises the turn through a bounded one-call grant', async () => {
+  it('authorises a single ordinary provider call under the bounded tool-capable foreground grant', async () => {
     const c = await started()
     const conversationId = await newConversation(c)
 
@@ -184,7 +185,9 @@ describe('A — an explicit user turn', () => {
     const grants = ownerAuthority(c).grants()
     expect(grants).toHaveLength(1)
     const grant = grants[0]
-    expect(grant?.maxCalls).toBe(1)
+    // A tool-capable Core reserves at most the loop ceiling, but an ordinary
+    // answer still uses exactly ONE actual provider call.
+    expect(grant?.maxCalls).toBe(MIND_TOOL_LIMITS.maxProviderCalls)
     expect(grant?.backgroundAllowed).toBe(false)
     expect(grant?.actor).toBe('owner')
     expect(grant?.usage.calls).toBe(1)

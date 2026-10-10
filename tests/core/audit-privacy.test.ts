@@ -157,9 +157,19 @@ describe('the activity feed is metadata too', () => {
     expect(feed).toMatch(/Turn completed/)
     expect(feed).not.toContain(USER_SECRET)
     expect(feed).not.toContain(ASSISTANT_SECRET)
-    // And no row has a payload field, which is the structural half of the property.
+    // No row may include payloads or message bodies. Turn correlation IDs are
+    // explicitly permitted so the UI can match an activity to its transcript.
+    // Optional IDs appear only on relevant rows; every other field is closed.
+    const allowedFields = new Set([
+      'at', 'conversationId', 'id', 'kind', 'sequence', 'text', 'tone', 'turnId', 'type',
+    ])
     for (const row of c.activity()) {
-      expect(Object.keys(row).sort()).toEqual(['at', 'id', 'kind', 'sequence', 'text', 'tone', 'type'])
+      expect(Object.keys(row).every((field) => allowedFields.has(field))).toBe(true)
+      expect('payload' in row).toBe(false)
+      expect(JSON.stringify(row)).not.toContain(USER_SECRET)
+      expect(JSON.stringify(row)).not.toContain(ASSISTANT_SECRET)
+      if ('conversationId' in row) expect(row.conversationId).toEqual(expect.any(String))
+      if ('turnId' in row) expect(row.turnId).toEqual(expect.any(String))
     }
     expect(raw).toBeDefined()
   })

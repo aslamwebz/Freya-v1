@@ -367,7 +367,12 @@ describe('research citation continuity', () => {
     expect(carried?.role).toBe('user')
     expect(carried?.content).toContain('SECOND STORED FINDING')
     expect(carried?.content).not.toContain('https://example.org/real')
-    expect(h.provider.requests[1]?.messages.at(-2)?.content).toBe('Summarise source 2 without searching again.')
+    // Evidence is untrusted reference material before the owner message;
+    // capability guidance must not displace the actual question from last place.
+    expect(h.provider.requests[1]?.messages.at(-2)?.content).toContain('Stored search evidence')
+    expect(h.provider.requests[1]?.messages.at(-1)?.content).toBe('Summarise source 2 without searching again.')
+    const guidance = h.provider.requests[1]?.messages.find(message => message.content.includes('Optional lookup tools for this turn.'))
+    expect(guidance?.role).toBe('system')
   })
 
   it('shows an existing numbered source without automatically searching for a replacement', async () => {

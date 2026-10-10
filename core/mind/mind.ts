@@ -1310,7 +1310,12 @@ export class MindService {
           ...(unresolvedResearch ? { blockedToolReason: 'The requested stored source is not available in this turn context. A new lookup cannot substitute for that reference; ask the owner to identify it.' } : {}),
           carriedSources: input.carriedSources,
         },
-        [...input.messages, tools.instructions(blockedTools)],
+        // Keep the owner's actual question last. Placing tool guidance after
+        // it made the provider see a synthetic system block as the most recent
+        // turn, weakening multi-turn relevance and personality preferences.
+        input.messages[0]?.role === 'system'
+          ? [input.messages[0], tools.instructions(blockedTools), ...input.messages.slice(1)]
+          : [tools.instructions(blockedTools), ...input.messages],
       )
       if (outcome.kind === 'denied') return { kind: 'denied', reason: outcome.reason }
       if (outcome.kind === 'cancelled') {

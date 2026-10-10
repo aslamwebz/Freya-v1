@@ -85,7 +85,7 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
       const obs = makeObservation({ sourceId: 'src-1', rawSummary: 'Test observation' })
 
       const ignoreDecision = policy.evaluate(
-        { candidateAction: 'ignore', confidence: 0.9, justification: 'Noise', modelTokensUsed: 0, wasOverridden: false },
+        { candidateAction: 'ignore', significanceAssessment: 'Noise', justification: 'Noise', verificationCriteria: 'None', modelTokensUsed: 0, wasOverridden: false },
         obs,
       )
       expect(ignoreDecision.decision).toBe('ignore')
@@ -94,7 +94,7 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
       expect(ignoreDecision.executed).toBe(true)
 
       const recordDecision = policy.evaluate(
-        { candidateAction: 'record', confidence: 0.8, justification: 'Save for later', modelTokensUsed: 0, wasOverridden: false },
+        { candidateAction: 'record', significanceAssessment: 'Save for later', justification: 'Save for later', verificationCriteria: 'Integrity check', modelTokensUsed: 0, wasOverridden: false },
         obs,
       )
       expect(recordDecision.decision).toBe('record')
@@ -103,7 +103,7 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
       expect(recordDecision.executed).toBe(true)
 
       const deferDecision = policy.evaluate(
-        { candidateAction: 'defer', confidence: 0.8, justification: 'Wait for window', modelTokensUsed: 0, wasOverridden: false },
+        { candidateAction: 'defer', significanceAssessment: 'Wait for window', justification: 'Wait for window', verificationCriteria: 'Batch window check', modelTokensUsed: 0, wasOverridden: false },
         obs,
       )
       expect(deferDecision.decision).toBe('defer')
@@ -112,7 +112,7 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
       expect(deferDecision.executed).toBe(true)
 
       const notifyDecision = policy.evaluate(
-        { candidateAction: 'notify', confidence: 0.85, justification: 'Important update', modelTokensUsed: 0, wasOverridden: false },
+        { candidateAction: 'notify', significanceAssessment: 'Important update', justification: 'Important update', verificationCriteria: 'Owner verification', modelTokensUsed: 0, wasOverridden: false },
         obs,
       )
       expect(notifyDecision.decision).toBe('notify')
@@ -127,8 +127,9 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
 
       const proposal: ProactiveAdvisoryProposal = {
         candidateAction: 'investigate',
-        confidence: 0.75,
+        significanceAssessment: 'Diagnostic investigation required',
         justification: 'Probe needed',
+        verificationCriteria: 'Diagnostic verification',
         modelTokensUsed: 50,
         wasOverridden: false,
       }
@@ -162,8 +163,9 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
 
       const proposal: ProactiveAdvisoryProposal = {
         candidateAction: 'continue_existing_mission',
-        confidence: 0.95,
+        significanceAssessment: 'Preconditions met for continuation',
         justification: 'Dependency completed, ready to continue',
+        verificationCriteria: 'Continuation check',
         modelTokensUsed: 100,
         wasOverridden: false,
       }
@@ -197,8 +199,9 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
 
       const proposal: ProactiveAdvisoryProposal = {
         candidateAction: 'continue_existing_mission',
-        confidence: 0.95,
+        significanceAssessment: 'Continuation proposed',
         justification: 'Dependency completed',
+        verificationCriteria: 'Continuation validation',
         modelTokensUsed: 100,
         wasOverridden: false,
       }
@@ -246,8 +249,9 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
 
       const proposal: ProactiveAdvisoryProposal = {
         candidateAction: 'notify',
-        confidence: 0.9,
+        significanceAssessment: 'Suppressed notification',
         justification: 'Notify owner',
+        verificationCriteria: 'None',
         modelTokensUsed: 0,
         wasOverridden: false,
       }
@@ -279,7 +283,6 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
       core = createCore({
         dataPath,
         providers: [scriptedModel],
-        skipAttentionTimer: true,
       })
       await core.start()
 
@@ -321,7 +324,7 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
       })
 
       expect(ingestResult.ok).toBe(true)
-      if (!ingestResult.ok) return
+      if (!ingestResult.ok || !ingestResult.observation) return
 
       expect(ingestResult.decision?.decision).toBe('notify')
       expect(ingestResult.decision?.level).toBe(1)
@@ -357,7 +360,6 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
       core = createCore({
         dataPath,
         providers: [scriptedModel],
-        skipAttentionTimer: true,
       })
       await core.start()
 
@@ -420,7 +422,6 @@ describe('Phase 6C — Governed Proactive Action & Boundaries', () => {
       core = createCore({
         dataPath,
         providers: [scriptedModel],
-        skipAttentionTimer: true,
       })
       await core.start()
 

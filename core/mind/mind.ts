@@ -190,7 +190,10 @@ export const TRUNCATION_REASON =
  * make on the owner's behalf.
  */
 export function renderTruncatedAnswer(text: string, footer = ''): string {
-  const produced = text.trim()
+  let produced = text.trim()
+  if (/<think(?:ing)?>/i.test(produced) && !/<\/think(?:ing)?>/i.test(produced)) {
+    produced = `${produced}\n</think>`
+  }
   const body = [produced, footer.trim()].filter((part) => part !== '').join('\n\n')
   const lead = body === '' ? '' : `${body}\n\n—\n`
   const before = produced === '' ? 'Freya produced no text at all. ' : 'Everything above is all that was produced. '
@@ -1780,6 +1783,33 @@ function boundAssistantMessageContent(
   if (content.length <= limit) return content
   const notice = '\n\n[Response safely preserved up to maximum message length]'
   const sliceLen = Math.max(0, limit - notice.length)
-  return `${content.slice(0, sliceLen)}${notice}`
+
+  // When a message has both thinking and body, do not let an oversized thinking
+  // block consume the whole message budget and erase the visible answer.
+  const thinkMatch = content.match(/^(<think(?:ing)?>)([\s\S]*?)(<\/think(?:ing)?>)([\s\S]*)$/i)
+  if (thinkMatch) {
+    const openTag = thinkMatch[1] ?? '<think>'
+    const thinkingText = thinkMatch[2] ?? ''
+    const closeTag = thinkMatch[3] ?? '</think>'
+    const body = (thinkMatch[4] ?? '').trim()
+    if (body.length > 0) {
+      const overhead = openTag.length + closeTag.length + 2 + notice.length
+      const bodyMax = Math.max(0, Math.min(body.length, limit - overhead - 200))
+      const thinkingMax = Math.max(0, limit - overhead - bodyMax)
+      const preservedThinking = thinkingText.length > thinkingMax
+        ? `${thinkingText.slice(0, Math.max(0, thinkingMax - 30))}\n[Thinking trace summarized]`
+        : thinkingText
+      const preservedBody = body.length > bodyMax ? `${body.slice(0, bodyMax)}${notice}` : body
+      return `${openTag}${preservedThinking}${closeTag}\n\n${preservedBody}`
+    }
+  }
+
+  let sliced = content.slice(0, sliceLen)
+  if (/<think(?:ing)?>/i.test(sliced) && !/<\/think(?:ing)?>/i.test(sliced)) {
+    const closeTag = '\n</think>'
+    const adjustedLen = Math.max(0, sliceLen - closeTag.length)
+    sliced = `${content.slice(0, adjustedLen)}${closeTag}`
+  }
+  return `${sliced}${notice}`
 }
 

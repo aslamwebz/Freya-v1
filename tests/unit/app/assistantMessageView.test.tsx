@@ -112,3 +112,12 @@ it('reports non-search tool failures and blocked operations accurately', () => {
   expect(screen.getByText('One or more tool operations were blocked by Core Guard.')).toBeInTheDocument()
 })
 
+it('renders unclosed thinking block and preserves trailing truncation notice in message body', () => {
+  const content = '<think>\nreasoning about timeline\n\n[Response safely preserved up to maximum message length]'
+  render(<AssistantMessageView content={content} />)
+  expect(screen.getByText('Thinking')).toBeInTheDocument()
+  expect(screen.getByText(/reasoning about timeline/)).toBeInTheDocument()
+  expect(screen.getByText('[Response safely preserved up to maximum message length]')).toBeInTheDocument()
+  expect(screen.queryByText('Freya did not return a written answer for this turn.')).toBeNull()
+})
+

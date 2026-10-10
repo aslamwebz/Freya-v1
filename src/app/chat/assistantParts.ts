@@ -78,9 +78,20 @@ export function splitAssistantContent(
   let thinking = ''
   const thinkMatch = working.match(THINK_RE)
   if (thinkMatch !== null) {
-    const rawThinking = thinkMatch[1] ?? ''
+    let rawThinking = thinkMatch[1] ?? ''
     const start = thinkMatch.index ?? -1
-    const end = start + thinkMatch[0].length
+    let end = start + thinkMatch[0].length
+
+    // If the match extended to the end without an explicit </think> close tag,
+    // ensure any trailing system notice or preservation marker is preserved in working.
+    if (!/<\/think>/i.test(thinkMatch[0])) {
+      const noticeMatch = rawThinking.match(/\n\n(?:—\n[\s\S]*|\[Response safely preserved[\s\S]*)$/)
+      if (noticeMatch !== null && noticeMatch.index !== undefined) {
+        end = start + '<think>'.length + noticeMatch.index
+        rawThinking = rawThinking.slice(0, noticeMatch.index)
+      }
+    }
+
     if (start >= 0) {
       thinking = rawThinking.trim()
       working = working.slice(0, start) + working.slice(end)

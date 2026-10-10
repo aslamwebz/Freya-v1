@@ -866,12 +866,14 @@ export class ElectronFreyaBrowserPage implements FreyaBrowserLivePage {
   async navigate(url: string): Promise<{ ok: boolean; finalUrl: string | null; code: string }> {
     if (this.closed || this.contents === undefined) return { ok: false, finalUrl: null, code: 'session-closed' }
     if (!this.allowedUrl(url)) return { ok: false, finalUrl: null, code: 'url-refused' }
+    this.error = null
     const startRevision = this.revision
     try {
       await this.contents.loadURL(url)
     } catch {
       return { ok: false, finalUrl: null, code: this.error ?? 'navigate-failed' }
     }
+
     const landed = this.url
     if (this.closed || landed === null) return { ok: false, finalUrl: null, code: this.error ?? 'navigate-failed' }
     if (this.revision === startRevision) {

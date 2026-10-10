@@ -29,9 +29,10 @@ export function cleanProviderCompletion(rawText: string, apiKey?: string): { tex
   // Strip known multimodal VTT internal notes leaked by MiniMax media models
   text = text.replace(/^(?:VTTEmbedded_note:|VTTEmbedded:)[^\r\n]*(?:\r?\n|$)/gmi, '')
 
-  // Detect degenerative repetition loops: substring of 3..60 characters repeating >= 4 times consecutively
+  // Detect degenerative repetition loops: substring of 3..60 characters repeating >= 4 times consecutively,
+  // excluding benign markdown formatting (whitespace indents, dashes, table dividers, rules).
   const loopMatch = text.match(/(.{3,60}?)\1{3,}/su)
-  if (loopMatch && loopMatch.index !== undefined) {
+  if (loopMatch && loopMatch.index !== undefined && !/^[\s\-_=.*#|~`+]+$/u.test((loopMatch[1] ?? ''))) {
     const loopStart = loopMatch.index
     const prefix = text.slice(0, loopStart).trim()
     if (prefix.length > 0) {
@@ -40,6 +41,7 @@ export function cleanProviderCompletion(rawText: string, apiKey?: string): { tex
       return { text: '', corrupted: true, reason: 'Provider response degenerated into a repetitive protocol loop.' }
     }
   }
+
 
   // Strip dangling delimiter tokens when they do not enclose an active tool envelope
   if (!/<tool_call>|FREYA_TOOL_CALL/i.test(text)) {
@@ -83,22 +85,69 @@ export class CompatibleModelProvider implements ModelProvider {
     if (this.id !== 'local') headers.authorization = `Bearer ${config.apiKey}`
     const timeoutMs = config.timeoutMs ?? 60_000
     const signal = AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)])
-    try {
-      const response = await this.fetchImpl(target, { method: 'POST', redirect: 'manual', signal, headers, body: JSON.stringify({ model: request.model ?? config.model, max_tokens: request.maxOutputTokens, messages: request.messages.map((message) => {
+    const requestBody: Record<string, unknown> = {
+      model: request.model ?? config.model,
+      // The Governor/ModelGateway already approved this limit. Never enlarge the
+      // provider's maximum output beyond the authorised request, even for
+      // reasoning models whose internal tokens consume some of the budget.
+      max_tokens: request.maxOutputTokens,
+      messages: request.messages.map((message) => {
         const parts = validateModelAttachments(message.attachments)
-        return { role: message.role, content: parts.length ? [{ type: 'text', text: message.content }, ...parts.map((attachment) => ({ type: 'image_url', image_url: { url: `data:${attachment.mimeType};base64,${attachment.data}` } }))] : message.content }
-      }) }) })
+        return {
+          role: message.role,
+          content: parts.length
+            ? [{ type: 'text', text: message.content }, ...parts.map((attachment) => ({ type: 'image_url', image_url: { url: `data:${attachment.mimeType};base64,${attachment.data}` } }))]
+            : message.content,
+        }
+      }),
+    }
+    if (this.id === 'minimax') {
+      requestBody.reasoning_split = true
+    }
+
+    try {
+      const response = await this.fetchImpl(target, { method: 'POST', redirect: 'manual', signal, headers, body: JSON.stringify(requestBody) })
       if (response.status >= 300 && response.status < 400) throw new Error('Provider redirect refused; no follow-up request was sent.')
       if (!response.ok) throw new Error(`Provider responded ${response.status}.`)
-      const body = await response.json() as { choices?: { message?: { content?: unknown }; finish_reason?: unknown }[]; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }
+      const body = await response.json() as {
+        choices?: {
+          message?: {
+            content?: unknown
+            reasoning_content?: unknown
+            reasoning_details?: unknown
+          }
+          finish_reason?: unknown
+        }[]
+        usage?: { prompt_tokens?: unknown; completion_tokens?: unknown }
+      }
       const choice = body.choices?.[0]
-      if (typeof choice?.message?.content !== 'string') throw new Error('Provider returned no text completion.')
+      const rawContent = typeof choice?.message?.content === 'string' ? choice.message.content : ''
+      const rawReasoning = typeof choice?.message?.reasoning_content === 'string'
+        ? choice.message.reasoning_content.trim()
+        : typeof choice?.message?.reasoning_details === 'string'
+          ? choice.message.reasoning_details.trim()
+          : ''
+      if (rawContent.length === 0 && rawReasoning.length === 0) throw new Error('Provider returned no text completion.')
+      const thinkWrapped = rawReasoning.length > 0
+        ? (/^<think(?:ing)?>/i.test(rawReasoning) ? rawReasoning : `<think>\n${rawReasoning}\n</think>`)
+        : ''
+      const combinedText = thinkWrapped.length > 0
+        ? (rawContent.length > 0 ? `${thinkWrapped}\n\n${rawContent}` : thinkWrapped)
+        : rawContent
       const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
-      const cleaned = cleanProviderCompletion(choice.message.content, config.apiKey)
+      const cleaned = cleanProviderCompletion(combinedText, config.apiKey)
       if (cleaned.corrupted) {
         throw new Error(`Provider returned unreadable output: ${cleaned.reason}`)
       }
-      return { requestId: request.requestId, providerId: this.id, model: request.model ?? config.model, text: cleaned.text, inputTokens: count(body.usage?.prompt_tokens), outputTokens: count(body.usage?.completion_tokens), finishReason: readFinishReason(choice.finish_reason) }
+      return {
+        requestId: request.requestId,
+        providerId: this.id,
+        model: request.model ?? config.model,
+        text: cleaned.text,
+        inputTokens: count(body.usage?.prompt_tokens),
+        outputTokens: count(body.usage?.completion_tokens),
+        finishReason: readFinishReason(choice?.finish_reason),
+      }
     } catch (error) {
       if (options.signal.aborted) throw new ModelRequestCancelled('cancelled during provider request')
       if (signal.aborted) {

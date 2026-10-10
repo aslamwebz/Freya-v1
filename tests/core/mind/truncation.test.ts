@@ -492,4 +492,14 @@ describe('renderTruncatedAnswer', () => {
     expect(rendered).toContain('Used the "web_search" lookup and read 1 result.')
     expect(rendered).toContain('cut off before it finished')
   })
+
+  it('closes unclosed think tags so the notice is not swallowed into reasoning', () => {
+    const unclosed = '<think>\nplanning a long response...'
+    const rendered = renderTruncatedAnswer(unclosed)
+    expect(rendered).toContain('</think>')
+    const thinkEnd = rendered.indexOf('</think>')
+    const noticeStart = rendered.indexOf('cut off before it finished')
+    expect(thinkEnd).toBeGreaterThan(0)
+    expect(noticeStart).toBeGreaterThan(thinkEnd)
+  })
 })

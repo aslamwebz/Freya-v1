@@ -1240,6 +1240,17 @@ describe('the wire protocol is strict', () => {
     expect(parseToolResponse('FREYA_TOOL_CALL\n[1,2,3]\nFREYA_TOOL_CALL_END', known).kind).toBe('invalid')
   })
 
+  it('refuses an array of tool objects instead of secretly executing the first item', () => {
+    const raw = 'FREYA_TOOL_CALL\n[{"tool":"web_search","query":"Python 3.13"},{"tool":"web_search","query":"Python 3.12"}]\nFREYA_TOOL_CALL_END'
+    expect(parseToolResponse(raw, known).kind).toBe('invalid')
+  })
+
+  it('refuses concatenated JSON objects rather than silently dropping later actions', () => {
+    const raw = 'FREYA_TOOL_CALL\n{"tool":"web_search","query":"Python 3.13"}\n{"tool":"web_search","query":"Python 3.12"}\nFREYA_TOOL_CALL_END'
+    expect(parseToolResponse(raw, known).kind).toBe('invalid')
+  })
+
+
   it('refuses a body that names no tool', () => {
     expect(parseToolResponse('FREYA_TOOL_CALL\n{"query":"q"}\nFREYA_TOOL_CALL_END', known).kind).toBe('invalid')
   })
@@ -1281,6 +1292,38 @@ describe('the wire protocol is strict', () => {
   it('refuses multiple <tool_call> envelopes in the same reply', () => {
     const one = '<tool_call>\n{"tool":"web_search","query":"q"}\n</tool_call>'
     expect(parseToolResponse([one, one].join('\n'), known).kind).toBe('invalid')
+  })
+
+  it('retains a complete workspace report beyond the lookup limit', () => {
+    const content = Array.from({ length: 230 }, (_, i) => 'Section ' + i + ': finding.').join('\n')
+    expect(content.length).toBeGreaterThan(MIND_TOOL_LIMITS.maxRequestChars)
+    const raw = ['FREYA_TOOL_CALL', JSON.stringify({ tool: 'workspace_save_report', filename: 'report.md', content }), 'FREYA_TOOL_CALL_END'].join('\n')
+    expect(parseToolResponse(raw, name => name === 'workspace_save_report')).toEqual({
+      kind: 'request', tool: 'workspace_save_report', arguments: { filename: 'report.md', content },
+    })
+  })
+
+  it('retains full canvas content rather than silently cutting it to query length', () => {
+    const content = Array.from({ length: 230 }, (_, i) => 'Canvas ' + i + ': finding.').join('\n')
+    expect(content.length).toBeGreaterThan(MIND_TOOL_LIMITS.maxRequestChars)
+    const raw = ['FREYA_TOOL_CALL', JSON.stringify({ tool: 'open_canvas', title: 'Preview', content, kind: 'document', language: 'markdown' }), 'FREYA_TOOL_CALL_END'].join('\n')
+    expect(parseToolResponse(raw, name => name === 'open_canvas')).toEqual({
+      kind: 'request', tool: 'open_canvas', arguments: { title: 'Preview', content, kind: 'document', language: 'markdown' },
+    })
+  })
+
+  it('refuses unclosed streams containing multiple tool actions', () => {
+    const raw = 'FREYA_TOOL_CALL\n{"tool":"web_search","query":"one"}\n{"tool":"web_search","query":"two"}'
+    expect(parseToolResponse(raw, known).kind).toBe('invalid')
+  })
+
+  it('reads tool requests emitted inside ToolUse envelopes with name and input object', () => {
+    const raw = 'The snapshot was truncated. Let me take a screenshot.يا-ToolUse|{"name":"browser_tabs","input":{"op": "screenshot","tab": "tab-123"}}-ToolUse|'
+    expect(parseToolResponse(raw, known)).toEqual({
+      kind: 'request',
+      tool: 'browser_tabs',
+      arguments: { op: 'screenshot', tab: 'tab-123' },
+    })
   })
 })
 
@@ -1640,6 +1683,31 @@ describe('explicit owner browser intent', () => {
     expect(result_.outcome).toBe('completed')
     expect(opened).toEqual([])
     expect(h.provider.calls).toBe(1)
+  })
+
+  it('injects synthesis steering guidance when approaching maxProviderCalls limit', async () => {
+    // Generate 8 distinct queries (iterations 0 to 7) so iteration 7 triggers guidance for iteration 8
+    const script: string[] = []
+    for (let i = 0; i < 8; i += 1) {
+      script.push(toolCall('web_search', { query: `query-${i}` }))
+    }
+    script.push('final synthesized answer based on all previous findings')
+
+    const h = await harness({
+      tools: [searchTool([result()])],
+      script,
+    })
+
+    const outcome = await submit(h)
+    expect(outcome.outcome).toBe('completed')
+    // Check that request 8 received the synthesis guidance
+    const lastRequest = h.provider.requests[8]
+    expect(lastRequest).toBeDefined()
+    expect(
+      lastRequest?.messages.some((m) =>
+        m.content.includes('approaching the turn limit. Please synthesize your final response now'),
+      ),
+    ).toBe(true)
   })
 })
 

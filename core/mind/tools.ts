@@ -647,6 +647,11 @@ export class MindToolRegistry {
       '{"tool":"<tool name>","<argument name>":"<argument value>"}',
       TOOL_CALL_CLOSE,
       '',
+      'CRITICAL: If an action or lookup is required, you MUST output the tool call envelope immediately in this turn. Never output conversational promises like "Opening it now", "Let me check", or "I will try to open it" without including the tool call envelope in the response.',
+      '',
+      'CRITICAL: Emit exactly ONE tool call at a time. Never emit multiple JSON objects or an array of tool calls in one envelope. If you need multiple searches or lookups, emit the first one now; you will receive its result and can make the next tool call in the next iteration.',
+
+      '',
       'Tools available on this turn:',
       ...this.tools.filter(tool => !blockedTools.includes(tool.name)).map((tool) => {
         const args = tool.parameters
@@ -736,32 +741,58 @@ export function parseToolResponse(text: string, known: (name: string) => boolean
   let trimmed = withoutReasoning.trim()
 
   // Clean leading provider delimiter noise if attached to tool envelope
-  trimmed = trimmed.replace(/\]?<\]minimax\[>\[?/gi, '')
+  trimmed = trimmed.replace(/\]?<\]minimax(?:\[>\[|\[\[|\[>|\[|\])?/gi, '')
 
   // Determine whether this text carries a Freya tool envelope or an alternative provider tool envelope.
   const freyaOpen = trimmed.indexOf(TOOL_CALL_OPEN)
   const altMatch = trimmed.match(/\[?<tool_call>\]?/i)
+  const toolUseMatch = trimmed.match(/(?:يا-?|-)?ToolUse\|/i)
   const hasAlt = altMatch && altMatch.index !== undefined
+  const hasToolUse = toolUseMatch && toolUseMatch.index !== undefined
 
   // Neither envelope present -> this is a direct prose answer.
-  if (freyaOpen === -1 && !hasAlt) return { kind: 'answer' }
+  if (freyaOpen === -1 && !hasAlt && !hasToolUse) return { kind: 'answer' }
 
-  // Use the envelope that appears first if both were somehow present
-  const useFreya = freyaOpen !== -1 && (!hasAlt || freyaOpen <= (altMatch?.index ?? Infinity))
-  const open = useFreya ? freyaOpen : altMatch!.index!
-  const openMarker = useFreya ? TOOL_CALL_OPEN : altMatch![0]
-  const closeMarker = useFreya ? TOOL_CALL_CLOSE : '</tool_call>'
+  // Use the envelope that appears first if multiple are present
+  type EnvelopeKind = 'freya' | 'alt' | 'toolUse'
+  let bestKind: EnvelopeKind = 'freya'
+  let bestIndex = freyaOpen !== -1 ? freyaOpen : Infinity
+
+  if (hasAlt && altMatch.index! < bestIndex) {
+    bestKind = 'alt'
+    bestIndex = altMatch.index!
+  }
+  if (hasToolUse && toolUseMatch.index! < bestIndex) {
+    bestKind = 'toolUse'
+    bestIndex = toolUseMatch.index!
+  }
+
+  const open = bestIndex
+  const useFreya = bestKind === 'freya'
+  let openMarker: string
+  let closePattern: RegExp
+
+  if (bestKind === 'freya') {
+    openMarker = TOOL_CALL_OPEN
+    closePattern = /FREYA_TOOL_CALL_END/u
+  } else if (bestKind === 'alt') {
+    openMarker = altMatch![0]
+    closePattern = /\[?<\/tool_call>\]?/i
+  } else {
+    openMarker = toolUseMatch![0]
+    closePattern = /-?ToolUse\|/i
+  }
 
   let closing = -1
   let closeMarkerLen = 0
-  if (useFreya) {
-    closing = trimmed.indexOf(closeMarker, open)
-    closeMarkerLen = closeMarker.length
+  if (bestKind === 'freya') {
+    closing = trimmed.indexOf(TOOL_CALL_CLOSE, open)
+    closeMarkerLen = TOOL_CALL_CLOSE.length
   } else {
-    const altCloseMatch = trimmed.slice(open + openMarker.length).match(/\[?<\/tool_call>\]?/i)
-    if (altCloseMatch && altCloseMatch.index !== undefined) {
-      closing = open + openMarker.length + altCloseMatch.index
-      closeMarkerLen = altCloseMatch[0].length
+    const closeMatch = trimmed.slice(open + openMarker.length).match(closePattern)
+    if (closeMatch && closeMatch.index !== undefined) {
+      closing = open + openMarker.length + closeMatch.index
+      closeMarkerLen = closeMatch[0].length
     }
   }
 
@@ -772,20 +803,31 @@ export function parseToolResponse(text: string, known: (name: string) => boolean
     // bytes, or multiple requests can enter this compatibility path.
     const candidate = trimmed.slice(open + openMarker.length).trim()
     const proseBefore = trimmed.slice(0, open).trim()
-    const allowUnclosed = useFreya ? open === 0 : proseBefore.length <= MIND_TOOL_LIMITS.maxToolCallProseChars
-    if (allowUnclosed && candidate.length <= MIND_TOOL_LIMITS.maxRequestChars
-        && candidate.startsWith('{') && candidate.endsWith('}')) {
-      try {
-        const value: unknown = JSON.parse(candidate)
-        if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-          const record = value as Record<string, unknown>
-          const name = record['tool']
-          if (typeof name === 'string' && known(name)
-              && Object.entries(record).some(([key, item]) => key !== 'tool' && typeof item === 'string' && item.trim().length > 0)) {
-            return { kind: 'request', tool: name, arguments: readArguments(record) }
+    const cleanCandidate = candidate
+      .replace(/^```[A-Za-z0-9_-]*[ \t]*\r?\n?/u, '')
+      .replace(/\r?\n?```$/u, '')
+      .trim()
+    const cleanProseBefore = proseBefore.replace(/<think(?:ing)?>[\s\S]*?(?:<\/think(?:ing)?>|$)/giu, '').trim()
+    const allowUnclosed = useFreya ? open === 0 : cleanProseBefore.length <= MIND_TOOL_LIMITS.maxToolCallProseChars
+    if (allowUnclosed && cleanCandidate.length <= MIND_TOOL_LIMITS.maxCanvasChars) {
+      // A missing closing sentinel is recoverable only for a complete, single
+      // JSON object. Never silently execute the first item in a list/stream.
+      if (cleanCandidate.startsWith('{') && cleanCandidate.endsWith('}')) {
+        try {
+          const value: unknown = JSON.parse(cleanCandidate)
+          if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+            const record = value as Record<string, unknown>
+            const name = record['tool'] ?? record['name']
+            if (typeof name === 'string' && known(name)
+                && Object.entries(record).some(([key, item]) => key !== 'tool' && key !== 'name' && typeof item === 'string' && item.trim().length > 0)) {
+              if (name !== 'workspace_save_report' && name !== 'open_canvas' && cleanCandidate.length > MIND_TOOL_LIMITS.maxRequestChars) {
+                return { kind: 'invalid', reason: 'the tool request was too long to be read' }
+              }
+              return { kind: 'request', tool: name, arguments: readArguments(record) }
+            }
           }
-        }
-      } catch { /* Malformed or partial JSON must never execute. */ }
+        } catch { /* Malformed or partial JSON must never execute. */ }
+      }
     }
     return { kind: 'invalid', reason: 'the tool request was not closed' }
   }
@@ -793,13 +835,15 @@ export function parseToolResponse(text: string, known: (name: string) => boolean
   // Two envelopes is not a request; it is a reply that could be read two ways.
   const afterClose = closing + closeMarkerLen
   const rest = trimmed.slice(afterClose)
-  if (rest.indexOf(TOOL_CALL_OPEN) !== -1 || /\[?<tool_call>\]?/i.test(rest)) {
+  if (rest.indexOf(TOOL_CALL_OPEN) !== -1 || /\[?<tool_call>\]?|(?:يا-?|-)?ToolUse\|/i.test(rest)) {
     return { kind: 'invalid', reason: 'the reply contained more than one tool request' }
   }
 
   // Surrounding prose is discarded, never read. Capped so a long ramble cannot
-  // ride along with a request.
-  const prose = trimmed.slice(0, open).length + rest.length
+  // ride along with a request. Thinking blocks are presentation, never prose.
+  const cleanProseHead = trimmed.slice(0, open).replace(/<think(?:ing)?>[\s\S]*?(?:<\/think(?:ing)?>|$)/giu, '').trim()
+  const cleanRest = rest.replace(/<think(?:ing)?>[\s\S]*?(?:<\/think(?:ing)?>|$)/giu, '').trim()
+  const prose = cleanProseHead.length + cleanRest.length
   if (prose > MIND_TOOL_LIMITS.maxToolCallProseChars) {
     return { kind: 'invalid', reason: 'the reply was mostly prose around a tool request' }
   }
@@ -816,7 +860,7 @@ export function parseToolResponse(text: string, known: (name: string) => boolean
   if (body.length === 0) {
     return { kind: 'invalid', reason: 'the tool request was empty' }
   }
-  if (body.length > MIND_TOOL_LIMITS.maxRequestChars) {
+  if (body.length > MIND_TOOL_LIMITS.maxCanvasChars) {
     return { kind: 'invalid', reason: 'the tool request was too long to be read' }
   }
 
@@ -824,16 +868,22 @@ export function parseToolResponse(text: string, known: (name: string) => boolean
   try {
     parsed = JSON.parse(body)
   } catch {
+    // Concatenated tool objects are not one request. Reject rather than
+    // silently running only the first action.
     return { kind: 'invalid', reason: 'the tool request was not valid JSON' }
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return { kind: 'invalid', reason: 'the tool request was not an object' }
-  }
 
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { kind: 'invalid', reason: 'the tool request was not a single object' }
+  }
   const record = parsed as Record<string, unknown>
-  const name = record['tool']
+
+  const name = record['tool'] ?? record['name']
   if (typeof name !== 'string' || name.length === 0 || name.length > 64) {
     return { kind: 'invalid', reason: 'the tool request did not name a tool' }
+  }
+  if (name !== 'workspace_save_report' && name !== 'open_canvas' && body.length > MIND_TOOL_LIMITS.maxRequestChars) {
+    return { kind: 'invalid', reason: 'the tool request was too long to be read' }
   }
   if (!known(name)) {
     // Not malformed — refused. Kept distinct so the loop reports "no such tool"
@@ -844,19 +894,23 @@ export function parseToolResponse(text: string, known: (name: string) => boolean
   return { kind: 'request', tool: name, arguments: readArguments(record) }
 }
 
-/** Read `tool`'s siblings as bounded strings, ignoring everything else. */
+/** Read `tool`'s siblings (or input object properties) as bounded strings, ignoring everything else. */
 function readArguments(record: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const [key, value] of Object.entries(record)) {
-    if (key === 'tool') continue
+  const toolName = record['tool'] ?? record['name']
+  const source = record.input && typeof record.input === 'object' && !Array.isArray(record.input)
+    ? record.input as Record<string, unknown>
+    : record
+  for (const [key, value] of Object.entries(source)) {
+    if (key === 'tool' || key === 'name' || key === 'input') continue
     if (typeof value !== 'string') continue
-    // Bounded to the whole-request ceiling, and with newlines kept. This layer has
-    // no tool metadata — it does not know which parameters are lists — so it does
-    // the one bound the body already implies and leaves the per-parameter bound and
-    // the control flattening to `boundArguments`, which does know. Doing the list
-    // flattening here is what turned ten addresses into one truncated line before
-    // any tool body ever saw them.
-    out[key] = sanitiseArgumentText(value, MIND_TOOL_LIMITS.maxRequestChars, true)
+    // Larger content is permitted only for the named, Guard-controlled artifact tools.
+    const maxChars = key === 'content' && toolName === 'workspace_save_report'
+      ? 32_000
+      : key === 'content' && toolName === 'open_canvas'
+        ? MIND_TOOL_LIMITS.maxCanvasChars
+        : MIND_TOOL_LIMITS.maxRequestChars
+    out[key] = sanitiseArgumentText(value, maxChars, true)
   }
   return out
 }
@@ -1243,7 +1297,7 @@ export function createCanvasTool(): MindTool {
       { name: 'title', description: 'A short title, e.g. "Q3 sales report" or "Bakery landing page".', required: true },
       { name: 'kind', description: '`document` for writing; `code` for a program or web page.', required: true },
       { name: 'language', description: 'The content language: `markdown`, `html`, `javascript`, `python`, `css`, `json` or `text`.', required: true },
-      { name: 'content', description: 'The full body of the document or program.', required: true },
+      { name: 'content', description: 'The full body of the document or program.', required: true, maxChars: MIND_TOOL_LIMITS.maxCanvasChars, multiline: true },
     ],
     async run(request) {
       const title = request.arguments['title'] ?? ''

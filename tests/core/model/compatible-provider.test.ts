@@ -121,4 +121,50 @@ describe('CompatibleModelProvider', () => {
     const outcome = await provider.complete(request, { signal: new AbortController().signal })
     expect(outcome.text).toBe('Valid analysis here.')
   })
+
+  it('sends reasoning_split for minimax and wraps reasoning_content into think tags', async () => {
+    let capturedBody: Record<string, unknown> = {}
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      capturedBody = JSON.parse(init?.body as string) as Record<string, unknown>
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'Paris is the capital of France.',
+                reasoning_content: 'The user is asking about the capital of France. That is Paris.',
+              },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 15, completion_tokens: 35 },
+        }),
+      } as unknown as Response
+    }
+
+    const provider = new CompatibleModelProvider(
+      'minimax',
+      { apiKey: 'test-key', baseUrl: 'https://api.minimax.io/v1', model: 'MiniMax-M3', liveEnabled: true, vision: false },
+      fetchImpl,
+    )
+
+    const request: ModelRequest = {
+      requestId: 'req-2',
+      model: 'MiniMax-M3',
+      prompt: 'Capital of France?',
+      messages: [{ role: 'user', content: 'Capital of France?' }],
+      maxOutputTokens: 200,
+    }
+
+    const outcome = await provider.complete(request, { signal: new AbortController().signal })
+    expect(capturedBody.reasoning_split).toBe(true)
+    // The provider cannot override the output token ceiling approved by Core.
+    expect(capturedBody.max_tokens).toBe(request.maxOutputTokens)
+    expect(outcome.text).toContain('<think>\nThe user is asking about the capital of France. That is Paris.\n</think>')
+    expect(outcome.text).toContain('Paris is the capital of France.')
+    expect(outcome.finishReason).toBe('stop')
+  })
 })

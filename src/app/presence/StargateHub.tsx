@@ -19,26 +19,36 @@ interface ComponentCard {
 }
 
 const COMPONENTS: readonly ComponentCard[] = [
-  { id: 'mind', nav: 'mind', label: 'Mind', description: 'Cognition & reasoning', icon: 'mind', angle: 0 },
-  { id: 'focus', nav: 'focus', label: 'Focus', description: 'Attention & deep work', icon: 'focus', angle: 36 },
-  { id: 'people', nav: 'people', label: 'People', description: 'Relationships & context', icon: 'people', angle: 72 },
-  { id: 'workforce', nav: 'office', label: 'Office', description: 'Agents & automation', icon: 'workforce', angle: 108 },
-  { id: 'world', nav: 'world', label: 'World', description: 'Real-time context', icon: 'world', angle: 144 },
-  { id: 'memory', nav: 'memory', label: 'Memory', description: 'Durable knowledge', icon: 'memory', angle: 180 },
-  { id: 'life', nav: 'life', label: 'Life', description: 'Growth & balance', icon: 'life', angle: 216 },
-  { id: 'foundry', nav: 'create', label: 'Foundry', description: 'Build & create', icon: 'forge', angle: 252 },
-  { id: 'relay', nav: 'relay', label: 'Relay', description: 'Connections & signals', icon: 'relay', angle: 288 },
-  { id: 'mission', nav: 'missions', label: 'Mission', description: 'Goals & direction', icon: 'mission', angle: 324 },
+  { id: 'mind', nav: 'mind/overview', label: 'Mind', description: 'Mind overview and decisions', icon: 'mind', angle: 0 },
+  { id: 'focus', nav: 'mind/focus', label: 'Focus & Attention', description: 'Mind focus and attention', icon: 'focus', angle: 36 },
+  { id: 'library', nav: 'library/knowledge', label: 'Library', description: 'Knowledge and evidence', icon: 'memory', angle: 72 },
+  { id: 'office', nav: 'office/scene', label: 'Office', description: 'Live agent workstations', icon: 'workforce', angle: 108 },
+  { id: 'world', nav: 'world/digest', label: 'World', description: 'World and news digest', icon: 'world', angle: 144 },
+  { id: 'memory', nav: 'mind/memory', label: 'Memory', description: 'Mind memory continuity', icon: 'memory', angle: 180 },
+  { id: 'workflows', nav: 'workflows/tasks', label: 'Workflows', description: 'Tasks and execution', icon: 'widgets', angle: 216 },
+  { id: 'settings', nav: 'settings/appearance', label: 'Settings', description: 'Personalization and controls', icon: 'settings', angle: 252 },
+  { id: 'chat', nav: 'chat', label: 'Chats', description: 'Conversations and browser', icon: 'chat', angle: 288 },
+  { id: 'missions', nav: 'missions/missions', label: 'Missions', description: 'Goals and verified outcomes', icon: 'mission', angle: 324 },
 ]
+
+/** The Core and existing clients can still emit the original component IDs. */
+const LEGACY_COMPONENT_ALIASES: Readonly<Record<string, string>> = {
+  people: 'library',
+  workforce: 'office',
+  life: 'workflows',
+  foundry: 'settings',
+  relay: 'chat',
+  mission: 'missions',
+}
 
 const HOT_BY_STATE: Record<BrainState, readonly string[]> = {
   calm: [],
   thinking: ['mind', 'focus', 'memory'],
-  researching: ['mind', 'world', 'memory'],
-  delegating: ['workforce', 'relay', 'mission'],
+  researching: ['mind', 'world', 'library'],
+  delegating: ['office', 'workflows', 'missions'],
   load: COMPONENTS.map((card) => card.id),
-  success: ['mission', 'life'],
-  uncertainty: ['focus', 'relay'],
+  success: ['missions', 'workflows'],
+  uncertainty: ['focus', 'library'],
 }
 
 // One fragment per subsystem, centred on that subsystem's angle. The socket is
@@ -105,7 +115,8 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
     let timer: ReturnType<typeof setTimeout> | null = null
     const onFire = (event: Event): void => {
       const detail = (event as CustomEvent<{ ids?: readonly string[] }>).detail
-      const ids = detail?.ids?.filter((id) => COMPONENTS.some((card) => card.id === id)) ?? []
+      const ids = [...new Set(detail?.ids?.map((id) => LEGACY_COMPONENT_ALIASES[id] ?? id)
+        .filter((id) => COMPONENTS.some((card) => card.id === id)) ?? [])]
       if (ids.length === 0) return
       setFired(ids)
       if (timer) clearTimeout(timer)
@@ -267,7 +278,10 @@ export function StargateHub({ state, energy, onNavigate }: Props) {
             <path className="sg-card-inner-rim" d={arcPath(cx, cy, inner + 5, start + 1, end - 1)} />
             <path className="sg-card-track" d={arcPath(cx, cy, outer - 11, start + 2, end - 2)} />
             <path id={labelId} className="sg-label-guide" d={`M${labelStart.x} ${labelStart.y} A${labelRadius} ${labelRadius} 0 0 ${lower ? 0 : 1} ${labelEnd.x} ${labelEnd.y}`} />
-            <text className="sg-card-label" style={{ fontSize: Math.max(10, Math.min(14, outer * .047)) }}>
+            <text className="sg-card-label" style={{
+              fontSize: Math.max(9, Math.min(card.label.length > 12 ? 11 : 14, outer * (card.label.length > 12 ? .039 : .047))),
+              letterSpacing: card.label.length > 12 ? '.35px' : undefined,
+            }}>
               <textPath href={`#${labelId}`} startOffset="50%" textAnchor="middle">{card.label.toUpperCase()}</textPath>
             </text>
             <g className="sg-card-chevron" transform={`translate(${marker.x} ${marker.y}) rotate(${card.angle})`}>

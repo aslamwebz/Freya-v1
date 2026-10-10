@@ -556,8 +556,12 @@
 .st-nav {
   width: 13rem; flex-shrink: 0; padding: 1rem .75rem;
   display: flex; flex-direction: column; gap: 2px;
-  border-right: 1px solid #8db7d326;
+  border-right: 1px solid #8db7d326; overflow-y: auto;
 }
+.st-advanced { margin-top: 12px; border-top: 1px solid #8db7d326; padding-top: 12px; }
+.st-advanced summary { cursor: pointer; padding: .55rem .75rem; color: #9fb4c7; }
+.st-advanced .st-tab { display: block; width: 100%; }
+.st-advanced summary:focus-visible, .st-tab:focus-visible { outline: 2px solid #7cdfff; outline-offset: -2px; }
 .st-tab {
   text-align: left; font: inherit; font-size: .9rem; padding: .55rem .75rem; border-radius: 8px;
   border: 0; background: none; color: #9fb4c7; cursor: pointer;

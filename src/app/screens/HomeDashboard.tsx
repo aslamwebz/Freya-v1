@@ -4,13 +4,12 @@ import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { Clock } from '../../ui-v2/primitives/Clock'
 import { ready } from '../state/view'
 import type { ScreenSlots } from './Home'
-import { FreyaCentre } from '../presence/FreyaCentre'
 import { StargateHub } from '../presence/StargateHub'
 import { HomeWidgets } from './HomeWidgets'
 import { Chats } from '../chat/Chats'
 import type { ComposerMode, WorkspaceResearchView } from '../chat/modes'
 import type { VoiceDock, VoiceView } from '../voice/useVoiceDock'
-import { brainState, type BrainState } from '../presence/state'
+import { brainState } from '../presence/state'
 import { ChatHistory } from '../chat/ChatHistory'
 import { ChatSidebarResize } from '../chat/ChatSidebarResize'
 import { SettingsOverlay, type SettingsCategory } from './Settings'
@@ -18,11 +17,13 @@ import { GlobalComposer } from './GlobalComposer'
 import { CoreHealth } from './CoreHealth'
 import { hostBridge } from '../../platform/host'
 import { conversationMirror } from '../../platform/conversationClient'
-import type { DressingStore, DressingState } from '../dressing/store'
+import type { DressingStore } from '../dressing/store'
 import { PersistentWorkspaceLayers } from './PersistentWorkspaceLayers'
 import chibiPlaceholder from '../assets/chibi-placeholder.svg'
 import type { PreferencesStore } from '../../ui-v2/theme/preferences'
 import type { DockedTabOrigin } from '../chat/BrowserWorkspace'
+import { PRIMARY_DESTINATIONS, resolveRoute } from '../state/routes'
+import { UnifiedWorkspace } from './UnifiedWorkspaces'
 import './home-dashboard.css'
 
 interface Props {
@@ -61,12 +62,7 @@ interface Props {
   onBrowserClose: () => void
 }
 
-const NAV = [['home', 'Home', 'home'], ['chat', 'Chats', 'chat'], ['mind', 'Mind', 'mind'], ['focus', 'Focus', 'focus'],
-  ['people', 'People', 'people'], ['workforce', 'Workforce', 'workforce'], ['world', 'World', 'world'],
-  ['memory', 'Memory', 'memory'], ['life', 'Life', 'life'], ['create', 'Foundry', 'forge'],
-  ['relay', 'Relay', 'relay']] as const
-
-const WORKSPACE_IDS: readonly string[] = [...NAV.map(([id]) => id), 'settings']
+const WORKSPACE_IDS: readonly string[] = PRIMARY_DESTINATIONS.map(([id]) => id)
 
 // Existing reference artwork supplies decorative face thumbnails, never UI text.
 const FACES = [[290, 219], [378, 236], [291, 310], [470, 199]] as const
@@ -108,31 +104,13 @@ function Panel({ name, title, icon, children, onOpen, meta }: {
  * bottom cards or replace the centre entirely (a graph, a timeline); otherwise
  * the shared Freya centre is drawn. `layout: 'wide'` drops the side columns.
  */
-function TabBody({ slots, design, cognition }: { slots?: ScreenSlots; design: DressingState; cognition: BrainState }) {
-  if (!slots) return null
-  const wide = slots.layout === 'wide'
-  return (
-    <div className="hd-tab-body" data-layout={wide ? 'wide' : 'standard'}>
-      {wide ? null : <div className="hd-col hd-col-l">{slots.left}</div>}
-      {/* Freya is always the centre and sits in front of the screen's geometry,
-          as the references show — the World graph and Life timeline pass behind
-          her. The overlay is absolute, so DOM order puts Freya on top. */}
-      <div className="hd-tab-centre">
-        {slots.centre ? <div className="hd-tab-overlay">{slots.centre}</div> : null}
-        {slots.presence === 'none' ? null : <FreyaCentre centre={design.centre} style={design.style} rings={design.rings === 'on'} state={cognition} />}
-      </div>
-      {wide ? null : <div className="hd-col hd-col-r">{slots.right}</div>}
-      {slots.bottom ? <div className="hd-col-b">{slots.bottom}</div> : null}
-      {/*
-        One visible statement, for every screen that declares it.
-        */}
-      {slots.sample ? <p className="hd-sample-note" role="status">{slots.sample}</p> : null}
-    </div>
-  )
-}
-
 /** Home owns a reference-sized composition; no shared app/card selectors leak into it. */
-export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, settingsCategory, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onResearchViewChange, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserPercent, onBrowserPercentChange, browserRequestedUrl, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
+export function HomeDashboard({ screen: requestedScreen, snapshot, generating, notice, dressing, preferences, voice, voiceControls, voiceTranscript, onSettingsCategory, onOpenDressing, onSend, onStopResponse, researchView, onResearchViewChange, onNavigate, onVoicePress, onVoiceRelease, maxMessageCharacters, browserOpen, browserPercent, onBrowserPercentChange, browserRequestedUrl, onBrowserOpenUrl, onBrowserRequestedUrlHandled, onBrowserClose }: Props) {
+  const route = resolveRoute(requestedScreen)
+  const screen = route.destination
+  const paths = useRef<Record<string, string>>({})
+  useEffect(() => { paths.current[screen] = route.path }, [screen, route.path])
+  const navigate = (path: string) => onNavigate(resolveRoute(path).path)
   const viewport = useRef<HTMLDivElement>(null)
   const [desktopView, setDesktopView] = useState<'dashboard' | 'mini-chat'>('dashboard')
   useEffect(() => {
@@ -197,7 +175,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
     lifecycle: core?.lifecycle ?? 'booting',
     operational: core?.operational,
   })
-  const open = (screen: string) => () => onNavigate(screen)
+  const open = (screen: string) => () => navigate(screen)
 
   /*
    * The chrome, after the reference shell's frame: one bar across the top that
@@ -342,16 +320,16 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
         <div className="hd-railhead">
           <button className="hd-rail-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={() => setCollapsed(value => !value)}><Glyph name="panel" size={16} /></button>
         </div>
-        <div className="hd-rail-list">
+        <nav className="hd-rail-list" aria-label="Primary">
           <button className="hd-place" aria-label="Home" aria-current={screen === 'home' ? 'page' : undefined} onClick={open('home')}><Glyph name="home" size={20} /><span>Home</span></button>
           <ChatHistory onOpen={() => { setCollapsed(false); onNavigate('chat') }} collapsed={collapsed} current={screen === 'chat'} />
-          {NAV.filter(([id]) => id !== 'home' && id !== 'chat').map(([id, label, icon]) => (
-            <button key={id} className="hd-place" aria-label={label} aria-current={id === screen ? 'page' : undefined} onClick={open(id)}><Glyph name={icon} size={20} /><span>{label}</span></button>
+          {PRIMARY_DESTINATIONS.filter(([id]) => id !== 'home' && id !== 'chat').map(([id, label, icon]) => (
+            <button key={id} className="hd-place" aria-label={label} aria-current={id === screen ? 'page' : undefined} onClick={() => navigate(paths.current[id] ?? id)}><Glyph name={icon} size={20} /><span>{label}</span></button>
           ))}
-        </div>
+        </nav>
         <div className="hd-rail-foot">
           {screen === 'home' ? <img className="hd-chibi" src={chibiPlaceholder} alt="Chibi Freya — temporary placeholder" draggable={false} /> : null}
-          <div className="hd-online" title={preview ? 'Design preview · Sample data' : undefined}><span className="hd-status-dot" /><span>{online ? 'Freya Online' : 'Freya Offline'}</span><small>Phase 19<br />Build 19.0.1</small></div>
+          <div className="hd-online" title={preview ? 'Design preview · Sample data' : undefined}><span className="hd-status-dot" /><span>{online ? 'Freya Online' : 'Freya Offline'}</span></div>
           <div className="hd-profile" ref={menuRef}>
             <button className="hd-user" aria-label="Open your account menu" aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => setMenuOpen((value) => !value)}>
               <span className="hd-user-avatar">A</span><span className="hd-user-name">Aslam</span><Glyph name="chevron" size={14} />
@@ -359,7 +337,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
             {menuOpen ? (
               <div className="hd-menu-pop" role="menu" aria-label="Account">
                 <button role="menuitem" onClick={() => { setMenuOpen(false); onSettingsCategory('appearance'); open('settings')() }}>Settings</button>
-                <button role="menuitem" onClick={() => { setMenuOpen(false); onSettingsCategory('about'); open('settings')() }}>About Freya</button>
+                <button role="menuitem" onClick={() => { setMenuOpen(false); onSettingsCategory('about'); open('settings/about')() }}>About Freya</button>
               </div>
             ) : null}
           </div>
@@ -371,19 +349,19 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
           active={screen}
           workspaceIds={WORKSPACE_IDS}
           renderWorkspace={(workspaceId) => workspaceId === 'home' ? (<>
-        <HomeWidgets snapshot={snapshot} onNavigate={onNavigate} />
+        <HomeWidgets snapshot={snapshot} onNavigate={navigate} />
         <Panel name="focus" title="Current focus" icon="focus" onOpen={open('focus')}>
           <h3>{focus?.title ?? 'No focus reported'}</h3>
           <p className="hd-description">{preview ? 'Finalizing system architecture, workspace designs, and go-to-market plan.' : focus?.detail}</p>
           <div className="hd-progress-line"><span className="hd-progress" role="progressbar" aria-label="Current focus progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={focus?.progress ?? undefined}><i style={{ width: `${focus?.progress ?? 0}%` }} /></span><small>{focus?.progress == null ? '—' : `${focus.progress}%`}</small></div>
           <div className="hd-tags">{['Strategy', 'Product', 'Launch'].map(tag => <button key={tag} onClick={open('focus')}>{tag}</button>)}<button aria-label="Add focus" onClick={open('focus')}>+</button></div>
         </Panel>
-        <Panel name="mission" title="Mission" icon="mission" onOpen={open('focus')}>
+        <Panel name="mission" title="Mission" icon="mission" onOpen={open('missions')}>
           <h3>{home?.mission ?? 'No mission reported'}</h3>
           <ul className="hd-goals">{home?.goals?.map((goal, i) => <li key={goal.id}><span className={preview && i === 0 ? 'hd-check hd-checked' : 'hd-check'} aria-hidden="true">{preview && i === 0 ? '✓' : ''}</span>{goal.text}</li>)}</ul>
         </Panel>
         <div className="hd-presence" role="region" aria-label="Freya containment dashboard">
-          <StargateHub state={cognition} energy={generating ? 1 : Math.min(1, workingCount * .16)} onNavigate={onNavigate} />
+          <StargateHub state={cognition} energy={generating ? 1 : Math.min(1, workingCount * .16)} onNavigate={navigate} />
           <button className="hd-dress" aria-label="Dressing table" aria-haspopup="dialog" onClick={onOpenDressing}><Glyph name="dress" size={15} /></button>
         </div>
         <Panel name="attention" title="Attention" icon="life" onOpen={open('focus')}>
@@ -395,7 +373,7 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
         <Panel name="people" title="People" icon="workforce" onOpen={open('people')}>
           <div className="hd-people-content"><div><p>Key People</p><>{preview ? <Faces more={home?.morePeople ?? 0} /> : <p>{home?.people?.map(person => person.name).join(' · ') || 'People not connected'}</p>}</></div><div className="hd-people-stats">{preview ? <><span><Glyph name="search" size={13} />{home?.messages ?? 0} new messages</span><span><i />{home?.followUps ?? 0} follow up today</span><span><i />{home?.meetingPrep ?? 0} meeting prep items</span></> : <span>Updates not available</span>}</div></div>
         </Panel>
-        <Panel name="workforce" title="Workforce" icon="workforce" onOpen={open('workforce')} meta={<span className="hd-meta"><i />{preview ? '12 active' : `${workers?.total ?? 0} reported`}</span>}>
+        <Panel name="workforce" title="Office" icon="workforce" onOpen={open('office')} meta={<span className="hd-meta"><i />{workers ? `${workers.total} reported` : 'Not connected'}</span>}>
           <div className="hd-workers">{(preview ? [
             { id: 'content', specialization: 'Content Studio', state: 'Creating campaign assets...' },
             { id: 'research', specialization: 'Research Agent', state: 'Monitoring AI & market updates...' },
@@ -442,11 +420,11 @@ export function HomeDashboard({ screen, slotsByScreen, snapshot, generating, not
             snapshot={snapshot}
             preferences={preferences}
             voiceControls={voiceControls}
-            category={settingsCategory}
-            onCategory={onSettingsCategory}
+            category={resolveRoute(screen === 'settings' ? route.path : paths.current.settings ?? 'settings').section.replace('advanced/', '') as SettingsCategory}
+            onCategory={category => { onSettingsCategory(category); navigate(`settings/${['foundry', 'relay', 'harness', 'context', 'security', 'diagnostics'].includes(category) ? 'advanced/' : ''}${category}`) }}
             onDone={open('home')}
           />
-        ) : <TabBody slots={slotsByScreen[workspaceId]} design={design} cognition={cognition} />}
+        ) : <UnifiedWorkspace path={workspaceId === screen ? route.path : paths.current[workspaceId] ?? workspaceId} snapshot={snapshot} onNavigate={navigate} />}
         />
       </main>
       <GlobalComposer

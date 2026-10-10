@@ -22,13 +22,13 @@ const COMPONENTS: readonly ComponentCard[] = [
   { id: 'mind', nav: 'mind', label: 'Mind', description: 'Cognition & reasoning', icon: 'mind', angle: 0 },
   { id: 'focus', nav: 'focus', label: 'Focus', description: 'Attention & deep work', icon: 'focus', angle: 36 },
   { id: 'people', nav: 'people', label: 'People', description: 'Relationships & context', icon: 'people', angle: 72 },
-  { id: 'workforce', nav: 'workforce', label: 'Workforce', description: 'Agents & automation', icon: 'workforce', angle: 108 },
+  { id: 'workforce', nav: 'office', label: 'Office', description: 'Agents & automation', icon: 'workforce', angle: 108 },
   { id: 'world', nav: 'world', label: 'World', description: 'Real-time context', icon: 'world', angle: 144 },
   { id: 'memory', nav: 'memory', label: 'Memory', description: 'Durable knowledge', icon: 'memory', angle: 180 },
   { id: 'life', nav: 'life', label: 'Life', description: 'Growth & balance', icon: 'life', angle: 216 },
   { id: 'foundry', nav: 'create', label: 'Foundry', description: 'Build & create', icon: 'forge', angle: 252 },
   { id: 'relay', nav: 'relay', label: 'Relay', description: 'Connections & signals', icon: 'relay', angle: 288 },
-  { id: 'mission', nav: 'focus', label: 'Mission', description: 'Goals & direction', icon: 'mission', angle: 324 },
+  { id: 'mission', nav: 'missions', label: 'Mission', description: 'Goals & direction', icon: 'mission', angle: 324 },
 ]
 
 const HOT_BY_STATE: Record<BrainState, readonly string[]> = {

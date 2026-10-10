@@ -37,11 +37,8 @@ export function HomeWidgets({ snapshot, onNavigate }: { snapshot: UiSnapshot; on
         <Clock />
         <div className="hw-time-foot"><span>LOCAL TIME</span><span>{Intl.DateTimeFormat().resolvedOptions().timeZone.replaceAll('_', ' ')}</span></div>
       </Widget>
-      <Widget name="weather" title="Weather" icon="world" badge="Sample">
-        <div className="hw-weather-main"><div><span className="hw-location">London · preview</span><div className="hw-temperature">16<span>°</span></div></div><WeatherSymbol /></div>
-        <div className="hw-weather-caption"><b>Partly cloudy</b><span>H 18° / L 11°</span></div>
-        <div className="hw-weather-hours">{[['Now','16°'],['18:00','15°'],['19:00','14°'],['20:00','13°']].map(([hour,temp]) => <span key={hour}><small>{hour}</small><i /><b>{temp}</b></span>)}</div>
-        <p className="hw-note">Weather preview · location not connected</p>
+      <Widget name="weather" title="Weather" icon="world">
+        <div className="hw-weather-main"><div><p className="hw-empty">Weather not connected</p><p className="hw-note">Use web search in Chats for a forecast.</p></div><WeatherSymbol /></div>
       </Widget>
       <Widget name="today" title="Today" icon="focus" badge={preview ? 'Sample' : undefined}>
         <div className="hw-today-line"><span className="hw-time-label">NOW</span><div><b>{home?.focus?.title ?? 'Choose your focus'}</b><p>{home?.focus?.detail ?? 'Your next priority will appear here.'}</p></div></div>
@@ -50,7 +47,7 @@ export function HomeWidgets({ snapshot, onNavigate }: { snapshot: UiSnapshot; on
       <Widget name="mission" title="Current mission" icon="mission" badge={preview ? 'Sample' : undefined}>
         <p className="hw-mission-title">{home?.mission ?? 'No current mission'}</p>
         {progress != null && <div className="hw-progress-wrap"><div className="hw-progress" role="progressbar" aria-label="Current focus progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><i style={{width: `${Math.max(0, Math.min(100, progress))}%`}} /></div><b>{progress}%</b></div>}
-        <button className="hw-link" onClick={() => onNavigate('focus')}>View mission <span>↗</span></button>
+        <button className="hw-link" onClick={() => onNavigate('missions')}>View mission <span>↗</span></button>
       </Widget>
     </aside>
     <aside className="hw-column hw-right" aria-label="Freya work widgets">
@@ -65,7 +62,7 @@ export function HomeWidgets({ snapshot, onNavigate }: { snapshot: UiSnapshot; on
       </Widget>
       <Widget name="attention" title="Needs your attention" icon="activity" badge={preview ? 'Sample' : undefined}>
         {pending.length || core?.faultCount ? <>
-          {pending.length > 0 && <button className="hw-attention-item" onClick={() => onNavigate('focus')}><span className="hw-attention-marker">!</span><span><b>{pending.length} mission{pending.length === 1 ? '' : 's'} needs review</b><small>Open to see the next decision</small></span><span>›</span></button>}
+          {pending.length > 0 && <button className="hw-attention-item" onClick={() => onNavigate('missions')}><span className="hw-attention-marker">!</span><span><b>{pending.length} mission{pending.length === 1 ? '' : 's'} needs review</b><small>Open to see the next decision</small></span><span>›</span></button>}
           {!!core?.faultCount && <p className="hw-note">{core.faultCount} recorded system issue{core.faultCount === 1 ? '' : 's'}.</p>}
         </> : <p className="hw-empty">Nothing reported that needs your attention.</p>}
       </Widget>

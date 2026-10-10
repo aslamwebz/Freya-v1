@@ -13,17 +13,8 @@ import {
   collectModelAttachments,
   composeWithAttachments,
 } from './chat/attachments'
-import type { ScreenSlots } from './screens/Home'
 import { HomeDashboard } from './screens/HomeDashboard'
-import { Mind } from './screens/Mind'
-import { World } from './screens/World'
-import { Life } from './screens/Life'
-import { Workforce } from './screens/Workforce'
-import { Foundry } from './screens/Foundry'
-import { Relay } from './screens/Relay'
-import { Focus } from './screens/Focus'
-import { People } from './screens/People'
-import { Memory } from './screens/Memory'
+import { resolveRoute } from './state/routes'
 import type { SettingsCategory } from './screens/Settings'
 import { setAppLayout, startupAppLayout, type AppLayout } from './state/workspace'
 import { DressingTable } from './dressing/DressingTable'
@@ -89,7 +80,7 @@ export function App({
 
   useEffect(() => {
     setAppLayout({
-      nav: screen,
+      nav: resolveRoute(screen).path,
       navCollapsed: false,
       conversationId: conversation?.activeConversationId ?? null,
     })
@@ -98,18 +89,6 @@ export function App({
   useEffect(() => {
     void ensureConversationAttached()
   }, [])
-
-  const slotsByScreen: Readonly<Record<string, ScreenSlots>> = {
-    mind: Mind({ snapshot }),
-    world: World(),
-    life: Life(),
-    workforce: Workforce(),
-    create: Foundry(),
-    relay: Relay(),
-    focus: Focus(),
-    people: People(),
-    memory: Memory(),
-  }
 
   const send = async (
     text: string,
@@ -319,7 +298,7 @@ export function App({
     {booted ? null : <BootScreen core={snapshot.core} attached={true} onDone={() => setBooted(true)} />}
     <HomeDashboard
       screen={screen}
-      slotsByScreen={slotsByScreen}
+      slotsByScreen={{}}
       snapshot={snapshot}
       generating={generating}
       notice={noticeConversationId === null || noticeConversationId === conversation?.activeConversationId ? notice : ''}
@@ -335,7 +314,7 @@ export function App({
       onStopResponse={stopResponse}
       researchView={researchView}
       onResearchViewChange={(view) => { setResearchView(view); setActiveEyeSessionId(view.outcome.session?.sessionId ?? null) }}
-      onNavigate={setScreen}
+      onNavigate={path => setScreen(resolveRoute(path).path)}
       onVoicePress={voice.press}
       onVoiceRelease={voice.release}
       maxMessageCharacters={conversation?.maxMessageCharacters ?? null}

@@ -6,7 +6,7 @@
 
 **Stack:** React 19, TypeScript, existing glass CSS and shared primitives, Electron IPC mirrors, Vitest and Testing Library.
 
-**Session boundary:** Execute Phases 0 and 1 only, directly on `feat/mind-phase8-live-integration` in `C:\Users\you\Desktop\AI\Freya`. No worktree, checkout, new desktop directory, push, new Electron instance, or browser port. Stop on unexpected concurrent edits. Do not modify secrets, user data, Core policies, or Freya-main. Commit only the session's explicit files after verification.
+**Execution boundary:** The owner subsequently approved the UI rebuild with a commit for each step. Work directly on `feat/mind-phase8-live-integration` in `C:\Users\you\Desktop\AI\Freya`. Follow the approved UI design in `docs/superpowers/specs/2026-10-10-ui-unification-design.md`: complete the six-destination shell, projected Office room and removal of alternate shipping UI. No worktree, checkout, new desktop directory, push or new Electron instance. Stop on unexpected concurrent edits. Do not modify secrets, user data, Core policies, or Freya-main. Backend association migrations and intelligence evaluation remain separate roadmap work.
 
 ## Phase 0: source inventory and migration map
 
@@ -106,4 +106,10 @@ With owner authorization for the live runtime, validate the single shipping app 
 
 ## Verification record
 
-Phase 1 command outcomes and implemented/deferred boundaries will be recorded here after checks run. Phase 6 live acceptance is explicitly outside this session.
+Step 0: `be585d3` records the approved design and source inventory.
+
+Step 1: the six-destination shipping shell, canonical routes, accessible section tabs, real read-only summaries, remembered sections and retained chat state are implemented. All 27 UI unification tests pass after review fixes. The 36 existing app test files passed (252 tests); review added two memory-source and return-navigation regressions, verified separately. Type checks and renderer/Electron builds pass; lint passes on changed TypeScript files. Repository-wide lint has 424 pre-existing errors in untouched tooling and legacy files, recorded in `.kilo/ui-lint.log`.
+
+Vitest's default fork pool fails to read temporary transformed modules on this Windows sandbox. `--pool=threads --maxWorkers=2` runs the same isolated suites successfully; no assertion or production behavior is changed to accommodate the runner.
+
+Mission associations, knowledge contents, global files/search and specialist controls without a UI bridge remain explicitly not connected. Goals remain a real, separate Core entity. No execution, approvals or heartbeat activation is added by this UI step. Live Electron acceptance has not been performed.

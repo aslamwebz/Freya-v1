@@ -10,6 +10,8 @@ import { THEMES, type ThemeId } from '../../ui-v2/theme/tokens'
 import type { PreferencesStore } from '../../ui-v2/theme/preferences'
 import type { CoreView, ProviderView, Resource } from '../../ui-v2/state/contract'
 import { ready, reason } from '../state/view'
+import { ADVANCED_SECTIONS } from '../state/routes'
+import { NotConnected } from './UnifiedWorkspaces'
 
 /*
  * Settings — the real controls, in the same visual language as every other screen.
@@ -24,7 +26,7 @@ import { ready, reason } from '../state/view'
  * cannot do is worse than none, because it is believed.
  */
 
-export type SettingsCategory = 'appearance' | 'provider' | 'voice' | 'privacy' | 'security' | 'about'
+export type SettingsCategory = 'appearance' | 'provider' | 'voice' | 'privacy' | 'spending' | 'about' | typeof ADVANCED_SECTIONS[number]
 
 export interface SettingsProps {
   /** The live snapshot, typed by the same contract every other surface reads. */
@@ -44,7 +46,7 @@ const CATEGORIES: readonly (readonly [SettingsCategory, string, string])[] = [
   ['provider', 'Provider', 'core'],
   ['voice', 'Voice', 'mic'],
   ['privacy', 'Privacy', 'settings'],
-  ['security', 'Security', 'settings'],
+  ['spending', 'Spending', 'activity'],
   ['about', 'About', 'world'],
 ]
 
@@ -107,6 +109,9 @@ function errorMessage(error: unknown): string {
  * alone, and forgetting one is its own explicit action.
  */
 export function SettingsOverlay({ snapshot, preferences, voiceControls, category, onCategory, onDone }: SettingsProps & { readonly onDone: () => void }) {
+  const advanced = ADVANCED_SECTIONS.some(id => id === category)
+  const [advancedOpen, setAdvancedOpen] = useState(advanced)
+  useEffect(() => { if (advanced) setAdvancedOpen(true) }, [advanced])
   return (
     <div className="st-overlay" role="dialog" aria-label="Settings">
       <header className="st-top">
@@ -121,6 +126,13 @@ export function SettingsOverlay({ snapshot, preferences, voiceControls, category
               {label}
             </button>
           ))}
+          <details className="st-advanced" open={advancedOpen} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
+            <summary>Advanced</summary>
+            <div hidden={!advancedOpen}>{ADVANCED_SECTIONS.map(id => <button key={id} type="button" className="st-tab" data-active={category === id}
+              aria-current={category === id ? 'true' : undefined} onClick={() => onCategory(id)}>
+              {id[0]!.toUpperCase() + id.slice(1)}
+            </button>)}</div>
+          </details>
         </nav>
         <div className="st-content">
           <section className="st-pane" hidden={category !== 'appearance'}><AppearanceCard preferences={preferences} /></section>
@@ -128,11 +140,35 @@ export function SettingsOverlay({ snapshot, preferences, voiceControls, category
           <section className="st-pane" hidden={category !== 'voice'}><Card title="Voice" icon="core" subtitle="Talk to Freya"><VoicePreferences />{voiceControls ? <VoiceSettings voice={voiceControls} expanded /> : null}</Card></section>
           <section className="st-pane" hidden={category !== 'privacy'}><PrivacyCard /></section>
           <section className="st-pane" hidden={category !== 'security'}><SecurityCard snapshot={snapshot} /></section>
+          <section className="st-pane" hidden={category !== 'spending'}><SpendingCard snapshot={snapshot} /></section>
+          {ADVANCED_SECTIONS.filter(id => id !== 'security').map(id => <section key={id} className="st-pane" hidden={category !== id}>
+            {id === 'diagnostics' ? <DiagnosticsCard snapshot={snapshot} /> : <NotConnected title={id[0]!.toUpperCase() + id.slice(1)} />}
+          </section>)}
           <section className="st-pane" hidden={category !== 'about'}><AboutCard snapshot={snapshot} /></section>
         </div>
       </div>
     </div>
   )
+}
+
+function SpendingCard({ snapshot }: { snapshot: SettingsProps['snapshot'] }) {
+  const core = ready(snapshot.core)
+  return <Card title="Spending" icon="activity" subtitle="Reported usage">
+    <div className="c-rows">{[['This session', core?.sessionUsage], ['Saved usage', core?.durableUsage]].map(([label, usage]) => {
+      const value = typeof usage === 'object' ? usage : undefined
+      return <Row key={String(label)} title={String(label)} detail={value ? `${value.calls} calls · ${value.inputTokens ?? 'Unknown'} input tokens · ${value.outputTokens ?? 'Unknown'} output tokens${value.unknownUsageCalls ? ` · ${value.unknownUsageCalls} calls without full usage` : ''}` : 'Usage not reported'} />
+    })}</div>
+    <p className="st-note">Cost in money is not available. Token counts with missing usage are incomplete.</p>
+  </Card>
+}
+
+function DiagnosticsCard({ snapshot }: { snapshot: SettingsProps['snapshot'] }) {
+  const core = ready(snapshot.core)
+  return <Card title="Diagnostics" icon="activity" subtitle="Freya’s latest status">
+    {core ? <div className="c-rows"><Row title="Lifecycle" detail={core.lifecycle} /><Row title="Recorded faults" detail={String(core.faultCount)} />
+      <Row title="Diagnostic writes that failed" detail={String(core.diagnosticsWriteFailures)} /><Row title="History" detail={core.persistenceDurable ? 'Durable' : 'Temporary'} /></div>
+      : <p className="st-note">{reason(snapshot.core)}</p>}
+  </Card>
 }
 
 function AppearanceCard({ preferences }: { preferences: PreferencesStore }) {

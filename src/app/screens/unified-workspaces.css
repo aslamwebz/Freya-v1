@@ -1,0 +1,23 @@
+.uw-workspace { height: 100%; min-width: 0; overflow-y: auto; padding: 28px clamp(18px, 3vw, 48px) 120px; color: #d8f1ff; }
+.uw-heading { display: flex; align-items: center; gap: 18px; margin-bottom: 26px; color: #7cdfff; }
+.uw-heading h1 { margin: 0 0 6px; font-size: 27px; font-weight: 400; letter-spacing: .03em; color: #d8f1ff; }
+.uw-heading p, .uw-summary { color: #9eb6c8; font-size: 14px; line-height: 1.6; margin: 0; }
+.uw-tabs { display: flex; gap: 4px; border-bottom: 1px solid #83a9c140; overflow-x: auto; flex-shrink: 0; margin-bottom: 24px; }
+.uw-tabs button { background: transparent; color: #9eb6c8; border: 0; border-bottom: 2px solid transparent; padding: 12px 18px; white-space: nowrap; cursor: pointer; font: inherit; }
+.uw-tabs button[aria-selected="true"] { color: #d8f1ff; border-bottom-color: #7cdfff; background: #7cdfff0c; }
+.uw-tabs button:hover { color: #d8f1ff; background: #28445a55; }
+.uw-tabs button:focus-visible, .uw-panel:focus-visible { outline: 2px solid #7cdfff; outline-offset: -2px; }
+.uw-panel { min-width: 0; }
+.uw-panel .uw-tabs { max-width: 520px; }
+.uw-source { margin: 0 0 18px; font-size: 12px; color: #83a9c1; }
+.uw-summary { margin-bottom: 18px; }
+.uw-records { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 18px; }
+.uw-record, .uw-empty { padding: 24px; border: 1px solid #83a9c133; border-radius: 12px; background: linear-gradient(130deg, #28445a44, #07131edd); }
+.uw-record h2, .uw-empty h2 { font-size: 17px; font-weight: 500; margin: 0 0 12px; overflow-wrap: anywhere; }
+.uw-record p, .uw-empty p { color: #9eb6c8; font-size: 14px; line-height: 1.7; margin: 12px 0 0; }
+.uw-status { display: inline-block; border-radius: 6px; padding: 4px 8px; color: #7cdfff; background: #7cdfff12; font-size: 12px; }
+.uw-id { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.uw-mind-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.uw-mind-grid > div { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.uw-mind-grid .uw-mind-bottom { grid-column: 1 / -1; }
+@media (max-width: 900px) { .uw-mind-grid { grid-template-columns: minmax(0, 1fr); } .uw-tabs button { padding: 10px 12px; } }

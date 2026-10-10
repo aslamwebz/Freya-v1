@@ -25,6 +25,7 @@ import { registerResearchInspection } from './work/research-inspection'
 import { createMissionProposalTool } from './mind/mission-proposal'
 import { ChatMissionIntegration } from './missions/chat-integration'
 import type { ChatMissionProposal } from './missions/chat-types'
+import { evaluateExecutiveDecision, type ExecutiveDecisionOutcome, type ExecutiveState } from './executive'
 import { LearningEngine } from './learning/engine'
 import type { LearningStore } from './learning/store'
 import { VaultLearningStore, MemoryLearningStore } from './vault/repositories/learning-store'
@@ -69,7 +70,7 @@ import { isAssignableToWorker, isTerminalAssignmentStatus, workerPrincipalId } f
 import type { WORKFORCE_LIMITS } from './workforce/types'
 import type { WorkforceProjection, WorkforceWorkerDetail } from './workforce/types'
 import { MissionEngine, type WorkPort } from './missions/engine'
-import type { MissionCapabilityPort } from './missions/autonomy/types'
+import type { MissionCapabilityPort, MissionPriority } from './missions/autonomy/types'
 import type { MissionAuthorityPort } from './missions/autonomy/authority'
 import type { WorkRisk } from './work/types'
 import {
@@ -1158,6 +1159,10 @@ untimeNotice, which states what the runtime cannot do, because a
   correctLearningClaim(recordId: string, replacement: { claim: string; reason: string }): Promise<LearningWriteOutcome>
   /** Withdraw an admitted knowledge record (retracts claim, destroying claim text while retaining audit trail). */
   withdrawLearningClaim(recordId: string): Promise<LearningWriteOutcome>
+  /** The explainable Executive decision for competing goals and resource allocation (Phase 4). */
+  executiveDecision(options?: { readonly explicitPriorities?: ReadonlyMap<string, MissionPriority> }): ExecutiveDecisionOutcome
+  /** The explainable Executive state projection (Phase 4). */
+  executiveState(options?: { readonly explicitPriorities?: ReadonlyMap<string, MissionPriority> }): ExecutiveState
   /**
    * The World & self summary and its subscription.
    *
@@ -4181,6 +4186,29 @@ private async buildForge(): Promise<void> {
     }
     return this.learningEngine.withdraw(recordId)
   }
+
+  executiveDecision(options?: { readonly explicitPriorities?: ReadonlyMap<string, MissionPriority> }): ExecutiveDecisionOutcome {
+    const nowIso = (this.options.now ?? (() => new Date()))().toISOString()
+    const missions = this.missionEngine?.projection().missions ?? []
+    const workforce = this.safeWorkforce()
+    const workers = workforce?.workers ?? []
+    const stopAllActive = this.state.stopAll.active
+    const guardMayManage = this.guard.evaluate(this.owner, 'mission.manage').allowed
+
+    return evaluateExecutiveDecision({
+      missions,
+      workers,
+      stopAllActive,
+      guardMayManage,
+      now: nowIso,
+      explicitPriorities: options?.explicitPriorities,
+    })
+  }
+
+  executiveState(options?: { readonly explicitPriorities?: ReadonlyMap<string, MissionPriority> }): ExecutiveState {
+    return this.executiveDecision(options).state
+  }
+
 
   /**
    * Evaluate `skill.manage` for the owner and record the decision, or answer the
@@ -11595,7 +11623,7 @@ export function createCore(options: CoreOptions): Core {
   return new FreyaCore(options)
 }
 
-export type { AnyCoreEvent }
+export type { AnyCoreEvent, ExecutiveDecisionOutcome, ExecutiveState }
 
 /**
  * A research result as the renderer sees it.

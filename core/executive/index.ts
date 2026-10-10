@@ -76,3 +76,11 @@ export {
   boundString,
   type ProjectionContext,
 } from './projection'
+export {
+  evaluateExecutiveDecision,
+  type ExecutiveDecisionKind,
+  type ExecutiveDecisionInput,
+  type ExecutiveCandidateEvaluation,
+  type ExecutiveDecisionOutcome,
+} from './decision'
+

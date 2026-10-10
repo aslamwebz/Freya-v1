@@ -10,6 +10,7 @@ export interface MissionGoalRequest {
   readonly missionId: string
   readonly grantId: string
   readonly continueAfterVerification?: boolean
+  readonly revision?: boolean
 }
 
 export interface MissionPlanningInput extends MissionGoalRequest {

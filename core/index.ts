@@ -943,7 +943,7 @@ export interface Core {
    * `null` means the runtime is not built, which a surface can render rather than crash on.
    */
   advanceMission(missionId: string, trigger: DecisionTrigger): Promise<StepOutcome | null>
-  planMissionGoal(input: MissionGoalRequest): Promise<MissionGoalOutcome>
+  planMissionGoal(input: MissionGoalRequest, revision?: boolean): Promise<MissionGoalOutcome>
   /**
    * One worker with its mailbox, decrypted from this process's memory.
    *
@@ -5411,7 +5411,7 @@ private async buildForge(): Promise<void> {
       recordDecision: (input) => engine.recordDecision(input),
       charge: (input) => engine.charge(input),
       noteBudgetExceeded: (input) => engine.noteBudgetExceeded(input),
-      requestCompletion: (missionId) => this.completeMission(missionId),
+      requestCompletion: (missionId, options) => this.completeMission(missionId, options),
       writeIntent: (missionId, intent) => engine.writeIntent(missionId, intent),
       readIntent: (missionId) => engine.readIntent(missionId),
     }
@@ -5558,8 +5558,8 @@ state: {
   }
 
   /** Trusted host entry: an existing owner grant authorizes one model proposal. */
-  async planMissionGoal(input: MissionGoalRequest): Promise<MissionGoalOutcome> {
-    return this.planChatMissionGoal(input, false)
+  async planMissionGoal(input: MissionGoalRequest, revision = false): Promise<MissionGoalOutcome> {
+    return this.planChatMissionGoal(input, revision || input.revision === true)
   }
 
   private chatResearchAvailable(): boolean {
@@ -5577,9 +5577,9 @@ state: {
     return !!binding && binding.ownerId === this.owner.id && this.chatMissionGrantAvailable(id, binding.grantId)
   }
 
-  private async completeMission(id: string): Promise<MissionCommandOutcome> {
+  private async completeMission(id: string, options?: { verifierId?: string; requiredRunIds?: readonly string[] }): Promise<MissionCommandOutcome> {
     const content = await this.requireMission().privateContent(id)
-    return content?.chatBinding && this.chatMissions ? this.chatMissions.complete(id) : this.requireMission().requestCompletion(id)
+    return content?.chatBinding && this.chatMissions ? this.chatMissions.complete(id) : this.requireMission().requestCompletion(id, options)
   }
 
   private async planChatMissionGoal(input: MissionGoalRequest, revision: boolean): Promise<MissionGoalOutcome> {
@@ -5590,7 +5590,7 @@ state: {
     const mission = engine.record(input.missionId)
     if (!mission || (revision ? !mission.activePlan || mission.status !== 'blocked' || mission.planRevisions !== 1 : !!mission.activePlan || !['draft', 'ready'].includes(mission.status))) return unavailable
     const content = await engine.privateContent(input.missionId, true)
-    if (!content || (revision ? !content.chatBinding || !content.executionPlan : !!content.executionPlan) || this.missionPlanning.has(input.missionId)) return unavailable
+    if (!content || (revision ? !content.executionPlan : !!content.executionPlan) || this.missionPlanning.has(input.missionId)) return unavailable
     if (content.chatBinding && (!this.chatResearchAvailable() || !await this.chatMissionAuthorized(input.missionId) || content.chatBinding.paused)) return unavailable
     const now = (this.options.now ?? (() => new Date()))()
     const deadline = Math.min(Date.parse(mission.deadlineAt), Date.parse(mission.activatedAt ?? mission.createdAt) + mission.budget.maxDurationMs)

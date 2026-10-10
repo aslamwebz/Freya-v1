@@ -269,6 +269,7 @@ export class DeterministicRelevanceFilter {
       const activeMissions = env.activeMissions?.() ?? []
       const matched = activeMissions.some((m) => m.missionId === obs.missionId && m.state === 'active')
       if (matched) {
+        const isInternal = obs.sourceType === 'internal'
         return {
           isRelevant: true,
           opportunityType: 'information_update',
@@ -276,7 +277,7 @@ export class DeterministicRelevanceFilter {
           goalId: null,
           milestoneId: null,
           reason: 'observation relates to active mission',
-          warrantsReasoning: true,
+          warrantsReasoning: !isInternal,
           tokensCost: 0,
         }
       }

@@ -22,6 +22,7 @@ export const EXECUTIVE_TRIGGER_EVENT_PREFIXES = [
   'stop_all.',
   'lifeloop.',
   'approval.',
+  'longhorizon.',
 ] as const
 
 /** Closed set of specific non-triggering event types (e.g. purely observational/diagnostic). */

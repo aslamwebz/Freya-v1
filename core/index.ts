@@ -98,11 +98,29 @@ import {
   Vault,
   VaultConversationStore,
   VaultMissionStore,
+  VaultGoalStore,
   VaultResearchSessionStore,
   VaultWorldStore,
   type VaultBinding,
   type VaultKeyProvider,
 } from './vault'
+import { GoalEngine } from './longhorizon/engine'
+import type { GoalStore } from './longhorizon/store'
+import { MemoryGoalStore } from './longhorizon/memory-store'
+import { VerificationEngine } from './longhorizon/verification'
+import {
+  GOAL_REASONS,
+  type GoalCommandOutcome,
+  type GoalDetail,
+  type GoalReason,
+  type GoalVerifier,
+} from './longhorizon/types'
+import {
+  ABSENT_GOAL_PROJECTION,
+  type GoalProjectionView,
+  type GoalCommandOperation,
+  type GoalCommandOutcomeView,
+} from './protocol/longhorizon'
 import { WorkEngine, type WorkCommandOutcome } from './work/engine'
 import { ABSENT_WORK_PROJECTION, type WorkProjection } from './work/projection'
 import {
@@ -516,6 +534,8 @@ export interface CoreOptions {
   personalityLimits?: { maxRelationshipItems?: number }
   /** Overrides the Mission content store wholesale. For tests. */
   missionStore?: MissionStore
+  /** Overrides the Goal content store wholesale. For tests. */
+  goalStore?: GoalStore
   /**
    * Life History's own independent secure key, from the keyring.
    *
@@ -909,6 +929,7 @@ export interface Core {
    */
   onWork(listener: (projection: WorkProjection) => void): () => void
   onMission(listener: (projection: MissionProjection) => void): () => void
+  onGoals(listener: (projection: GoalProjectionView) => void): () => void
   /**
    * The current Work projection.
    *
@@ -930,6 +951,10 @@ export interface Core {
    * guess which one it is looking at.
    */
   mission(): MissionProjection
+  /**
+   * Core's account of long-horizon Goals (Phase 5). Derived from the journal, content encrypted.
+   */
+  goals(): GoalProjectionView
   /**
    * Mark a Mission's goal as ready to be planned.
    *
@@ -969,6 +994,10 @@ export interface Core {
    * journal.
    */
   missionDetail(missionId: string): Promise<MissionDetail | null>
+  /**
+   * One Goal's private content, decrypted from the Goal store (Phase 5).
+   */
+  goalDetail(goalId: string): Promise<GoalDetail | null>
   /**
    * Core's account of the workforce: workers, teams, and what each is doing.
    *
@@ -1322,6 +1351,7 @@ class FreyaCore implements Core {
   private readonly brainListeners = new Set<(projection: BrainProjection) => void>()
   private readonly workListeners = new Set<(projection: WorkProjection) => void>()
   private readonly missionListeners = new Set<(projection: MissionProjection) => void>()
+  private readonly goalListeners = new Set<(projection: GoalProjectionView) => void>()
   private readonly workforceListeners = new Set<(projection: WorkforceMirror) => void>()
   private readonly contextListeners = new Set<(projection: ContextProjectionView) => void>()
   private readonly learningListeners = new Set<(projection: LearningProjection) => void>()
@@ -1550,6 +1580,7 @@ class FreyaCore implements Core {
    */
   private workEngine: WorkEngine | undefined
   private missionEngine: MissionEngine | undefined
+  private goalEngine: GoalEngine | undefined
   private chatMissions: ChatMissionIntegration | undefined
   private learningEngine: LearningEngine | undefined
   private learningStore: LearningStore | undefined
@@ -2450,6 +2481,45 @@ class FreyaCore implements Core {
     })
     await this.missionEngine.open()
 
+    const goalVerificationEngine = new VerificationEngine({
+      fabric: this.fabric,
+      goals: {
+        recordCheckpointOutcome: (goalId, checkpointId, outcome, reason, attempts) =>
+          this.goalEngine?.recordCheckpointOutcome(goalId, checkpointId, outcome, reason, attempts) ?? Promise.resolve(),
+        checkpointAttempts: (goalId, checkpointId) =>
+          this.goalEngine?.checkpointAttempts(goalId, checkpointId) ?? 0,
+        goalRetryCount: (goalId) =>
+          this.goalEngine?.goalRetryCount(goalId) ?? 0,
+      },
+      principalId: this.owner.id,
+      now: this.options.now,
+      stopAll: () => this.state.stopAll.active,
+    })
+
+    this.goalEngine = new GoalEngine({
+      fabric: this.fabric,
+      store: await this.buildGoalStore(),
+      continuation: {
+        verifyCheckpoint: async (goalId, checkpointId, signal) => {
+          const defaultVerifier: GoalVerifier = {
+            id: 'default',
+            verify: async () => ({ established: true, reason: GOAL_REASONS.verification_passed }),
+          }
+          const res = await goalVerificationEngine.verify(goalId, checkpointId, defaultVerifier, signal)
+          return {
+            established: res.outcome === 'passed',
+            reason: res.reason ?? (res.outcome === 'passed' ? GOAL_REASONS.verification_passed : GOAL_REASONS.verification_not_established),
+          }
+        },
+      },
+      principalId: this.owner.id,
+      now: this.options.now,
+      newId: this.options.newId,
+      onChange: () => this.publishGoals(),
+      stopAll: () => this.state.stopAll.active,
+    })
+    await this.goalEngine.open()
+
     this.learningStore = await this.buildLearningStore()
     this.learningEngine = new LearningEngine({
       store: this.learningStore,
@@ -2934,6 +3004,7 @@ class FreyaCore implements Core {
       // into a closed journal. Closing after Work is deliberate: the Mission may want
       // to consult a Run that Work has just finished recording.
       await this.missionEngine?.close()
+      await this.goalEngine?.close()
       await this.learningStore?.close()
       // The Vault owns the Mission store's connection, so it closes after the engine
       // has flushed. Closing it here keeps the one encrypted database's lifetime
@@ -5415,6 +5486,50 @@ private async buildForge(): Promise<void> {
     }
   }
 
+  async goalDetail(goalId: string): Promise<GoalDetail | null> {
+    if (this.goalEngine === undefined) return null
+    return await this.goalEngine.detail(goalId)
+  }
+
+  goals(): GoalProjectionView {
+    if (this.goalEngine === undefined) {
+      return {
+        ...ABSENT_GOAL_PROJECTION,
+        persistence: { mode: 'ephemeral', durable: false, reason: 'Goals are not available' },
+      }
+    }
+    return this.goalEngine.projection()
+  }
+
+  onGoals(listener: (projection: GoalProjectionView) => void): () => void {
+    this.goalListeners.add(listener)
+    listener(this.goals())
+    return () => {
+      this.goalListeners.delete(listener)
+    }
+  }
+
+  private publishGoals(): void {
+    this.publishConsciousness()
+    if (this.goalListeners.size === 0) return
+    const projection = this.goals()
+    for (const listener of [...this.goalListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Goal listener threw', describe(error))
+        this.goalListeners.delete(listener)
+      }
+    }
+  }
+
+  private requireGoal(): GoalEngine {
+    if (this.goalEngine === undefined) {
+      throw new Error('the Goal engine is not available')
+    }
+    return this.goalEngine
+  }
+
   /**
    * Point "here" at the current Mission, if there is one.
    *
@@ -6862,6 +6977,19 @@ state: {
       ok: false,
       refusal: { reason },
       mission: { operation, ok: false, reason },
+    }
+  }
+
+  private goalRefusal(
+    requestId: string,
+    operation: GoalCommandOperation,
+    reason: string,
+  ): CoreCommandResult {
+    return {
+      requestId,
+      ok: false,
+      refusal: { reason },
+      goal: { operation, ok: false, reason },
     }
   }
 
@@ -9105,6 +9233,83 @@ state: {
           }
         }
 
+        /* ----------------------------------------------------------- goals (longhorizon) */
+
+        case 'goal.create': {
+          const decision = this.guard.evaluate(this.owner, 'goal.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.manage', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          const title = readString(envelope.payload, 'title')
+          if (title === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal title is missing')
+          }
+          const description = readString(envelope.payload, 'description')
+          if (description === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal needs a description as well as a title')
+          }
+          const criteria = readStringArray(envelope.payload, 'completionCriteria')
+          const outcome = await this.requireGoal().createGoal({
+            title,
+            description,
+            ...(criteria === undefined ? {} : { completionCriteria: criteria }),
+          })
+          this.publishGoals()
+          return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
+        }
+
+        case 'goal.activate':
+        case 'goal.pause':
+        case 'goal.resume':
+        case 'goal.cancel':
+        case 'goal.fail':
+        case 'goal.requestCompletion': {
+          const decision = this.guard.evaluate(this.owner, 'goal.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.manage', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          const goalId = readString(envelope.payload, 'goalId')
+          if (goalId === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal id is missing')
+          }
+          const engine = this.requireGoal()
+          const operations: Partial<Record<CoreCommandName, () => Promise<GoalCommandOutcome>>> = {
+            'goal.activate': () => engine.activateGoal(goalId),
+            'goal.pause': () => engine.pauseGoal(goalId),
+            'goal.resume': () => engine.resumeGoal(goalId),
+            'goal.cancel': () => engine.cancelGoal(goalId),
+            'goal.fail': () => {
+              const reasonStr = readString(envelope.payload, 'reason')
+              const reason = (reasonStr && reasonStr in GOAL_REASONS) ? (reasonStr as GoalReason) : GOAL_REASONS.owner
+              return engine.failGoal(goalId, reason)
+            },
+            'goal.requestCompletion': () => engine.completeGoal(goalId),
+          }
+          const run = operations[envelope.command]
+          if (run === undefined) {
+            return this.goalRefusal(requestId, 'refused', 'that Goal command is not recognised')
+          }
+          const outcome = await run()
+          this.publishGoals()
+          return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
+        }
+
+        case 'goal.status.read': {
+          const decision = this.guard.evaluate(this.owner, 'goal.status.read')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.status.read', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            goal: { operation: 'status', ok: true },
+          }
+        }
+
         /* --------------------------------------------------------- life */
 
         case 'life.status.read': {
@@ -10195,6 +10400,24 @@ case 'forge.run': {
   }
 
   /**
+   * Build the Goal content store (Phase 5 LongHorizon).
+   *
+   * Persists private goal content (title, description, criteria) to the encrypted Vault.
+   * If the Vault is not configured or fails to open, falls back to MemoryGoalStore reporting
+   * why it is ephemeral.
+   */
+  private async buildGoalStore(): Promise<GoalStore> {
+    if (this.options.goalStore) return this.options.goalStore
+    const vault = await this.ensureVault()
+    if (vault !== null) return new VaultGoalStore(vault)
+    return new MemoryGoalStore({
+      faultReason: this.options.vault !== undefined
+        ? `Goal content is held in memory only: ${this.vaultFault ?? 'the encrypted Vault is not configured'}`
+        : 'the encrypted Vault is not configured',
+    })
+  }
+
+  /**
    * The Life History store.
    *
    * The canonical path is the one encrypted Vault: when a Vault is configured,
@@ -10957,6 +11180,16 @@ function missionResult(outcome: MissionCommandOutcome): MissionCommandOutcomeVie
     ok: outcome.ok,
     ...(outcome.missionId === undefined ? {} : { missionId: outcome.missionId }),
     ...(outcome.status === undefined ? {} : { status: outcome.status }),
+    ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+  }
+}
+
+function goalResult(outcome: GoalCommandOutcome): GoalCommandOutcomeView {
+  return {
+    operation: outcome.operation,
+    ok: outcome.ok,
+    ...(outcome.goalId === undefined ? {} : { goalId: outcome.goalId }),
+    ...(outcome.state === undefined ? {} : { state: outcome.state }),
     ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
   }
 }

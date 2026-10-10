@@ -1,4 +1,4 @@
-﻿export { Vault, type VaultHealth, type VaultOpenOptions, type VaultTransaction, type VaultRunResult } from './vault'
+export { Vault, type VaultHealth, type VaultOpenOptions, type VaultTransaction, type VaultRunResult } from './vault'
 export { VaultError, type VaultErrorCode } from './errors'
 export {
   StaticVaultKeyProvider,
@@ -31,3 +31,4 @@ export {
 } from './repositories/research-session-store'
 
 export { VaultConversationStore } from './repositories/conversation-store'
+export { VaultGoalStore, MAX_VAULT_GOAL_BYTES } from './repositories/goal-store'

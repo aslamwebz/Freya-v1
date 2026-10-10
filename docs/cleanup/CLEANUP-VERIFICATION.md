@@ -164,12 +164,55 @@ KEEP / CONSOLIDATE / ARCHIVE-CANDIDATE / FIX matrix.
 
 ---
 
-## Phase C2-B — authoritatively reconcile mission-linked assignments (pending)
+## Phase C2-B — authoritatively reconcile mission-linked assignments (commit pending)
+
+### Change
+
+| File | Lines | What changed |
+| --- | --- | --- |
+| `core/workforce/authority.ts` | 132-152 | New `listAssignmentsForMission(missionId)` on `WorkforceOwnerScope`, returns `readonly { assignmentId, status }[]` from the engine's authoritative `state.assignments` map |
+| `core/workforce/engine.ts` | 245-279 | `ownerScope()` exposes the new method, reading `this.state.assignments` directly, not the projection's retention slice |
+| `core/index.ts` | 5902-5989 | `releaseMissionAssignments` rewritten: reads the authoritative list, filters by `isTerminalAssignmentStatus`, logs a per-assignment warning on refused cancellation, and a single summary line on the terminal-status run |
+| `tests/core/release-mission-assignments.test.ts` | new (300 lines) | 6 targeted tests: authoritative enumeration, no-leak between missions, idempotent re-issuance, diagnostic shape, restart-recovery across a Core restart |
+
+### The authoritative enumeration
+
+- `WorkforceOwnerScope.listAssignmentsForMission(missionId)` returns every
+  row the workforce's `state.assignments` map carries with that
+  `missionId`. It cannot miss a row the projection would have called
+  `assignmentsHidden` — the engine reads its own map.
+- Cancellation is already idempotent in the engine:
+  `settleAssignment(id, 'cancelled', ...)` refuses a transition from a
+  terminal status. A re-issued close is therefore a no-op rather than a
+  chain of follow-on errors, and the closer can be invoked twice without
+  compounding.
+
+### Diagnostics, not silent swallow
+
+- Per-refused cancellation: a single `console.warn` carrying the
+  assignment id, the mission id, the reason returned. The Mission's
+  outcome stays untouched — a refusal here is not a reason to invalidate
+  a settled Mission.
+- Per-run summary: a single `console.warn` with the counters
+  `closed` / `already-terminal` / `refused` / `total`, only emitted when
+  `refused > 0`.
+
+### Verification at C2-B close
+
+- `npm run typecheck`: PASS
+- `npx vitest run tests/core/release-mission-assignments.test.ts`: 6/6 pass
+- `npx vitest run tests/unit tests/core tests/host tests/qualification tests/red-team`:
+  9521 passed / 8 failed / 6 skipped. Same 8 baseline failures; +6 new
+  from this phase; +0 regressions.
+- `npm run lint`: 16 pre-existing errors, +0 new.
+
+---
 
 ## Phase C3 — docs, scripts, CI (pending)
 
 ## Phase C4 — bounded extractions (pending)
 
 ## Phase C5 — classify/retire legacy (pending)
+
 
 

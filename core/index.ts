@@ -5924,8 +5924,36 @@ state: {
    * Mission's delegation look finished, which is the same class of lie as a completed step
    * that never ran.
    *
-   * Every failure is swallowed: a Mission's outcome does not depend on its paperwork being
-   * tidied, and a refusal here must not turn a completed Mission into a failed one.
+   * ## Authoritative store, not a retention slice
+   *
+   * The Mission's own projection does not list every assignment; the workforce
+   * projection does, but `WorkerView.assignments` is a *retention slice* and
+   * the projection also exposes `assignmentsTotal` / `assignmentsHidden` to
+   * say so. A Mission with more steps than the slice holds would have left
+   * the missing ones open in the old code — a "leak" the board knew about
+   * (the hidden count) but the closer did not. The C2-B fix reads the
+   * authoritative store through `listAssignmentsForMission`, which the
+   * engine exposes from its own `state.assignments` map; nothing in the
+   * projection's slice can hide a row from the closer.
+   *
+   * ## Diagnostics, not silent swallow
+   *
+   * The old code did `await scope.cancelAssignment(...).catch(() => undefined)`.
+   * That was the right shape to avoid turning a completed Mission into a
+   * failed one — a refusal here is not a reason to invalidate the
+   * Mission's outcome — but a refusal with **no log, no event, no count**
+   * is not the same as "not failing", it is *unobservable* failing. The
+   * new code logs a single warning per refused cancellation with the
+   * assignment id, the mission id, the reason returned, and the running
+   * counters of opened / closed / refused. The Mission's outcome stays
+   * untouched, but a person reading the log can tell that cleanup is
+   * incomplete and act on it.
+   *
+   * Cancellation is idempotent: `settleAssignment(id, 'cancelled', ...)`
+   * already refuses a transition from a terminal status, and a re-issued
+   * call is a no-op rather than a chain of follow-on errors. The caller
+   * can invoke `releaseMissionAssignments` more than once and the second
+   * call walks the same authoritative list and finds nothing left to do.
    */
   private async releaseMissionAssignments(missionId: string): Promise<void> {
     const workforce = this.workforceEngine
@@ -5935,18 +5963,42 @@ state: {
     if (!isTerminalMissionStatus(projection.status)) return
 
     const scope = workforce.ownerScope()
-    // Read through the **workers**, which is the only place a retained assignment list
-    // appears on this projection. `WorkerView.assignments` is a retention slice, so a Mission
-    // with more steps than the slice holds could leave some open; that is preferable to a
-    // second enumeration that could disagree with the one the board shows.
-    for (const worker of scope.projection().workers) {
-      for (const assignment of worker.assignments) {
-        if (assignment.missionId !== missionId) continue
-        // `open` is the nonterminal status. `isTerminalAssignmentStatus` is used rather than
-        // a string compare so a new terminal status cannot slip past and be "closed" twice.
-        if (isTerminalAssignmentStatus(assignment.status)) continue
-        await scope.cancelAssignment(assignment.assignmentId).catch(() => undefined)
+    // The authoritative list, not the projection's retention slice. The
+    // engine reads its own `state.assignments` map and returns every row
+    // tagged with this mission id, terminal or not, so a closed-form
+    // filter is enough to drive the closer.
+    const linked = scope.listAssignmentsForMission(missionId)
+    let closed = 0
+    let alreadyTerminal = 0
+    let refused = 0
+    for (const entry of linked) {
+      if (isTerminalAssignmentStatus(entry.status)) {
+        // Idempotency: a re-issue finds the assignment already closed and
+        // skips it. A re-issue happens whenever the closer runs twice for
+        // the same mission, which is fine.
+        alreadyTerminal += 1
+        continue
       }
+      const outcome = await scope.cancelAssignment(entry.assignmentId)
+      if (outcome.ok) {
+        closed += 1
+        continue
+      }
+      // Refused cancellation is not a Mission failure. The Mission is
+      // already terminal — its outcome is settled. The refusal is a
+      // housekeeping problem (the workforce could not find the assignment
+      // by id, the worker is no longer in scope, the deadline was set to
+      // the past and the transition was refused) and the right thing to
+      // do is make it visible, not let it propagate.
+      refused += 1
+      console.warn(
+        `[freya.core] releaseMissionAssignments could not cancel ${entry.assignmentId} for mission ${missionId}: ${outcome.reason ?? 'no reason'}`,
+      )
+    }
+    if (refused > 0) {
+      console.warn(
+        `[freya.core] releaseMissionAssignments for ${missionId}: closed=${closed} already-terminal=${alreadyTerminal} refused=${refused} total=${linked.length}`,
+      )
     }
   }
 

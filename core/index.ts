@@ -28,7 +28,7 @@ import type { ChatMissionProposal } from './missions/chat-types'
 import { LearningEngine } from './learning/engine'
 import type { LearningStore } from './learning/store'
 import { VaultLearningStore, MemoryLearningStore } from './vault/repositories/learning-store'
-import type { LearningProjection } from './protocol/learning'
+import type { LearningProjection, LearningWriteOutcome } from './protocol/learning'
 import { ABSENT_LEARNING_PROJECTION } from './protocol/learning'
 import { admitWorkStepOutcome } from './learning/work-admission'
 import { recallRelevantLearning } from './learning/recall'
@@ -1154,6 +1154,10 @@ untimeNotice, which states what the runtime cannot do, because a
   onLearning(listener: (projection: LearningProjection) => void): () => void
   /** Direct engine handle for internal reasoning and planning recall. */
   learningEngineInstance(): LearningEngine | undefined
+  /** Correct an admitted knowledge record (replaces claim, superseding original). */
+  correctLearningClaim(recordId: string, replacement: { claim: string; reason: string }): Promise<LearningWriteOutcome>
+  /** Withdraw an admitted knowledge record (retracts claim, destroying claim text while retaining audit trail). */
+  withdrawLearningClaim(recordId: string): Promise<LearningWriteOutcome>
   /**
    * The World & self summary and its subscription.
    *
@@ -4138,6 +4142,44 @@ private async buildForge(): Promise<void> {
   /** Direct engine handle for internal reasoning and planning recall. */
   learningEngineInstance(): LearningEngine | undefined {
     return this.learningEngine
+  }
+
+  /** Correct an admitted knowledge record (replaces claim, superseding original). */
+  async correctLearningClaim(
+    recordId: string,
+    replacement: { claim: string; reason: string },
+  ): Promise<LearningWriteOutcome> {
+    if (this.learningEngine === undefined) {
+      return {
+        ok: false,
+        outcome: 'refused',
+        code: 'store-unavailable',
+        reason: 'the learning engine is not available',
+        recordId: null,
+        superseded: null,
+      }
+    }
+    const observedAt = (this.options.now ?? (() => new Date()))().toISOString()
+    return this.learningEngine.correct(recordId, {
+      claim: replacement.claim,
+      reason: replacement.reason,
+      observedAt,
+    })
+  }
+
+  /** Withdraw an admitted knowledge record (retracts claim, destroying claim text while retaining audit trail). */
+  async withdrawLearningClaim(recordId: string): Promise<LearningWriteOutcome> {
+    if (this.learningEngine === undefined) {
+      return {
+        ok: false,
+        outcome: 'refused',
+        code: 'store-unavailable',
+        reason: 'the learning engine is not available',
+        recordId: null,
+        superseded: null,
+      }
+    }
+    return this.learningEngine.withdraw(recordId)
   }
 
   /**

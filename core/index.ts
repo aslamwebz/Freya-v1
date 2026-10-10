@@ -31,6 +31,7 @@ import { VaultLearningStore, MemoryLearningStore } from './vault/repositories/le
 import type { LearningProjection } from './protocol/learning'
 import { ABSENT_LEARNING_PROJECTION } from './protocol/learning'
 import { admitWorkStepOutcome } from './learning/work-admission'
+import { recallRelevantLearning } from './learning/recall'
 import { createWebSearchTool, createChartTool, createCanvasTool, MindToolRegistry } from './mind/tools'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
 import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
@@ -5563,7 +5564,15 @@ state: {
       }
       const maxSteps = Math.min(mission.budget.maxStepsPerPlan - (revision ? mission.activePlan!.steps.filter(step => step.status === 'verified').length : 0), mission.budget.maxActions - mission.spend.actions,
         mission.budget.maxDelegations - mission.spend.delegations, mission.limits.maxChildRuns - mission.childRuns.length)
+      const learningAdvice = this.learningEngine
+        ? recallRelevantLearning(this.learningEngine, {
+            capabilities: this.missionCapabilityPort().known(),
+            goal: content.intent,
+            failureContext: revision ? content.researchEvidence : undefined,
+          })
+        : undefined
       const outcome = await proposeMissionPlan({ ...input, goal: content.intent, successCriteria: content.successCriteria, budget: mission.budget, maxSteps, now,
+        learningAdvice,
         ...(revision ? { previousPlan: mission.activePlan!, previousExecution: content.executionPlan, failure: content.researchEvidence } : {}) },
         this.missionCapabilityPort(), name => (!content.chatBinding || name === 'research.search') && this.missionAuthorityPort().mayUse(name), intent => this.ownerAuthority.request(intent))
       // Owner cancellation, correction and STOP ALL win over a delayed provider answer.

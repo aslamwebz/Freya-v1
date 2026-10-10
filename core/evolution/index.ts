@@ -130,3 +130,4 @@ export {
 } from './runtime'
 export * from './strategy'
 export * from './store'
+export * from './experiment'

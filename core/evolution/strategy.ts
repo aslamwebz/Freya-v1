@@ -321,7 +321,7 @@ export function generateCandidateFromWeakness(
         experimentRequirements: {
           maxRuns: 3,
           maxTokens: 15000,
-          maxActions: 9,
+          maxActions: 25,
           timeoutMs: 30000,
         },
         budgetCeiling: {
@@ -397,7 +397,7 @@ export function generateCandidateFromWeakness(
         experimentRequirements: {
           maxRuns: 3,
           maxTokens: 12000,
-          maxActions: 6,
+          maxActions: 25,
           timeoutMs: 25000,
         },
         budgetCeiling: {

@@ -25,6 +25,12 @@ import { registerResearchInspection } from './work/research-inspection'
 import { createMissionProposalTool } from './mind/mission-proposal'
 import { ChatMissionIntegration } from './missions/chat-integration'
 import type { ChatMissionProposal } from './missions/chat-types'
+import { LearningEngine } from './learning/engine'
+import type { LearningStore } from './learning/store'
+import { VaultLearningStore, MemoryLearningStore } from './vault/repositories/learning-store'
+import type { LearningProjection } from './protocol/learning'
+import { ABSENT_LEARNING_PROJECTION } from './protocol/learning'
+import { admitWorkStepOutcome } from './learning/work-admission'
 import { createWebSearchTool, createChartTool, createCanvasTool, MindToolRegistry } from './mind/tools'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
 import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
@@ -532,6 +538,8 @@ export interface CoreOptions {
     /** The selected SQLCipher-capable binding, injected by the host. */
     binding?: VaultBinding
   }
+  /** Test/embedding seam. Production uses the canonical encrypted Vault when available. */
+  learningStore?: LearningStore
   /**
    * What the host has actually wired, so the runtime registry can report it.
    *
@@ -1139,6 +1147,12 @@ untimeNotice, which states what the runtime cannot do, because a
   life(): LifeProjection
   /** Subscribe to the Life History projection. Same mirror semantics as the others. */
   onLife(listener: (projection: LifeProjection) => void): () => void
+  /** Read what Freya has learned: outcomes, distilled lessons and active claims. */
+  learning(): LearningProjection
+  /** Subscribe to the Learning projection. Same mirror semantics as the others. */
+  onLearning(listener: (projection: LearningProjection) => void): () => void
+  /** Direct engine handle for internal reasoning and planning recall. */
+  learningEngineInstance(): LearningEngine | undefined
   /**
    * The World & self summary and its subscription.
    *
@@ -1277,6 +1291,7 @@ class FreyaCore implements Core {
   private readonly missionListeners = new Set<(projection: MissionProjection) => void>()
   private readonly workforceListeners = new Set<(projection: WorkforceMirror) => void>()
   private readonly contextListeners = new Set<(projection: ContextProjectionView) => void>()
+  private readonly learningListeners = new Set<(projection: LearningProjection) => void>()
   /**
    * The Phase 9 Context integration, or undefined before `start()`.
    *
@@ -1501,6 +1516,8 @@ class FreyaCore implements Core {
   private workEngine: WorkEngine | undefined
   private missionEngine: MissionEngine | undefined
   private chatMissions: ChatMissionIntegration | undefined
+  private learningEngine: LearningEngine | undefined
+  private learningStore: LearningStore | undefined
   /**
    * The canonical encrypted Vault, or null when the host supplied none or it could
    * not be opened. Held privately so that Mission content has one owner of the
@@ -1967,6 +1984,7 @@ class FreyaCore implements Core {
       // ordering reason as every other line here.
       this.observeLifeLoopSource(event)
       this.observeVerifiedMissionStep(event)
+      this.observeLearningSource(event)
       // Life History derives from authoritative events live. The engine is
       // idempotent, so a replayed event cannot duplicate an entry.
       if (!event.type.startsWith('life.')) void this.lifeEngine?.observe(event)
@@ -2395,6 +2413,15 @@ class FreyaCore implements Core {
       stopAll: () => this.state.stopAll.active,
     })
     await this.missionEngine.open()
+
+    this.learningStore = await this.buildLearningStore()
+    this.learningEngine = new LearningEngine({
+      store: this.learningStore,
+      now: this.options.now,
+      newId: this.options.newId,
+      stopped: () => this.state.stopAll.active,
+      onChange: () => this.publishLearning(),
+    })
 
     // Context sits beside Missions rather than above them: it reads which Mission is
     // current and nothing else, and it is built here so the two are wired in one place.
@@ -2871,6 +2898,7 @@ class FreyaCore implements Core {
       // into a closed journal. Closing after Work is deliberate: the Mission may want
       // to consult a Run that Work has just finished recording.
       await this.missionEngine?.close()
+      await this.learningStore?.close()
       // The Vault owns the Mission store's connection, so it closes after the engine
       // has flushed. Closing it here keeps the one encrypted database's lifetime
       // inside Core's own.
@@ -4059,6 +4087,56 @@ private async buildForge(): Promise<void> {
         this.lifeListeners.delete(listener)
       }
     }
+  }
+
+  /** Read what Freya has learned: outcomes, distilled lessons and active claims. */
+  learning(): LearningProjection {
+    if (this.learningEngine === undefined) {
+      return ABSENT_LEARNING_PROJECTION
+    }
+    try {
+      return this.learningEngine.project()
+    } catch (error) {
+      return {
+        ...ABSENT_LEARNING_PROJECTION,
+        persistence: {
+          ...ABSENT_LEARNING_PROJECTION.persistence,
+          reason: `the Learning domain could not be read: ${describe(error)}`,
+        },
+      }
+    }
+  }
+
+  /** Subscribe to the Learning projection. Same mirror semantics as the others. */
+  onLearning(listener: (projection: LearningProjection) => void): () => void {
+    this.learningListeners.add(listener)
+    try {
+      listener(this.learning())
+    } catch (error) {
+      console.error('[freya.core] Learning subscriber threw', error)
+      this.learningListeners.delete(listener)
+    }
+    return () => {
+      this.learningListeners.delete(listener)
+    }
+  }
+
+  private publishLearning(): void {
+    if (this.learningListeners.size === 0) return
+    const projection = this.learning()
+    for (const listener of [...this.learningListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Learning listener threw', error)
+        this.learningListeners.delete(listener)
+      }
+    }
+  }
+
+  /** Direct engine handle for internal reasoning and planning recall. */
+  learningEngineInstance(): LearningEngine | undefined {
+    return this.learningEngine
   }
 
   /**
@@ -5541,6 +5619,38 @@ state: {
         || !mission.activePlan.steps.some(step => step.stepId === stepId && step.status === 'verified')) return
       await this.advanceMissionDecision(missionId, 'event', { type: event.type })
     }).catch(() => undefined)
+  }
+
+  private observeLearningSource(event: AnyCoreEvent): void {
+    if (this.learningEngine === undefined) return
+    if (event.type !== 'work.step.verified' && event.type !== 'work.step.failed') return
+    const stepId = 'stepId' in event.payload && typeof event.payload.stepId === 'string' ? event.payload.stepId : null
+    if (!stepId) return
+
+    void (async () => {
+      // Yield to let WorkEngine's event subscription finish updating its snapshot.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      try {
+        const workSnapshot = this.workEngine?.snapshot()
+        if (!workSnapshot) return
+        const step = workSnapshot.steps.get(stepId)
+        if (!step) return
+        const verification = [...workSnapshot.verifications.values()].find((v) => v.stepId === stepId) ?? null
+        const run = workSnapshot.runs.get(step.runId)
+        const missionId = run?.parentId
+        const missionContent = missionId ? await this.missionEngine?.privateContent(missionId) : null
+        const nowIso = (this.options.now ?? (() => new Date()))().toISOString()
+
+        await admitWorkStepOutcome(this.learningEngine!, {
+          step,
+          verification,
+          missionContent,
+          nowIso,
+        })
+      } catch (error) {
+        console.error('[freya.core] learning observation threw', describe(error))
+      }
+    })()
   }
 
   /**
@@ -9925,6 +10035,40 @@ case 'forge.run': {
       faultReason:
         'no encrypted Vault is available on this machine, so Freya is keeping her ' +
         'autobiographical layer in memory only and it will not survive a restart',
+    })
+  }
+
+  /**
+   * The Learning store.
+   *
+   * The canonical path is the one encrypted Vault: when a Vault is configured,
+   * Learning records live in the one SQLCipher database under `domain = 'learning'`.
+   * When no Vault is configured or opening it fails, Learning falls back to an
+   * explicitly ephemeral store that says so — never to a different durable store,
+   * never to plaintext, and never to a second encrypted file.
+   */
+  private async buildLearningStore(): Promise<LearningStore> {
+    if (this.options.learningStore) return this.options.learningStore
+    const vault = await this.ensureVault()
+    if (this.options.vault && vault !== null) {
+      try {
+        const store = new VaultLearningStore(vault)
+        await store.open()
+        return store
+      } catch (error) {
+        console.error('[freya.core] encrypted Vault Learning store unavailable', describe(error))
+        this.recordRuntimeFault('core.learning', 'learning_store_open_failed', 'Learning records could not be encrypted', error)
+        return new MemoryLearningStore({
+          mode: 'ephemeral',
+          faultReason: `Learning records could not be encrypted: ${describe(error)}`,
+        })
+      }
+    }
+    return new MemoryLearningStore({
+      mode: 'ephemeral',
+      faultReason:
+        this.vaultFault ??
+        'no encrypted Vault is available on this machine, so Freya is keeping learning records in memory only and they will not survive a restart',
     })
   }
 

@@ -463,6 +463,22 @@ export class LearningEngine {
 
   /* -------------------------------------------------------------- reads */
 
+  /**
+   * Internal read of all current folded records across outcomes, experiences and knowledge.
+   */
+  records(): {
+    readonly outcomes: readonly VerifiedOutcome[]
+    readonly experiences: readonly LearningExperience[]
+    readonly knowledge: readonly KnowledgeRecord[]
+  } {
+    const s = this.store.state()
+    return {
+      outcomes: Array.from(s.outcomes.values()),
+      experiences: Array.from(s.experiences.values()),
+      knowledge: Array.from(s.knowledge.values()),
+    }
+  }
+
   /** The broad projection. Carries no lesson or claim text, by construction. */
   project(now?: string): LearningProjection {
     const input: LearningProjectionInput = {

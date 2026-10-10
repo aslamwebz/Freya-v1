@@ -20,6 +20,7 @@ import { localUnrestrictedDecision, localUnrestrictedFromProcess } from '../../.
  */
 
 const DEV_PROFILE = { FREYA_DEV_USER_DATA: 'C:/temp/freya-scratch-profile' } as const
+const PRODUCTION_PROFILE = 'C:/Users/Owner/AppData/Roaming/Freya'
 
 /**
  * A dev-tagged launch against a separate profile: every prerequisite satisfied
@@ -33,12 +34,14 @@ function prerequisitesSatisfied(overrides: {
   requested?: string
   isPackaged?: boolean
   devUserData?: string
+  productionUserData?: string
   argv?: readonly string[]
 } = {}) {
   return localUnrestrictedDecision({
     isPackaged: overrides.isPackaged ?? false,
     requested: overrides.requested ?? '1',
     devUserData: 'devUserData' in overrides ? overrides.devUserData : DEV_PROFILE.FREYA_DEV_USER_DATA,
+    productionUserData: overrides.productionUserData ?? PRODUCTION_PROFILE,
     argv: overrides.argv ?? ['electron', '.', '--dev'],
   })
 }
@@ -128,6 +131,33 @@ describe('the explicit opt-in', () => {
     })
   })
 
+  it('refuses a dev profile equal to the real user profile', () => {
+    expect(prerequisitesSatisfied({ devUserData: PRODUCTION_PROFILE })).toEqual({
+      mode: false, reason: 'unsafe-dev-profile',
+    })
+  })
+
+  it('refuses a dev profile nested inside the real user profile', () => {
+    expect(prerequisitesSatisfied({ devUserData: PRODUCTION_PROFILE + '/test-profile' })).toEqual({
+      mode: false, reason: 'unsafe-dev-profile',
+    })
+  })
+
+  it('refuses a dev profile that contains the real user profile', () => {
+    expect(prerequisitesSatisfied({ devUserData: 'C:/Users/Owner/AppData/Roaming' })).toEqual({
+      mode: false, reason: 'unsafe-dev-profile',
+    })
+  })
+
+  it('refuses unrestricted mode without a known production profile', () => {
+    expect(localUnrestrictedDecision({
+      isPackaged: false,
+      requested: '1',
+      devUserData: DEV_PROFILE.FREYA_DEV_USER_DATA,
+      argv: ['electron', '--dev'],
+    })).toEqual({ mode: false, reason: 'unsafe-dev-profile' })
+  })
+
   it('refuses when the run is not dev-tagged', () => {
     // `FREYA_DEV_USER_DATA` is itself only honoured when `--dev` is present — see
     // `electron/main.ts`. Unrestricted mode requires the same tag, so the two can
@@ -152,7 +182,7 @@ describe('the refusal reason', () => {
     }).reason).toBe('packaged-build-always-strict')
   })
 
-  it('always produces one of the five closed reasons', () => {
+  it('always produces one of the six closed reasons', () => {
     // Guards the startup warning against printing something unexpected. Nothing
     // here is an environment value, so the closed set is also what keeps a path or
     // a credential out of the log.
@@ -162,17 +192,19 @@ describe('the refusal reason', () => {
       for (const isPackaged of [true, false]) {
         for (const devUserData of [undefined, '', DEV_PROFILE.FREYA_DEV_USER_DATA]) {
           for (const argv of [[], ['--dev']]) {
-            reasons.add(localUnrestrictedDecision({ isPackaged, requested, devUserData, argv }).reason)
+            reasons.add(localUnrestrictedDecision({ isPackaged, requested, devUserData, argv, productionUserData: PRODUCTION_PROFILE }).reason)
           }
         }
       }
     }
+    reasons.add(prerequisitesSatisfied({ devUserData: PRODUCTION_PROFILE }).reason)
     expect([...reasons].sort()).toEqual([
       'granted',
       'no-separate-profile',
       'not-dev-tagged',
       'not-requested',
       'packaged-build-always-strict',
+      'unsafe-dev-profile',
     ])
   })
 })
@@ -191,7 +223,7 @@ describe('reading the host process', () => {
       FREYA_LOCAL_UNRESTRICTED: '1',
       FREYA_DEV_USER_DATA: 'C:/temp/freya-scratch-profile',
     } as NodeJS.ProcessEnv
-    expect(localUnrestrictedFromProcess(false, asking, ['electron', '.', '--dev']).mode).toBe(true)
+    expect(localUnrestrictedFromProcess(false, asking, ['electron', '.', '--dev'], PRODUCTION_PROFILE).mode).toBe(true)
   })
 
   it('defaults to the real environment and argv, which is how main.ts calls it', () => {

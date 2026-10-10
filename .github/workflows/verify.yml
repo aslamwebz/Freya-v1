@@ -1,6 +1,6 @@
 name: Verify
 
-  on:
+on:
   push:
     branches:
       - main

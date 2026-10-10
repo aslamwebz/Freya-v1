@@ -51,6 +51,40 @@
  * open localhost. That is the difference between a security control and a trap.
  */
 
+import { existsSync, realpathSync } from 'node:fs'
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+
+/** Resolve existing ancestors physically, so a junction/symlink cannot alias the real profile. */
+function physicalProfilePath(value: string): string | null {
+  let ancestor = resolve(value)
+  const absent: string[] = []
+  for (;;) {
+    if (existsSync(ancestor)) {
+      try {
+        return resolve(realpathSync.native(ancestor), ...absent)
+      } catch {
+        return null
+      }
+    }
+    const parent = dirname(ancestor)
+    if (parent === ancestor) return null
+    absent.unshift(basename(ancestor))
+    ancestor = parent
+  }
+}
+
+function containsPath(parent: string, child: string): boolean {
+  const part = relative(parent, child)
+  return part === '' || (part !== '..' && !part.startsWith('..' + sep) && !isAbsolute(part))
+}
+
+function safelySeparateProfile(candidate: string, production: string): boolean {
+  const dev = physicalProfilePath(candidate)
+  const normal = physicalProfilePath(production)
+  if (dev === null || normal === null) return false
+  return !containsPath(normal, dev) && !containsPath(dev, normal)
+}
+
 export interface LocalUnrestrictedInputs {
   /** `app.isPackaged`. The packaging question, asked first and answered absolutely. */
   readonly isPackaged: boolean
@@ -58,6 +92,8 @@ export interface LocalUnrestrictedInputs {
   readonly requested: string | undefined
   /** `process.env.FREYA_DEV_USER_DATA`. The separate profile the host would use. */
   readonly devUserData: string | undefined
+  /** Default Electron userData path before any developer override. */
+  readonly productionUserData?: string
   /** `process.argv`. Unrestricted mode additionally requires the `--dev` tag. */
   readonly argv: readonly string[]
 }
@@ -67,6 +103,7 @@ export type LocalUnrestrictedReason =
   | 'not-requested'
   | 'no-separate-profile'
   | 'not-dev-tagged'
+  | 'unsafe-dev-profile'
   | 'granted'
 
 export interface LocalUnrestrictedDecision {
@@ -92,6 +129,9 @@ export function localUnrestrictedDecision(inputs: LocalUnrestrictedInputs): Loca
     return { mode: false, reason: 'no-separate-profile' }
   }
   if (!inputs.argv.includes('--dev')) return { mode: false, reason: 'not-dev-tagged' }
+  if (!inputs.productionUserData || !safelySeparateProfile(inputs.devUserData, inputs.productionUserData)) {
+    return { mode: false, reason: 'unsafe-dev-profile' }
+  }
   return { mode: true, reason: 'granted' }
 }
 
@@ -107,11 +147,13 @@ export function localUnrestrictedFromProcess(
   isPackaged: boolean,
   env: NodeJS.ProcessEnv = process.env,
   argv: readonly string[] = process.argv,
+  productionUserData?: string,
 ): LocalUnrestrictedDecision {
   return localUnrestrictedDecision({
     isPackaged,
     requested: env.FREYA_LOCAL_UNRESTRICTED,
     devUserData: env.FREYA_DEV_USER_DATA,
+    productionUserData,
     argv,
   })
 }

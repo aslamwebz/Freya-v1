@@ -80,10 +80,14 @@ loadLocalEnv(join(ROOT, '.env'))
  * will not open localhost. A security control that answers "no" without saying
  * why reads as a bug, and gets worked around.
  *
- * Only the reason is printed — a closed vocabulary of five words, never an
+ * Only the reason is printed — a closed vocabulary of six reasons, never an
  * environment value and never a path.
  */
-const localUnrestrictedStartup = localUnrestrictedFromProcess(app.isPackaged)
+// Capture the shipping profile before --dev can override app.userData.
+const productionUserDataPath = app.getPath('userData')
+const localUnrestrictedStartup = localUnrestrictedFromProcess(app.isPackaged, process.env, process.argv, productionUserDataPath)
+// E2E fixtures and deterministic test keys are never available in packaged builds.
+const e2eMode = !app.isPackaged && process.env.FREYA_E2E === '1'
 if (process.env.FREYA_LOCAL_UNRESTRICTED !== undefined) {
   if (localUnrestrictedStartup.mode) {
     console.warn('[freya] unrestricted mode is ON for this dev profile: private hosts, protected fields and Device Hands allowlists are all bypassed.')
@@ -238,7 +242,7 @@ function splitDeviceHandsList(value: string | undefined): string[] {
  * `... || !app.isPackaged`, which made `npm start` unrestricted by accident.
  */
 function localUnrestrictedMode(): boolean {
-  return localUnrestrictedFromProcess(app.isPackaged).mode
+  return localUnrestrictedFromProcess(app.isPackaged, process.env, process.argv, productionUserDataPath).mode
 }
 
 function readDeviceHandsGrants(path: string): GrantFact[] {
@@ -619,7 +623,7 @@ if (
 // by --dev (never present in packaged launches) AND FREYA_DEV_ALLOW_MULTI_INSTANCE,
 // and only skips the single-instance lock — nothing else.
 const e2eAllowsParallelInstances =
-  process.env.FREYA_E2E === '1' && process.env.FREYA_E2E_ALLOW_MULTI_INSTANCE === '1'
+  e2eMode && process.env.FREYA_E2E_ALLOW_MULTI_INSTANCE === '1'
 const devAllowsParallelInstances =
   process.argv.includes('--dev') && process.env.FREYA_DEV_ALLOW_MULTI_INSTANCE === '1'
 const allowsParallelInstances = e2eAllowsParallelInstances || devAllowsParallelInstances
@@ -655,7 +659,7 @@ const COLLECT_TIMEOUT_MS = 750
  * in a way that reads as a Brain bug. Normal application launches never read this.
  */
 function e2eKey(variable: string): Uint8Array | null {
-  if (process.env.FREYA_E2E !== '1') return null
+  if (!e2eMode) return null
   const encoded = process.env[variable]
   if (!encoded) return null
   const bytes = Buffer.from(encoded, 'base64')
@@ -837,7 +841,7 @@ function currentHostEnv(): HostEnv {
     // The preferred backend. It has to be named here as well as on `HostEnv`, or the
     // provider that is asked first can never be given a URL to ask.
     FREYA_SEARXNG_URL: process.env.FREYA_SEARXNG_URL,
-    FREYA_E2E: process.env.FREYA_E2E,
+    FREYA_E2E: e2eMode ? '1' : undefined,
     FREYA_E2E_RESEARCH: process.env.FREYA_E2E_RESEARCH,
   }
 }
@@ -1985,7 +1989,7 @@ app.whenReady().then(async () => {
         `[freya] what Freya records about you will not survive a restart, and she will not reuse gestures — ${result.personality.reason}`,
       )
     }
-    const fixtureProvider = e2eResearchFixtureProvider(process.env)
+    const fixtureProvider = e2eMode ? e2eResearchFixtureProvider(process.env) : null
     const vaultPath = join(app.getPath('userData'), 'vault', 'freya.db')
     const vaultBinding = process.platform === 'win32'
       ? createFreyaVaultBinding(join(ROOT, 'native', 'sqlcipher', 'win32-x64', 'better_sqlite3-electron44.node'))
@@ -1999,7 +2003,7 @@ app.whenReady().then(async () => {
     // store so the process-relaunch test can exercise real encrypted persistence
     // rather than ephemeral memory. Production Windows never takes this branch.
     const e2eEncryptedConversationCompatibility =
-      process.env.FREYA_E2E === '1' && vaultBinding === undefined
+      e2eMode && vaultBinding === undefined
     const e2eConversationStore =
       e2eEncryptedConversationCompatibility && result.conversation.key !== null
         ? await EncryptedConversationStore.open({
@@ -2034,7 +2038,7 @@ app.whenReady().then(async () => {
         // Gates for the offline research fixtures. Both are required, and they are
         // read here in main rather than accepted from a window, so no renderer can
         // put a production build into fixture mode.
-        FREYA_E2E: process.env.FREYA_E2E,
+        FREYA_E2E: e2eMode ? '1' : undefined,
         FREYA_E2E_RESEARCH: process.env.FREYA_E2E_RESEARCH,
       },
       {
@@ -2045,9 +2049,9 @@ app.whenReady().then(async () => {
         // shipped Core's capability surface is the product's surface, not the test
         // set's. The Electron e2e and the Work-mirror host tests pass `true`; nothing
         // else does. Driven by the same env switch the E2E launcher already uses for
-        // `FREYA_E2E`, so the flag only flips on when the e2e is asking, never by
-        // accident.
-        ...(process.env.FREYA_E2E === '1' ? { testCapabilities: true } : {}),
+        // `FREYA_E2E` AND an unpackaged host. A packaged Freya stays fixture-free
+        // even when the environment contains the test switch.
+        ...(e2eMode ? { testCapabilities: true } : {}),
         missionKey: result.mission.key,
         contextKey: result.context.key,
         personalityKey: result.personality.key,

@@ -484,6 +484,7 @@ describe('office red team through a real Core', () => {
     core = createCore({
       dataPath: join(dir, 'events.jsonl'),
       providers: [new FakeModelProvider()],
+      testCapabilities: true,
       now: () => new Date(NOW),
     })
     await core.start()

@@ -491,6 +491,7 @@ describe('office through a real Core', () => {
     core = createCore({
       dataPath: join(dir, 'events.jsonl'),
       providers: [new FakeModelProvider()],
+      testCapabilities: true,
       now: () => new Date(NOW),
     })
     await core.start()
@@ -505,6 +506,7 @@ describe('office through a real Core', () => {
     const fresh = createCore({
       dataPath: join(dir, 'events2.jsonl'),
       providers: [new FakeModelProvider()],
+      testCapabilities: true,
     })
     const projection = fresh.office()
     expect(projection.health).toBe('unavailable')
@@ -673,6 +675,7 @@ describe('office through a real Core', () => {
     const restarted = createCore({
       dataPath: join(dir, 'events.jsonl'),
       providers: [new FakeModelProvider()],
+      testCapabilities: true,
       now: () => new Date(NOW),
     })
     await restarted.start()

@@ -82,6 +82,7 @@ async function started(
     dataPath: join(dir, 'events.jsonl'),
     providers: [provider],
     missionKey: new Uint8Array(32).fill(9),
+    testCapabilities: true,
     ...coreOptions,
   })
   await core.start()

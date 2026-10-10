@@ -665,11 +665,30 @@ export interface CoreOptions {
    *
    * The seam Phase 5 (Searcher, managed browser) and Phase 7 (Missions) attach
    * through. A capability is registered and nothing else changes: no engine edit,
-   * no new execution path, no new event family. Phase 6 registers only its own
-   * inert test set, so a Core built today can execute no external operation at all
-   * — which is the correct starting posture rather than a gap.
+   * no new execution path, no new event family.
    */
   workCapabilities?: readonly WorkCapability[]
+  /**
+   * Whether to register the Phase 6 fixture capabilities (`test.record`,
+   * `test.failing`, `test.unverifiable`, `test.slow`, `test.consequential`,
+   * and their verifiers).
+   *
+   * The capability surface a shipped Core exposes is a product question, not an
+   * implementation one, and the answer is **no**: the only way to demonstrate
+   * a Work run end to end through the product itself is to give it something to
+   * drive, and these capabilities are the inert test set that does that. They
+   * are kept for the e2e and the test suite, and not because a real run is ever
+   * supposed to invoke `test.failing` against a user.
+   *
+   * The decision is therefore explicit and never inferred:
+   *   - `undefined` and `false` (the default): no Phase 6 capabilities.
+   *   - `true`: Phase 6 capabilities registered alongside whatever `workCapabilities` adds.
+   *
+   * Production code sets neither; the e2e and the `createCore` test fixtures
+   * set it to `true`. The opt-in is the single gate, and it is named for what
+   * it is so a reader can find the call sites with `git grep testCapabilities`.
+   */
+  testCapabilities?: boolean
   /** Trusted host authorization for read-only mission file metadata; empty by default. */
   missionReadRoots?: readonly string[]
   /**
@@ -2356,7 +2375,19 @@ class FreyaCore implements Core {
       },
     })
     registerFoundryWorkCapabilities(this.workRegistry, this.requireFoundry())
-    registerPhaseSixCapabilities(this.workRegistry)
+    // Phase 6's fixture capabilities are the only executable capabilities the
+    // shipped Core would otherwise have, and they exist to prove the Work engine
+    // can be driven end to end. They are inert — no fs, no child_process, no
+    // socket, no model access — but `test.failing` is a deliberate failure
+    // generator and `test.record` is the only one a Skills workflow or a renderer
+    // `work.run.create` could reach by name in a shipped build, which makes
+    // shipping them a product decision that has to be made on purpose.
+    //
+    // The decision is `options.testCapabilities === true`, and the default is
+    // false. Production builds and the renderer never set it; the e2e and the
+    // `createCore` test fixtures do. The intent is that "test.record" failing
+    // to resolve in a default Core is a feature, not a regression.
+    if (this.options.testCapabilities === true) registerPhaseSixCapabilities(this.workRegistry)
     this.workEngine = new WorkEngine({
       fabric: this.fabric,
       // The one place Work asks Guard anything. The owner principal is baked in

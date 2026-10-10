@@ -21,7 +21,7 @@ let host: ElectronCoreHost | null = null
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'freya-host-'))
-  host = new ElectronCoreHost(join(dir, 'core-events.jsonl'), {})
+  host = new ElectronCoreHost(join(dir, 'core-events.jsonl'), {}, { testCapabilities: true })
 })
 
 afterEach(async () => {

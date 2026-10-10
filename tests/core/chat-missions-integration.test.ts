@@ -65,7 +65,7 @@ async function started(responder?: (request: ModelRequest) => string | Promise<s
     })() : request.messages.filter(message => message.role === 'user' && !message.content.startsWith('Optional lookup')).at(-1)?.content === 'Hello Freya' ? 'Hello!' : proposalEnvelope()
     return { requestId: request.requestId, providerId: provider.id, model: provider.model, text, inputTokens: 100, outputTokens: 200 }
   }
-  const options: CoreOptions = { dataPath: join(directory, 'events.jsonl'), missionKey: new Uint8Array(32).fill(9), conversationKey: new Uint8Array(32).fill(8), providers: [provider], research: {
+  const options: CoreOptions = { dataPath: join(directory, 'events.jsonl'), missionKey: new Uint8Array(32).fill(9), conversationKey: new Uint8Array(32).fill(8), providers: [provider], testCapabilities: true, research: {
     searchProvider: { id: 'local-http', status: () => ({ ready: true, reason: 'local fixture' }), search: async (query, options) => (await fetch(`${origin}/search?q=${encodeURIComponent(query)}`, { signal: options.signal })).json() as Promise<SearchResult[]> },
     browserFactory: { async create() {
       let url = ''

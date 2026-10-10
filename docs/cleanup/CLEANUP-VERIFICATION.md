@@ -39,7 +39,7 @@ KEEP / CONSOLIDATE / ARCHIVE-CANDIDATE / FIX matrix.
 
 ---
 
-## Phase C1-A — secure default-deny for `localUnrestrictedMode` (in progress)
+## Phase C1-A — secure default-deny for `localUnrestrictedMode` (commit `12cac4e`)
 
 ### Change
 
@@ -72,13 +72,57 @@ KEEP / CONSOLIDATE / ARCHIVE-CANDIDATE / FIX matrix.
    whether this is a real profile.
 5. All four hold → `mode = true`, reason `granted`.
 
-### Verification (this section, end-of-phase target)
+### Verification at C1-A close
 
-Recorded in `CLEANUP-VERIFICATION.md` once the C1-A commit is in.
+- `npm run typecheck`: PASS
+- `npx vitest run tests/unit/electron tests/host`: 41 files / 428 tests passed
+- `npx vitest run tests/unit tests/core tests/host tests/qualification tests/red-team`:
+  9504 passed / 8 failed / 6 skipped (same 8 as the inventory baseline;
+  +22 net from C1-A's new tests, +0 regressions)
+- `npm run lint`: 16 pre-existing errors, +0 new
 
 ---
 
-## Phase C1-B — gate `registerPhaseSixCapabilities` behind explicit opt-in (pending)
+## Phase C1-B — gate `registerPhaseSixCapabilities` behind explicit opt-in (commit pending)
+
+### Change
+
+| File | Lines | What changed |
+| --- | --- | --- |
+| `core/index.ts` | 663-686 | New `CoreOptions.testCapabilities?: boolean` opt-in, default `false` |
+| `core/index.ts` | 2378-2387 | `registerPhaseSixCapabilities(this.workRegistry)` gated on `this.options.testCapabilities === true` |
+| `electron/coreHost.ts` | 599-611 | New `CoreHostOptions.testCapabilities?: boolean`, forwarded to `createCore` |
+| `electron/main.ts` | 2040-2053 | Forwards `testCapabilities: true` to `coreHost` when `FREYA_E2E === '1'` so the e2e retains its fixtures without a production carve-out |
+| `tests/core/work-test-capabilities.test.ts` | new | 4 targeted tests: default Core refuses `test.record`; opted-in Core registers; opt-in is `=== true` not truthy |
+| 12 test fixtures | varies | `testCapabilities: true` added at every `createCore` call that previously relied on the unconditional registration, plus the `tests/host/coreHost.test.ts` and `tests/host/skillsBridge.test.ts` host fixtures and the two shared red-team / context-redteam harnesses |
+
+### The opt-in contract
+
+- `undefined` and `false`: no Phase 6 fixtures. This is the default for a
+  shipped Core and for any production code path.
+- `true`: Phase 6 fixtures are registered alongside whatever
+  `options.workCapabilities` adds.
+- Any other value (`'1'`, `'true'`, `'yes'`, `''`): treated as `false`. The
+  gate is `=== true`, not truthy, so a typo cannot accidentally widen the
+  surface.
+- Never inferred from `NODE_ENV`, `VITEST`, `app.isPackaged`, a debug flag,
+  or the presence of test runners. Production code sets neither; the e2e
+  sets it through its own `FREYA_E2E` env switch; the test fixtures set it
+  directly in their options objects.
+
+### Verification at C1-B close
+
+- `npm run typecheck`: PASS
+- `npx vitest run tests/core/work-test-capabilities.test.ts`: 4/4 pass
+- `npx vitest run tests/unit tests/core tests/host tests/qualification tests/red-team`:
+  9508 passed / 8 failed / 6 skipped. Same 8 baseline failures; +4 from the
+  new opt-in test file; **+0 regressions from removing the unconditional
+  registration** (the 24 Skills / red-team / context-redteam failures that
+  appeared mid-C1-B are all addressed by adding `testCapabilities: true` at
+  the fixture sites, not by changing Core).
+- `npm run lint`: 16 pre-existing errors, +0 new
+
+---
 
 ## Phase C2-A — discriminate settled/failed/unknown in `lifeLoopVerify` (pending)
 
@@ -89,3 +133,4 @@ Recorded in `CLEANUP-VERIFICATION.md` once the C1-A commit is in.
 ## Phase C4 — bounded extractions (pending)
 
 ## Phase C5 — classify/retire legacy (pending)
+

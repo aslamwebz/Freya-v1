@@ -137,6 +137,7 @@ export async function bootAttackCore(overrides: Partial<CoreOptions> = {}): Prom
     now: () => new Date(clock),
     newId,
     providers: [provider],
+    testCapabilities: true,
     ...overrides,
   }
 
@@ -206,6 +207,7 @@ export async function rebootAfterCrash(harness: AttackCore): Promise<AttackCore>
     now: () => new Date(clock),
     newId,
     providers: [provider],
+    testCapabilities: true,
   })
   await core.start()
 

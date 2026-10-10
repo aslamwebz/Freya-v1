@@ -2041,6 +2041,13 @@ app.whenReady().then(async () => {
         conversationKey: result.conversation.key,
         ...(e2eConversationStore ? { conversationStore: e2eConversationStore } : {}),
         brainKey: result.brain.key,
+        // Phase 6 fixture capabilities are gated on an explicit host-level opt-in so a
+        // shipped Core's capability surface is the product's surface, not the test
+        // set's. The Electron e2e and the Work-mirror host tests pass `true`; nothing
+        // else does. Driven by the same env switch the E2E launcher already uses for
+        // `FREYA_E2E`, so the flag only flips on when the e2e is asking, never by
+        // accident.
+        ...(process.env.FREYA_E2E === '1' ? { testCapabilities: true } : {}),
         missionKey: result.mission.key,
         contextKey: result.context.key,
         personalityKey: result.personality.key,

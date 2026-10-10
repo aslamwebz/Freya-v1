@@ -187,6 +187,7 @@ export async function bootContextAttackCore(
     // A memory conversation store keeps the harness offline and deterministic;
     // tests that need encryption open their own stores.
     conversationStore: new MemoryConversationStore({ mode: 'memory' }),
+    testCapabilities: true,
     ...options.core,
   })
   await core.start()
@@ -220,6 +221,7 @@ export async function rebootAfterCrash(
     newId,
     providers: [provider],
     conversationStore: new MemoryConversationStore({ mode: 'memory' }),
+    testCapabilities: true,
     ...core,
   })
   await coreInstance.start()

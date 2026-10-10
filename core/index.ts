@@ -77,7 +77,7 @@ import { isAssignableToWorker, isTerminalAssignmentStatus, workerPrincipalId } f
 import type { WORKFORCE_LIMITS } from './workforce/types'
 import type { WorkforceProjection, WorkforceWorkerDetail } from './workforce/types'
 import { MissionEngine, type WorkPort } from './missions/engine'
-import type { MissionCapabilityPort, MissionPriority } from './missions/autonomy/types'
+import type { MissionBudget, MissionCapabilityPort, MissionPriority } from './missions/autonomy/types'
 import type { MissionAuthorityPort } from './missions/autonomy/authority'
 import type { WorkRisk } from './work/types'
 import {
@@ -109,8 +109,22 @@ import type { GoalStore } from './longhorizon/store'
 import { MemoryGoalStore } from './longhorizon/memory-store'
 import { VerificationEngine } from './longhorizon/verification'
 import {
+  ContinuationEngine,
+  type ContinuationWake,
+  type ContinuationDecisionOutcome,
+} from './longhorizon/continuation'
+import {
+  validateGoalBudget,
+  checkBudgetExhaustion,
+  ZERO_GOAL_SPEND,
+  type GoalBudgetPolicy,
+  type GoalSpend,
+  type MissionBudgetDerivationResult,
+} from './longhorizon/budget'
+import {
   GOAL_REASONS,
   type GoalCommandOutcome,
+  type GoalContent,
   type GoalDetail,
   type GoalReason,
   type GoalVerifier,
@@ -1016,6 +1030,22 @@ export interface Core {
    */
   elaborateMilestoneMission(goalId: string, milestoneId?: string): Promise<BoundedMissionProposal | null>
   /**
+   * Set or update a goal's budget policy (Phase 5C).
+   */
+  setGoalBudget(goalId: string, budget: Partial<GoalBudgetPolicy>): Promise<GoalCommandOutcome>
+  /**
+   * Record spend against a goal's budget policy (Phase 5C).
+   */
+  recordGoalSpend(goalId: string, incremental: Partial<GoalSpend>): Promise<GoalCommandOutcome>
+  /**
+   * Derive a strictly bounded MissionBudget for an eligible milestone Mission (Phase 5C).
+   */
+  deriveMilestoneMissionBudget(goalId: string, requested?: Partial<MissionBudget>): MissionBudgetDerivationResult
+  /**
+   * Handle an authorized continuation wake (Phase 5C).
+   */
+  handleContinuationWake(wake: ContinuationWake): Promise<ContinuationDecisionOutcome>
+  /**
    * Core's account of the workforce: workers, teams, and what each is doing.
    *
    * Read-only and never null. A Core whose Workforce has never reported says so in
@@ -1598,6 +1628,8 @@ class FreyaCore implements Core {
   private workEngine: WorkEngine | undefined
   private missionEngine: MissionEngine | undefined
   private goalEngine: GoalEngine | undefined
+  private goalStore: GoalStore | undefined
+  private continuationEngine: ContinuationEngine | undefined
   private chatMissions: ChatMissionIntegration | undefined
   private learningEngine: LearningEngine | undefined
   private learningStore: LearningStore | undefined
@@ -2513,9 +2545,10 @@ class FreyaCore implements Core {
       stopAll: () => this.state.stopAll.active,
     })
 
+    this.goalStore = await this.buildGoalStore()
     this.goalEngine = new GoalEngine({
       fabric: this.fabric,
-      store: await this.buildGoalStore(),
+      store: this.goalStore,
       continuation: {
         verifyCheckpoint: async (goalId, checkpointId, signal) => {
           const defaultVerifier: GoalVerifier = {
@@ -2536,6 +2569,17 @@ class FreyaCore implements Core {
       stopAll: () => this.state.stopAll.active,
     })
     await this.goalEngine.open()
+
+    this.continuationEngine = new ContinuationEngine({
+      fabric: this.fabric,
+      goals: this.goalEngine.toTruthPort(),
+      principalId: this.owner.id,
+      now: this.options.now,
+      newId: this.options.newId,
+      onChange: () => this.publishGoals(),
+      stopAll: () => this.state.stopAll.active,
+    })
+    await this.continuationEngine.open()
 
     this.learningStore = await this.buildLearningStore()
     this.learningEngine = new LearningEngine({
@@ -3021,7 +3065,9 @@ class FreyaCore implements Core {
       // into a closed journal. Closing after Work is deliberate: the Mission may want
       // to consult a Run that Work has just finished recording.
       await this.missionEngine?.close()
+      await this.continuationEngine?.close()
       await this.goalEngine?.close()
+      await this.goalStore?.close()
       await this.learningStore?.close()
       // The Vault owns the Mission store's connection, so it closes after the engine
       // has flushed. Closing it here keeps the one encrypted database's lifetime
@@ -5551,6 +5597,70 @@ private async buildForge(): Promise<void> {
 
     if (!targetMilestone) return null
     return this.goalEngine.getPlanner().createMissionForMilestone(targetMilestone, detail.content)
+  }
+
+  async setGoalBudget(goalId: string, budgetInput: Partial<GoalBudgetPolicy>): Promise<GoalCommandOutcome> {
+    if (this.state.stopAll.active) return { operation: 'budget-updated', ok: false, reason: 'STOP ALL is active' }
+    if (this.goalEngine === undefined) return { operation: 'budget-updated', ok: false, reason: 'goal engine unavailable' }
+
+    const validated = validateGoalBudget(budgetInput)
+    if (!validated.ok) return { operation: 'budget-updated', ok: false, reason: validated.reason }
+
+    const store = this.goalStore
+    if (store === undefined) return { operation: 'budget-updated', ok: false, reason: 'goal store unavailable' }
+    const read = await store.read(goalId)
+    if (!read.ok) return { operation: 'budget-updated', ok: false, reason: read.reason }
+
+    const currentSpend = read.value.spend ?? { ...ZERO_GOAL_SPEND }
+    const updatedContent: GoalContent = {
+      ...read.value,
+      budget: validated.value,
+      spend: currentSpend,
+    }
+
+    try {
+      await store.write(updatedContent)
+      this.goalEngine.updateContent(updatedContent)
+    } catch (error) {
+      return { operation: 'budget-updated', ok: false, reason: error instanceof Error ? error.message : String(error) }
+    }
+
+    const exhaustion = checkBudgetExhaustion(validated.value, currentSpend)
+    if (exhaustion.exhausted) {
+      await this.goalEngine.pauseGoal(goalId, GOAL_REASONS.budget_exhausted)
+    }
+
+    this.publishGoals()
+    return {
+      operation: 'budget-updated',
+      ok: true,
+      goalId,
+      budgetExhausted: exhaustion.exhausted,
+    }
+  }
+
+  async recordGoalSpend(goalId: string, incremental: Partial<GoalSpend>): Promise<GoalCommandOutcome> {
+    if (this.goalEngine === undefined) return { operation: 'refused', ok: false, reason: 'goal engine unavailable' }
+    return await this.goalEngine.recordSpend(goalId, incremental)
+  }
+
+  deriveMilestoneMissionBudget(goalId: string, requested?: Partial<MissionBudget>): MissionBudgetDerivationResult {
+    if (this.goalEngine === undefined) return { ok: false, reason: 'goal engine unavailable' }
+    return this.goalEngine.deriveMissionBudget(goalId, requested)
+  }
+
+  async handleContinuationWake(wake: ContinuationWake): Promise<ContinuationDecisionOutcome> {
+    if (this.continuationEngine === undefined) {
+      return {
+        decision: {
+          decision: 'wait',
+          reason: 'continuation engine unavailable',
+          deadline: (this.options.now?.() ?? new Date()).toISOString(),
+        },
+        goalId: wake.goalId,
+      }
+    }
+    return await this.continuationEngine.handleWake(wake)
   }
 
   goals(): GoalProjectionView {
@@ -9315,11 +9425,15 @@ state: {
           const roadmap = typeof envelope.payload === 'object' && envelope.payload !== null && 'roadmap' in envelope.payload
             ? (envelope.payload as { roadmap?: GoalRoadmapInput }).roadmap
             : undefined
+          const budget = typeof envelope.payload === 'object' && envelope.payload !== null && 'budget' in envelope.payload
+            ? (envelope.payload as { budget?: Partial<GoalBudgetPolicy> }).budget
+            : undefined
           const outcome = await this.requireGoal().createGoal({
             title,
             description,
             ...(criteria === undefined ? {} : { completionCriteria: criteria }),
             ...(roadmap === undefined ? {} : { roadmap }),
+            ...(budget === undefined ? {} : { budget }),
           })
           this.publishGoals()
           return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
@@ -9372,6 +9486,25 @@ state: {
             ? (payload.evidence as { reason?: string; missionId?: string })
             : {}
           const outcome = await this.requireGoal().settleMilestone(goalId, milestoneId, outcomeStr, evidence)
+          this.publishGoals()
+          return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
+        }
+
+        case 'goal.budget.set': {
+          const decision = this.guard.evaluate(this.owner, 'goal.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.manage', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          const goalId = readString(envelope.payload, 'goalId')
+          if (goalId === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal id is missing')
+          }
+          const payload = envelope.payload as Record<string, unknown>
+          const budget = typeof payload?.budget === 'object' && payload.budget !== null
+            ? (payload.budget as Partial<GoalBudgetPolicy>)
+            : (payload as Partial<GoalBudgetPolicy>)
+          const outcome = await this.setGoalBudget(goalId, budget)
           this.publishGoals()
           return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
         }
@@ -11308,6 +11441,9 @@ function goalResult(outcome: GoalCommandOutcome): GoalCommandOutcomeView {
     ...(outcome.goalId === undefined ? {} : { goalId: outcome.goalId }),
     ...(outcome.state === undefined ? {} : { state: outcome.state }),
     ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+    ...(outcome.revision === undefined ? {} : { revision: outcome.revision }),
+    ...(outcome.milestoneId === undefined ? {} : { milestoneId: outcome.milestoneId }),
+    ...(outcome.budgetExhausted === undefined ? {} : { budgetExhausted: outcome.budgetExhausted }),
   }
 }
 

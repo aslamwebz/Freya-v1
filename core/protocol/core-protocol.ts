@@ -726,6 +726,7 @@ export type CoreCommandName =
   | 'goal.requestCompletion'
   | 'goal.roadmap.set'
   | 'goal.milestone.settle'
+  | 'goal.budget.set'
   /* -------------------------------------------------------------- life */
   /**
    * Phase 21. Three reads and nothing else.

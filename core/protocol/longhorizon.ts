@@ -131,6 +131,7 @@ export type GoalCommandOperation =
   | 'checkpoint-failed'
   | 'roadmap-updated'
   | 'milestone-settled'
+  | 'budget-updated'
   | 'refused'
 
 /** What a goal command produced, as a window may see it. */
@@ -143,4 +144,5 @@ export interface GoalCommandOutcomeView {
   readonly needsAttention?: boolean
   readonly revision?: number
   readonly milestoneId?: string
+  readonly budgetExhausted?: boolean
 }

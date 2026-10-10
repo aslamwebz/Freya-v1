@@ -1,5 +1,6 @@
 import type { PrincipalId } from '../protocol/core-protocol'
 import type { GoalRoadmap, GoalRoadmapInput } from './decomposition/types'
+import type { GoalBudgetPolicy, GoalSpend, GoalBudgetRemaining } from './budget'
 
 /**
  * THE LONG-HORIZON GOAL DOMAIN.
@@ -232,6 +233,7 @@ export interface GoalContentInput {
   readonly description: string
   readonly completionCriteria?: readonly string[]
   readonly roadmap?: GoalRoadmapInput
+  readonly budget?: Partial<GoalBudgetPolicy>
 }
 
 export interface GoalContent {
@@ -241,6 +243,8 @@ export interface GoalContent {
   readonly completionCriteria: readonly string[]
   readonly createdAt: string
   readonly roadmap?: GoalRoadmap
+  readonly budget?: GoalBudgetPolicy
+  readonly spend?: GoalSpend
 }
 
 export type GoalContentResult =
@@ -532,6 +536,9 @@ export interface GoalDetail extends GoalSummaryView {
   readonly content: GoalContent | null
   readonly contentReason: string | null
   readonly roadmap?: GoalRoadmap | null
+  readonly budget?: GoalBudgetPolicy | null
+  readonly spend?: GoalSpend | null
+  readonly budgetRemaining?: GoalBudgetRemaining | null
 }
 
 /* -------------------------------------------------------------- outcomes */
@@ -552,6 +559,7 @@ export type GoalOperation =
   | 'checkpoint-failed'
   | 'roadmap-updated'
   | 'milestone-settled'
+  | 'budget-updated'
   | 'refused'
 
 /**
@@ -571,6 +579,7 @@ export interface GoalCommandOutcome {
   readonly needsAttention?: boolean
   readonly revision?: number
   readonly milestoneId?: string
+  readonly budgetExhausted?: boolean
 }
 
 /* ------------------------------------------------------------------ misc */

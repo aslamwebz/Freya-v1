@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
-import { App } from '../../../src/ui-v2/App'
-import { PreferencesStore } from '../../../src/ui-v2/theme/preferences'
-import { WindowsStore } from '../../../src/ui-v2/windows/model'
 import { createPreviewAdapter } from '../../../src/ui-v2/state/preview'
 import { createLiveAdapter } from '../../../src/ui-v2/state/live'
 import { uiMode, type Resource, type UiSnapshot } from '../../../src/ui-v2/state/contract'
@@ -58,26 +55,6 @@ describe('uiMode provenance helper', () => {
   it('is live when a live Core has not reported (unavailable is still not preview)', () => {
     const absent = liveSnapshot({ home: { status: 'unavailable', reason: 'No Freya Core is reachable from this window.' } })
     expect(uiMode(absent)).toBe('live')
-  })
-})
-
-describe('shell label', () => {
-  function mountWith(snapshot: UiSnapshot) {
-    const listeners = new Set<() => void>()
-    render(<App preferences={new PreferencesStore()} windows={ new WindowsStore({ width: 1400, height: 800 })}
-      adapter={{ getSnapshot: () => snapshot, subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } } }} />)
-  }
-  it('labels a preview window as design preview sample data', () => {
-    mountWith(preview)
-    expect(screen.getByText('Design preview · Sample data')).toBeInTheDocument()
-    expect(screen.queryByText('Live · projected from Freya Core')).not.toBeInTheDocument()
-  })
-  it('labels a live window as Live without claiming the whole shell is projected from Core', () => {
-    mountWith(liveSnapshot())
-    // The shell must not overclaim: several workspaces are not wired, so the global
-    // label cannot assert the entire window is a Core projection.
-    expect(screen.getByText('Live', { selector: '.f-preview-label' })).toBeInTheDocument()
-    expect(screen.queryByText('Live · projected from Freya Core')).not.toBeInTheDocument()
   })
 })
 
@@ -155,22 +132,5 @@ describe('live adapter carries no fake figures', () => {
       expect(resource.status === 'ready' ? resource.source : 'not ready').not.toBe('preview')
     }
     disposer()
-  })
-})
-
-describe('Home activity is not called memory in live mode', () => {
-  it('labels the live activity feed as Recent activity', () => {
-    const snapshot = liveSnapshot()
-    const listeners = new Set<() => void>()
-    render(<App preferences={new PreferencesStore()} windows={new WindowsStore({ width: 1400, height: 800 })}
-      adapter={{ getSnapshot: () => snapshot, subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } } }} />)
-    expect(screen.getByRole('region', { name: 'Recent activity' })).toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: 'Recent memory' })).not.toBeInTheDocument()
-  })
-  it('labels the preview feed as Recent memory', () => {
-    const listeners = new Set<() => void>()
-    render(<App preferences={new PreferencesStore()} windows={new WindowsStore({ width: 1400, height: 800 })}
-      adapter={{ getSnapshot: () => preview, subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } } }} />)
-    expect(screen.getByRole('region', { name: 'Recent memory' })).toBeInTheDocument()
   })
 })

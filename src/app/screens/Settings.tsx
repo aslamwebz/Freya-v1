@@ -105,7 +105,7 @@ function errorMessage(error: unknown): string {
  * Where the backend cannot supply a value, the row says so. There is no third
  * option, and no default that looks like a fact.
  *
- * The provider form reuses the proven `?ui=v2` semantics rather than a second
+ * The provider form reuses the existing shared provider semantics rather than a second
  * set: a key is sent only when typed, an empty field leaves the stored key
  * alone, and forgetting one is its own explicit action.
  */

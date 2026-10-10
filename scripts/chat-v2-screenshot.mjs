@@ -6,20 +6,9 @@ import { dirname, extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /**
- * Snapshot the v2 Chat workspace's empty state and a hydrated transcript, so a
- * change in either can be reviewed by eye.
- *
- * The page is loaded from the locally built renderer; the v2 entry is reached
- * with `?ui=v2`, which selects the Phase 19 shell over the legacy one. A
- * Chromium context has no bridge, so the v2 entry falls back to its preview
- * adapter, which is labelled "sample data" everywhere it shows up. We replace
- * the bridge with a fixture-backed fake before the page scripts run so the
- * same ChatView renders the rich-message, TOC, copy, and provenance features
- * against a fixed transcript. That is the cheapest Electron-shaped evidence
- * available without booting Electron itself: same Vite output, same React
- * tree, same CSS.
- *
- *   node scripts/chat-v2-screenshot.mjs
+ * Capture the shipping Chat UI using explicit fixture-backed host data.
+ * This is layout evidence only; it does not prove live Core behavior.
+ * The historical command filename is retained for existing callers.
  */
 
 const here_ = dirname(fileURLToPath(import.meta.url))
@@ -78,11 +67,25 @@ const fixtureProjection = {
 /** Init-script body. Runs before any renderer module evaluates. */
 const INIT_SCRIPT = `
 (() => {
-  const projection = ${JSON.stringify(fixtureProjection)};
+  const fixture = ${JSON.stringify(fixtureProjection)};
+  const projection = location.search === '?fixture=empty'
+    ? { ...fixture, conversations: [], activeConversationId: null, messages: [] }
+    : fixture;
   const target = window;
   target.freyaHost = target.freyaHost ?? {};
   const host = target.freyaHost;
   host.isDesktop = true;
+  host.onCollect = () => {};
+  host.loadWorkspace = async () => null;
+  host.saveWorkspace = async () => false;
+  // Unpictured lanes deliberately have no projection or command authority.
+  for (const lane of ['Mission', 'Workforce', 'Attention', 'Brain', 'Work', 'Personality', 'Context', 'Consciousness', 'World', 'Office', 'Life', 'LifeLoop', 'Foundry', 'Relay', 'Skills', 'Voice']) {
+    host['core' + lane] = async () => null;
+    host['onCore' + lane] = () => () => {};
+  }
+  host.coreSubmit = async () => ({ ok: false, refusal: { reason: 'Layout fixture has no Core command authority' } });
+  host.providerConfig = async () => { throw new Error('No provider in this layout fixture'); };
+  host.voiceConfig = async () => { throw new Error('No voice provider in this layout fixture'); };
   host.coreConversation = async () => projection;
   host.onCoreConversation = () => () => {};
   host.coreActivity = async () => [
@@ -135,6 +138,15 @@ function startStaticServer(rootDir) {
 }
 
 async function shot(page, label) {
+  await page.evaluate(() => {
+    const document = globalThis.document;
+    if (document.getElementById('fixture-label')) return;
+    const label = document.createElement('div');
+    label.id = 'fixture-label';
+    label.textContent = 'Layout fixture · no live Core';
+    label.style.cssText = 'position:fixed;top:2px;left:50%;transform:translateX(-50%);z-index:99999;font:12px sans-serif;color:#cbd5e1;background:#101827;padding:4px 12px;border-radius:6px;pointer-events:none';
+    document.body.append(label);
+  });
   const file = resolve(SHOTS, `${label}.png`)
   await page.screenshot({ path: file, fullPage: true })
   process.stdout.write(`   [shot] ${file}\n`)
@@ -145,59 +157,53 @@ async function main() {
   const { server, url } = await startStaticServer(resolve(ROOT, 'dist'))
   process.stdout.write(`[server] serving dist/ at ${url}\n`)
 
-  const browser = await chromium.launch({ headless: true })
+  let browser
   try {
+    browser = await chromium.launch({ headless: true, channel: 'chrome' })
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
     await context.addInitScript({ content: INIT_SCRIPT })
     const page = await context.newPage()
-    page.on('pageerror', (error) => process.stdout.write(`   [pageerror] ${String(error)}\n`))
+    const errors = []
+    page.on('pageerror', (error) => errors.push(String(error)))
     page.on('console', (msg) => {
       if (msg.type() === 'error') process.stdout.write(`   [console:error] ${msg.text()}\n`)
     })
 
-    // 1. Default view: Phase 19 v2 shell with the Chat workspace selected.
+    // 1. Default view: shipping shell with the Chat workspace selected.
     //    The projection from the init script is the one with messages, so the
     //    transcript draws; for the *empty state* we briefly drop it.
-    await page.goto(`${url}/?ui=v2`, { waitUntil: 'load' })
+    await page.goto(`${url}/?fixture=empty`, { waitUntil: 'load' })
     await page.waitForSelector('.freya-v2', { timeout: 30_000 })
-    await page.evaluate(`(() => { window.freyaHost.coreConversation = async () => null })()`)
-
-    const chatNav = page.getByRole('button', { name: 'Chat' }).first()
-    if (await chatNav.isVisible().catch(() => false)) {
-      await chatNav.click()
-      await page.waitForSelector('.f-chat', { timeout: 10_000 }).catch(() => {})
-    }
+    await page.locator('.freya-boot').waitFor({ state: 'hidden', timeout: 20_000 })
+    const chatNav = page.getByRole('button', { name: 'Open Chats' }).first()
+    await chatNav.click()
+    await page.waitForSelector('.chats', { timeout: 10_000 })
+    if (await page.locator('.chats-rich').count()) throw new Error('Empty fixture rendered a transcript')
     await page.waitForTimeout(500)
     await shot(page, '01-empty-state')
 
     // 2. Restore the projection so the hydrated transcript draws.
-    await page.evaluate(`(() => {
-      const host = window.freyaHost
-      host.coreConversation = async () => (${JSON.stringify(fixtureProjection)})
-    })()`)
-    // The conversation mirror is a singleton in the v2 entry; reload so the
-    // first read picks up the restored projection.
-    await page.reload({ waitUntil: 'load' })
+    // A fresh document lets the singleton mirror read the hydrated fixture.
+    await page.goto(`${url}/`, { waitUntil: 'load' })
     await page.waitForSelector('.freya-v2', { timeout: 30_000 })
-    const chatNav2 = page.getByRole('button', { name: 'Chat' }).first()
-    if (await chatNav2.isVisible().catch(() => false)) {
-      await chatNav2.click()
-    }
-    await page.waitForSelector('.chats-rich', { timeout: 15_000 }).catch(() => {})
+    await page.locator('.freya-boot').waitFor({ state: 'hidden', timeout: 20_000 })
+    const chatNav2 = page.getByRole('button', { name: 'Open Chats' }).first()
+    await chatNav2.click()
+    await page.waitForSelector('.chats-rich', { timeout: 15_000 })
+    await page.getByText('show me images of Saturn', { exact: true }).waitFor()
     await page.waitForTimeout(700)
     await shot(page, '02-hydrated-transcript')
 
     // 3. Open the contents disclosure to show the TOC against the same body.
     const toc = page.locator('.chats-toc > summary').first()
-    if (await toc.isVisible().catch(() => false)) {
-      await toc.click()
-      await page.waitForTimeout(300)
-      await shot(page, '03-toc-open')
-    }
+    await toc.click()
+    await page.waitForTimeout(300)
+    await shot(page, '03-toc-open')
+    if (errors.length) throw new Error(errors.join('\n'))
 
     process.stdout.write(`\nshots: ${SHOTS}\n`)
   } finally {
-    await browser.close()
+    await browser?.close()
     server.close()
   }
 }

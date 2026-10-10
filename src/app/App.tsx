@@ -69,7 +69,8 @@ export function App({
    * global composer, which sits over the conversation column so the input never
    * straddles the divider. One number, one source.
    */
-  const [browserPercent, setBrowserPercent] = useState(52)
+  // Give the browser room for real tabs without ever replacing the conversation.
+  const [browserPercent, setBrowserPercent] = useState(62)
   useEffect(() => {
     const store = sharedDockedBrowserStore()
     let count = store.getSnapshot().tabs.length

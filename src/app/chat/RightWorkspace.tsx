@@ -36,6 +36,8 @@ export interface RightWorkspaceProps {
   readonly mediaItems?: readonly MediaItem[]
   readonly executionSteps?: readonly ToolStepRecord[]
   readonly browserRequestedUrl?: string | null
+  readonly browserExpanded?: boolean
+  readonly onBrowserExpandedToggle?: () => void
   readonly onBrowserRequestedUrlHandled?: () => void
   readonly onBrowserOpenUrl?: (url: string, origin?: DockedTabOrigin) => void
   readonly store?: RightWorkspaceStore
@@ -838,6 +840,8 @@ export function UniversalRightWorkspace({
   mediaItems: explicitMedia,
   executionSteps: explicitSteps,
   browserRequestedUrl = null,
+  browserExpanded = false,
+  onBrowserExpandedToggle,
   onBrowserRequestedUrlHandled = () => {},
   onBrowserOpenUrl,
   store: injectedStore,
@@ -952,6 +956,7 @@ export function UniversalRightWorkspace({
   return (
     <aside
       className="chats-right-workspace"
+      data-active-tab={activeTab}
       role="region"
       aria-label="Universal Right Workspace"
     >
@@ -1084,6 +1089,9 @@ export function UniversalRightWorkspace({
             requestedOrigin={{ kind: 'link', from: 'chat', ownerText: 'browser workspace' }}
             onRequestedUrlHandled={onBrowserRequestedUrlHandled}
             onClose={onClose}
+            expanded={browserExpanded}
+            onToggleExpanded={onBrowserExpandedToggle}
+            onViewChange={handleTabClick}
           />
         ) : activeTab === 'sources' ? (
           <SourcesView sources={allSources} onOpenInBrowser={handleOpenInBrowser} />

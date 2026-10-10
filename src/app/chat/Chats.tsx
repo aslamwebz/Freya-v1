@@ -399,6 +399,8 @@ export function Chats({
   })()
   const rwStore = sharedRightWorkspaceStore()
   const rwSnapshot = useSyncExternalStore(rwStore.subscribe, rwStore.getSnapshot, rwStore.getSnapshot)
+  // Chat stays visible by default; fullscreen browser is an explicit owner action.
+  const [browserExpanded, setBrowserExpanded] = useState(false)
 
   // When a new canvas arrives, open canvas in right workspace if not dismissed.
   useEffect(() => {
@@ -475,7 +477,9 @@ export function Chats({
   }, [messages.length, generating, problemKey])
 
   return (
-    <div className="chats" data-workspace-open={workspaceOpen || undefined} data-browser-open={workspaceOpen || undefined} data-canvas-open={(latestCanvas !== null) || undefined}>
+    <div className="chats" data-workspace-open={workspaceOpen || undefined} data-browser-open={browserOpen || undefined}
+      data-browser-expanded={(workspaceOpen && rwSnapshot.activeTab === 'browser' && browserExpanded) || undefined}
+      data-canvas-open={(latestCanvas !== null) || undefined}>
       {/*
         Conversation history lives in the left rail. This workspace owns the
         transcript and, when opened, Freya's bounded browser controller.
@@ -697,6 +701,8 @@ export function Chats({
             messages={messages}
             canvas={latestCanvas}
             browserRequestedUrl={browserRequestedUrl}
+            browserExpanded={browserExpanded}
+            onBrowserExpandedToggle={() => setBrowserExpanded((value) => !value)}
             onBrowserRequestedUrlHandled={onBrowserRequestedUrlHandled}
             onBrowserOpenUrl={onBrowserOpenUrl}
           />

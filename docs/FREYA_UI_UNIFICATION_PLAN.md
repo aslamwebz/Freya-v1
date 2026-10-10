@@ -1,6 +1,6 @@
 # Freya UI unification implementation plan
 
-**Navigation revision:** The owner subsequently requested a separate primary Mind page, vertical subpages and a sidebar redesign. The seven-page hierarchy and remaining work are defined in `docs/superpowers/specs/2026-10-10-navigation-revision-design.md` and `docs/superpowers/plans/2026-10-10-navigation-revision.md`. The original six-page requirements below are historical and superseded.
+**Navigation revision:** The owner subsequently requested a separate primary Mind page and a sidebar redesign, then clarified that subpage tabs should be horizontal. The seven-page hierarchy and remaining work are defined in `docs/superpowers/specs/2026-10-10-navigation-revision-design.md` and `docs/superpowers/plans/2026-10-10-navigation-revision.md`. The original six-page requirements below are historical and superseded.
 
 **Goal:** One coherent default app with exactly Home, Chats, Missions, Library, Office, and Settings in the primary navigation.
 

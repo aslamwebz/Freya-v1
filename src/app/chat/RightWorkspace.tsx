@@ -4,6 +4,7 @@ import type { ChartSpec } from './ChartView'
 import type { TypedSource } from './assistantParts'
 import type { ToolStepRecord } from '../../../core/mind/tools'
 import type { MediaItem } from '../../../core/media/types'
+import { MediaGrid } from './MediaCards'
 import type { ConversationMessageView } from '../../../core/protocol/conversation'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { copyText } from './clipboard'
@@ -387,15 +388,12 @@ function MediaView({
   readonly mediaItems: readonly MediaItem[]
   readonly onOpenInBrowser: (url: string, title?: string) => void
 }) {
-  const [selectedIndex, setSelectedIndex] = useState(0)
-  const current = mediaItems[selectedIndex] ?? null
-
   if (mediaItems.length === 0) {
     return (
       <div className="chats-rw-empty">
         <Glyph name="dress" size={28} />
         <b>No Media Items</b>
-        <p>Images, video findings, and audio attachments will appear here.</p>
+        <p>Images, videos, and audio found by Freya will appear here.</p>
       </div>
     )
   }
@@ -406,116 +404,14 @@ function MediaView({
         <span className="chats-rw-badge">
           {mediaItems.length} media item{mediaItems.length === 1 ? '' : 's'}
         </span>
-        <div className="chats-rw-media-nav">
-          <button
-            type="button"
-            className="chats-rw-nav-btn"
-            disabled={selectedIndex <= 0}
-            onClick={() => setSelectedIndex((i) => i - 1)}
-            aria-label="Previous media item"
-          >
-            ‹
-          </button>
-          <span>
-            {selectedIndex + 1} / {mediaItems.length}
-          </span>
-          <button
-            type="button"
-            className="chats-rw-nav-btn"
-            disabled={selectedIndex >= mediaItems.length - 1}
-            onClick={() => setSelectedIndex((i) => i + 1)}
-            aria-label="Next media item"
-          >
-            ›
-          </button>
-        </div>
+        <small className="chats-rw-media-hint">Select to preview ? Navigate inside viewer</small>
       </div>
-
-      {current ? (
-        <div className="chats-rw-media-stage">
-          <div className="chats-rw-media-frame">
-            {current.kind === 'video' ? (
-              current.embedUrl ? (
-                <iframe
-                  className="chats-rw-video-embed"
-                  src={current.embedUrl}
-                  title={current.title}
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                />
-              ) : (
-                <div className="chats-rw-video-fallback">
-                  <span className="chats-rw-video-icon">▶</span>
-                  <p>{current.title}</p>
-                </div>
-              )
-            ) : current.kind === 'audio' ? (
-              <div className="chats-rw-audio-frame">
-                <div className="chats-rw-audio-visualizer" aria-hidden="true">
-                  <Glyph name="mic" size={40} />
-                </div>
-                <audio
-                  controls
-                  src={current.url}
-                  className="chats-rw-audio-player"
-                  aria-label={current.title || 'Audio player'}
-                >
-                  Your browser does not support the audio element.
-                </audio>
-              </div>
-            ) : (
-              <img
-                src={current.url}
-                alt={current.title}
-                className="chats-rw-image-preview"
-                loading="lazy"
-              />
-            )}
-          </div>
-          <header className="chats-rw-media-caption">
-            <h4>{current.title}</h4>
-            <small>{current.host || hostOf(current.page)} · {current.kind}</small>
-          </header>
-          <footer className="chats-rw-pane-footer">
-            <button
-              type="button"
-              className="chats-rw-action-btn"
-              onClick={() => onOpenInBrowser(current.page || current.url, current.title)}
-            >
-              <Glyph name="world" size={13} />
-              <span>Open in Browser</span>
-            </button>
-            <button
-              type="button"
-              className="chats-rw-action-btn"
-              onClick={() => void copyText(current.url)}
-            >
-              {current.kind === 'audio' ? 'Copy Audio URL' : current.kind === 'video' ? 'Copy Video URL' : 'Copy Image URL'}
-            </button>
-          </footer>
-        </div>
-      ) : null}
-
-      {mediaItems.length > 1 ? (
-        <div className="chats-rw-thumbnails-strip">
-          {mediaItems.map((item, idx) => (
-            <button
-              key={`${item.kind}:${item.url}:${idx}`}
-              type="button"
-              className={`chats-rw-thumb-btn ${idx === selectedIndex ? 'active' : ''}`}
-              onClick={() => setSelectedIndex(idx)}
-              aria-label={`View ${item.title}`}
-            >
-              {item.kind === 'audio' ? (
-                <span className="chats-rw-thumb-audio" aria-hidden="true">
-                  <Glyph name="mic" size={14} />
-                </span>
-              ) : (
-                <img src={item.thumbnailUrl || item.url} alt="" />
-              )}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      {/* This workspace is a gallery, never a second hidden player.
+          Only MediaOverlay may mount an iframe or audio/video element. */}
+      <MediaGrid
+        items={mediaItems}
+        onOpenBrowserUrl={(url) => onOpenInBrowser(url, url)}
+      />
     </div>
   )
 }

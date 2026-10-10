@@ -569,11 +569,8 @@ export function Chats({
                       <MediaGrid
                         items={media}
                         onOpenBrowserUrl={(url, kind) => {
-                          if (kind === 'document' || kind === 'pdf') {
-                            rwStore.openDocument()
-                          } else if (kind === 'image' || kind === 'video' || kind === 'audio') {
-                            rwStore.openMedia()
-                          }
+                          // Explicit "Open in Browser" inside the preview is the
+                          // ONLY media action that may create a browser session.
                           onBrowserOpenUrl(url, { kind: 'link', from: 'media', ownerText, mediaKind: kind })
                         }}
                       />

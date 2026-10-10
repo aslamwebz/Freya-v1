@@ -703,14 +703,35 @@ export class ElectronFreyaBrowserPage implements FreyaBrowserLivePage {
 
   setDock(bounds: Electron.Rectangle | null): void {
     if (!this.view || this.closed) return
+    const contents = this.view.webContents
+    const host = bounds === null ? null : this.options.hostWindow?.()
+    if (bounds !== null && host && !host.isDestroyed() && this.attachedHost === host) {
+      // Resizes must not detach, mute, and reattach a playing foreground tab.
+      this.view.setBounds(bounds)
+      return
+    }
+
+    const wasAttached = this.attachedHost !== undefined
+    if (!contents.isDestroyed()) contents.setAudioMuted(true)
     if (this.attachedHost && !this.attachedHost.isDestroyed()) this.attachedHost.contentView.removeChildView(this.view)
     this.attachedHost = undefined
-    if (bounds === null) return
-    const host = this.options.hostWindow?.()
-    if (!host || host.isDestroyed()) return
+
+    if (bounds === null || !host || host.isDestroyed()) {
+      // Hidden WebContentsViews can keep audio playing. Muting is the hard
+      // boundary, including media in inaccessible cross-origin subframes.
+      // Best-effort pause once when a visible tab becomes background.
+      if (wasAttached && !contents.isDestroyed()) {
+        void contents.executeJavaScript(
+          "for (const media of document.querySelectorAll('audio,video')) media.pause()",
+          true,
+        ).catch(() => undefined)
+      }
+      return
+    }
     host.contentView.addChildView(this.view)
     this.view.setBounds(bounds)
     this.attachedHost = host
+    if (!contents.isDestroyed()) contents.setAudioMuted(false)
   }
 
   /**
@@ -1341,7 +1362,11 @@ export class ElectronFreyaWindowFactory implements FreyaBrowserPageFactory {
   constructor(private readonly options: FreyaWindowFactoryOptions = {}) {}
 
   dock(sessionId: string | null, bounds: Electron.Rectangle | null): boolean {
-    for (const page of this.pages.values()) page.setDock(null)
+    // Silence every background tab, but never detach the foreground view just
+    // because its rectangle changed or an overlay was removed.
+    for (const [id, page] of this.pages) {
+      if (id !== sessionId || bounds === null) page.setDock(null)
+    }
     if (sessionId === null || bounds === null) return true
     const page = this.pages.get(sessionId)
     if (!page) return false

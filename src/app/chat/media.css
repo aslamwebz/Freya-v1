@@ -421,3 +421,42 @@
   margin-top: 8px;
   border-radius: 24px;
 }
+/* Media previews are portals at the document root, not clipped by chat panels.
+   Native WebContentsViews are independently undocked during preview. */
+.chats-overlay {
+  z-index: 2147483000;
+  isolation: isolate;
+}
+.chats-overlay-panel {
+  min-height: 0;
+  overflow: hidden;
+}
+.chats-overlay-stage {
+  min-width: 0;
+  overflow: hidden;
+}
+.chats-overlay-video-embed, .chats-overlay-video {
+  width: min(100%, 1100px);
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+}
+.chats-rw-media-pane {
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+.chats-rw-media-pane > .chats-media {
+  margin: 12px;
+}
+.chats-rw-media-hint {
+  color: #8da5b8;
+  font-size: 11px;
+}
+@media (max-width: 660px) {
+  .chats-overlay-panel { width: 98vw; height: min(94vh, 780px); padding: 6px; }
+  .chats-overlay-host { display: none; }
+  .chats-overlay-bar { flex-wrap: wrap; }
+}

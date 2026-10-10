@@ -148,7 +148,9 @@ describe('a session with a valid URL', () => {
     }))
     render(<DockedBrowser requestedUrl={null} onRequestedUrlHandled={() => {}} onClose={() => {}} />)
     expect(await screen.findByRole('tab', { name: /Alpha/ })).toBeInTheDocument()
-    expect(screen.getByText(/find ten sites/)).toBeInTheDocument()
+    expect(document.querySelector('.chats-browser-tab[data-origin="link"]')).not.toBeNull()
+    // The compact tab should not duplicate the long owner prompt as a subtitle.
+    expect(screen.queryByText(/find ten sites/)).toBeNull()
   })
 })
 
@@ -222,7 +224,7 @@ describe('a runtime that is unavailable', () => {
     bridge.state.mockResolvedValue(stateWith({ available: false, active: false, runtimeStatus: 'disabled', reason: 'off' }))
     render(<DockedBrowser requestedUrl={null} onRequestedUrlHandled={() => {}} onClose={() => {}} />)
     await screen.findByText(/switched off/)
-    expect(document.querySelector('small[data-runtime]')?.textContent).toBe('paused')
+    expect(document.querySelector('.chats-browser-runtime')?.getAttribute('aria-label')).toBe('Browser paused')
   })
 
   it('refuses to submit an address while it is unavailable', async () => {
@@ -293,7 +295,7 @@ describe('no sessions at all', () => {
   it('keeps the status word active, so the header does not claim the browser is paused', async () => {
     render(<DockedBrowser requestedUrl={null} onRequestedUrlHandled={() => {}} onClose={() => {}} />)
     await screen.findByText(/No browser tab open/)
-    expect(document.querySelector('small[data-runtime]')?.textContent).toBe('isolated')
+    expect(document.querySelector('.chats-browser-runtime')?.getAttribute('aria-label')).toBe('Browser isolated')
   })
 })
 
@@ -369,7 +371,7 @@ describe('many sessions', () => {
   it('reports the count, so a strip of ten is visibly ten', async () => {
     bridge.state.mockResolvedValue(stateWith({ tabs: ten, activeTabId: 'tab-0', tabCount: 10 }))
     render(<DockedBrowser requestedUrl={null} onRequestedUrlHandled={() => {}} onClose={() => {}} />)
-    await screen.findByText('10 tabs')
+    await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(10))
   })
 
   it('marks exactly one chip as selected', async () => {
@@ -390,7 +392,10 @@ describe('many sessions', () => {
     bridge.state.mockResolvedValue(stateWith({ tabs: ten, activeTabId: 'tab-0', tabCount: 10 }))
     render(<DockedBrowser requestedUrl={null} onRequestedUrlHandled={() => {}} onClose={() => {}} />)
     await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(10))
-    fireEvent.click(screen.getByLabelText('Close site0.example.com'))
+    const close = screen.getByLabelText('Close site0.example.com')
+    expect(close).not.toBeDisabled()
+    expect(close.querySelector('.chats-browser-close-glyph')).not.toBeNull()
+    fireEvent.click(close)
     await waitFor(() => expect(bridge.command).toHaveBeenCalledWith(expect.objectContaining({ op: 'close', tabId: 'tab-0' })))
     push(stateWith({ tabs: ten.slice(1), activeTabId: 'tab-1', tabCount: 9 }))
     await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(9))
@@ -462,8 +467,7 @@ describe('the toolbar', () => {
     bridge.command.mockResolvedValue({ ok: false, op: 'navigate', code: 'url-refused', reason: 'That address is not one the Freya Browser will open.', data: {} })
     fireEvent.change(screen.getByLabelText('Browser address or search'), { target: { value: 'http://192.168.0.1/' } })
     fireEvent.click(screen.getByRole('button', { name: 'Go' }))
-    await screen.findByRole('status')
-    expect(screen.getByRole('status').textContent).toContain('not one the Freya Browser will open')
+    await waitFor(() => expect(document.querySelector('.chats-browser-notice')?.textContent).toContain('not one the Freya Browser will open'))
   })
 })
 

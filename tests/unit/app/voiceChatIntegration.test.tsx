@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GlobalComposer } from '../../../src/app/screens/GlobalComposer'
 import { Chats } from '../../../src/app/chat/Chats'
 import { MediaGrid } from '../../../src/app/chat/MediaCards'
@@ -13,6 +13,8 @@ import type { VoiceView } from '../../../src/app/voice/useVoiceDock'
 import type { MediaItem } from '../../../core/media/types'
 import type { ConversationProjection } from '../../../core/protocol/conversation'
 
+beforeEach(() => { vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {}) })
+
 afterEach(() => {
   cleanup()
   attachmentTray.clear()
@@ -21,6 +23,7 @@ afterEach(() => {
   resetConversationMirror()
   resetCoreMirror()
   delete (window as unknown as { freyaHost?: unknown }).freyaHost
+  vi.restoreAllMocks()
 })
 
 function mockVoice(overrides: Partial<VoiceView> = {}): VoiceView {
@@ -296,7 +299,7 @@ describe('Phase 7: Voice & Multimodal Chat Integration', () => {
   describe('Multimodal Audio and Media Interactions', () => {
     const sampleAudioItem: MediaItem = {
       kind: 'audio',
-      url: 'https://example.com/podcast.mp3',
+      url: 'https://cdn.public-fixture.org/podcast.mp3',
       page: 'https://example.com/episodes/1',
       title: 'AI Revolution Podcast',
       host: 'example.com',
@@ -324,12 +327,13 @@ describe('Phase 7: Voice & Multimodal Chat Integration', () => {
       expect(screen.getByRole('dialog', { name: 'Media preview' })).toBeTruthy()
       const player = screen.getByLabelText('AI Revolution Podcast')
       expect(player.tagName.toLowerCase()).toBe('audio')
-      expect(player.getAttribute('src')).toBe('https://example.com/podcast.mp3')
+      expect(player.getAttribute('src')).toBe('https://cdn.public-fixture.org/podcast.mp3')
     })
 
-    it('renders playable audio frame in UniversalRightWorkspace MediaView', () => {
+    it('does not mount hidden audio in MediaView until an explicit preview click', () => {
       const rwStore = sharedRightWorkspaceStore()
       rwStore.open('media')
+      const openBrowserUrl = vi.fn()
 
       render(
         <UniversalRightWorkspace
@@ -338,15 +342,20 @@ describe('Phase 7: Voice & Multimodal Chat Integration', () => {
           percent={50}
           onPercentChange={vi.fn()}
           onClose={vi.fn()}
-          onBrowserOpenUrl={vi.fn()}
+          onBrowserOpenUrl={openBrowserUrl}
           mediaItems={[sampleAudioItem]}
         />,
       )
-
+      expect(document.querySelector('audio')).toBeNull()
+      expect(openBrowserUrl).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Listen to AI Revolution Podcast' }))
+      expect(screen.getByRole('dialog', { name: 'Media preview' })).toBeTruthy()
       const player = screen.getByLabelText('AI Revolution Podcast')
       expect(player.tagName.toLowerCase()).toBe('audio')
-      expect(player.getAttribute('src')).toBe('https://example.com/podcast.mp3')
-      expect(screen.getByText('Copy Audio URL')).toBeTruthy()
+      expect(player.getAttribute('src')).toBe('https://cdn.public-fixture.org/podcast.mp3')
+      expect(openBrowserUrl).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Close preview' }))
+      expect(document.querySelector('audio')).toBeNull()
     })
   })
 })

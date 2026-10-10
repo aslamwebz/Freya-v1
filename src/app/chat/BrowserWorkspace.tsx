@@ -197,7 +197,10 @@ export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHan
       // consulting it would hide a live view whenever the layout happened to position it
       // outside the normal flow.
       const rect = box.getBoundingClientRect()
-      const sessionId = tab?.status === 'ready' ? (tab?.sessionId ?? null) : null
+      // A WebContentsView always paints above renderer DOM, including portals.
+      // A media preview must temporarily detach it to remain visible.
+      const previewOpen = document.body.dataset.freyaMediaPreviewOpen !== undefined
+      const sessionId = !previewOpen && tab?.status === 'ready' ? (tab?.sessionId ?? null) : null
       if (sessionId === null || rect.width <= 0 || rect.height <= 0) {
         // Nothing to place, or nowhere to place it. The message has to be the *hide* form —
         // `{sessionId: null, bounds: null}` — because a null session id paired with real
@@ -237,12 +240,14 @@ export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHan
     observer.observe(box)
     window.addEventListener('resize', send)
     window.addEventListener('scroll', send, true)
+    window.addEventListener('freya-media-preview-visibility', send)
     document.addEventListener('visibilitychange', send)
     send()
     return () => {
       observer.disconnect()
       window.removeEventListener('resize', send)
       window.removeEventListener('scroll', send, true)
+      window.removeEventListener('freya-media-preview-visibility', send)
       document.removeEventListener('visibilitychange', send)
       if (queued !== 0) window.cancelAnimationFrame(queued)
     }
@@ -284,14 +289,15 @@ export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHan
           <button type="button" role="tab" aria-selected={item.id === tab?.id} onClick={() => void activateTab(item)} title={item.liveUrl ?? item.url ?? item.title}>
             <span className="chats-browser-tab-title">{item.title}</span>
           </button>
-          <button type="button" className="chats-browser-tab-close" aria-label={`Close ${item.title}`} disabled={busy} onClick={() => void closeTab(item)}>?</button>
+          <button type="button" className="chats-browser-tab-close" aria-label={`Close ${item.title}`} title={`Close ${item.title}`}
+            onClick={() => void closeTab(item)}><span className="chats-browser-close-glyph" aria-hidden="true" /></button>
         </div>)}
       </div>
       <div className="chats-browser-tab-controls">
         <span className="chats-browser-runtime" data-runtime={status} role="status" title={`Browser ${statusLabel[status]}`} aria-label={`Browser ${statusLabel[status]}`} />
         <button type="button" className="chats-browser-control" aria-label="Open a new tab" title="New tab" disabled={busy} onClick={() => void openNewTab()}>+</button>
         {onToggleExpanded ? <button type="button" className="chats-browser-control" onClick={onToggleExpanded}
-          aria-label={expanded ? 'Show chat beside browser' : 'Expand browser'} title={expanded ? 'Split with chat' : 'Expand browser'}>{expanded ? '?' : '?'}</button> : null}
+          aria-label={expanded ? 'Show chat beside browser' : 'Expand browser'} title={expanded ? 'Split with chat' : 'Expand browser'}>{expanded ? 'Split' : 'Expand'}</button> : null}
         {onViewChange ? <select className="chats-browser-view-switch" aria-label="Switch workspace view" title="Other workspaces" value="browser"
           onChange={(event) => onViewChange(event.target.value as RightWorkspaceTab)}>
           <option value="browser">Views</option>
@@ -303,7 +309,7 @@ export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHan
           <option value="execution">Execution</option>
           <option value="files">Files</option>
         </select> : null}
-        <button type="button" className="chats-browser-control chats-browser-close" aria-label="Close browser workspace" title="Close browser panel" onClick={onClose}>?</button>
+        <button type="button" className="chats-browser-control chats-browser-close" aria-label="Close browser workspace" title="Close browser panel" onClick={onClose}><span className="chats-browser-close-glyph" aria-hidden="true" /></button>
       </div>
     </div>
     <form className="chats-browser-bar" onSubmit={(event) => { event.preventDefault(); void submitAddress() }}>

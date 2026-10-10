@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { isPrivateOrLocalHost } from '../../../core/browserext/safety'
 
 import type { MediaItem } from '../../../core/media/types'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
@@ -7,6 +9,43 @@ import './media.css'
 
 const images = new Map<string, string>()
 const pendingImages = new Map<string, Promise<string | null>>()
+
+/** One preview across all assistant messages. No browser-tab side effects. */
+const PREVIEW_EXCLUSIVE_EVENT = 'freya-media-preview-exclusive'
+const PREVIEW_VISIBILITY_EVENT = 'freya-media-preview-visibility'
+
+/** Only accept hosted-player URLs from known player endpoints, never model-provided arbitrary iframes. */
+/** Never let a persisted/untrusted media URL directly load local resources in Electron. */
+function safeAudioAddress(address: string): string | null {
+  if (!address || address.length > 2048) return null
+  try {
+    const url = new URL(address)
+    const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    if (url.protocol !== 'https:' || url.username || url.password || url.port ||
+        isPrivateOrLocalHost(host) || /(?:^|\.)(?:test|invalid|example|onion)$/.test(host)) return null
+    return url.href
+  } catch { return null }
+}
+
+function safeHostedEmbed(url: string | null | undefined): string | null {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:') return null
+    if (['www.youtube.com', 'youtube.com', 'www.youtube-nocookie.com', 'youtube-nocookie.com'].includes(parsed.hostname) &&
+        /^\/embed\/[A-Za-z0-9_-]+$/.test(parsed.pathname)) {
+      return parsed.origin + parsed.pathname
+    }
+    if (parsed.hostname === 'player.vimeo.com' && /^\/video\/[0-9]+$/.test(parsed.pathname)) {
+      return parsed.origin + parsed.pathname
+    }
+    if (['www.dailymotion.com', 'dailymotion.com'].includes(parsed.hostname) &&
+        /^\/embed\/video\/[A-Za-z0-9_-]+$/.test(parsed.pathname)) {
+      return parsed.origin + parsed.pathname
+    }
+  } catch { /* Invalid addresses may not become iframe origins. */ }
+  return null
+}
 
 async function imageFor(address: string): Promise<string | null> {
   const remembered = images.get(address)
@@ -165,6 +204,18 @@ export function MediaGrid({ items, onOpenBrowserUrl }: {
 
 }) {
   const [openIndex, setOpenIndex] = useState<number | null>(null)
+  const previewId = useId()
+  useEffect(() => {
+    const onOtherPreview = (event: Event): void => {
+      if ((event as CustomEvent<string>).detail !== previewId) setOpenIndex(null)
+    }
+    window.addEventListener(PREVIEW_EXCLUSIVE_EVENT, onOtherPreview)
+    return () => window.removeEventListener(PREVIEW_EXCLUSIVE_EVENT, onOtherPreview)
+  }, [previewId])
+  const openPreview = (index: number): void => {
+    window.dispatchEvent(new CustomEvent(PREVIEW_EXCLUSIVE_EVENT, { detail: previewId }))
+    setOpenIndex(index)
+  }
   if (items.length === 0) return null
 
   return (
@@ -175,18 +226,20 @@ export function MediaGrid({ items, onOpenBrowserUrl }: {
             key={`${item.kind}:${item.url}:${String(index)}`}
             item={item}
             index={index}
-            onOpen={(selected) => { const found = items[selected]; if (onOpenBrowserUrl && found) onOpenBrowserUrl(found.page || found.url, found.kind === 'document' ? 'document' : found.kind); else setOpenIndex(selected) }}
+            onOpen={(selected) => openPreview(selected)}
           />
         ))}
       </div>
-      {openIndex === null ? null : (
+      {openIndex === null ? null : createPortal(
         <MediaOverlay
+          previewId={previewId}
           items={items}
           index={openIndex}
           onIndex={setOpenIndex}
           onClose={() => setOpenIndex(null)}
           onOpenBrowserUrl={onOpenBrowserUrl}
-        />
+        />,
+        document.body,
       )}
     </>
   )
@@ -201,7 +254,8 @@ export function MediaGrid({ items, onOpenBrowserUrl }: {
  * view is drawn over. When no bridge exists — tests, a plain browser — the box
  * degrades to a plain sandboxed iframe, which is where that path is acceptable.
  */
-function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
+function MediaOverlay({ previewId, items, index, onIndex, onClose, onOpenBrowserUrl }: {
+  readonly previewId: string
   readonly items: readonly MediaItem[]
   readonly index: number
   readonly onIndex: (next: number) => void
@@ -212,6 +266,34 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
   const item = items[index] ?? items[0]!
   const many = items.length > 1
   const bridge = hostBridge()
+  const safeEmbedUrl = safeHostedEmbed(item.kind === 'video' ? item.embedUrl : null)
+  const audioAddress = item.kind === 'audio' ? safeAudioAddress(item.url) : null
+  const playingMedia = useRef<HTMLMediaElement | null>(null)
+
+  // A native Electron WebContentsView paints OVER the renderer, even above
+  // z-indexed overlays. Undock it while a real preview is visible.
+  useLayoutEffect(() => {
+    document.body.dataset.freyaMediaPreviewOpen = previewId
+    window.dispatchEvent(new Event(PREVIEW_VISIBILITY_EVENT))
+    return () => {
+      // Avoid hiding a newer preview when the previous preview unmounts.
+      if (document.body.dataset.freyaMediaPreviewOpen === previewId) {
+        delete document.body.dataset.freyaMediaPreviewOpen
+      }
+      window.dispatchEvent(new Event(PREVIEW_VISIBILITY_EVENT))
+    }
+  }, [previewId])
+
+  // A stable callback ref stops the PREVIOUS media element before React mounts
+  // the next. Cleanup also runs on modal dismissal, so audio cannot play hidden.
+  const attachPlayer = useCallback((next: HTMLMediaElement | null): void => {
+    const previous = playingMedia.current
+    if (previous && previous !== next) {
+      previous.pause()
+      previous.removeAttribute('src')
+    }
+    playingMedia.current = next
+  }, [])
 
   const [imageData, setImageData] = useState<string | null>(null)
   const [videoData, setVideoData] = useState<string | null>(null)
@@ -279,7 +361,7 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
       }
 
       if (item.kind === 'video') {
-        if (item.embedUrl) {
+        if (safeEmbedUrl) {
           if (!alive) return
           setLoading(false)
           return
@@ -331,7 +413,7 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
       alive = false
       revokeDocument()
     }
-  }, [bridge, fallbackPoster, item])
+  }, [bridge, fallbackPoster, item, safeEmbedUrl])
 
   return (
     <div className="chats-overlay" role="dialog" aria-modal="true" aria-label="Media preview" onClick={onClose}>
@@ -349,7 +431,10 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
               type="button"
               className="chats-overlay-open"
               aria-label="Open this page in Freya's browser"
-              onClick={() => onOpenBrowserUrl(item.page, item.kind === 'document' ? 'pdf' : item.kind)}
+              onClick={() => {
+                onClose()
+                onOpenBrowserUrl(item.page, item.kind === 'document' ? 'pdf' : item.kind)
+              } }
             >
               Open in browser
             </button>
@@ -368,7 +453,7 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
           ) : null}
 
           {!loading && item.kind === 'video' ? (
-            item.embedUrl
+            safeEmbedUrl
               ? (
                 // Sandboxed iframe. A `file://` transcript document has a null
                 // origin, and several providers (YouTube most visibly) refuse to
@@ -379,15 +464,17 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
                 // button if the provider rejects the embed.
                 <iframe
                   className="chats-overlay-video-embed"
-                  src={item.embedUrl}
+                  key={safeEmbedUrl}
+                  src={safeEmbedUrl}
                   title={item.title || 'Video preview'}
-                  allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+                  allow="encrypted-media; picture-in-picture; fullscreen"
                   sandbox="allow-scripts allow-same-origin allow-presentation"
+                  referrerPolicy="no-referrer"
                   allowFullScreen
                 />
               )
               : videoData !== null
-                ? <video className="chats-overlay-video" src={videoData} controls autoPlay playsInline />
+                ? <video key={item.url} ref={attachPlayer} className="chats-overlay-video" src={videoData} controls preload="none" playsInline />
                 : (
                   <div className="chats-overlay-video-fallback">
                     {fallbackPoster === null ? null : <img src={fallbackPoster} alt="" />}
@@ -407,15 +494,19 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
               </span>
               <h3 className="chats-overlay-audio-title">{item.title || 'Audio Clip'}</h3>
               <p className="chats-overlay-audio-host">{item.host || hostOf(item.page)}</p>
-              <audio
-                className="chats-overlay-audio-player"
-                src={item.url}
-                controls
-                autoPlay
-                aria-label={item.title || 'Audio player'}
-              >
-                Your browser does not support the audio element.
-              </audio>
+              {audioAddress ? (
+                <audio
+                  key={audioAddress}
+                  ref={attachPlayer}
+                  className="chats-overlay-audio-player"
+                  src={audioAddress}
+                  controls
+                  preload="none"
+                  aria-label={item.title || 'Audio player'}
+                >
+                  Your browser does not support the audio element.
+                </audio>
+              ) : <p className="chats-overlay-note">This audio address was refused by the public-media safety policy.</p>}
             </div>
           ) : null}
 

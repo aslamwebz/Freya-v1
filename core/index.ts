@@ -2513,6 +2513,16 @@ class FreyaCore implements Core {
     if (this.options.missionReadRoots?.length) registerFileInspection(this.workRegistry, [...this.options.missionReadRoots])
     if (this.researchIntegration) registerResearchInspection(this.workRegistry, {
       research: this.researchIntegration,
+      resolveStrategy: (scope: string) => {
+        const strat = this.strategyLifecycle?.getActiveStrategy(scope)
+        if (!strat) return null
+        return {
+          strategyId: strat.strategyId,
+          version: strat.version,
+          kind: strat.kind,
+          parameters: strat.parameters,
+        }
+      },
       admit: async (runId, stepKey, signal) => {
         signal?.throwIfAborted()
         const id = this.workEngine?.snapshot().runs.get(runId)?.parentId

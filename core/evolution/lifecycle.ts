@@ -353,6 +353,7 @@ export class StrategyLifecycleManager {
       status: 'active',
       activatedAt: now,
       rollbackTargetVersion: candidate.baselineStrategyId,
+      parameters: candidate.parameters,
     }
 
     this.activeStrategy = newActive

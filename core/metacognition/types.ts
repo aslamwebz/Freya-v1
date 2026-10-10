@@ -99,6 +99,7 @@ export interface ActiveStrategyRecord {
   readonly status: 'active' | 'evaluating' | 'rolled_back' | 'rejected'
   readonly activatedAt: string
   readonly rollbackTargetVersion?: string | null
+  readonly parameters?: Record<string, unknown>
 }
 
 export interface FailedImprovementRecord {

@@ -95,9 +95,25 @@ describe('the shipping primary destinations', () => {
     expect(within(rail).getAllByRole('tab')).toHaveLength(8)
     expect(within(rail).getByRole('tab', { name: /Browser/ })).toBeDisabled()
     fireEvent.click(primary('Missions'))
+    expect(screen.queryByRole('textbox', { name: 'Ask Freya' })).toBeNull()
     fireEvent.click(primary('Chats'))
     expect(screen.getByRole('textbox', { name: 'Ask Freya' })).toHaveValue('Keep this thought')
     expect(within(screen.getByRole('tablist', { name: /workspace/i })).getAllByRole('tab')).toHaveLength(8)
+  })
+
+  it('shows the chat bar only on Home and Chats while retaining the draft across every page', () => {
+    render(<Harness />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Ask Freya' }), { target: { value: 'Keep this draft while navigating' } })
+    for (const name of ['Mind', 'Missions', 'Workflows', 'World', 'Library', 'Office', 'Settings']) {
+      fireEvent.click(primary(name))
+      expect(screen.queryByRole('form', { name: 'Freya composer' })).toBeNull()
+      expect(screen.queryByRole('textbox', { name: 'Ask Freya' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Send message' })).toBeNull()
+    }
+    fireEvent.click(primary('Chats'))
+    expect(screen.getByRole('textbox', { name: 'Ask Freya' })).toHaveValue('Keep this draft while navigating')
+    fireEvent.click(primary('Home'))
+    expect(screen.getByRole('form', { name: 'Freya composer' })).toBeInTheDocument()
   })
 
   it('returns to the last Mind page when switching primary destinations', () => {

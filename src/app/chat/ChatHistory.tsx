@@ -19,11 +19,8 @@ import './chat.css'
  * arrived on the conversation channel, which is what makes "3 saved" mean
  * three conversations exist rather than three rows were drawn.
  *
- * Chats is the one place that is *not* a plain row — it carries the conversation
- * list underneath it. That made collapsing the rail a special case: hiding this
- * block for a 64px column would take the Chats workspace with it, so instead the
- * head stays as an icon-only row and behaves like every other place (it navigates)
- * while the disclosure it normally performs is meaningless at that width.
+ * In the shipping sidebar, primary navigation is separate from this context list.
+ * The contextual heading folds saved conversations without changing the workspace.
  */
 export function ChatHistory({ onOpen, collapsed = false, current = false, contextual = false }: {
   onOpen?: () => void
@@ -164,6 +161,7 @@ export function ChatHistory({ onOpen, collapsed = false, current = false, contex
                 disabled={pending || unavailable}
                 onClick={() => { void read(conversation.conversationId) }}
               >
+                <span className="chats-history-mark" aria-hidden="true"><Glyph name="chat" size={20} /></span>
                 <span className="chats-history-copy"><b>{conversation.title}</b></span>
                 {busy && conversation.conversationId === active ? (
                   <span className="chats-history-dot" aria-label="Freya is answering in this conversation" />

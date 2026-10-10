@@ -37,6 +37,15 @@ it('filters saved titles without changing the active conversation', async () => 
   expect(screen.getByText(/no matching conversations/i)).toBeInTheDocument()
 })
 
+it('provides a full conversation row with a decorative icon and separately named actions', () => {
+  render(<ChatHistory current contextual />)
+  const row = screen.getByRole('button', { name: 'Saturn research' })
+  expect(row.querySelector('.chats-history-mark')).toHaveAttribute('aria-hidden', 'true')
+  expect(row).toHaveAttribute('aria-current', 'true')
+  expect(screen.getByRole('button', { name: 'Rename Saturn research' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Close Saturn research' })).toBeInTheDocument()
+})
+
 it('stays on the current screen and shows the reason when opening history is refused', async () => {
   const open = vi.fn()
   render(<ChatHistory onOpen={open} />)

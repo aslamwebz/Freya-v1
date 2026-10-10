@@ -252,7 +252,7 @@ export function HomeDashboard({ screen: requestedScreen, snapshot, generating, n
       read is published here, so the composer can sit over the conversation column
       instead of over the divider.
     */}
-    <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-background={design.background} data-browser={browserOpen || undefined} style={{ '--chats-thread': String(100 - browserPercent), '--chat-sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
+    <div className="hd-frame"><div className="hd-dashboard" data-screen={screen} data-composer={screen === 'home' || screen === 'chat' || desktopView === 'mini-chat' || undefined} data-background={design.background} data-browser={browserOpen || undefined} style={{ '--chats-thread': String(100 - browserPercent), '--chat-sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
       <header className="hd-top">
         <div className="hd-brand"><b>FREYA</b></div>
         {core && (core.lifecycle === 'degraded' || core.persistenceDurable === false || core.faultCount > 0 || core.diagnosticsWriteFailures > 0)
@@ -431,6 +431,7 @@ export function HomeDashboard({ screen: requestedScreen, snapshot, generating, n
         />
       </main>
       <GlobalComposer
+        visible={screen === 'home' || screen === 'chat' || desktopView === 'mini-chat'}
         miniChat={desktopView === 'mini-chat'}
         generating={generating}
         defaultModel={provider?.model ?? null}
@@ -442,7 +443,7 @@ export function HomeDashboard({ screen: requestedScreen, snapshot, generating, n
         onStopResponse={onStopResponse}
         onVoicePress={onVoicePress}
         onVoiceRelease={onVoiceRelease}
-maxMessageCharacters={maxMessageCharacters}
+        maxMessageCharacters={maxMessageCharacters}
         onNotice={setComposerIssue}
       />
     </div></div>

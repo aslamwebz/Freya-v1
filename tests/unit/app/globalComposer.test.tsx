@@ -38,6 +38,29 @@ function voice(): VoiceView {
 }
 
 describe('GlobalComposer', () => {
+  it('preserves field height while hidden and measures a changed draft when reopened', () => {
+    const props = {
+      generating: false, defaultModel: null, voice: voice(), voiceTranscript: null,
+      onVoicePress: vi.fn(), onVoiceRelease: vi.fn(), maxMessageCharacters: 8000,
+      onSend: vi.fn(async () => true), onStopResponse: vi.fn(),
+    }
+    const view = render(<GlobalComposer {...props} />)
+    const field = input()
+    Object.defineProperty(field, 'scrollHeight', {
+      configurable: true,
+      get: () => (field.closest('footer') as HTMLElement).hidden ? 0 : 120,
+    })
+    fireEvent.change(field, { target: { value: 'initial draft' } })
+    expect(field.style.height).toBe('120px')
+    view.rerender(<GlobalComposer {...props} visible={false} />)
+    const transcript = { id: 1, text: 'updated\nwhile hidden' }
+    view.rerender(<GlobalComposer {...props} visible={false} voiceTranscript={transcript} />)
+    expect(field.style.height).toBe('120px')
+    view.rerender(<GlobalComposer {...props} voiceTranscript={transcript} />)
+    expect(input().value).toBe('initial draft updated\nwhile hidden')
+    expect(field.style.height).toBe('120px')
+  })
+
   it('clears immediately on Enter before a slow model responds and blocks duplicate sends', async () => {
     let finish!: (accepted: boolean) => void
     const onSend = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve }))

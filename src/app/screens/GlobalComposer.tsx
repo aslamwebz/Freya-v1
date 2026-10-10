@@ -186,6 +186,7 @@ export function GlobalComposer({
   onNotice,
   conversationId: propConversationId,
   miniChat = false,
+  visible = true,
 }: {
   generating: boolean
   defaultModel: string | null
@@ -203,6 +204,7 @@ export function GlobalComposer({
   onNotice?: (message: string) => void
   conversationId?: string | null
   miniChat?: boolean
+  visible?: boolean
 }) {
   const projection = useSyncExternalStore(
     conversationMirror().subscribe,
@@ -317,10 +319,10 @@ export function GlobalComposer({
    */
   useEffect(() => {
     const field = textAreaRef.current
-    if (!field) return
+    if (!visible || !field) return
     field.style.height = 'auto'
     field.style.height = `${field.scrollHeight}px`
-  }, [text])
+  }, [text, visible])
 
   const inFlight = sending || generating
   const isOverLimit =
@@ -497,6 +499,7 @@ export function GlobalComposer({
   return (
     <footer
       className="hd-dock"
+      hidden={!visible}
       data-state={voice.capturing ? 'listening' : generating ? 'responding' : 'idle'}
     >
       {miniChat ? <MiniChatControls busy={inFlight || sessionPending} onPendingChange={onSessionPendingChange} /> : null}

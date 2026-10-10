@@ -16,6 +16,7 @@ import { loadKeyring } from './keyring'
 import { ProviderConfigStore } from './providerConfig'
 import { createFreyaVaultBinding } from './vaultBinding'
 import { loadLocalEnv } from './localEnv'
+import { localUnrestrictedFromProcess } from './localUnrestricted'
 import { createConnectorRuntime } from './connectors/runtime'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
@@ -70,6 +71,26 @@ const EXPLICIT_ENV: NodeJS.ProcessEnv = { ...process.env }
 // nothing here is forwarded to a window — the preload bridge carries named
 // commands and bounded payloads only, never environment content.
 loadLocalEnv(join(ROOT, '.env'))
+
+/**
+ * Say out loud, once, which way the unrestricted decision went and why.
+ *
+ * A developer who sets `FREYA_LOCAL_UNRESTRICTED=1` and is still refused should
+ * be told which condition failed, rather than discovering it as a browser that
+ * will not open localhost. A security control that answers "no" without saying
+ * why reads as a bug, and gets worked around.
+ *
+ * Only the reason is printed — a closed vocabulary of five words, never an
+ * environment value and never a path.
+ */
+const localUnrestrictedStartup = localUnrestrictedFromProcess(app.isPackaged)
+if (process.env.FREYA_LOCAL_UNRESTRICTED !== undefined) {
+  if (localUnrestrictedStartup.mode) {
+    console.warn('[freya] unrestricted mode is ON for this dev profile: private hosts, protected fields and Device Hands allowlists are all bypassed.')
+  } else if (localUnrestrictedStartup.reason !== 'not-requested') {
+    console.warn(`[freya] unrestricted mode stayed off (${localUnrestrictedStartup.reason}). It needs FREYA_LOCAL_UNRESTRICTED=1 on an unpackaged --dev run with FREYA_DEV_USER_DATA naming a separate profile.`)
+  }
+}
 
 let mainWindow: BrowserWindow | null = null
 let adultWindow: BrowserWindow | null = null
@@ -205,13 +226,19 @@ function splitDeviceHandsList(value: string | undefined): string[] {
 }
 
 /**
- * Local development is permissive by default so capability testing exercises Freya
- * rather than approval plumbing. Packaged builds stay strict. Set
- * FREYA_LOCAL_UNRESTRICTED=0 to test the strict path locally.
+ * Whether this host may run unrestricted. Strict by default.
+ *
+ * The decision, the reasoning and the failure modes live in `electron/localUnrestricted.ts`,
+ * where they are pure and therefore testable without booting Electron. This stays a
+ * `boolean` so every call site below keeps the contract it always had.
+ *
+ * Unrestricted mode grants every local authority at once — empty Device Hands allowlists,
+ * `allowPrivateHosts`, `allowProtectedFields`, and an owner approval that answers itself —
+ * so it now takes an explicit request **and** a separate disposable profile. It used to be
+ * `... || !app.isPackaged`, which made `npm start` unrestricted by accident.
  */
 function localUnrestrictedMode(): boolean {
-  if (process.env.FREYA_LOCAL_UNRESTRICTED === '0') return false
-  return process.env.FREYA_LOCAL_UNRESTRICTED === '1' || !app.isPackaged
+  return localUnrestrictedFromProcess(app.isPackaged).mode
 }
 
 function readDeviceHandsGrants(path: string): GrantFact[] {

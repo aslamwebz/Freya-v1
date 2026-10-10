@@ -25,10 +25,11 @@ import './chat.css'
  * head stays as an icon-only row and behaves like every other place (it navigates)
  * while the disclosure it normally performs is meaningless at that width.
  */
-export function ChatHistory({ onOpen, collapsed = false, current = false }: {
+export function ChatHistory({ onOpen, collapsed = false, current = false, contextual = false }: {
   onOpen?: () => void
   collapsed?: boolean
   current?: boolean
+  contextual?: boolean
 }) {
   const mirror = conversationMirror()
   const projection = useSyncExternalStore(mirror.subscribe, () => mirror.projection, () => null)
@@ -110,14 +111,14 @@ export function ChatHistory({ onOpen, collapsed = false, current = false }: {
           on the title can never quietly eat the conversation the owner was in.
         */}
         <button type="button" className="chats-history-title" aria-expanded={current ? open : undefined}
-          aria-current={current ? 'page' : undefined}
+          aria-current={current && !contextual ? 'page' : undefined}
           aria-label={!current || collapsed ? 'Open Chats' : (open ? 'Hide the conversation list' : 'Show the conversation list')}
           onClick={() => {
             if (!current || collapsed) { setOpen(true); onOpen?.(); return }
             setOpen((value) => !value)
           }}>
           <Glyph name="chat" size={20} style={open && !collapsed ? undefined : { opacity: 0.75 }} />
-          <span>Chats</span>
+          <span>{contextual ? 'Conversations' : 'Chats'}</span>
         </button>
         <button
           type="button"

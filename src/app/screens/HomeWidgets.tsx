@@ -29,7 +29,7 @@ export function HomeWidgets({ snapshot, onNavigate }: { snapshot: UiSnapshot; on
   const preview = snapshot.home.status === 'ready' && snapshot.home.source === 'preview'
   const workforcePreview = snapshot.workforce.status === 'ready' && snapshot.workforce.source === 'preview'
   const pending = missions?.rows.filter(row => row.needsAttention) ?? []
-  const results = (activity ?? []).filter(row => row.tone === 'good').slice(0, 3)
+  const results = (activity ?? []).slice(0, 3)
   const progress = home?.focus?.progress
   return <>
     <aside className="hw-column hw-left" aria-label="Your day widgets">
@@ -66,10 +66,10 @@ export function HomeWidgets({ snapshot, onNavigate }: { snapshot: UiSnapshot; on
           {!!core?.faultCount && <p className="hw-note">{core.faultCount} recorded system issue{core.faultCount === 1 ? '' : 's'}.</p>}
         </> : <p className="hw-empty">Nothing reported that needs your attention.</p>}
       </Widget>
-      <Widget name="results" title="Recent results" icon="memory" badge={snapshot.activity.status === 'ready' && snapshot.activity.source === 'preview' ? 'Sample' : undefined}>
-        <div className="hw-result-list">{results.map(row => <button key={row.id} className="hw-result" onClick={() => onNavigate('memory')}><span className="hw-result-check">✓</span><span><b>{row.text}</b><small>{new Date(row.at).toLocaleDateString('en-GB',{day:'numeric',month:'short'})} · Ready to review</small></span></button>)}</div>
-        {!results.length && <p className="hw-empty">Completed work will appear here.</p>}
-        <button className="hw-link" onClick={() => onNavigate('memory')}>View activity <span>↗</span></button>
+      <Widget name="results" title="Recent updates" icon="activity" badge={snapshot.activity.status === 'ready' && snapshot.activity.source === 'preview' ? 'Sample' : undefined}>
+        <div className="hw-result-list">{results.map(row => <button key={row.id} className="hw-result" onClick={() => onNavigate('activity')}><span className="hw-result-check">·</span><span><b>{row.text}</b><small>{new Date(row.at).toLocaleDateString('en-GB',{day:'numeric',month:'short'})}</small></span></button>)}</div>
+        {!results.length && <p className="hw-empty">{snapshot.activity.status === 'unavailable' || snapshot.activity.status === 'error' ? snapshot.activity.reason : 'No recent activity reported.'}</p>}
+        <button className="hw-link" onClick={() => onNavigate('activity')}>View activity <span>↗</span></button>
       </Widget>
     </aside>
   </>

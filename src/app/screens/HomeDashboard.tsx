@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, 
 import type { UiSnapshot } from '../../ui-v2/state/contract'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { Clock } from '../../ui-v2/primitives/Clock'
-import { ready } from '../state/view'
+import { ready, reason } from '../state/view'
 import type { ScreenSlots } from './Home'
 import { StargateHub } from '../presence/StargateHub'
 import { HomeWidgets } from './HomeWidgets'
@@ -24,6 +24,7 @@ import type { PreferencesStore } from '../../ui-v2/theme/preferences'
 import type { DockedTabOrigin } from '../chat/BrowserWorkspace'
 import { PRIMARY_DESTINATIONS, resolveRoute } from '../state/routes'
 import { UnifiedWorkspace } from './UnifiedWorkspaces'
+import { PrimaryNavigation } from '../navigation/PrimaryNavigation'
 import './home-dashboard.css'
 
 interface Props {
@@ -138,7 +139,7 @@ export function HomeDashboard({ screen: requestedScreen, snapshot, generating, n
    * so after first paint the attribute is the single source of truth.
    */
   const [collapsed, setCollapsed] = useState(
-    () => typeof window !== 'undefined' && window.innerWidth < 1800,
+    () => typeof window !== 'undefined' && window.innerWidth < 1100,
   )
   const [chatSidebarWidth, setChatSidebarWidth] = useState(216)
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth)
@@ -307,7 +308,7 @@ export function HomeDashboard({ screen: requestedScreen, snapshot, generating, n
                 {(activity ?? []).length === 0
                   ? <p className="hd-pop-empty">{preview ? 'Sample activity is off in this preview.' : 'Nothing has been recorded yet.'}</p>
                   : (activity ?? []).slice(0, 9).map((row) => (
-                    <button key={row.id} type="button" className="hd-pop-row" onClick={open('memory')}>
+                    <button key={row.id} type="button" className="hd-pop-row" onClick={open('activity')}>
                       <span className="hd-pop-words"><b>{row.text}</b><small>{agoLabel(row.at)}</small></span>
                     </button>
                   ))}
@@ -318,18 +319,18 @@ export function HomeDashboard({ screen: requestedScreen, snapshot, generating, n
       </header>
       <aside className="hd-rail" data-collapsed={collapsed || undefined}>
         <div className="hd-railhead">
+          <span className="hd-rail-label">Workspace</span>
           <button className="hd-rail-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={() => setCollapsed(value => !value)}><Glyph name="panel" size={16} /></button>
         </div>
-        <nav className="hd-rail-list" aria-label="Primary">
-          <button className="hd-place" aria-label="Home" aria-current={screen === 'home' ? 'page' : undefined} onClick={open('home')}><Glyph name="home" size={20} /><span>Home</span></button>
-          <ChatHistory onOpen={() => { setCollapsed(false); onNavigate('chat') }} collapsed={collapsed} current={screen === 'chat'} />
-          {PRIMARY_DESTINATIONS.filter(([id]) => id !== 'home' && id !== 'chat').map(([id, label, icon]) => (
-            <button key={id} className="hd-place" aria-label={label} aria-current={id === screen ? 'page' : undefined} onClick={() => navigate(paths.current[id] ?? id)}><Glyph name={icon} size={20} /><span>{label}</span></button>
-          ))}
-        </nav>
+        <div className="hd-rail-body">
+          <PrimaryNavigation active={screen} onSelect={id => navigate(paths.current[id] ?? id)} />
+          <section className="hd-context-list" aria-label="Saved conversations" hidden={screen !== 'chat' || collapsed}>
+            <ChatHistory onOpen={open('chat')} current contextual />
+          </section>
+        </div>
         <div className="hd-rail-foot">
           {screen === 'home' ? <img className="hd-chibi" src={chibiPlaceholder} alt="Chibi Freya — temporary placeholder" draggable={false} /> : null}
-          <div className="hd-online" title={preview ? 'Design preview · Sample data' : undefined}><span className="hd-status-dot" /><span>{online ? 'Freya Online' : 'Freya Offline'}</span></div>
+          <div className="hd-online" data-online={online} title={preview ? 'Design preview · Sample data' : !core ? reason(snapshot.core) : core.lifecycle}><span className="hd-status-dot" /><span>{online ? 'Freya Online' : 'Freya Offline'}</span></div>
           <div className="hd-profile" ref={menuRef}>
             <button className="hd-user" aria-label="Open your account menu" aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => setMenuOpen((value) => !value)}>
               <span className="hd-user-avatar">A</span><span className="hd-user-name">Aslam</span><Glyph name="chevron" size={14} />
@@ -390,10 +391,12 @@ export function HomeDashboard({ screen: requestedScreen, snapshot, generating, n
             ['Opportunities', '3 new potential partnerships today.', 'world', 'Today'],
           ] : home?.world?.map(item => [item.title, item.detail, item.icon, '']) ?? []).map(([title, detail, icon, time]) => <button key={title} onClick={open('world')}><Glyph name={icon!} size={19} /><span><b>{title}</b><small>{detail}</small></span><span className="hd-world-time">{time}</span></button>)}</div>
         </Panel>
-        <Panel name="memory" title="Recent memory" icon="memory" onOpen={open('memory')}>
+        <Panel name="memory" title={preview ? 'Recent memory' : 'Recent activity'} icon="activity" onOpen={open('activity')}>
           <div className="hd-memories">{(preview ? [
             ['Product strategy review completed', '2h ago'], ['Drafted Phase 19 launch plan', '4h ago'], ['Spoke with Alex about partnership idea', '6h ago'], ['Researched EU AI regulatory updates', '12h ago'], ['Created visual concepts for new workspace', '1d ago'],
-          ] : activity?.slice(0, 5).map(item => [item.text, new Date(item.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })]) ?? []).map(([text, time], i) => <button key={text} onClick={open('memory')}><span className={`hd-memory-icon hd-memory-icon-${i}`}><Glyph name={['mind', 'mission', 'relay', 'people', 'create'][i]!} size={17} /></span><span>{text}</span><small>{time}</small></button>)}</div>
+          ] : activity?.slice(0, 5).map(item => [item.text, new Date(item.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })]) ?? []).map(([text, time], i) => <button key={text} onClick={open('activity')}><span className={`hd-memory-icon hd-memory-icon-${i}`}><Glyph name={['mind', 'mission', 'relay', 'people', 'create'][i]!} size={17} /></span><span>{text}</span><small>{time}</small></button>)}</div>
+          {!preview && (!activity || activity.length === 0) ? <p className="hd-description">{activity ? 'No recent activity reported.' : reason(snapshot.activity)}</p> : null}
+          {snapshot.activity.status === 'stale' ? <p className="hd-description">Last known activity · {snapshot.activity.reason}</p> : null}
         </Panel>
         </>) : workspaceId === 'chat' ? (
           <Chats
@@ -421,7 +424,7 @@ export function HomeDashboard({ screen: requestedScreen, snapshot, generating, n
             preferences={preferences}
             voiceControls={voiceControls}
             category={resolveRoute(screen === 'settings' ? route.path : paths.current.settings ?? 'settings').section.replace('advanced/', '') as SettingsCategory}
-            onCategory={category => { onSettingsCategory(category); navigate(`settings/${['foundry', 'relay', 'harness', 'context', 'security', 'diagnostics'].includes(category) ? 'advanced/' : ''}${category}`) }}
+            onCategory={category => { onSettingsCategory(category); navigate(`settings/${['foundry', 'relay', 'harness', 'context', 'diagnostics'].includes(category) ? 'advanced/' : ''}${category}`) }}
             onDone={open('home')}
           />
         ) : <UnifiedWorkspace path={workspaceId === screen ? route.path : paths.current[workspaceId] ?? workspaceId} snapshot={snapshot} onNavigate={navigate} />}

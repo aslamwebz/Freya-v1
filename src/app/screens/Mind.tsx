@@ -417,7 +417,7 @@ function MissionsCard({ resource }: { resource: Resource<MindView> }) {
   const missions = view?.missions ?? []
   return (
     <Card
-      title="Goals"
+      title="Missions"
       icon="mission"
       subtitle="What Freya is working toward"
       meta={view && view.missionsTotal > 0 ? <Chip>{view.missionsTotal}</Chip> : undefined}
@@ -655,6 +655,16 @@ function ProvenanceCard({ resource }: { resource: Resource<MindView> }) {
 }
 
 /* -------------------------------------------------------------------- screen */
+
+/** Dedicated pages show their own records rather than repeating the entire control room. */
+export function MindPage({ snapshot, page }: { snapshot: UiSnapshot; page: 'overview' | 'focus' | 'self' }) {
+  const resource = snapshot.mind
+  return <div className="uw-mind-grid">
+    {page === 'focus' ? <><div><AttentionCard resource={resource} /></div><div><UncertaintyCard resource={resource} /></div></>
+      : page === 'self' ? <><div><SelfCard resource={resource} /></div><div><OwnerCard resource={resource} /></div></>
+      : <><div><OverviewCard resource={resource} /><ThreadsCard resource={resource} /></div><div><ProvenanceCard resource={resource} /></div></>}
+  </div>
+}
 
 export function Mind({ snapshot }: { snapshot: UiSnapshot }): ScreenSlots {
   const resource = snapshot.mind

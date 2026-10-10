@@ -26,7 +26,7 @@ import { NotConnected } from './UnifiedWorkspaces'
  * cannot do is worse than none, because it is believed.
  */
 
-export type SettingsCategory = 'appearance' | 'provider' | 'voice' | 'privacy' | 'spending' | 'about' | typeof ADVANCED_SECTIONS[number]
+export type SettingsCategory = 'appearance' | 'provider' | 'voice' | 'privacy' | 'security' | 'spending' | 'about' | typeof ADVANCED_SECTIONS[number]
 
 export interface SettingsProps {
   /** The live snapshot, typed by the same contract every other surface reads. */
@@ -46,6 +46,7 @@ const CATEGORIES: readonly (readonly [SettingsCategory, string, string])[] = [
   ['provider', 'Provider', 'core'],
   ['voice', 'Voice', 'mic'],
   ['privacy', 'Privacy', 'settings'],
+  ['security', 'Security', 'shield'],
   ['spending', 'Spending', 'activity'],
   ['about', 'About', 'world'],
 ]
@@ -141,7 +142,7 @@ export function SettingsOverlay({ snapshot, preferences, voiceControls, category
           <section className="st-pane" hidden={category !== 'privacy'}><PrivacyCard /></section>
           <section className="st-pane" hidden={category !== 'security'}><SecurityCard snapshot={snapshot} /></section>
           <section className="st-pane" hidden={category !== 'spending'}><SpendingCard snapshot={snapshot} /></section>
-          {ADVANCED_SECTIONS.filter(id => id !== 'security').map(id => <section key={id} className="st-pane" hidden={category !== id}>
+          {ADVANCED_SECTIONS.map(id => <section key={id} className="st-pane" hidden={category !== id}>
             {id === 'diagnostics' ? <DiagnosticsCard snapshot={snapshot} /> : <NotConnected title={id[0]!.toUpperCase() + id.slice(1)} />}
           </section>)}
           <section className="st-pane" hidden={category !== 'about'}><AboutCard snapshot={snapshot} /></section>

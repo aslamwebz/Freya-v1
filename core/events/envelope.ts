@@ -693,6 +693,8 @@ export const CORE_EVENT_TYPES = [
   'longhorizon.goal.completed',
   'longhorizon.goal.failed',
   'longhorizon.goal.cancelled',
+  'longhorizon.goal.roadmap-updated',
+  'longhorizon.goal.milestone-settled',
   'longhorizon.checkpoint.started',
   'longhorizon.checkpoint.verified',
   'longhorizon.checkpoint.failed',
@@ -3101,6 +3103,19 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
   'longhorizon.goal.cancelled': {
     goalId: string
     reason: string | null
+  }
+
+  'longhorizon.goal.roadmap-updated': {
+    goalId: string
+    revision: number
+    milestoneCount: number
+  }
+
+  'longhorizon.goal.milestone-settled': {
+    goalId: string
+    milestoneId: string
+    outcome: string
+    revision: number
   }
 
   /**

@@ -731,7 +731,7 @@ export class GoalEngine {
       const goal = this.goalState.goals.get(goalId)
       if (checkpoint === undefined || goal === undefined) return
       if (checkpoint.goalId !== goalId) return
-      if (checkpoint.status !== 'in-progress') return
+      if (checkpoint.status === 'verified') return
       if (outcome === 'passed') {
         await this.emit('longhorizon.checkpoint.verified', {
           goalId,

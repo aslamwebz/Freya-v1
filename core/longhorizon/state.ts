@@ -59,6 +59,8 @@ const GOAL_EVENT_TYPES: ReadonlySet<CoreEventType> = new Set<CoreEventType>([
   'longhorizon.goal.completed',
   'longhorizon.goal.failed',
   'longhorizon.goal.cancelled',
+  'longhorizon.goal.roadmap-updated',
+  'longhorizon.goal.milestone-settled',
   'longhorizon.checkpoint.started',
   'longhorizon.checkpoint.verified',
   'longhorizon.checkpoint.failed',
@@ -184,6 +186,8 @@ export function reduceGoalState(state: GoalState, event: AnyCoreEvent): GoalStat
       return { ...state, sequence: event.sequence }
     }
 
+    case 'longhorizon.goal.roadmap-updated':
+    case 'longhorizon.goal.milestone-settled':
     case 'longhorizon.schedule.fired':
     case 'longhorizon.schedule.expired':
     case 'longhorizon.wake.received':

@@ -192,10 +192,11 @@ export class ContinuationEngine {
       return this.decide({ decision: 'pause', reason: 'the goal is paused' }, goalId)
     }
 
+    const hasEligible = this.options.goals.hasEligibleMilestone?.(goalId) ?? false
     const verified = this.options.goals.verifiedCheckpoints(goalId)
     const total = this.options.goals.totalCheckpoints(goalId)
 
-    if (total > 0 && verified >= total) {
+    if (!hasEligible && total > 0 && verified >= total) {
       return this.decide({ decision: 'complete', reason: 'every checkpoint has been verified' }, goalId)
     }
 
@@ -213,7 +214,7 @@ export class ContinuationEngine {
     }
 
     // If milestone checks are active, verify prerequisite readiness
-    if (this.options.goals.hasEligibleMilestone && !this.options.goals.hasEligibleMilestone(goalId)) {
+    if (this.options.goals.hasEligibleMilestone && !hasEligible) {
       return this.decide(
         this.expiresNow('wait', 'waiting on milestone dependencies or external conditions'),
         goalId,

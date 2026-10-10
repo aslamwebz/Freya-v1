@@ -1803,6 +1803,23 @@ const PAYLOAD_RULES: {
     (p) => isEventId(p.goalId) && (p.reason === null || GOAL_REASON_CODES.has(p.reason as string)),
   ),
 
+  'longhorizon.goal.roadmap-updated': workRule(
+    ['goalId', 'revision', 'milestoneCount'],
+    (p) => isEventId(p.goalId) && isNonNegativeInt(p.revision) && isNonNegativeInt(p.milestoneCount),
+  ),
+
+  'longhorizon.goal.milestone-settled': workRule(
+    ['goalId', 'milestoneId', 'outcome', 'revision'],
+    (p) =>
+      isEventId(p.goalId) &&
+      isEventId(p.milestoneId) &&
+      (p.outcome === 'completed' ||
+        p.outcome === 'failed' ||
+        p.outcome === 'cancelled' ||
+        p.outcome === 'deferred') &&
+      isNonNegativeInt(p.revision),
+  ),
+
   'longhorizon.checkpoint.started': workRule(
     ['goalId', 'checkpointId', 'order', 'kind'],
     (p) =>

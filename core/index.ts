@@ -27,6 +27,7 @@ import { ChatMissionIntegration } from './missions/chat-integration'
 import type { ChatMissionProposal } from './missions/chat-types'
 import {
   evaluateExecutiveDecision,
+  isExecutiveTriggerEvent,
   type ExecutiveDecisionOutcome,
   type ExecutiveState,
   type ExecutiveBudgetLimit,
@@ -1181,6 +1182,10 @@ untimeNotice, which states what the runtime cannot do, because a
     readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
     readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
   }): ExecutiveState
+  /** Subscribe to event-driven Executive decisions (Phase 4C). */
+  onExecutiveDecision(listener: (outcome: ExecutiveDecisionOutcome) => void): () => void
+  /** The last event-driven Executive decision outcome (Phase 4C). */
+  lastExecutiveDecision(): ExecutiveDecisionOutcome | null
   /**
    * The World & self summary and its subscription.
    *
@@ -1406,6 +1411,8 @@ class FreyaCore implements Core {
   private readonly attentionListeners = new Set<(projection: AttentionProjection) => void>()
   private readonly lifeLoopListeners = new Set<(projection: LifeLoopProjection) => void>()
   private readonly runtimeListeners = new Set<(projection: RuntimeProjection) => void>()
+  private readonly executiveListeners = new Set<(outcome: ExecutiveDecisionOutcome) => void>()
+  private lastExecutiveDecisionOutcome: ExecutiveDecisionOutcome | null = null
   /**
    * The Phase 40 runtime activation controller.
    *
@@ -2013,6 +2020,7 @@ class FreyaCore implements Core {
       this.observeLifeLoopSource(event)
       this.observeVerifiedMissionStep(event)
       this.observeLearningSource(event)
+      this.observeExecutiveSource(event)
       // Life History derives from authoritative events live. The engine is
       // idempotent, so a replayed event cannot duplicate an entry.
       if (!event.type.startsWith('life.')) void this.lifeEngine?.observe(event)
@@ -4279,6 +4287,46 @@ private async buildForge(): Promise<void> {
     readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
   }): ExecutiveState {
     return this.executiveDecision(options).state
+  }
+
+  /** Subscribe to event-driven Executive decisions (Phase 4C). */
+  onExecutiveDecision(listener: (outcome: ExecutiveDecisionOutcome) => void): () => void {
+    this.executiveListeners.add(listener)
+    if (this.lastExecutiveDecisionOutcome !== null) {
+      try {
+        listener(this.lastExecutiveDecisionOutcome)
+      } catch (error) {
+        console.error('[freya.core] Immediate executive listener threw', error)
+      }
+    }
+    return () => {
+      this.executiveListeners.delete(listener)
+    }
+  }
+
+  /** The last event-driven Executive decision outcome (Phase 4C). */
+  lastExecutiveDecision(): ExecutiveDecisionOutcome | null {
+    return this.lastExecutiveDecisionOutcome
+  }
+
+  private observeExecutiveSource(event: AnyCoreEvent): void {
+    if (!isExecutiveTriggerEvent(event.type)) return
+    queueMicrotask(() => {
+      if (this.stopped) return
+      try {
+        const outcome = this.executiveDecision()
+        this.lastExecutiveDecisionOutcome = outcome
+        for (const listener of [...this.executiveListeners]) {
+          try {
+            listener(outcome)
+          } catch (error) {
+            console.error('[freya.core] Executive listener threw', error)
+          }
+        }
+      } catch (error) {
+        console.error('[freya.core] observeExecutiveSource threw', error)
+      }
+    })
   }
 
 

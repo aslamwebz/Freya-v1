@@ -1719,6 +1719,55 @@ class FreyaCore implements Core {
     return this.requireLife().ownerScope()
   }
 
+  /**
+   * TEST SEAM: classify a reference through the verify port.
+   *
+   * The verify port is `private` and is exposed to the loop only through
+   * `lifeLoopPorts`. C2-A's discrimination lives in `classifyReference` and
+   * is reachable from the loop's runtime, but a runtime test would assert
+   * the journal's `verification.passed` / `verification.failed` line and
+   * never the closed-vocabulary outcome. This seam lets a test call the
+   * underlying classification directly and check the outcome + code
+   * combination, which is the property the brief is fixing.
+   *
+   * The seam is a one-line wrapper around the same private method the loop
+   * uses, so its behaviour cannot drift from the loop's. It is reachable
+   * from `core/testing.ts` and from this module only — a renderer has no
+   * way to obtain a `FreyaCore` reference and there is no public accessor
+   * to mint one. See `core/index.ts:1625-1643` for the existing test-seam
+   * pattern.
+   */
+  verifyReferenceForTest(reference: string): {
+    readonly holds: boolean
+    readonly outcome: 'settled' | 'still-open' | 'unknown'
+    readonly code: string
+  } {
+    return this.classifyReference(reference)
+  }
+
+  /**
+   * TEST SEAM: drive the verify port with a fabricated request.
+   *
+   * The reference-only seam is sufficient for the closed-vocabulary
+   * tests, but the `escalation-delivered` branch of the verify port is
+   * a separate code path with its own two-value shape, and a test
+   * needs to reach it. This seam accepts the same `request` shape the
+   * loop hands to `lifeLoopPorts().verify` and returns the same
+   * outcome the loop records in its journal — the test asserts the
+   * verdict directly, without having to drive Attention through a
+   * full wake to reach the same state.
+   */
+  verifyForTest(request: {
+    readonly kind: 'reference-terminal' | 'escalation-delivered'
+    readonly reference: string
+  }): Promise<{
+    readonly holds: boolean
+    readonly outcome: 'settled' | 'still-open' | 'unknown'
+    readonly code: string
+  }> {
+    return this.lifeLoopVerify(request as unknown as Parameters<LifeLoopPorts['verify']>[0])
+  }
+
   async start(): Promise<CoreStatus> {
     if (this.lifecycle !== 'booting') return this.status()
 
@@ -4854,26 +4903,109 @@ private async buildForge(): Promise<void> {
    * A read of Core's own projections, never a second thought: "is the thing that
    * just finished still open?" is a question about state the loop's host already
    * holds, and answering it with inference would make the loop's honesty depend on
-   * its provider being honest. A reference Core does not recognise is reported as
-   * satisfied, because "nothing is known to still be running" is the true statement
-   * and a fabricated doubt would burn a retry for no reason.
+   * its provider being honest.
+   *
+   * ## Three states, not two
+   *
+   * The closed vocabulary is `settled` / `still-open` / `unknown`, not a boolean
+   * derived from `attentionGoalOpen`. A `still-open` reference is one Core
+   * recognises that has not yet reached a terminal state. A `settled` reference
+   * is one that has — and is true whether the underlying mission or work run
+   * succeeded, failed, or was cancelled. An `unknown` reference is one Core
+   * has no projection of at all.
+   *
+   * The old shape returned `holds: !stillOpen` for everything, which is
+   * `settled` + `unknown` collapsed into one bucket. `unknown` had to mean
+   * `settled` because the old doc argued "nothing is known to still be running
+   * is the true statement", but that argument is about *the absence of a known
+   * open thing*, not about a *settled* thing — a missing reference is
+   * unverifiable, not verified, and treating it as settled burns a retry for no
+   * reason and hides the real bug. The new shape separates the two.
+   *
+   * ## `holds` is about the claim, not the outcome
+   *
+   * `holds: true` means the wake's claim ("the reference has reached a
+   * terminal state") is verified by an authoritative source. It is **not** a
+   * statement that the mission succeeded. The verify port answers a question
+   * about the loop's wake, not about a user's task, and a reader who wants to
+   * know whether the mission succeeded reads Core's own mission projection,
+   * not this port's return.
    */
   private async lifeLoopVerify(
     request: Parameters<LifeLoopPorts['verify']>[0],
-  ): Promise<{ readonly holds: boolean; readonly code: string }> {
+  ): Promise<{ readonly holds: boolean; readonly outcome: 'settled' | 'still-open' | 'unknown'; readonly code: string }> {
     if (request.kind === 'escalation-delivered') {
       // Attention records every decision it makes, including the ones that say
       // nothing should reach the owner. The claim being verified is "Attention
       // considered it", and that is answered by a decision existing — not by the
       // decision being loud, because being loud was never the loop's to decide.
+      // This branch keeps the old two-value shape: Attention's answer is
+      // binary (it decided or it didn't), and "unknown" is not a third state
+      // for an in-process recorder that simply says "no decision has been
+      // recorded yet". A reader who needs the binary can read `holds`; a
+      // reader who needs "we did not even try" can read `outcome`.
       const decisions = this.state.attention.decisions
+      const hasDecision = decisions.length > 0
       return {
-        holds: decisions.length > 0,
-        code: decisions.length > 0 ? 'attention-decided' : 'attention-decided-nothing',
+        holds: hasDecision,
+        outcome: hasDecision ? 'settled' : 'still-open',
+        code: hasDecision ? 'attention-decided' : 'attention-decided-nothing',
       }
     }
-    const stillOpen = this.attentionGoalOpen(request.reference)
-    return { holds: !stillOpen, code: stillOpen ? 'reference-still-open' : 'reference-settled' }
+    return this.classifyReference(request.reference)
+  }
+
+  /**
+   * Map a reference to its three-state verification verdict.
+   *
+   * The lookup is direct against Core's own projections — `missionEngine.record`
+   * for missions, `workEngine.snapshot().runs` for runs — and the verdict is
+   * derived from the projection's status, not from a flag we maintain. The
+   * only way a future code path can return a wrong verdict is by writing the
+   * wrong status into one of those two projections, and that is a single
+   * change to read.
+   */
+  private classifyReference(reference: string): {
+    readonly holds: boolean
+    readonly outcome: 'settled' | 'still-open' | 'unknown'
+    readonly code: string
+  } {
+    // A Mission is "open" against this port when it exists in the engine's
+    // projections and is not yet in a terminal state. The engine exposes
+    // `record(id)` which returns the projection or `undefined` if the mission
+    // is not in the engine's view.
+    const mission = this.missionEngine?.record(reference)
+    if (mission !== undefined) {
+      if (isTerminalMissionStatus(mission.status)) {
+        // The terminal status is in the code, so a journal reader can tell
+        // success from failure from the verify port's record alone. The port
+        // itself still reports `outcome: 'settled'` because the verify port
+        // does not adjudicate success.
+        return { holds: true, outcome: 'settled', code: `mission-${mission.status}` }
+      }
+      return { holds: false, outcome: 'still-open', code: 'mission-still-open' }
+    }
+    // A Work Run is "open" the same way. `snapshot().runs` is the authoritative
+    // map for the run, indexed by run id; the goal ref *is* the run id for
+    // runs that originated as a wake's reference.
+    const snapshot = this.workEngine?.snapshot()
+    if (snapshot !== undefined) {
+      const run = snapshot.runs.get(reference)
+      if (run !== undefined) {
+        if (isTerminalRunStatus(run.status)) {
+          return { holds: true, outcome: 'settled', code: `run-${run.status}` }
+        }
+        return { holds: false, outcome: 'still-open', code: 'run-still-open' }
+      }
+    }
+    // A reference Core has no projection of at all. The old code reported
+    // `holds: true` for this case ("nothing is known to still be running"),
+    // which is the source of the conflation the brief is fixing: a missing
+    // reference is *unverifiable*, and retrying is futile until the
+    // reference is registered with one of the engines. Burning a retry for
+    // no reason and writing `reference-settled` to the journal is exactly
+    // the false-success the C2-A inventory entry warned about.
+    return { holds: false, outcome: 'unknown', code: 'reference-unknown' }
   }
 
   /**

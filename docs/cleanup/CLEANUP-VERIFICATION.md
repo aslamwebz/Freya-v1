@@ -124,7 +124,45 @@ KEEP / CONSOLIDATE / ARCHIVE-CANDIDATE / FIX matrix.
 
 ---
 
-## Phase C2-A — discriminate settled/failed/unknown in `lifeLoopVerify` (pending)
+## Phase C2-A — discriminate settled/failed/unknown in `lifeLoopVerify` (commit pending)
+
+### Change
+
+| File | Lines | What changed |
+| --- | --- | --- |
+| `core/lifeloop/ports.ts` | 98-130 | `LifeLoopVerificationOutcome` gains `outcome: 'settled' \| 'still-open' \| 'unknown'` and a docstring that names the closed vocabulary |
+| `core/index.ts` | 4851-4956 | `lifeLoopVerify` rewritten to read mission and work projections directly, returning the closed `outcome` plus a `code` that carries the terminal status (e.g. `mission-completed`, `mission-failed`, `mission-cancelled`, `run-completed`) for journal readers |
+| `core/index.ts` | 1722-1769 | Two test seams on the concrete `FreyaCore` class: `verifyReferenceForTest(reference)` and `verifyForTest(request)`, both unreachable from a renderer, both one-line wrappers around the same private methods the loop uses |
+| `tests/core/lifeloop/harness.ts` | 146-154 | Default verify stub now returns the `outcome: 'settled'` field |
+| `tests/core/lifeloop/runtime.test.ts` | 6 sites | Test stubs updated to include `outcome: 'still-open' as const` so the literal type narrows correctly |
+| `tests/core/lifeloop-verify-classify.test.ts` | new (228 lines) | 7 targeted tests: unknown reference, empty string, open mission, settled mission, queued run, escalation-delivered with no decision, closed vocabulary |
+
+### The three-state verdict
+
+- `settled`: the reference is known to Core and is terminal. `holds: true`.
+  The `code` field carries the terminal status so a journal reader can
+  tell success from failure without leaving the verify port's record.
+  The verify port does not adjudicate success; that is Core's mission
+  projection's job.
+- `still-open`: the reference is known to Core and not yet terminal.
+  `holds: false`. The loop reads this as "retry".
+- `unknown`: Core has no projection of the reference. `holds: false`.
+  The old code returned `holds: true` for this case ("nothing is known
+  to still be running"), which was the source of the false-success the
+  brief is fixing: a missing reference is *unverifiable*, not verified,
+  and treating it as settled burned a retry for no reason and hid the
+  real bug.
+
+### Verification at C2-A close
+
+- `npm run typecheck`: PASS
+- `npx vitest run tests/core/lifeloop-verify-classify.test.ts`: 7/7 pass
+- `npx vitest run tests/unit tests/core tests/host tests/qualification tests/red-team`:
+  9515 passed / 8 failed / 6 skipped. Same 8 baseline failures; +7 new
+  from this phase; +0 regressions.
+- `npm run lint`: 16 pre-existing errors, +0 new.
+
+---
 
 ## Phase C2-B — authoritatively reconcile mission-linked assignments (pending)
 
@@ -133,4 +171,5 @@ KEEP / CONSOLIDATE / ARCHIVE-CANDIDATE / FIX matrix.
 ## Phase C4 — bounded extractions (pending)
 
 ## Phase C5 — classify/retire legacy (pending)
+
 

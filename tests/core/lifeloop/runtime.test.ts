@@ -278,7 +278,7 @@ describe('every payload the runtime writes is a payload the journal accepts', ()
     const options: readonly [string, Parameters<typeof harness>[0]][] = [
       ['default', {}],
       ['refused cognition', { cognition: () => refused() }],
-      ['failed verification', { verification: () => ({ holds: false, code: 'reference-still-open' }) }],
+      ['failed verification', { verification: () => ({ holds: false, outcome: 'still-open' as const, code: 'reference-still-open' }) }],
       ['a loud conclusion', { cognition: () => decided('interrupt') }],
       ['a loud conclusion needing approval', { cognition: () => decided('interrupt'), escalationApprovalRequired: true }],
     ]
@@ -370,7 +370,7 @@ describe('approval parks the loop rather than ending it', () => {
 describe('the retry ceiling counts attempts, and survives a restart', () => {
   it('tries three times in total, not three times per wake', async () => {
     const { h, runtime } = await opened({
-      verification: () => ({ holds: false, code: 'reference-still-open' }),
+      verification: () => ({ holds: false, outcome: 'still-open' as const, code: 'reference-still-open' }),
     })
     await runtime.considerWake(workWake())
     // Failure one: parked on a bounded backoff rather than denied.
@@ -392,7 +392,7 @@ describe('the retry ceiling counts attempts, and survives a restart', () => {
 
   it('counts an attempt even though the step failed, because that is what a ceiling counts', async () => {
     const { h, runtime } = await opened({
-      verification: () => ({ holds: false, code: 'reference-still-open' }),
+      verification: () => ({ holds: false, outcome: 'still-open' as const, code: 'reference-still-open' }),
     })
     await runtime.considerWake(workWake())
     expect(runtime.status().attemptCount).toBe(1)
@@ -401,7 +401,7 @@ describe('the retry ceiling counts attempts, and survives a restart', () => {
 
   it('records the backoff as an absolute instant, so a restart cannot lengthen it into a month', async () => {
     const { h, runtime } = await opened({
-      verification: () => ({ holds: false, code: 'reference-still-open' }),
+      verification: () => ({ holds: false, outcome: 'still-open' as const, code: 'reference-still-open' }),
     })
     await runtime.considerWake(workWake())
     const parked = h.entries.find(
@@ -543,7 +543,7 @@ const first = harness()
       { label: 'a loud conclusion', options: { cognition: () => decided('speak') } },
       { label: 'a suppressed interrupt', options: { focus: FOCUSED, cognition: () => decided('interrupt') } },
       { label: 'a refused thought', options: { cognition: () => refused() } },
-      { label: 'a failed verification', options: { verification: () => ({ holds: false, code: 'reference-still-open' }) } },
+      { label: 'a failed verification', options: { verification: () => ({ holds: false, outcome: 'still-open' as const, code: 'reference-still-open' }) } },
       { label: 'an approval parking', options: { cognition: () => decided('interrupt'), escalationApprovalRequired: true } },
       { label: 'a continued wake', options: { openGoals: ['goal-1'] } },
     ] as const
@@ -574,7 +574,7 @@ describe('the owner comes first', () => {
     // count it would be a way around the retry ceiling — and being interrupted by
     // the owner would become the cheapest way to get three more tries.
     const { h, runtime } = await opened({
-      verification: () => ({ holds: false, code: 'reference-still-open' }),
+      verification: () => ({ holds: false, outcome: 'still-open' as const, code: 'reference-still-open' }),
     })
     await runtime.considerWake(workWake())
     const attempts = runtime.status().attemptCount

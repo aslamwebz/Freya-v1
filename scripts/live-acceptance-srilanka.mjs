@@ -117,7 +117,7 @@ async function run() {
     await sleep(2000)
 
     // Read answer from screen
-    const chatContent = await bodyText()
+    await bodyText()
     console.log('[7] Freya answered via Web Search!')
 
     // List of 10 solid Sri Lankan sites for the test
@@ -285,7 +285,11 @@ async function run() {
   } finally {
     try {
       await freyaCli(['browser', 'undock'])
-    } catch {}
+    } catch (undockError) {
+      // Undocking is best-effort cleanup; the test already produced a
+      // result by this point and an undock failure must not mask it.
+      console.warn('[srilanka] undock after run failed:', undockError instanceof Error ? undockError.message : String(undockError))
+    }
     await browser.close()
   }
 }

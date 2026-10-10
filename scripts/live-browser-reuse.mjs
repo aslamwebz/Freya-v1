@@ -20,7 +20,7 @@ async function command(args) {
       cwd: ROOT, env: { ...process.env, FREYA_USER_DATA: profile }, encoding: 'utf8', timeout: 12000
     }))
   } catch (e) {
-    throw new Error(String(e.stderr || e.stdout || e.message).trim().slice(0, 650))
+    throw new Error(String(e.stderr || e.stdout || e.message).trim().slice(0, 650), { cause: e })
   }
   if (!stdout.trim()) throw new Error('CLI returned no response; inspect browser tabs')
   try { return JSON.parse(stdout) } catch { throw new Error('Non-JSON response: ' + stdout.slice(0, 300)) }

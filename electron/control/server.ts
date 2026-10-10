@@ -29,7 +29,7 @@ import {
   MAX_PAYLOAD_BYTES,
 } from './contract'
 import { AuthFailureLimiter, loadOrCreateToken, tokensMatch } from './token'
-import { ControlService } from './service'
+import type { ControlService } from './service'
 
 const PIPE_NAME_PREFIX = 'freya-control'
 const MAX_LINE_BYTES = MAX_PAYLOAD_BYTES + 64

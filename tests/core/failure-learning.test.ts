@@ -105,8 +105,8 @@ describe('Phase 3C — Failure Learning and Correction', () => {
       known: () => ['filesystem.inspect'],
       lookup: (name: string) =>
         name === 'filesystem.inspect'
-          ? { risk: 'none' as const, verifier: 'filesystem.inspect.verified' }
-          : undefined,
+          ? { risk: 'none' as const, requiresApproval: false, verifier: 'filesystem.inspect.verified' }
+          : null,
       verifiers: () => ['filesystem.inspect.verified'],
     }
 
@@ -179,7 +179,7 @@ describe('Phase 3C — Failure Learning and Correction', () => {
 
       const outcome = await proposeMissionPlan(
         input,
-        mockCapabilities as any,
+        mockCapabilities,
         () => true,
         async (intent) => {
           capturedSystemPrompt = intent.messages?.[0]?.content ?? ''
@@ -228,7 +228,7 @@ describe('Phase 3C — Failure Learning and Correction', () => {
 
       const outcome = await proposeMissionPlan(
         input,
-        mockCapabilities as any,
+        mockCapabilities,
         () => true,
         async () => ({
           status: 'allowed',

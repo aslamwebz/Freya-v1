@@ -1,16 +1,15 @@
 name: Verify
 
-on:
+  on:
   push:
     branches:
       - main
-      # Phase 5 lives on its own branch until it is reviewed and merged. Its
-      # pushes are verified here so the branch cannot rot silently while it waits.
-      # This adds coverage; it removes none.
+      # Legacy branch triggers. The Phase 5 and Phase 49 lanes were
+      # expected to merge into main and the triggers were to be removed
+      # at that point. The audit brief calls them out as candidates
+      # for removal; the owner has not signed off, so they stay here
+      # as documented decisions rather than dead code. C3-C.
       - phase-5-research
-      # Phase 49's qualification lane lives on its own branch until it is reviewed
-      # and merged. Verifying it here means the sixteen gates cannot rot while it
-      # waits. This adds coverage; it removes none.
       - runtime/phase49-release-evaluation
 
   pull_request:
@@ -67,6 +66,17 @@ jobs:
       # unreliable on GitHub runners and is unnecessary for headless steps.
       - name: Run Electron E2E
         run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npm run test:e2e
+
+      # Chat-driven Missions acceptance. The lane is in package.json
+      # (`test:chat-missions`) but was not in this workflow, so it
+      # could rot silently while the e2e green-light hid it. C3-G
+      # adds it here, in the same xvfb envelope as the e2e, so the
+      # capability set under test matches the one the product ships.
+      # The lane is hermetic: it injects a fake provider and a fixture
+      # search transport, so no paid-model call and no live network
+      # is possible.
+      - name: Run chat-Missions acceptance
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npm run test:chat-missions
 
       # Phase 49. This runs every gate itself rather than re-running the commands CI
       # has already run, because the point of the layer is the roll-up: one verdict

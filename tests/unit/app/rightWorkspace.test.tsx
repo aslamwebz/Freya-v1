@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { UniversalRightWorkspace } from '../../../src/app/chat/RightWorkspace'
+import { RightWorkspaceRail, UniversalRightWorkspace } from '../../../src/app/chat/RightWorkspace'
 import { createRightWorkspaceStore } from '../../../src/app/chat/rightWorkspaceStore'
 import { attachmentTray } from '../../../src/app/chat/attachments'
 import type { CanvasSpec } from '../../../src/app/chat/CanvasPanel'
@@ -130,9 +130,44 @@ afterEach(() => {
 })
 
 describe('UniversalRightWorkspace', () => {
+  it('keeps the icon rail available with closed content and disables Browser until Chat Browser is on', () => {
+    const store = createRightWorkspaceStore()
+    const onClose = vi.fn()
+    const { rerender } = render(
+      <RightWorkspaceRail open={false} activeTab="browser" browserEnabled={false} store={store} onClose={onClose} />,
+    )
+    expect(screen.getAllByRole('tab')).toHaveLength(8)
+    const browser = screen.getByRole('tab', { name: 'Browser' })
+    expect(browser).toBeDisabled()
+    fireEvent.click(browser)
+    expect(store.getSnapshot().open).toBe(false)
+    const sources = screen.getByRole('tab', { name: 'Sources' })
+    fireEvent.click(sources)
+    expect(store.getSnapshot().activeTab).toBe('sources')
+    expect(store.getSnapshot().open).toBe(true)
+    rerender(<RightWorkspaceRail open={true} activeTab="sources" browserEnabled={true} store={store} onClose={onClose} />)
+    expect(screen.getByRole('tab', { name: 'Browser' })).not.toBeDisabled()
+    expect(screen.getByRole('tab', { name: 'Sources' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('tab', { name: 'Sources' }))
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
   it('renders all eight content type tabs in the tab strip', () => {
     const store = createRightWorkspaceStore('browser')
     render(
+      <>
+        <RightWorkspaceRail
+          open={true}
+          activeTab="browser"
+          browserEnabled={true}
+          store={store}
+          onClose={vi.fn()}
+          sources={sampleSources}
+          canvas={sampleCanvas}
+          charts={sampleCharts}
+          mediaItems={[...sampleMedia, ...sampleDocs]}
+          executionSteps={sampleSteps}
+        />
       <UniversalRightWorkspace
         open={true}
         onClose={vi.fn()}
@@ -142,7 +177,8 @@ describe('UniversalRightWorkspace', () => {
         charts={sampleCharts}
         mediaItems={[...sampleMedia, ...sampleDocs]}
         executionSteps={sampleSteps}
-      />,
+      />
+      </>,
     )
 
     expect(screen.getByRole('tab', { name: /Browser/ })).toBeInTheDocument()
@@ -158,6 +194,19 @@ describe('UniversalRightWorkspace', () => {
   it('displays accurate count badges for available artifacts', () => {
     const store = createRightWorkspaceStore('browser')
     render(
+      <>
+        <RightWorkspaceRail
+          open={true}
+          activeTab="browser"
+          browserEnabled={true}
+          store={store}
+          onClose={vi.fn()}
+          sources={sampleSources}
+          canvas={sampleCanvas}
+          charts={sampleCharts}
+          mediaItems={[...sampleMedia, ...sampleDocs]}
+          executionSteps={sampleSteps}
+        />
       <UniversalRightWorkspace
         open={true}
         onClose={vi.fn()}
@@ -166,7 +215,8 @@ describe('UniversalRightWorkspace', () => {
         charts={sampleCharts}
         mediaItems={sampleMedia}
         executionSteps={sampleSteps}
-      />,
+      />
+      </>,
     )
 
     const sourcesTab = screen.getByRole('tab', { name: /Sources/ })
@@ -182,6 +232,19 @@ describe('UniversalRightWorkspace', () => {
   it('switches between content tabs cleanly and renders the corresponding pane', () => {
     const store = createRightWorkspaceStore('browser')
     render(
+      <>
+        <RightWorkspaceRail
+          open={true}
+          activeTab="browser"
+          browserEnabled={true}
+          store={store}
+          onClose={vi.fn()}
+          sources={sampleSources}
+          canvas={sampleCanvas}
+          charts={sampleCharts}
+          mediaItems={[...sampleMedia, ...sampleDocs]}
+          executionSteps={sampleSteps}
+        />
       <UniversalRightWorkspace
         open={true}
         onClose={vi.fn()}
@@ -190,7 +253,8 @@ describe('UniversalRightWorkspace', () => {
         canvas={sampleCanvas}
         charts={sampleCharts}
         executionSteps={sampleSteps}
-      />,
+      />
+      </>,
     )
 
     // Switch to Sources

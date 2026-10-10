@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { dockBrowserView, onBrowserState, readBrowserState, runBrowserCommand, type RuntimeStatus } from '../../platform/browserClient'
 import { addressAsQuery, normalizeOpenInputUrl, sharedDockedBrowserStore, type DockedBrowserStore, type DockedTab, type DockedTabOrigin, type DockedTabStatus } from './dockedBrowserStore'
 import type { SemanticBrowserResult, SemanticSnapshot } from '../../../core/browser/service'
-import type { RightWorkspaceTab } from './rightWorkspaceStore'
 
 export { sharedDockedBrowserStore, createDockedBrowserStore, normalizeOpenInputUrl, tabOriginLabel } from './dockedBrowserStore'
 export type { DockedBrowserSnapshot, DockedBrowserStore, DockedTab, DockedTabOrigin } from './dockedBrowserStore'
@@ -61,14 +60,13 @@ export async function openUrlInDockedBrowser(
  * projection every 800 ms whether or not anything had changed, and the cost of that grows with
  * the tab count. One read on mount, then a subscription.
  */
-export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHandled, onClose, expanded, onToggleExpanded, onViewChange }: {
+export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHandled, onClose, expanded, onToggleExpanded }: {
   requestedUrl: string | null
   requestedOrigin?: DockedTabOrigin
   onRequestedUrlHandled(): void
   onClose(): void
   expanded?: boolean
   onToggleExpanded?(): void
-  onViewChange?(view: RightWorkspaceTab): void
 }) {
   const store = sharedDockedBrowserStore()
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
@@ -292,17 +290,7 @@ export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHan
         <button type="button" className="chats-browser-control" aria-label="Open a new tab" title="New tab" disabled={busy} onClick={() => void openNewTab()}>+</button>
         {onToggleExpanded ? <button type="button" className="chats-browser-control" onClick={onToggleExpanded}
           aria-label={expanded ? 'Show chat beside browser' : 'Expand browser'} title={expanded ? 'Split with chat' : 'Expand browser'}>{expanded ? '?' : '?'}</button> : null}
-        {onViewChange ? <select className="chats-browser-view-switch" aria-label="Switch workspace view" title="Other workspaces" value="browser"
-          onChange={(event) => onViewChange(event.target.value as RightWorkspaceTab)}>
-          <option value="browser">Views</option>
-          <option value="sources">Sources</option>
-          <option value="canvas">Canvas</option>
-          <option value="documents">Documents</option>
-          <option value="media">Media</option>
-          <option value="charts">Charts</option>
-          <option value="execution">Execution</option>
-          <option value="files">Files</option>
-        </select> : null}
+
         <button type="button" className="chats-browser-control chats-browser-close" aria-label="Close browser workspace" title="Close browser panel" onClick={onClose}>?</button>
       </div>
     </div>

@@ -762,3 +762,18 @@
   color: #ffb8b8;
 }
 
+
+/* The always-visible Chat content rail uses 48px on the far right.
+   Keep the composer directly below the conversation, never under the rail. */
+.hd-dashboard[data-screen='chat']:not([data-browser]) .hd-dock {
+  width: calc(100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter) - 48px);
+}
+.hd-dashboard[data-screen='chat'][data-browser] .hd-dock {
+  width: calc((100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter) - 54px) * var(--chats-thread, 48) / 100);
+}
+
+/* Sources, Canvas, Docs and other content panels also narrow the conversation:
+   align the fixed composer to the actual thread, not across the content panel. */
+.hd-dashboard[data-screen='chat']:has(.chats[data-workspace-open]) .hd-dock {
+  width: calc((100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter) - 54px) * var(--chats-thread, 48) / 100);
+}

@@ -20,8 +20,9 @@ import type { DockedTabOrigin } from './BrowserWorkspace'
 import { EyeSessionControls } from './EyeSessionControls'
 import { openResearchCitationInDockedBrowser } from './eyeHandoff'
 import { ActiveTurnTracker } from './ActiveTurnTracker'
-import { UniversalRightWorkspace } from './RightWorkspace'
+import { RightWorkspaceRail, UniversalRightWorkspace } from './RightWorkspace'
 import { sharedRightWorkspaceStore } from './rightWorkspaceStore'
+import { sharedComposerDraftStore } from './composerDraftStore'
 import './chat.css'
 
 /**
@@ -399,6 +400,16 @@ export function Chats({
   })()
   const rwStore = sharedRightWorkspaceStore()
   const rwSnapshot = useSyncExternalStore(rwStore.subscribe, rwStore.getSnapshot, rwStore.getSnapshot)
+  // The Browser rail icon follows the owner's Chat Browser toggle as well as
+  // an already-open browser session. Toggling it on enables Browser immediately.
+  const composerDraftStore = sharedComposerDraftStore()
+  const composerDrafts = useSyncExternalStore(
+    composerDraftStore.subscribe,
+    composerDraftStore.getSnapshot,
+    composerDraftStore.getSnapshot,
+  )
+  const chatBrowserEnabled = browserOpen ||
+    (composerDrafts[projection?.activeConversationId ?? '__new__']?.wantBrowser ?? false)
   // Chat stays visible by default; fullscreen browser is an explicit owner action.
   const [browserExpanded, setBrowserExpanded] = useState(false)
 
@@ -708,6 +719,14 @@ export function Chats({
           />
         </>
       ) : null}
+      <RightWorkspaceRail
+        open={workspaceOpen}
+        activeTab={rwSnapshot.activeTab}
+        browserEnabled={chatBrowserEnabled}
+        messages={messages}
+        canvas={latestCanvas}
+        onClose={handleWorkspaceClose}
+      />
     </div>
   )
 }

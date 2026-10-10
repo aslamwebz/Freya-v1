@@ -219,6 +219,7 @@ export function GlobalComposer({
   const initialDraft = draftStore.getDraft(activeConversationId)
   const [text, setText] = useState(initialDraft.text)
   const [sending, setSending] = useState(false)
+  const sendingRef = useRef(false)
   const [sessionPending, setSessionPending] = useState(false)
   const sessionPendingRef = useRef(false)
   const onSessionPendingChange = useCallback((pending: boolean) => {
@@ -333,7 +334,7 @@ export function GlobalComposer({
 
   const submit = async () => {
     const value = text.trim()
-    if ((value.length === 0 && drafts.length === 0) || generating || sending || (miniChat && sessionPendingRef.current)) return
+    if ((value.length === 0 && drafts.length === 0) || generating || sendingRef.current || (miniChat && sessionPendingRef.current)) return
     if (isOverLimit) {
       onNotice?.(`Message exceeds maximum length of ${maxMessageCharacters} characters.`)
       return
@@ -345,16 +346,35 @@ export function GlobalComposer({
         : drafts.length === 1
           ? 'Please review this attached file.'
           : 'Please review these attached files.'
+    const submittedConversationId = activeConversationId
+    const originalText = text
 
-    onNotice?.('')
+    // Clear on Send/Enter, not after model completion. Attachment bytes stay
+    // in the tray until Core explicitly accepts the request.
+    sendingRef.current = true
     setSending(true)
+    setText('')
+    draftStore.setDraft(submittedConversationId, { text: '' })
+    onNotice?.('')
     try {
       const accepted = await onSend(textToSend, mode, { webSearch: wantWeb, browserUse: wantBrowser })
-      if (accepted) {
-        if (prevConvRef.current === activeConversationId) setText('')
-        draftStore.clearDraft(activeConversationId)
+      if (!accepted) {
+        // Restore only when no replacement text was typed in the meantime.
+        if (draftStore.getDraft(submittedConversationId).text === '') {
+          draftStore.setDraft(submittedConversationId, { text: originalText })
+          if (prevConvRef.current === submittedConversationId) setText(originalText)
+        }
+      } else if (draftStore.getDraft(submittedConversationId).text === '') {
+        draftStore.clearDraft(submittedConversationId)
       }
+    } catch {
+      if (draftStore.getDraft(submittedConversationId).text === '') {
+        draftStore.setDraft(submittedConversationId, { text: originalText })
+        if (prevConvRef.current === submittedConversationId) setText(originalText)
+      }
+      onNotice?.('Freya could not send that message. Your draft is still available to retry.')
     } finally {
+      sendingRef.current = false
       setSending(false)
     }
   }

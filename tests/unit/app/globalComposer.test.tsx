@@ -38,6 +38,48 @@ function voice(): VoiceView {
 }
 
 describe('GlobalComposer', () => {
+  it('clears immediately on Enter before a slow model responds and blocks duplicate sends', async () => {
+    let finish!: (accepted: boolean) => void
+    const onSend = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve }))
+    render(
+      <GlobalComposer
+        generating={false} defaultModel={null} voice={voice()} voiceTranscript={null}
+        onVoicePress={vi.fn()} onVoiceRelease={vi.fn()} maxMessageCharacters={8000}
+        onSend={onSend} onStopResponse={vi.fn()}
+      />,
+    )
+    fireEvent.change(input(), { target: { value: 'send immediately' } })
+    fireEvent.keyDown(input(), { key: 'Enter', code: 'Enter', shiftKey: false })
+    expect(input().value).toBe('')
+    expect(sharedComposerDraftStore().getDraft(null).text).toBe('')
+    fireEvent.keyDown(input(), { key: 'Enter', code: 'Enter', shiftKey: false })
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend).toHaveBeenCalledWith('send immediately', 'chat', { webSearch: false, browserUse: false })
+    finish(true)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeInTheDocument())
+    expect(input().value).toBe('')
+  })
+
+  it('restores a rejected message unless the owner has already typed a newer draft', async () => {
+    let finish!: (accepted: boolean) => void
+    const onSend = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve }))
+    render(
+      <GlobalComposer
+        generating={false} defaultModel={null} voice={voice()} voiceTranscript={null}
+        onVoicePress={vi.fn()} onVoiceRelease={vi.fn()} maxMessageCharacters={8000}
+        onSend={onSend} onStopResponse={vi.fn()}
+      />,
+    )
+    fireEvent.change(input(), { target: { value: 'first draft' } })
+    fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
+    expect(input().value).toBe('')
+    fireEvent.change(input(), { target: { value: 'newer draft' } })
+    finish(false)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeInTheDocument())
+    expect(input().value).toBe('newer draft')
+    expect(sharedComposerDraftStore().getDraft(null).text).toBe('newer draft')
+  })
+
   it('keeps the draft when Core does not accept the send', async () => {
     const onSend = vi.fn(async () => false)
 

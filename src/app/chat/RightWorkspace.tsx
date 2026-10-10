@@ -823,6 +823,91 @@ function FilesView({ drafts }: { readonly drafts: readonly AttachmentDraft[] }) 
   )
 }
 
+/**
+ * Permanent, narrow rail anchored to the far-right of Chat, independent of
+ * whether the content panel is currently open. Only icons are drawn; labels
+ * remain accessible to assistive tech and on hover.
+ */
+export function RightWorkspaceRail({
+  open,
+  activeTab,
+  browserEnabled,
+  messages = [],
+  canvas = null,
+  sources,
+  charts,
+  mediaItems,
+  executionSteps,
+  store: injectedStore,
+  onClose,
+}: {
+  readonly open: boolean
+  readonly activeTab: RightWorkspaceTab
+  readonly browserEnabled: boolean
+  readonly messages?: readonly ConversationMessageView[]
+  readonly canvas?: CanvasSpec | null
+  readonly sources?: readonly TypedSource[]
+  readonly charts?: readonly ChartSpec[]
+  readonly mediaItems?: readonly MediaItem[]
+  readonly executionSteps?: readonly ToolStepRecord[]
+  readonly store?: RightWorkspaceStore
+  readonly onClose: () => void
+}) {
+  const store = injectedStore ?? sharedRightWorkspaceStore()
+  const drafts = useSyncExternalStore(
+    attachmentTray.subscribe, attachmentTray.getSnapshot, attachmentTray.getSnapshot,
+  )
+  const counts: Record<RightWorkspaceTab, number> = {
+    browser: 0,
+    sources: sources?.length ?? messages.reduce((max, m) => Math.max(max, m.sources?.length ?? 0), 0),
+    canvas: messages.filter((m) => m.canvas).length + (canvas && !messages.some((m) => m.canvas?.title === canvas.title) ? 1 : 0),
+    documents: mediaItems?.filter((x) => x.kind === 'document').length ?? messages.reduce((sum, m) => sum + (m.media?.filter((x) => x.kind === 'document').length ?? 0), 0),
+    media: mediaItems?.filter((x) => x.kind !== 'document').length ?? messages.reduce((sum, m) => sum + (m.media?.filter((x) => x.kind !== 'document').length ?? 0), 0),
+    charts: charts?.length ?? messages.reduce((sum, m) => sum + (m.charts?.length ?? 0), 0),
+    execution: executionSteps?.length ?? messages.reduce((max, m) => Math.max(max, m.steps?.length ?? 0), 0),
+    files: drafts.length,
+  }
+  const entries = [
+    { tab: 'browser', label: 'Browser', icon: 'world' },
+    { tab: 'sources', label: 'Sources', icon: 'search' },
+    { tab: 'canvas', label: 'Canvas', icon: 'create' },
+    { tab: 'documents', label: 'Docs', icon: 'relay' },
+    { tab: 'media', label: 'Media', icon: 'dress' },
+    { tab: 'charts', label: 'Charts', icon: 'focus' },
+    { tab: 'execution', label: 'Execution', icon: 'mind' },
+    { tab: 'files', label: 'Files', icon: 'attach' },
+  ] as const
+
+  return (
+    <nav className="chats-workspace-rail" role="tablist" aria-label="Workspace content types">
+      {entries.map(({ tab, label, icon }) => {
+        const enabled = tab !== 'browser' || browserEnabled
+        const selected = open && activeTab === tab
+        return (
+          <button
+            key={tab}
+            type="button"
+            role="tab"
+            aria-label={label}
+            aria-selected={selected}
+            aria-controls="chats-right-panel"
+            disabled={!enabled}
+            className="chats-workspace-rail-button"
+            title={enabled ? label : 'Enable Chat Browser to use Browser'}
+            onClick={() => {
+              if (selected) onClose()
+              else store.open(tab)
+            }}
+          >
+            <Glyph name={icon} size={18} />
+            {counts[tab] > 0 ? <small className="chats-workspace-rail-count" aria-hidden="true">{counts[tab] > 99 ? '99+' : counts[tab]}</small> : null}
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
 /* ------------------------------------------------------------------ *
  * Main Universal Right Workspace Component
  * ------------------------------------------------------------------ */
@@ -956,121 +1041,12 @@ export function UniversalRightWorkspace({
   return (
     <aside
       className="chats-right-workspace"
+      id="chats-right-panel"
       data-active-tab={activeTab}
       role="region"
       aria-label="Universal Right Workspace"
     >
       <header className="chats-rw-head">
-        <div className="chats-rw-tabs" role="tablist" aria-label="Workspace content types">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'browser'}
-            className="chats-rw-tab"
-            onClick={() => handleTabClick('browser')}
-          >
-            <Glyph name="world" size={14} />
-            <span>Browser</span>
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'sources'}
-            className="chats-rw-tab"
-            onClick={() => handleTabClick('sources')}
-          >
-            <Glyph name="search" size={14} />
-            <span>Sources</span>
-            {allSources.length > 0 ? (
-              <small className="chats-rw-count">{allSources.length}</small>
-            ) : null}
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'canvas'}
-            className="chats-rw-tab"
-            onClick={() => handleTabClick('canvas')}
-          >
-            <Glyph name="create" size={14} />
-            <span>Canvas</span>
-            {allCanvases.length > 0 ? (
-              <small className="chats-rw-count">{allCanvases.length}</small>
-            ) : null}
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'documents'}
-            className="chats-rw-tab"
-            onClick={() => handleTabClick('documents')}
-          >
-            <Glyph name="relay" size={14} />
-            <span>Docs</span>
-            {allDocs.length > 0 ? (
-              <small className="chats-rw-count">{allDocs.length}</small>
-            ) : null}
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'media'}
-            className="chats-rw-tab"
-            onClick={() => handleTabClick('media')}
-          >
-            <Glyph name="dress" size={14} />
-            <span>Media</span>
-            {allMedia.length > 0 ? (
-              <small className="chats-rw-count">{allMedia.length}</small>
-            ) : null}
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'charts'}
-            className="chats-rw-tab"
-            onClick={() => handleTabClick('charts')}
-          >
-            <Glyph name="focus" size={14} />
-            <span>Charts</span>
-            {allCharts.length > 0 ? (
-              <small className="chats-rw-count">{allCharts.length}</small>
-            ) : null}
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'execution'}
-            className="chats-rw-tab"
-            onClick={() => handleTabClick('execution')}
-          >
-            <Glyph name="mind" size={14} />
-            <span>Execution</span>
-            {allSteps.length > 0 ? (
-              <small className="chats-rw-count">{allSteps.length}</small>
-            ) : null}
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'files'}
-            className="chats-rw-tab"
-            onClick={() => handleTabClick('files')}
-          >
-            <Glyph name="attach" size={14} />
-            <span>Files</span>
-            {drafts.length > 0 ? (
-              <small className="chats-rw-count">{drafts.length}</small>
-            ) : null}
-          </button>
-        </div>
 
         <button
           type="button"
@@ -1091,7 +1067,6 @@ export function UniversalRightWorkspace({
             onClose={onClose}
             expanded={browserExpanded}
             onToggleExpanded={onBrowserExpandedToggle}
-            onViewChange={handleTabClick}
           />
         ) : activeTab === 'sources' ? (
           <SourcesView sources={allSources} onOpenInBrowser={handleOpenInBrowser} />

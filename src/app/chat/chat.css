@@ -2323,3 +2323,77 @@
   .chats-browser-runtime { display: none; }
   .chats-browser-bar { padding: 5px; }
 }
+
+/* Persistent icon-only content rail, even while the actual workspace is shut.
+   The browser slot is disabled unless Chat Browser is currently on. */
+.chats {
+  grid-template-columns: minmax(0, 1fr) 48px;
+}
+.chats[data-workspace-open] {
+  grid-template-columns: calc((100% - 54px) * var(--chats-thread, 48) / 100) 6px minmax(0, 1fr) 48px;
+}
+.chats-workspace-rail {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 12px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  border-left: 1px solid #5fb3d43b;
+  background: rgba(6, 16, 27, .97);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.chats-workspace-rail::-webkit-scrollbar { display: none; }
+.chats-workspace-rail-button {
+  position: relative;
+  flex: 0 0 39px;
+  display: grid;
+  place-items: center;
+  width: 39px;
+  height: 39px;
+  padding: 0;
+  background: transparent;
+  color: #9bb4c9;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  cursor: pointer;
+  transition: color .14s ease, background .14s ease, border-color .14s ease;
+}
+.chats-workspace-rail-button:hover:not(:disabled),
+.chats-workspace-rail-button:focus-visible {
+  color: #e0f8ff;
+  border-color: #85dfff78;
+  background: rgba(34, 91, 122, .45);
+}
+.chats-workspace-rail-button[aria-selected='true'] {
+  color: #9cebff;
+  background: rgba(36, 95, 126, .62);
+  border-color: #5fb3d4;
+  box-shadow: inset 2px 0 #b6efff, 0 0 11px rgba(95, 179, 212, .12);
+}
+.chats-workspace-rail-button:disabled { opacity: .28; cursor: not-allowed; }
+.chats-workspace-rail-count {
+  position: absolute;
+  right: 1px;
+  top: 1px;
+  min-width: 12px;
+  padding: 1px 3px;
+  border-radius: 7px;
+  font: 600 8px/1.1 ui-sans-serif, system-ui;
+  background: #1b4d67;
+  color: #dff8ff;
+}
+.chats[data-browser-expanded][data-workspace-open] {
+  grid-template-columns: minmax(0, 1fr) 48px;
+}
+.chats[data-browser-expanded] > .chats-workspace-rail { grid-column: 2; }
+
+/* Non-browser content no longer needs a horizontal selector toolbar. */
+.chats-right-workspace:not([data-active-tab='browser']) > .chats-rw-head {
+  min-height: 36px;
+  justify-content: flex-end;
+  padding: 3px 8px;
+}

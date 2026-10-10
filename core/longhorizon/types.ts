@@ -1,4 +1,5 @@
 import type { PrincipalId } from '../protocol/core-protocol'
+import type { GoalRoadmap, GoalRoadmapInput } from './decomposition/types'
 
 /**
  * THE LONG-HORIZON GOAL DOMAIN.
@@ -230,6 +231,7 @@ export interface GoalContentInput {
   readonly title: string
   readonly description: string
   readonly completionCriteria?: readonly string[]
+  readonly roadmap?: GoalRoadmapInput
 }
 
 export interface GoalContent {
@@ -238,6 +240,7 @@ export interface GoalContent {
   readonly description: string
   readonly completionCriteria: readonly string[]
   readonly createdAt: string
+  readonly roadmap?: GoalRoadmap
 }
 
 export type GoalContentResult =
@@ -528,6 +531,7 @@ export interface GoalDetail extends GoalSummaryView {
   /** Null only when the content store is unavailable or the content is gone. */
   readonly content: GoalContent | null
   readonly contentReason: string | null
+  readonly roadmap?: GoalRoadmap | null
 }
 
 /* -------------------------------------------------------------- outcomes */
@@ -546,6 +550,8 @@ export type GoalOperation =
   | 'verification-timeout'
   | 'checkpoint-verified'
   | 'checkpoint-failed'
+  | 'roadmap-updated'
+  | 'milestone-settled'
   | 'refused'
 
 /**
@@ -563,6 +569,8 @@ export interface GoalCommandOutcome {
   readonly goalId?: string
   readonly state?: GoalStatus
   readonly needsAttention?: boolean
+  readonly revision?: number
+  readonly milestoneId?: string
 }
 
 /* ------------------------------------------------------------------ misc */

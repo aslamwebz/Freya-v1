@@ -116,6 +116,15 @@ import {
   type GoalVerifier,
 } from './longhorizon/types'
 import {
+  type AdvisoryLessonInput,
+  type DecompositionOptions,
+  type RoadmapValidationResult,
+  type BoundedMissionProposal,
+  type GoalMilestone,
+  type GoalMilestoneInput,
+  type GoalRoadmapInput,
+} from './longhorizon/decomposition'
+import {
   ABSENT_GOAL_PROJECTION,
   type GoalProjectionView,
   type GoalCommandOperation,
@@ -998,6 +1007,14 @@ export interface Core {
    * One Goal's private content, decrypted from the Goal store (Phase 5).
    */
   goalDetail(goalId: string): Promise<GoalDetail | null>
+  /**
+   * Propose a structured milestone roadmap for a long-term goal informed by learning (Phase 5B).
+   */
+  proposeGoalRoadmap(goalId: string, options?: DecompositionOptions): Promise<RoadmapValidationResult>
+  /**
+   * Elaborate an eligible milestone into a bounded Mission specification (Phase 5B).
+   */
+  elaborateMilestoneMission(goalId: string, milestoneId?: string): Promise<BoundedMissionProposal | null>
   /**
    * Core's account of the workforce: workers, teams, and what each is doing.
    *
@@ -5491,6 +5508,51 @@ private async buildForge(): Promise<void> {
     return await this.goalEngine.detail(goalId)
   }
 
+  async proposeGoalRoadmap(
+    goalId: string,
+    options: DecompositionOptions = {},
+  ): Promise<RoadmapValidationResult> {
+    if (this.goalEngine === undefined) return { ok: false, reason: 'goal engine unavailable' }
+    const detail = await this.goalEngine.detail(goalId)
+    if (!detail || !detail.content) return { ok: false, reason: 'goal content unavailable' }
+
+    let advisoryLessons: AdvisoryLessonInput[] | undefined
+    if (this.learningEngine) {
+      const recalled = recallRelevantLearning(this.learningEngine, {
+        capabilities: ['work.execute', 'mission.manage'],
+        goal: `${detail.content.title} ${detail.content.description}`,
+      })
+      advisoryLessons = recalled.lessons.map((l) => ({
+        recordId: l.recordId,
+        claim: l.text,
+        confidence: l.confidence,
+        sourceDomain: l.scope,
+      }))
+    }
+
+    return this.goalEngine.getPlanner().proposeRoadmap(
+      detail.content,
+      detail.roadmap ?? undefined,
+      { advisoryLessons, ...options },
+    )
+  }
+
+  async elaborateMilestoneMission(
+    goalId: string,
+    milestoneId?: string,
+  ): Promise<BoundedMissionProposal | null> {
+    if (this.goalEngine === undefined) return null
+    const detail = await this.goalEngine.detail(goalId)
+    if (!detail || !detail.content || !detail.roadmap) return null
+
+    const targetMilestone: GoalMilestone | null = milestoneId
+      ? (detail.roadmap.milestones.find((m) => m.milestoneId === milestoneId) ?? null)
+      : this.goalEngine.getPlanner().nextEligibleMilestone(detail.roadmap)
+
+    if (!targetMilestone) return null
+    return this.goalEngine.getPlanner().createMissionForMilestone(targetMilestone, detail.content)
+  }
+
   goals(): GoalProjectionView {
     if (this.goalEngine === undefined) {
       return {
@@ -9250,11 +9312,66 @@ state: {
             return this.goalRefusal(requestId, 'refused', 'a Goal needs a description as well as a title')
           }
           const criteria = readStringArray(envelope.payload, 'completionCriteria')
+          const roadmap = typeof envelope.payload === 'object' && envelope.payload !== null && 'roadmap' in envelope.payload
+            ? (envelope.payload as { roadmap?: GoalRoadmapInput }).roadmap
+            : undefined
           const outcome = await this.requireGoal().createGoal({
             title,
             description,
             ...(criteria === undefined ? {} : { completionCriteria: criteria }),
+            ...(roadmap === undefined ? {} : { roadmap }),
           })
+          this.publishGoals()
+          return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
+        }
+
+        case 'goal.roadmap.set': {
+          const decision = this.guard.evaluate(this.owner, 'goal.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.manage', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          const goalId = readString(envelope.payload, 'goalId')
+          if (goalId === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal id is missing')
+          }
+          const payload = envelope.payload as Record<string, unknown>
+          const milestones = Array.isArray(payload?.milestones) ? payload.milestones : []
+          const advisoryNotes = Array.isArray(payload?.advisoryNotes)
+            ? (payload.advisoryNotes as string[])
+            : undefined
+          const outcome = await this.requireGoal().setRoadmap(goalId, {
+            goalId,
+            milestones: milestones as unknown as readonly GoalMilestoneInput[],
+            advisoryNotes,
+          })
+          this.publishGoals()
+          return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
+        }
+
+        case 'goal.milestone.settle': {
+          const decision = this.guard.evaluate(this.owner, 'goal.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'goal.manage', requestId)
+            return this.goalRefusal(requestId, 'refused', decision.reason)
+          }
+          const goalId = readString(envelope.payload, 'goalId')
+          if (goalId === null) {
+            return this.goalRefusal(requestId, 'refused', 'a Goal id is missing')
+          }
+          const milestoneId = readString(envelope.payload, 'milestoneId')
+          if (milestoneId === null) {
+            return this.goalRefusal(requestId, 'refused', 'a milestone id is missing')
+          }
+          const outcomeStr = readString(envelope.payload, 'outcome')
+          if (outcomeStr !== 'completed' && outcomeStr !== 'failed') {
+            return this.goalRefusal(requestId, 'refused', 'milestone outcome must be completed or failed')
+          }
+          const payload = envelope.payload as Record<string, unknown>
+          const evidence = typeof payload?.evidence === 'object' && payload.evidence !== null
+            ? (payload.evidence as { reason?: string; missionId?: string })
+            : {}
+          const outcome = await this.requireGoal().settleMilestone(goalId, milestoneId, outcomeStr, evidence)
           this.publishGoals()
           return { requestId, ok: outcome.ok, status: this.status(), goal: goalResult(outcome) }
         }

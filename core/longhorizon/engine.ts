@@ -4,6 +4,11 @@ import type { PrincipalId } from '../protocol/core-protocol'
 import { reduceGoalState, initialGoalState } from './state'
 import type { GoalStore } from './store'
 import {
+  ProgressiveRoadmapPlanner,
+  validateRoadmap,
+  type GoalRoadmapInput,
+} from './decomposition'
+import {
   DEFAULT_GOAL_LIMITS,
   GOAL_REASONS,
   canTransitionGoal,
@@ -97,8 +102,11 @@ export class GoalEngine {
   private goalState: GoalState = initialGoalState()
   private readonly locks = new Map<string, Promise<unknown>>()
   private readonly inflight = new Set<Promise<unknown>>()
+  private readonly planner: ProgressiveRoadmapPlanner
 
-  constructor(private readonly options: GoalEngineOptions) {}
+  constructor(private readonly options: GoalEngineOptions) {
+    this.planner = new ProgressiveRoadmapPlanner(() => this.now())
+  }
 
   /* -------------------------------------------------------------- lifecycle */
 
@@ -197,10 +205,19 @@ export class GoalEngine {
 
     const goalId = this.newId()
     const now = this.nowIso()
+
+    let roadmap = undefined
+    if (input.roadmap) {
+      const validated = validateRoadmap({ ...input.roadmap, goalId }, 0, undefined, now)
+      if (!validated.ok) return this.refused('created', validated.reason)
+      roadmap = validated.value
+    }
+
     const content: GoalContent = {
       goalId,
       ...normalised.value,
       createdAt: now,
+      ...(roadmap ? { roadmap } : {}),
     }
 
     try {
@@ -316,6 +333,111 @@ export class GoalEngine {
       })
       this.onChange()
       return { ok: true, goalId, checkpointId }
+    })
+  }
+
+  /* -------------------------------------------------------------- decomposition */
+
+  getPlanner(): ProgressiveRoadmapPlanner {
+    return this.planner
+  }
+
+  async setRoadmap(goalId: string, input: GoalRoadmapInput): Promise<GoalCommandOutcome> {
+    if (this.stopped()) return this.refused('roadmap-updated', 'STOP ALL is active')
+
+    return this.lock(goalId, async () => {
+      const goal = this.goalState.goals.get(goalId)
+      if (goal === undefined) return this.refused('roadmap-updated', 'no such goal')
+      if (isTerminalGoalStatus(goal.state)) {
+        return this.refused('roadmap-updated', `a ${goal.state} goal cannot update roadmap`)
+      }
+
+      const read = await this.options.store.read(goalId)
+      if (!read.ok) return this.refused('roadmap-updated', read.reason)
+
+      const currentRevision = read.value.roadmap?.revision ?? 0
+      const validated = validateRoadmap(input, currentRevision, undefined, this.nowIso())
+      if (!validated.ok) return this.refused('roadmap-updated', validated.reason)
+
+      const updatedContent: GoalContent = {
+        ...read.value,
+        roadmap: validated.value,
+      }
+
+      try {
+        await this.options.store.write(updatedContent)
+      } catch (error) {
+        return this.refused('roadmap-updated', this.describe(error))
+      }
+
+      await this.emit('longhorizon.goal.roadmap-updated', {
+        goalId,
+        revision: validated.value.revision,
+        milestoneCount: validated.value.milestones.length,
+      })
+
+      this.onChange()
+      return {
+        operation: 'roadmap-updated',
+        ok: true,
+        goalId,
+        revision: validated.value.revision,
+      }
+    })
+  }
+
+  async settleMilestone(
+    goalId: string,
+    milestoneId: string,
+    outcome: 'completed' | 'failed',
+    evidence: { readonly reason?: string; readonly missionId?: string } = {},
+  ): Promise<GoalCommandOutcome> {
+    if (this.stopped()) return this.refused('milestone-settled', 'STOP ALL is active')
+
+    return this.lock(goalId, async () => {
+      const goal = this.goalState.goals.get(goalId)
+      if (goal === undefined) return this.refused('milestone-settled', 'no such goal')
+      if (isTerminalGoalStatus(goal.state)) {
+        return this.refused('milestone-settled', `a ${goal.state} goal cannot settle a milestone`)
+      }
+
+      const read = await this.options.store.read(goalId)
+      if (!read.ok) return this.refused('milestone-settled', read.reason)
+      if (!read.value.roadmap) {
+        return this.refused('milestone-settled', 'goal has no roadmap')
+      }
+
+      const targetMilestone = read.value.roadmap.milestones.find((m) => m.milestoneId === milestoneId)
+      if (!targetMilestone) {
+        return this.refused('milestone-settled', `milestone ${milestoneId} not found in roadmap`)
+      }
+
+      const updatedRoadmap = this.planner.settleMilestone(read.value.roadmap, milestoneId, outcome, evidence)
+      const updatedContent: GoalContent = {
+        ...read.value,
+        roadmap: updatedRoadmap,
+      }
+
+      try {
+        await this.options.store.write(updatedContent)
+      } catch (error) {
+        return this.refused('milestone-settled', this.describe(error))
+      }
+
+      await this.emit('longhorizon.goal.milestone-settled', {
+        goalId,
+        milestoneId,
+        outcome,
+        revision: updatedRoadmap.revision,
+      })
+
+      this.onChange()
+      return {
+        operation: 'milestone-settled',
+        ok: true,
+        goalId,
+        milestoneId,
+      }
     })
   }
 
@@ -581,6 +703,7 @@ export class GoalEngine {
       ...this.summarise(goal),
       content: content.ok ? content.value : null,
       contentReason: content.ok ? null : content.reason,
+      roadmap: content.ok ? (content.value.roadmap ?? null) : null,
     }
   }
 

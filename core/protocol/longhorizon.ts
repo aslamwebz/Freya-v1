@@ -129,6 +129,8 @@ export type GoalCommandOperation =
   | 'verification-timeout'
   | 'checkpoint-verified'
   | 'checkpoint-failed'
+  | 'roadmap-updated'
+  | 'milestone-settled'
   | 'refused'
 
 /** What a goal command produced, as a window may see it. */
@@ -139,4 +141,6 @@ export interface GoalCommandOutcomeView {
   readonly goalId?: string
   readonly state?: GoalStatus
   readonly needsAttention?: boolean
+  readonly revision?: number
+  readonly milestoneId?: string
 }

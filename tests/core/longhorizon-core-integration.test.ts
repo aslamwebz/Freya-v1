@@ -175,9 +175,9 @@ describe('Phase 5A — LongHorizon Production Core Integration', () => {
     const projection = core.goals()
     const summary = projection.goals.find((g) => g.goalId === goalId)!
     expect(summary).toBeDefined()
-    expect((summary as Record<string, unknown>).title).toBeUndefined()
-    expect((summary as Record<string, unknown>).description).toBeUndefined()
-    expect((summary as Record<string, unknown>).completionCriteria).toBeUndefined()
+    expect((summary as unknown as Record<string, unknown>).title).toBeUndefined()
+    expect((summary as unknown as Record<string, unknown>).description).toBeUndefined()
+    expect((summary as unknown as Record<string, unknown>).completionCriteria).toBeUndefined()
 
     // Explicit detail read: MUST return private content
     const detail = await core.goalDetail(goalId)

@@ -3,6 +3,7 @@ import type { Resource, UiSnapshot } from '../../ui-v2/state/contract'
 import { MISSION_SECTIONS, LIBRARY_SECTIONS, OFFICE_SECTIONS, resolveRoute } from '../state/routes'
 import { Mind } from './Mind'
 import { ContextTabs, WorkspaceFrame } from './WorkspaceFrame'
+import { OfficeScene } from '../office/OfficeRoom'
 
 export function NotConnected({ title, children }: { title: string; children?: ReactNode }) {
   return <div className="uw-empty"><h2>{title}</h2><p>{title} not connected.</p><p>{children ?? 'This view cannot read those records yet.'}</p></div>
@@ -58,7 +59,7 @@ export function UnifiedWorkspace({ path, snapshot, onNavigate }: { path: string;
   if (route.destination === 'office') return <WorkspaceFrame title="Office" description="Your agents and the work they are doing." icon="workforce">
     <ContextTabs label="Office sections" tabs={OFFICE_SECTIONS.map(id => ({ id, label: id === 'scene' ? 'Office scene' : 'Agents' }))}
       selected={route.section} onSelect={id => onNavigate(`office/${id}`)}>
-      {route.section === 'scene' ? <NotConnected title="Office scene">The Office scene is being connected to the agent view.</NotConnected>
+      {route.section === 'scene' ? <OfficeScene />
         : <ResourceGate resource={snapshot.workforce} title="Agents">{data => <>
           <p className="uw-summary">{data.total} agents reported · {data.working} working</p>
           {data.rows.length ? <div className="uw-records">{data.rows.map(worker => <article className="uw-record" key={worker.id}>

@@ -1,4 +1,5 @@
 import type { ConversationPersistenceMode } from '../conversation/store'
+import type { ChatMissionProposal, ConversationMissionView } from '../missions/chat-types'
 
 /**
  * The renderer-safe conversation projection.
@@ -18,6 +19,9 @@ import type { ConversationPersistenceMode } from '../conversation/store'
 import type { MediaItem } from '../media/types'
 import type { ToolSource, ToolStepRecord, ChartSpec, CanvasSpec } from '../mind/tools'
 export interface ConversationMessageView {
+  missionProposal?: ChatMissionProposal
+  missionId?: string
+  missionDecision?: { proposalMessageId: string; decision: 'approved' | 'rejected' }
   messageId: string
   role: 'user' | 'assistant'
   content: string
@@ -108,6 +112,7 @@ export interface ConversationTurnView {
  * treating a refusal as a list, or an empty transcript as "no messages yet".
  */
 export type ConversationCommandOutcome =
+  | { operation: 'mission'; missionId: string | null; decision: string }
   | { operation: 'created'; conversation: ConversationSummaryView }
   | { operation: 'listed'; conversations: ConversationSummaryView[] }
   | {
@@ -143,6 +148,7 @@ export interface CognitionAvailability {
 }
 
 export interface ConversationProjection {
+  missions?: readonly ConversationMissionView[]
   /**
    * How durable this history really is.
    *

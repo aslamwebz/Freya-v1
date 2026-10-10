@@ -15,6 +15,8 @@ import { countPlanSteps, evidenceCounts } from './metrics'
 import { countChildren, liveChildCount, missionProjection, summarise, type WorkTruthPort } from './projection'
 import { reduceMissionState, initialMissionState } from './state'
 import type { MissionStore } from './store'
+import type { MissionExecutionPlan } from '../mind/mission-planning'
+import type { ChatMissionBinding } from './chat-types'
 import { MissionVerifierRegistry } from './verifier'
 import {
   DEFAULT_MISSION_LIMITS,
@@ -27,6 +29,7 @@ import {
   normaliseMissionContent,
   normaliseStoredIntentShape,
   type MissionCommandOutcome,
+  type MissionContent,
   type MissionContentInput,
   type MissionDetail,
   type MissionLimits,
@@ -190,6 +193,7 @@ export class MissionEngine {
       readonly priority?: MissionPriority
       /** How many results the owner asked for. Null when they named no number. */
       readonly requestedQuantity?: number | null
+      readonly chatBinding?: ChatMissionBinding
     } = {},
   ): Promise<MissionCommandOutcome> {
     if (this.closed) return refused('created', 'missions are shutting down')
@@ -242,6 +246,7 @@ export class MissionEngine {
         intentShape: content.value.intentShape,
         successCriteria: content.value.successCriteria,
         createdAt: now,
+        ...(options.chatBinding ? { chatBinding: options.chatBinding } : {}),
       })
     } catch (error) {
       return refused('created', `Mission content could not be stored: ${describe(error)}`)
@@ -865,6 +870,31 @@ export class MissionEngine {
     return this.state.missions.get(missionId)
   }
 
+  async privateContent(missionId: string, requireDurable = false): Promise<MissionContent | null> {
+    if (requireDurable && !this.options.store.durable) return null
+    const read = await this.options.store.read(missionId).catch(() => null)
+    return read?.ok ? read.value : null
+  }
+
+  async updateChatContent(missionId: string, update: (content: MissionContent) => MissionContent): Promise<void> {
+    await this.serialise(missionId, async () => {
+      const content = await this.privateContent(missionId, true)
+      if (this.closed || !content?.chatBinding) throw new Error('Durable chat Mission content is unavailable.')
+      await this.options.store.write(update(content))
+      this.options.onChange?.()
+    })
+  }
+
+  async persistExecutionPlan(missionId: string, executionPlan: MissionExecutionPlan, expectedIntent: string, previousPlanId?: string): Promise<void> {
+    await this.serialise(missionId, async () => {
+      if (!this.options.store.durable || this.closed || this.options.stopAll?.()
+        || this.record(missionId)?.status !== 'planning') throw new Error('Durable mission planning is unavailable.')
+      const content = await this.privateContent(missionId, true)
+      if (!content || (previousPlanId ? content.executionPlan?.planId !== previousPlanId : !!content.executionPlan) || content.intent !== expectedIntent) throw new Error('Mission content changed.')
+      await this.options.store.write({ ...content, executionPlan })
+    })
+  }
+
   /**
    * Write the private intent.
    *
@@ -889,6 +919,8 @@ export class MissionEngine {
     if (!existing.ok) return
     await this.options.store.write({
       ...existing.value,
+      // A correction must not execute inputs generated for the previous goal.
+      executionPlan: undefined,
       intentShape: normalised.value,
       // The free-text intent is regenerated from the shape so the two cannot disagree.
       // A store holding "find 100 cat videos" beside a shape saying quantity 40 would be
@@ -924,11 +956,17 @@ export class MissionEngine {
     supersedes: string | null
     reason: string | null
     steps: readonly MissionStepRecord[]
+    expectedStatus?: MissionStatus
+    expectedPreviousPlanId?: string
   }): Promise<MissionCommandOutcome> {
     if (this.closed) return refused('plan-committed', 'missions are shutting down')
     return this.serialise(input.missionId, async () => {
       if (this.state.missions.get(input.missionId) === undefined) {
         return refused('plan-committed', 'no such mission', input.missionId)
+      }
+      if (input.expectedStatus !== undefined && (this.closed || this.options.stopAll?.()
+        || this.record(input.missionId)?.status !== input.expectedStatus || (input.expectedPreviousPlanId ? this.record(input.missionId)?.activePlan?.planId !== input.expectedPreviousPlanId : !!this.record(input.missionId)?.activePlan))) {
+        return refused('plan-committed', 'mission planning was interrupted', input.missionId)
       }
       // The steps are spread field by field rather than passed through with `...input`.
       // `MissionStepRecord.status` and `.reason` are narrow closed enums while the

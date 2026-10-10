@@ -807,7 +807,7 @@ describe('ceilings and deadlines', () => {
     await h.close()
   })
 
-  it('refuses to replan past the revision ceiling', async () => {
+  it('executes the final committed plan without allowing another revision', async () => {
     const h = await harness({ workers: ['find.video-worker'] })
     const created = await h.engine.create({ title: 'One plan', intent: 'Only once.' }, undefined, {
       budget: { maxPlanRevisions: 1 },
@@ -832,9 +832,9 @@ describe('ceilings and deadlines', () => {
     })
 
     const second = await h.autonomy.step(missionId, 'manual', null)
-    // Every step terminal, so the decision is `complete`; but a replan is unavailable and
-    // that is recorded rather than discovered one decision later.
-    expect(second.decision).toBe('wait')
+    // Exhausting revision slots prevents new plans, not execution of the last one.
+    expect(second.decision).toBe('continue')
+    expect(h.engine.record(missionId)?.activePlan?.steps[0]?.status).toBe('verified')
     expect(h.engine.record(missionId)?.planRevisions).toBe(1)
     await h.close()
   })

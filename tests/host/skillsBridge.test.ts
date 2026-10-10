@@ -42,6 +42,7 @@ beforeEach(async () => {
   host = new ElectronCoreHost(join(dir, 'core-events.jsonl'), {}, {
     attentionObserveSources: false,
     skillKey: SKILL_KEY,
+    testCapabilities: true,
   })
 })
 
@@ -105,6 +106,7 @@ describe('the Skills mirror belongs to the process, not the window', () => {
     const ephemeral = new ElectronCoreHost(join(ephemeralDir, 'core-events.jsonl'), {}, {
       attentionObserveSources: false,
       skillKey: null,
+      testCapabilities: true,
     })
     try {
       await ephemeral.start()

@@ -259,6 +259,7 @@ describe('pass 3 — a real Core reaches the same decision whatever a model says
         const core: Core = createCore({
           dataPath: join(dir, `events-${run}.jsonl`),
           providers: [new FakeModelProvider()],
+          testCapabilities: true,
           attentionObserveSources: false,
         })
         await core.start()
@@ -334,6 +335,7 @@ describe('pass 4 — a whole conversation turn cannot decide anything either', (
         const core = createCore({
           dataPath: join(dir, `turn-${run}.jsonl`),
           providers: [fake],
+          testCapabilities: true,
           attentionObserveSources: false,
         })
         await core.start()

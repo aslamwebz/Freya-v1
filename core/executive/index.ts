@@ -76,3 +76,20 @@ export {
   boundString,
   type ProjectionContext,
 } from './projection'
+export {
+  evaluateExecutiveDecision,
+  type ExecutiveDecisionKind,
+  type ExecutiveDecisionInput,
+  type ExecutiveCandidateEvaluation,
+  type ExecutiveDecisionOutcome,
+  type ExecutiveBudgetLimit,
+  type ExecutiveBudgetSpend,
+} from './decision'
+export {
+  isExecutiveTriggerEvent,
+  evaluateExecutiveOnEvent,
+  EXECUTIVE_TRIGGER_EVENT_PREFIXES,
+  EXECUTIVE_IGNORED_EVENT_TYPES,
+  type EventDrivenExecutiveEvaluationInput,
+} from './events'
+

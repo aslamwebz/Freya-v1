@@ -96,9 +96,37 @@ export const LIFE_LOOP_VERIFICATION_KINDS = ['reference-terminal', 'escalation-d
 export type LifeLoopVerificationKind = (typeof LIFE_LOOP_VERIFICATION_KINDS)[number]
 
 export interface LifeLoopVerificationOutcome {
-  /** True when what happened matches what the wake claimed. */
+  /**
+   * True when the wake's claim is settled against Core's own projections.
+   *
+   * The claim is "the reference has reached a terminal state", and a settled
+   * claim is verified regardless of whether the underlying thing succeeded,
+   * failed, or was cancelled. The loop's caller reads this as "the wake is
+   * resolved, move on" — never as "the mission succeeded".
+   */
   readonly holds: boolean
-  /** A closed code when it does not. Never prose from the thing being checked. */
+  /**
+   * The three states a verification can report.
+   *
+   * - `settled`: the reference is known to Core and is terminal. `holds` is
+   *   `true`. Whether the underlying thing was a success is a separate
+   *   question and is *not* what this port answers — the verify port is
+   *   about the claim, not the outcome.
+   * - `still-open`: the reference is known to Core and is not yet terminal.
+   *   `holds` is `false`. The wake is not yet resolved.
+   * - `unknown`: the reference is not in Core's mission or work projections
+   *   at all. `holds` is `false`. The wake is unverifiable, not just
+   *   unsettled, and retrying is futile until the reference is registered.
+   *
+   * This is a closed vocabulary: the three are exactly what a verification
+   * can return, and a new state would be a new port.
+   */
+  readonly outcome: 'settled' | 'still-open' | 'unknown'
+  /**
+   * A closed code carrying the source detail. Never prose from the thing
+   * being checked. `code` is for diagnostics and journal lines; callers
+   * branch on `outcome`, not on `code`.
+   */
   readonly code: string
 }
 

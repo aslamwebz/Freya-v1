@@ -138,6 +138,8 @@ async function boot(overrides: Partial<CoreOptions> = {}): Promise<Core> {
 
     providers: [provider],
 
+    testCapabilities: true,
+
     ...overrides,
 
   }
@@ -1754,6 +1756,8 @@ describe('recovery after a restart', () => {
 
       providers: [provider],
 
+      testCapabilities: true,
+
     })
 
     core = restarted
@@ -1824,6 +1828,8 @@ describe('recovery after a restart', () => {
 
       providers: [provider],
 
+      testCapabilities: true,
+
     })
 
     core = restarted
@@ -1888,6 +1894,8 @@ describe('recovery after a restart', () => {
 
       providers: [provider],
 
+      testCapabilities: true,
+
     })
 
     core = restarted
@@ -1944,6 +1952,8 @@ describe('recovery after a restart', () => {
 
       providers: [provider],
 
+      testCapabilities: true,
+
     })
 
     core = restarted
@@ -1991,6 +2001,8 @@ describe('recovery after a restart', () => {
       newId,
 
       providers: [provider],
+
+      testCapabilities: true,
 
     })
 
@@ -2437,6 +2449,8 @@ describe('idle work', () => {
       newId,
 
       providers: [provider],
+
+      testCapabilities: true,
 
     })
 

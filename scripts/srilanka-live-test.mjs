@@ -37,9 +37,13 @@ async function freya(args, timeoutMs = 60000) {
     if (err.stdout) {
       try {
         return JSON.parse(err.stdout)
-      } catch {}
+      } catch (parseError) {
+        // The stdout was not JSON; fall through and throw the original
+        // error so the caller sees the subprocess's failure.
+        console.warn('[srilanka] json parse failed:', parseError instanceof Error ? parseError.message : String(parseError))
+      }
     }
-    throw new Error(err.message || String(err))
+    throw new Error(err.message || String(err), { cause: err })
   }
 }
 
@@ -98,8 +102,8 @@ async function main() {
   try {
     const browserTurn = await freya(['send', conversationId, browserPrompt, '--browser'], 90000)
     console.log('  Freya Browser Turn Result:', browserTurn.conversation?.turn?.outcome ?? 'completed')
-  } catch (e) {
-    console.log('  (Browser turn sent, verifying Browser Service tabs...)')
+  } catch (browserError) {
+    console.log('  (Browser turn sent, verifying Browser Service tabs...)', browserError instanceof Error ? browserError.message : '')
   }
   await sleep(2000)
 

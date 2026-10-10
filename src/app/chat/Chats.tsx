@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { MissionCard } from './MissionCard'
 import type { CoreActivityEvent } from '../../../core/protocol/activity'
 import type { MediaItem } from '../../../core/media/types'
 import {
@@ -551,6 +552,15 @@ export function Chats({
                     {/* What the lookups behind this answer returned. Drawn from the
                         message Core stored, never recovered from the prose: a card needs
                         an address, and an address read out of a sentence is a guess. */}
+                    {message.missionProposal && projection?.activeConversationId ? <MissionCard
+                      proposal={message.missionProposal}
+                      mission={projection.missions?.find(mission => mission.proposalMessageId === message.messageId)}
+                      decided={messages.find(item => item.missionDecision?.proposalMessageId === message.messageId)?.missionDecision?.decision}
+                      disabled={projection.stopAll.active || projection.persistence.mode !== 'encrypted'}
+                      onDecision={async decision => {
+                        const result = await mirror.decideMission(projection.activeConversationId!, message.messageId, decision)
+                        return result.operation === 'refused' ? result.reason : null
+                      }} /> : null}
                     {message.role === 'assistant' && media.length > 0 ? (
                       <MediaGrid
                         items={media}

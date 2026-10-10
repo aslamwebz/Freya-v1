@@ -44,7 +44,7 @@ export interface RedTeamCore {
 export async function startRedTeamCore(overrides: Partial<CoreOptions> = {}): Promise<RedTeamCore> {
   const dir = await mkdtemp(join(tmpdir(), 'freya-redteam-'))
   const fake = new FakeModelProvider()
-  const core = createCore({ dataPath: join(dir, 'events.jsonl'), providers: [fake], ...overrides })
+  const core = createCore({ dataPath: join(dir, 'events.jsonl'), providers: [fake], testCapabilities: true, ...overrides })
   await core.start()
   return {
     core,

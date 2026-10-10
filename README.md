@@ -3,6 +3,16 @@
 **A secure, voice-first personal intelligence environment, centred on one
 persistent intelligence, with transparent work surfaces.**
 
+The README below is a deliberate archival copy of the Phase 0 launch
+notes — kept because it records what was decided at the time, and the
+audit brief asks that historical docs be marked archival rather than
+rewritten. The current state of Freya is described in `docs/ROADMAP.md`
+and the per-phase notes in `docs/PHASE-*.md`; the production surface
+at this commit (4453563) is a Mind, Brain, Learning, Missions, Work,
+LifeLoop, Workforce, encrypted Vault, EventFabric, application/chat,
+browser, voice, tray, Adult/Chibi modes, and the Guard/Governor that
+keeps each surface in its lane.
+
 Phase 0 is a real desktop shell. It runs, it persists, it is tested end to end,
 and it is honest about the fact that there is no model behind it yet.
 
@@ -67,7 +77,8 @@ request, through the same Gateway.
 - **A typed event model** — one event union, one reducer, one store.
 - **A sealed renderer** — `contextIsolation: true`, `sandbox: true`, no Node in
   the renderer, a four-function preload bridge, and every permission request
-  denied, and a four-function preload bridge.
+  denied. (The original copy repeated "a four-function preload bridge" at
+  the end of the sentence; that was a transcription error and is fixed here.)
 
 ## Documentation
 
@@ -75,8 +86,12 @@ request, through the same Gateway.
 | --- | --- |
 | [docs/PRODUCT.md](docs/PRODUCT.md) | what Freya is, and what the first principles imply |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the process boundary, the four renderer seams, how future systems attach |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | the current phase and the road to the next one |
+| [docs/CORE-EVENTS.md](docs/CORE-EVENTS.md) | the durable event model every subsystem reads from |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | the stack, and every significant choice including the ones that were reversed |
 | [docs/REFERENCE-ANALYSIS.md](docs/REFERENCE-ANALYSIS.md) | the design language extracted from `References/`, and what was deliberately not copied |
+| [docs/PHASE-*.md](docs/) | per-phase work notes; the canonical record of what was built, why, and how it was tested |
+| [docs/superpowers/](docs/superpowers/) | the design and implementation plans the owner has signed off on; treated as archival, never rewritten |
 
 ## Phase 0 boundaries
 

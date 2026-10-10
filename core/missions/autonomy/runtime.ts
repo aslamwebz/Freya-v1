@@ -238,7 +238,7 @@ export interface MissionEnginePort {
     consequential: boolean
   }): Promise<MissionCommandOutcome>
   /** Request completion. This is the *only* route to `completed`, and it verifies. */
-  requestCompletion(missionId: string): Promise<MissionCommandOutcome>
+  requestCompletion(missionId: string, options?: { verifierId?: string; requiredRunIds?: readonly string[] }): Promise<MissionCommandOutcome>
   /**
    * Write the private intent. Never journalled. */
   writeIntent(missionId: string, intent: MissionIntentShape): Promise<void>
@@ -1358,7 +1358,11 @@ export class MissionAutonomyRuntime {
     // the benefit is that adding a rule to the verifier cannot be silently bypassed by a
     // caller that forgot to mirror it here.
     await this.options.missions.transition({ missionId, to: 'verifying', reason: MISSION_REASONS.verification_requested })
-    const outcome = await this.options.missions.requestCompletion(missionId)
+    const currentMission = this.options.missions.record(missionId)
+    const requiredRunIds = currentMission?.activePlan
+      ? currentMission.activePlan.steps.map((s) => s.runId).filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : undefined
+    const outcome = await this.options.missions.requestCompletion(missionId, requiredRunIds && requiredRunIds.length > 0 ? { requiredRunIds } : {})
     if (outcome.ok) return 'completed'
     refusals.push(outcome.reason ?? 'verification did not establish the outcome')
     // Back to `active` rather than `failed`: the verification did not establish it, and

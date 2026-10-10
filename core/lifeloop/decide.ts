@@ -6,6 +6,11 @@ import {
   type OwnerEscalation,
 } from './types'
 
+/** Event-driven Missions use this gate, never LifeLoop polling or its cognition grant. */
+export function chatMissionContinuation(input: { stopped: boolean; authorized: boolean; paused: boolean; expired: boolean }): boolean {
+  return !input.stopped && input.authorized && !input.paused && !input.expired
+}
+
 /**
  * The decide step: what Freya concluded, and how loudly she is allowed to say so.
  *

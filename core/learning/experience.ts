@@ -237,11 +237,18 @@ export function createLearningExperience(
       reason: 'an experience must carry its outcomeId among its evidence references',
     }
   }
-  if (context.outcomeResult === 'failed') {
+  if (context.outcomeResult === 'failed' && (input as { kind?: unknown }).kind !== 'failure-lesson') {
     return {
       ok: false,
       code: 'no-verification-evidence',
       reason: 'a failed check is not a lesson about how to do the thing; record it as a failure-lesson instead',
+    }
+  }
+  if (context.outcomeResult === 'succeeded' && (input as { kind?: unknown }).kind === 'failure-lesson') {
+    return {
+      ok: false,
+      code: 'no-verification-evidence',
+      reason: 'a successful check cannot be recorded as a failure-lesson',
     }
   }
 

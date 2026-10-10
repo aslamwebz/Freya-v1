@@ -43,7 +43,14 @@ async function freyaJson(args) {
     const firstIdx = (start !== -1 && startArr !== -1) ? Math.min(start, startArr) : (start !== -1 ? start : startArr)
     if (firstIdx !== -1) {
       const slice = raw.slice(firstIdx)
-      try { return JSON.parse(slice) } catch {}
+      try {
+        return JSON.parse(slice)
+      } catch (parseError) {
+        // The slice was not JSON. Fall through to the raw return below;
+        // the caller distinguishes "no JSON here" from "no stdout at
+        // all" through the returned shape.
+        console.warn('[run-live-acceptance] json parse failed:', parseError instanceof Error ? parseError.message : String(parseError))
+      }
     }
     return { raw }
   }

@@ -19,6 +19,27 @@ import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
 import { buildConfiguredModelProviders, modelCapabilityPreference, type CapabilityEnv } from './model/capability-runtime'
 import type { CapabilityPreferences } from './capabilities'
 import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
+import { proposeMissionPlan, type MissionGoalRequest, type MissionGoalOutcome } from './mind/mission-planning'
+import { registerFileInspection } from './work/file-inspection'
+import { registerResearchInspection } from './work/research-inspection'
+import { createMissionProposalTool } from './mind/mission-proposal'
+import { ChatMissionIntegration } from './missions/chat-integration'
+import type { ChatMissionProposal } from './missions/chat-types'
+import {
+  evaluateExecutiveDecision,
+  isExecutiveTriggerEvent,
+  type ExecutiveDecisionOutcome,
+  type ExecutiveState,
+  type ExecutiveBudgetLimit,
+  type ExecutiveBudgetSpend,
+} from './executive'
+import { LearningEngine } from './learning/engine'
+import type { LearningStore } from './learning/store'
+import { VaultLearningStore, MemoryLearningStore } from './vault/repositories/learning-store'
+import type { LearningProjection, LearningWriteOutcome } from './protocol/learning'
+import { ABSENT_LEARNING_PROJECTION } from './protocol/learning'
+import { admitWorkStepOutcome } from './learning/work-admission'
+import { recallRelevantLearning } from './learning/recall'
 import { createWebSearchTool, createChartTool, createCanvasTool, MindToolRegistry } from './mind/tools'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
 import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
@@ -56,7 +77,7 @@ import { isAssignableToWorker, isTerminalAssignmentStatus, workerPrincipalId } f
 import type { WORKFORCE_LIMITS } from './workforce/types'
 import type { WorkforceProjection, WorkforceWorkerDetail } from './workforce/types'
 import { MissionEngine, type WorkPort } from './missions/engine'
-import type { MissionCapabilityPort } from './missions/autonomy/types'
+import type { MissionCapabilityPort, MissionPriority } from './missions/autonomy/types'
 import type { MissionAuthorityPort } from './missions/autonomy/authority'
 import type { WorkRisk } from './work/types'
 import {
@@ -526,6 +547,8 @@ export interface CoreOptions {
     /** The selected SQLCipher-capable binding, injected by the host. */
     binding?: VaultBinding
   }
+  /** Test/embedding seam. Production uses the canonical encrypted Vault when available. */
+  learningStore?: LearningStore
   /**
    * What the host has actually wired, so the runtime registry can report it.
    *
@@ -650,11 +673,32 @@ export interface CoreOptions {
    *
    * The seam Phase 5 (Searcher, managed browser) and Phase 7 (Missions) attach
    * through. A capability is registered and nothing else changes: no engine edit,
-   * no new execution path, no new event family. Phase 6 registers only its own
-   * inert test set, so a Core built today can execute no external operation at all
-   * — which is the correct starting posture rather than a gap.
+   * no new execution path, no new event family.
    */
   workCapabilities?: readonly WorkCapability[]
+  /**
+   * Whether to register the Phase 6 fixture capabilities (`test.record`,
+   * `test.failing`, `test.unverifiable`, `test.slow`, `test.consequential`,
+   * and their verifiers).
+   *
+   * The capability surface a shipped Core exposes is a product question, not an
+   * implementation one, and the answer is **no**: the only way to demonstrate
+   * a Work run end to end through the product itself is to give it something to
+   * drive, and these capabilities are the inert test set that does that. They
+   * are kept for the e2e and the test suite, and not because a real run is ever
+   * supposed to invoke `test.failing` against a user.
+   *
+   * The decision is therefore explicit and never inferred:
+   *   - `undefined` and `false` (the default): no Phase 6 capabilities.
+   *   - `true`: Phase 6 capabilities registered alongside whatever `workCapabilities` adds.
+   *
+   * Production code sets neither; the e2e and the `createCore` test fixtures
+   * set it to `true`. The opt-in is the single gate, and it is named for what
+   * it is so a reader can find the call sites with `git grep testCapabilities`.
+   */
+  testCapabilities?: boolean
+  /** Trusted host authorization for read-only mission file metadata; empty by default. */
+  missionReadRoots?: readonly string[]
   /**
    * The Phase 8 Workforce seam.
    *
@@ -926,6 +970,7 @@ export interface Core {
    * `null` means the runtime is not built, which a surface can render rather than crash on.
    */
   advanceMission(missionId: string, trigger: DecisionTrigger): Promise<StepOutcome | null>
+  planMissionGoal(input: MissionGoalRequest, revision?: boolean): Promise<MissionGoalOutcome>
   /**
    * One worker with its mailbox, decrypted from this process's memory.
    *
@@ -1130,6 +1175,36 @@ untimeNotice, which states what the runtime cannot do, because a
   life(): LifeProjection
   /** Subscribe to the Life History projection. Same mirror semantics as the others. */
   onLife(listener: (projection: LifeProjection) => void): () => void
+  /** Read what Freya has learned: outcomes, distilled lessons and active claims. */
+  learning(): LearningProjection
+  /** Subscribe to the Learning projection. Same mirror semantics as the others. */
+  onLearning(listener: (projection: LearningProjection) => void): () => void
+  /** Direct engine handle for internal reasoning and planning recall. */
+  learningEngineInstance(): LearningEngine | undefined
+  /** Correct an admitted knowledge record (replaces claim, superseding original). */
+  correctLearningClaim(recordId: string, replacement: { claim: string; reason: string }): Promise<LearningWriteOutcome>
+  /** Withdraw an admitted knowledge record (retracts claim, destroying claim text while retaining audit trail). */
+  withdrawLearningClaim(recordId: string): Promise<LearningWriteOutcome>
+  /** The explainable Executive decision for competing goals and resource allocation (Phase 4). */
+  executiveDecision(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveDecisionOutcome
+  /** The explainable Executive state projection (Phase 4). */
+  executiveState(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveState
+  /** Subscribe to event-driven Executive decisions (Phase 4C). */
+  onExecutiveDecision(listener: (outcome: ExecutiveDecisionOutcome) => void): () => void
+  /** The last event-driven Executive decision outcome (Phase 4C). */
+  lastExecutiveDecision(): ExecutiveDecisionOutcome | null
   /**
    * The World & self summary and its subscription.
    *
@@ -1268,6 +1343,7 @@ class FreyaCore implements Core {
   private readonly missionListeners = new Set<(projection: MissionProjection) => void>()
   private readonly workforceListeners = new Set<(projection: WorkforceMirror) => void>()
   private readonly contextListeners = new Set<(projection: ContextProjectionView) => void>()
+  private readonly learningListeners = new Set<(projection: LearningProjection) => void>()
   /**
    * The Phase 9 Context integration, or undefined before `start()`.
    *
@@ -1354,6 +1430,8 @@ class FreyaCore implements Core {
   private readonly attentionListeners = new Set<(projection: AttentionProjection) => void>()
   private readonly lifeLoopListeners = new Set<(projection: LifeLoopProjection) => void>()
   private readonly runtimeListeners = new Set<(projection: RuntimeProjection) => void>()
+  private readonly executiveListeners = new Set<(outcome: ExecutiveDecisionOutcome) => void>()
+  private lastExecutiveDecisionOutcome: ExecutiveDecisionOutcome | null = null
   /**
    * The Phase 40 runtime activation controller.
    *
@@ -1491,6 +1569,9 @@ class FreyaCore implements Core {
    */
   private workEngine: WorkEngine | undefined
   private missionEngine: MissionEngine | undefined
+  private chatMissions: ChatMissionIntegration | undefined
+  private learningEngine: LearningEngine | undefined
+  private learningStore: LearningStore | undefined
   /**
    * The canonical encrypted Vault, or null when the host supplied none or it could
    * not be opened. Held privately so that Mission content has one owner of the
@@ -1522,6 +1603,8 @@ class FreyaCore implements Core {
    * render that plainly during startup.
    */
   private missionAutonomy: MissionAutonomyRuntime | undefined
+  private readonly missionPlanning = new Set<string>()
+  private readonly missionAdvancing = new Map<string, Promise<StepOutcome | null>>()
 
   constructor(private readonly options: CoreOptions) {
     this.newId = options.newId ?? (() => randomUUID())
@@ -1664,6 +1747,55 @@ class FreyaCore implements Core {
    */
   issueLifeOwnerScope(): LifeOwnerScope {
     return this.requireLife().ownerScope()
+  }
+
+  /**
+   * TEST SEAM: classify a reference through the verify port.
+   *
+   * The verify port is `private` and is exposed to the loop only through
+   * `lifeLoopPorts`. C2-A's discrimination lives in `classifyReference` and
+   * is reachable from the loop's runtime, but a runtime test would assert
+   * the journal's `verification.passed` / `verification.failed` line and
+   * never the closed-vocabulary outcome. This seam lets a test call the
+   * underlying classification directly and check the outcome + code
+   * combination, which is the property the brief is fixing.
+   *
+   * The seam is a one-line wrapper around the same private method the loop
+   * uses, so its behaviour cannot drift from the loop's. It is reachable
+   * from `core/testing.ts` and from this module only — a renderer has no
+   * way to obtain a `FreyaCore` reference and there is no public accessor
+   * to mint one. See `core/index.ts:1625-1643` for the existing test-seam
+   * pattern.
+   */
+  verifyReferenceForTest(reference: string): {
+    readonly holds: boolean
+    readonly outcome: 'settled' | 'still-open' | 'unknown'
+    readonly code: string
+  } {
+    return this.classifyReference(reference)
+  }
+
+  /**
+   * TEST SEAM: drive the verify port with a fabricated request.
+   *
+   * The reference-only seam is sufficient for the closed-vocabulary
+   * tests, but the `escalation-delivered` branch of the verify port is
+   * a separate code path with its own two-value shape, and a test
+   * needs to reach it. This seam accepts the same `request` shape the
+   * loop hands to `lifeLoopPorts().verify` and returns the same
+   * outcome the loop records in its journal — the test asserts the
+   * verdict directly, without having to drive Attention through a
+   * full wake to reach the same state.
+   */
+  verifyForTest(request: {
+    readonly kind: 'reference-terminal' | 'escalation-delivered'
+    readonly reference: string
+  }): Promise<{
+    readonly holds: boolean
+    readonly outcome: 'settled' | 'still-open' | 'unknown'
+    readonly code: string
+  }> {
+    return this.lifeLoopVerify(request as unknown as Parameters<LifeLoopPorts['verify']>[0])
   }
 
   async start(): Promise<CoreStatus> {
@@ -1954,6 +2086,9 @@ class FreyaCore implements Core {
       // another subsystem decided to forward it. Fire-and-forget, for the same
       // ordering reason as every other line here.
       this.observeLifeLoopSource(event)
+      this.observeVerifiedMissionStep(event)
+      this.observeLearningSource(event)
+      this.observeExecutiveSource(event)
       // Life History derives from authoritative events live. The engine is
       // idempotent, so a replayed event cannot duplicate an entry.
       if (!event.type.startsWith('life.')) void this.lifeEngine?.observe(event)
@@ -2174,6 +2309,7 @@ class FreyaCore implements Core {
        */
       tools: (() => {
         const tools = [
+          ...(this.researchIntegration && this.conversationStore.mode === 'encrypted' && this.options.missionKey ? [createMissionProposalTool()] : []),
           ...(this.researchIntegration
             ? [createWebSearchTool({
               searchWeb: (query, vertical, signal, site) => this.researchIntegration!.searchWeb(query, vertical, signal, site),
@@ -2216,6 +2352,7 @@ class FreyaCore implements Core {
       now: this.options.now,
       newId: this.options.newId,
       cognitionAvailability: () => this.cognitionAvailability(),
+      missionViews: conversationId => this.chatMissions?.views(conversationId) ?? Promise.resolve([]),
       stopAll: () => ({
         active: this.state.stopAll.active,
         activatedAt: this.state.stopAll.activatedAt,
@@ -2294,8 +2431,43 @@ class FreyaCore implements Core {
     for (const capability of this.workCapabilities()) {
       this.workRegistry.register(capability)
     }
+    if (this.options.missionReadRoots?.length) registerFileInspection(this.workRegistry, [...this.options.missionReadRoots])
+    if (this.researchIntegration) registerResearchInspection(this.workRegistry, {
+      research: this.researchIntegration,
+      admit: async (runId, stepKey, signal) => {
+        signal?.throwIfAborted()
+        const id = this.workEngine?.snapshot().runs.get(runId)?.parentId
+        const content = id ? await this.missionEngine?.privateContent(id, true) : null
+        const mission = id ? this.missionEngine?.record(id) : null
+        if (!id || !content?.chatBinding || !mission || !mission.childRuns.includes(runId) || !mission.activePlan?.steps.some(step => step.stepId === stepKey && step.capability === 'research.search') || !await this.chatMissionAuthorized(id) || !this.chatResearchAvailable() || content.chatBinding.paused || !['active', 'planning'].includes(mission.status)) throw new Error('Research authorization unavailable.')
+        const charged = await this.requireMission().charge({ missionId: id, modelCalls: 0, actions: 0, externalRequests: 1, retries: 0, delegations: 0 })
+        if (!charged.ok) throw new Error('Research request budget exhausted.')
+        signal?.throwIfAborted()
+      },
+      save: async (runId, stepKey, evidence) => {
+        const id = this.workEngine?.snapshot().runs.get(runId)?.parentId
+        if (!id) throw new Error('Attached Mission unavailable.')
+        await this.requireMission().updateChatContent(id, content => ({ ...content, researchEvidence: { ...content.researchEvidence, [stepKey]: evidence } }))
+      },
+      read: async (runId, stepKey) => {
+        const id = this.workEngine?.snapshot().runs.get(runId)?.parentId
+        return id ? (await this.missionEngine?.privateContent(id))?.researchEvidence?.[stepKey] ?? null : null
+      },
+    })
     registerFoundryWorkCapabilities(this.workRegistry, this.requireFoundry())
-    registerPhaseSixCapabilities(this.workRegistry)
+    // Phase 6's fixture capabilities are the only executable capabilities the
+    // shipped Core would otherwise have, and they exist to prove the Work engine
+    // can be driven end to end. They are inert — no fs, no child_process, no
+    // socket, no model access — but `test.failing` is a deliberate failure
+    // generator and `test.record` is the only one a Skills workflow or a renderer
+    // `work.run.create` could reach by name in a shipped build, which makes
+    // shipping them a product decision that has to be made on purpose.
+    //
+    // The decision is `options.testCapabilities === true`, and the default is
+    // false. Production builds and the renderer never set it; the e2e and the
+    // `createCore` test fixtures do. The intent is that "test.record" failing
+    // to resolve in a default Core is a feature, not a regression.
+    if (this.options.testCapabilities === true) registerPhaseSixCapabilities(this.workRegistry)
     this.workEngine = new WorkEngine({
       fabric: this.fabric,
       // The one place Work asks Guard anything. The owner principal is baked in
@@ -2357,6 +2529,15 @@ class FreyaCore implements Core {
       stopAll: () => this.state.stopAll.active,
     })
     await this.missionEngine.open()
+
+    this.learningStore = await this.buildLearningStore()
+    this.learningEngine = new LearningEngine({
+      store: this.learningStore,
+      now: this.options.now,
+      newId: this.options.newId,
+      stopped: () => this.state.stopAll.active,
+      onChange: () => this.publishLearning(),
+    })
 
     // Context sits beside Missions rather than above them: it reads which Mission is
     // current and nothing else, and it is built here so the two are wired in one place.
@@ -2683,6 +2864,26 @@ class FreyaCore implements Core {
     this.activation.register(RUNTIME_REGISTRY)
     await this.activation.load(this.runtimeFacts())
     this.operational = true
+    if (this.missionEngine && this.researchIntegration && this.conversationStore.mode === 'encrypted') {
+      this.chatMissions = new ChatMissionIntegration({ engine: this.missionEngine, store: this.conversationStore, ownerId: this.owner.id,
+        now: () => (this.options.now ?? (() => new Date()))(), available: () => this.chatResearchAvailable(),
+        authorized: id => this.chatMissionAuthorized(id),
+        authorize: async (id, grantId, expiresAt) => {
+          if (!this.chatResearchAvailable()) return false
+          const scope = this.issueWorkforceOwnerScope()
+          if (!scope.projection().workers.some(worker => worker.capabilities.includes('cognition.request'))) {
+            const worker = await scope.createWorker({ name: 'Research', specialisation: 'general' })
+            if (!worker.ok || !worker.workerId || !(await scope.assignCapability(worker.workerId, 'cognition.request')).ok) return false
+          }
+          await this.ownerAuthority.createGrant({ grantId, expiresAt, allowedOrigins: ['agent'], allowedCauses: ['run_finished'], actor: this.owner.id, goalId: id, backgroundAllowed: true, maxCalls: 3, maxOutputTokens: 6144 })
+          return true
+        },
+        plan: (id, grantId, revision) => this.planChatMissionGoal({ missionId: id, grantId, continueAfterVerification: true }, revision),
+        advance: id => this.advanceMission(id, 'manual'), request: intent => this.ownerAuthority.request(intent),
+        notify: () => this.conversations.publish(),
+      })
+      await this.chatMissions.recover()
+    }
     this.publishRuntime()
     this.notify()
 
@@ -2813,6 +3014,7 @@ class FreyaCore implements Core {
       // into a closed journal. Closing after Work is deliberate: the Mission may want
       // to consult a Run that Work has just finished recording.
       await this.missionEngine?.close()
+      await this.learningStore?.close()
       // The Vault owns the Mission store's connection, so it closes after the engine
       // has flushed. Closing it here keeps the one encrypted database's lifetime
       // inside Core's own.
@@ -4003,6 +4205,211 @@ private async buildForge(): Promise<void> {
     }
   }
 
+  /** Read what Freya has learned: outcomes, distilled lessons and active claims. */
+  learning(): LearningProjection {
+    if (this.learningEngine === undefined) {
+      return ABSENT_LEARNING_PROJECTION
+    }
+    try {
+      return this.learningEngine.project()
+    } catch (error) {
+      return {
+        ...ABSENT_LEARNING_PROJECTION,
+        persistence: {
+          ...ABSENT_LEARNING_PROJECTION.persistence,
+          reason: `the Learning domain could not be read: ${describe(error)}`,
+        },
+      }
+    }
+  }
+
+  /** Subscribe to the Learning projection. Same mirror semantics as the others. */
+  onLearning(listener: (projection: LearningProjection) => void): () => void {
+    this.learningListeners.add(listener)
+    try {
+      listener(this.learning())
+    } catch (error) {
+      console.error('[freya.core] Learning subscriber threw', error)
+      this.learningListeners.delete(listener)
+    }
+    return () => {
+      this.learningListeners.delete(listener)
+    }
+  }
+
+  private publishLearning(): void {
+    if (this.learningListeners.size === 0) return
+    const projection = this.learning()
+    for (const listener of [...this.learningListeners]) {
+      try {
+        listener(projection)
+      } catch (error) {
+        console.error('[freya.core] Learning listener threw', error)
+        this.learningListeners.delete(listener)
+      }
+    }
+  }
+
+  /** Direct engine handle for internal reasoning and planning recall. */
+  learningEngineInstance(): LearningEngine | undefined {
+    return this.learningEngine
+  }
+
+  /** Correct an admitted knowledge record (replaces claim, superseding original). */
+  async correctLearningClaim(
+    recordId: string,
+    replacement: { claim: string; reason: string },
+  ): Promise<LearningWriteOutcome> {
+    if (this.learningEngine === undefined) {
+      return {
+        ok: false,
+        outcome: 'refused',
+        code: 'store-unavailable',
+        reason: 'the learning engine is not available',
+        recordId: null,
+        superseded: null,
+      }
+    }
+    const observedAt = (this.options.now ?? (() => new Date()))().toISOString()
+    return this.learningEngine.correct(recordId, {
+      claim: replacement.claim,
+      reason: replacement.reason,
+      observedAt,
+    })
+  }
+
+  /** Withdraw an admitted knowledge record (retracts claim, destroying claim text while retaining audit trail). */
+  async withdrawLearningClaim(recordId: string): Promise<LearningWriteOutcome> {
+    if (this.learningEngine === undefined) {
+      return {
+        ok: false,
+        outcome: 'refused',
+        code: 'store-unavailable',
+        reason: 'the learning engine is not available',
+        recordId: null,
+        superseded: null,
+      }
+    }
+    return this.learningEngine.withdraw(recordId)
+  }
+
+  executiveDecision(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveDecisionOutcome {
+    const nowIso = (this.options.now ?? (() => new Date()))().toISOString()
+    const missions = this.missionEngine?.projection().missions ?? []
+    const workforce = this.safeWorkforce()
+    const workers = workforce?.workers ?? []
+    const stopAllActive = this.state.stopAll.active
+    const guardMayManage = this.guard.evaluate(this.owner, 'mission.manage').allowed
+
+    // Extract durable mission spend and budget if available from mission engine
+    const internalMissions = this.missionEngine
+      ? (
+          this.missionEngine as unknown as {
+            state?: {
+              missions: Map<
+                string,
+                {
+                  budget?: { maxActions: number; maxModelCalls: number; maxExternalRequests: number }
+                  spend?: { actions: number; modelCalls: number; externalRequests: number }
+                }
+              >
+            }
+          }
+        ).state?.missions
+      : undefined
+
+    const derivedSpends = new Map<string, ExecutiveBudgetSpend>()
+    const derivedLimits = new Map<string, ExecutiveBudgetLimit>()
+    if (internalMissions) {
+      for (const [id, m] of internalMissions.entries()) {
+        if (m.budget) {
+          derivedLimits.set(id, {
+            maxActions: m.budget.maxActions,
+            maxModelCalls: m.budget.maxModelCalls,
+            maxExternalRequests: m.budget.maxExternalRequests,
+          })
+        }
+        if (m.spend) {
+          derivedSpends.set(id, {
+            actions: m.spend.actions,
+            modelCalls: m.spend.modelCalls,
+            externalRequests: m.spend.externalRequests,
+          })
+        }
+      }
+    }
+
+    return evaluateExecutiveDecision({
+      missions,
+      workers,
+      stopAllActive,
+      guardMayManage,
+      now: nowIso,
+      explicitPriorities: options?.explicitPriorities,
+      budgetLimits: options?.budgetLimits ?? derivedLimits,
+      budgetSpends: options?.budgetSpends ?? derivedSpends,
+      requiredSpecialisations: options?.requiredSpecialisations,
+      missionAges: options?.missionAges,
+    })
+  }
+
+  executiveState(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveState {
+    return this.executiveDecision(options).state
+  }
+
+  /** Subscribe to event-driven Executive decisions (Phase 4C). */
+  onExecutiveDecision(listener: (outcome: ExecutiveDecisionOutcome) => void): () => void {
+    this.executiveListeners.add(listener)
+    if (this.lastExecutiveDecisionOutcome !== null) {
+      try {
+        listener(this.lastExecutiveDecisionOutcome)
+      } catch (error) {
+        console.error('[freya.core] Immediate executive listener threw', error)
+      }
+    }
+    return () => {
+      this.executiveListeners.delete(listener)
+    }
+  }
+
+  /** The last event-driven Executive decision outcome (Phase 4C). */
+  lastExecutiveDecision(): ExecutiveDecisionOutcome | null {
+    return this.lastExecutiveDecisionOutcome
+  }
+
+  private observeExecutiveSource(event: AnyCoreEvent): void {
+    if (!isExecutiveTriggerEvent(event.type)) return
+    queueMicrotask(() => {
+      if (this.stopped) return
+      try {
+        const outcome = this.executiveDecision()
+        this.lastExecutiveDecisionOutcome = outcome
+        for (const listener of [...this.executiveListeners]) {
+          try {
+            listener(outcome)
+          } catch (error) {
+            console.error('[freya.core] Executive listener threw', error)
+          }
+        }
+      } catch (error) {
+        console.error('[freya.core] observeExecutiveSource threw', error)
+      }
+    })
+  }
+
+
   /**
    * Evaluate `skill.manage` for the owner and record the decision, or answer the
    * refusal.
@@ -4644,26 +5051,109 @@ private async buildForge(): Promise<void> {
    * A read of Core's own projections, never a second thought: "is the thing that
    * just finished still open?" is a question about state the loop's host already
    * holds, and answering it with inference would make the loop's honesty depend on
-   * its provider being honest. A reference Core does not recognise is reported as
-   * satisfied, because "nothing is known to still be running" is the true statement
-   * and a fabricated doubt would burn a retry for no reason.
+   * its provider being honest.
+   *
+   * ## Three states, not two
+   *
+   * The closed vocabulary is `settled` / `still-open` / `unknown`, not a boolean
+   * derived from `attentionGoalOpen`. A `still-open` reference is one Core
+   * recognises that has not yet reached a terminal state. A `settled` reference
+   * is one that has — and is true whether the underlying mission or work run
+   * succeeded, failed, or was cancelled. An `unknown` reference is one Core
+   * has no projection of at all.
+   *
+   * The old shape returned `holds: !stillOpen` for everything, which is
+   * `settled` + `unknown` collapsed into one bucket. `unknown` had to mean
+   * `settled` because the old doc argued "nothing is known to still be running
+   * is the true statement", but that argument is about *the absence of a known
+   * open thing*, not about a *settled* thing — a missing reference is
+   * unverifiable, not verified, and treating it as settled burns a retry for no
+   * reason and hides the real bug. The new shape separates the two.
+   *
+   * ## `holds` is about the claim, not the outcome
+   *
+   * `holds: true` means the wake's claim ("the reference has reached a
+   * terminal state") is verified by an authoritative source. It is **not** a
+   * statement that the mission succeeded. The verify port answers a question
+   * about the loop's wake, not about a user's task, and a reader who wants to
+   * know whether the mission succeeded reads Core's own mission projection,
+   * not this port's return.
    */
   private async lifeLoopVerify(
     request: Parameters<LifeLoopPorts['verify']>[0],
-  ): Promise<{ readonly holds: boolean; readonly code: string }> {
+  ): Promise<{ readonly holds: boolean; readonly outcome: 'settled' | 'still-open' | 'unknown'; readonly code: string }> {
     if (request.kind === 'escalation-delivered') {
       // Attention records every decision it makes, including the ones that say
       // nothing should reach the owner. The claim being verified is "Attention
       // considered it", and that is answered by a decision existing — not by the
       // decision being loud, because being loud was never the loop's to decide.
+      // This branch keeps the old two-value shape: Attention's answer is
+      // binary (it decided or it didn't), and "unknown" is not a third state
+      // for an in-process recorder that simply says "no decision has been
+      // recorded yet". A reader who needs the binary can read `holds`; a
+      // reader who needs "we did not even try" can read `outcome`.
       const decisions = this.state.attention.decisions
+      const hasDecision = decisions.length > 0
       return {
-        holds: decisions.length > 0,
-        code: decisions.length > 0 ? 'attention-decided' : 'attention-decided-nothing',
+        holds: hasDecision,
+        outcome: hasDecision ? 'settled' : 'still-open',
+        code: hasDecision ? 'attention-decided' : 'attention-decided-nothing',
       }
     }
-    const stillOpen = this.attentionGoalOpen(request.reference)
-    return { holds: !stillOpen, code: stillOpen ? 'reference-still-open' : 'reference-settled' }
+    return this.classifyReference(request.reference)
+  }
+
+  /**
+   * Map a reference to its three-state verification verdict.
+   *
+   * The lookup is direct against Core's own projections — `missionEngine.record`
+   * for missions, `workEngine.snapshot().runs` for runs — and the verdict is
+   * derived from the projection's status, not from a flag we maintain. The
+   * only way a future code path can return a wrong verdict is by writing the
+   * wrong status into one of those two projections, and that is a single
+   * change to read.
+   */
+  private classifyReference(reference: string): {
+    readonly holds: boolean
+    readonly outcome: 'settled' | 'still-open' | 'unknown'
+    readonly code: string
+  } {
+    // A Mission is "open" against this port when it exists in the engine's
+    // projections and is not yet in a terminal state. The engine exposes
+    // `record(id)` which returns the projection or `undefined` if the mission
+    // is not in the engine's view.
+    const mission = this.missionEngine?.record(reference)
+    if (mission !== undefined) {
+      if (isTerminalMissionStatus(mission.status)) {
+        // The terminal status is in the code, so a journal reader can tell
+        // success from failure from the verify port's record alone. The port
+        // itself still reports `outcome: 'settled'` because the verify port
+        // does not adjudicate success.
+        return { holds: true, outcome: 'settled', code: `mission-${mission.status}` }
+      }
+      return { holds: false, outcome: 'still-open', code: 'mission-still-open' }
+    }
+    // A Work Run is "open" the same way. `snapshot().runs` is the authoritative
+    // map for the run, indexed by run id; the goal ref *is* the run id for
+    // runs that originated as a wake's reference.
+    const snapshot = this.workEngine?.snapshot()
+    if (snapshot !== undefined) {
+      const run = snapshot.runs.get(reference)
+      if (run !== undefined) {
+        if (isTerminalRunStatus(run.status)) {
+          return { holds: true, outcome: 'settled', code: `run-${run.status}` }
+        }
+        return { holds: false, outcome: 'still-open', code: 'run-still-open' }
+      }
+    }
+    // A reference Core has no projection of at all. The old code reported
+    // `holds: true` for this case ("nothing is known to still be running"),
+    // which is the source of the conflation the brief is fixing: a missing
+    // reference is *unverifiable*, and retrying is futile until the
+    // reference is registered with one of the engines. Burning a retry for
+    // no reason and writing `reference-settled` to the journal is exactly
+    // the false-success the C2-A inventory entry warned about.
+    return { holds: false, outcome: 'unknown', code: 'reference-unknown' }
   }
 
   /**
@@ -5070,6 +5560,7 @@ private async buildForge(): Promise<void> {
   }
 
   private publishMission(): void {
+    if (this.chatMissions) this.conversations?.publish()
     // Every subsystem that can move the snapshot does, through this one call.
     // The conscious context is derived from all of them, so a change to any one
     // is a change to it - and hooking each publisher is what keeps that true
@@ -5231,7 +5722,7 @@ private async buildForge(): Promise<void> {
       recordDecision: (input) => engine.recordDecision(input),
       charge: (input) => engine.charge(input),
       noteBudgetExceeded: (input) => engine.noteBudgetExceeded(input),
-      requestCompletion: (missionId) => engine.requestCompletion(missionId),
+      requestCompletion: (missionId, options) => this.completeMission(missionId, options),
       writeIntent: (missionId, intent) => engine.writeIntent(missionId, intent),
       readIntent: (missionId) => engine.readIntent(missionId),
     }
@@ -5288,10 +5779,11 @@ private async buildForge(): Promise<void> {
   private missionAuthorityPort(): MissionAuthorityPort {
     return {
       stopAll: () => this.state.stopAll.active,
-      // Read against the **Work registry**, not the Guard vocabulary. A Work capability
-      // is registered or it is not, and whether it *may* run is decided by Guard when the
-      // Run executes — which the executor reaches through Work, as it always has.
-      mayUse: (capability) => this.workRegistry?.capability(capability) !== undefined,
+      // Bind the registered action to current Guard authority. Work checks again.
+      mayUse: (capability) => {
+        const binding = this.workRegistry?.capability(capability)
+        return binding !== undefined && this.guard.evaluate(this.owner, binding.capability).allowed
+      },
       maySpend: () => false,
       approvalState: async ({ runId }) => {
         // Resolved from the `runId` the executor returned, **not** from the step record.
@@ -5376,6 +5868,153 @@ state: {
     return await this.missionEngine.markGoalReady(missionId)
   }
 
+  /** Trusted host entry: an existing owner grant authorizes one model proposal. */
+  async planMissionGoal(input: MissionGoalRequest, revision = false): Promise<MissionGoalOutcome> {
+    return this.planChatMissionGoal(input, revision || input.revision === true)
+  }
+
+  private chatResearchAvailable(): boolean {
+    return !!this.researchIntegration && this.operational && !this.stopped && this.persistence.durable && !this.state.stopAll.active && this.conversationStore.mode === 'encrypted'
+      && (['mission.manage', 'work.execute', 'research.start', 'search.web', 'browser.read', 'cognition.request'] as const).every(capability => this.guard.evaluate(this.owner, capability).allowed)
+  }
+
+  private chatMissionGrantAvailable(id: string, grantId: string): boolean {
+    const grant = this.ownerAuthority.grants().find(candidate => candidate.goalId === id && candidate.id === grantId)
+    return !!grant && isGrantActive(grant, (this.options.now ?? (() => new Date()))()) && grant.actor === this.owner.id && grant.backgroundAllowed
+  }
+
+  private async chatMissionAuthorized(id: string): Promise<boolean> {
+    const binding = (await this.missionEngine?.privateContent(id, true))?.chatBinding
+    return !!binding && binding.ownerId === this.owner.id && this.chatMissionGrantAvailable(id, binding.grantId)
+  }
+
+  private async completeMission(id: string, options?: { verifierId?: string; requiredRunIds?: readonly string[] }): Promise<MissionCommandOutcome> {
+    const content = await this.requireMission().privateContent(id)
+    return content?.chatBinding && this.chatMissions ? this.chatMissions.complete(id) : this.requireMission().requestCompletion(id, options)
+  }
+
+  private async planChatMissionGoal(input: MissionGoalRequest, revision: boolean): Promise<MissionGoalOutcome> {
+    const engine = this.missionEngine
+    const unavailable = { ok: false, reason: 'mission_unavailable' } as const
+    if (!engine || !this.operational || this.stopped || !this.persistence.durable || this.state.stopAll.active || this.missionPlanning.has(input.missionId)
+      || this.missionAdvancing.has(input.missionId) || !this.guard.evaluate(this.owner, 'mission.manage').allowed) return unavailable
+    const mission = engine.record(input.missionId)
+    if (!mission || (revision ? !mission.activePlan || mission.status !== 'blocked' || mission.planRevisions !== 1 : !!mission.activePlan || !['draft', 'ready'].includes(mission.status))) return unavailable
+    const content = await engine.privateContent(input.missionId, true)
+    if (!content || (revision ? !content.executionPlan : !!content.executionPlan) || this.missionPlanning.has(input.missionId)) return unavailable
+    if (content.chatBinding && (!this.chatResearchAvailable() || !await this.chatMissionAuthorized(input.missionId) || content.chatBinding.paused)) return unavailable
+    const now = (this.options.now ?? (() => new Date()))()
+    const deadline = Math.min(Date.parse(mission.deadlineAt), Date.parse(mission.activatedAt ?? mission.createdAt) + mission.budget.maxDurationMs)
+    if (now.getTime() >= deadline || mission.planRevisions >= mission.budget.maxPlanRevisions) return { ok: false, reason: 'budget_exhausted' }
+    this.missionPlanning.add(input.missionId)
+    try {
+      if (mission.status === 'draft' && !(await engine.markGoalReady(input.missionId)).ok) return unavailable
+      if (!(await engine.autonomyTransition({ missionId: input.missionId, to: 'planning', reason: 'plan_started' })).ok) return unavailable
+      const charged = await engine.charge({ missionId: input.missionId, modelCalls: 1, actions: 0, externalRequests: 0, retries: 0, delegations: 0 })
+      if (!charged.ok) {
+        await engine.autonomyTransition({ missionId: input.missionId, to: 'blocked', reason: 'budget_exhausted' })
+        return { ok: false, reason: 'budget_exhausted' }
+      }
+      const maxSteps = Math.min(mission.budget.maxStepsPerPlan - (revision ? mission.activePlan!.steps.filter(step => step.status === 'verified').length : 0), mission.budget.maxActions - mission.spend.actions,
+        mission.budget.maxDelegations - mission.spend.delegations, mission.limits.maxChildRuns - mission.childRuns.length)
+      const learningAdvice = this.learningEngine
+        ? recallRelevantLearning(this.learningEngine, {
+            capabilities: this.missionCapabilityPort().known(),
+            goal: content.intent,
+            failureContext: revision ? content.researchEvidence : undefined,
+          })
+        : undefined
+      const outcome = await proposeMissionPlan({ ...input, goal: content.intent, successCriteria: content.successCriteria, budget: mission.budget, maxSteps, now,
+        learningAdvice,
+        ...(revision ? { previousPlan: mission.activePlan!, previousExecution: content.executionPlan, failure: content.researchEvidence } : {}) },
+        this.missionCapabilityPort(), name => (!content.chatBinding || name === 'research.search') && this.missionAuthorityPort().mayUse(name), intent => this.ownerAuthority.request(intent))
+      // Owner cancellation, correction and STOP ALL win over a delayed provider answer.
+      const current = engine.record(input.missionId)
+      const latest = await engine.privateContent(input.missionId)
+      if (this.stopped || !this.persistence.durable || this.state.stopAll.active || current?.status !== 'planning' || (revision ? current.activePlan?.planId !== mission.activePlan?.planId : !!current.activePlan)
+        || latest?.intent !== content.intent || !this.guard.evaluate(this.owner, 'mission.manage').allowed) return unavailable
+      if (!outcome.ok) {
+        await engine.setBlocker({ missionId: input.missionId, code: 'intent_ambiguous', stepId: null, raised: true })
+        await engine.autonomyTransition({ missionId: input.missionId, to: 'blocked',
+          reason: outcome.reason === 'capability_unavailable' ? 'capability_unavailable'
+            : outcome.reason === 'budget_exhausted' ? 'budget_exhausted' : 'intent_ambiguous' })
+        return outcome
+      }
+      if ((this.options.now ?? (() => new Date()))().getTime() >= deadline) {
+        await engine.autonomyTransition({ missionId: input.missionId, to: 'blocked', reason: 'deadline_expired' })
+        return { ok: false, reason: 'budget_exhausted' }
+      }
+      await engine.persistExecutionPlan(input.missionId, outcome.execution, content.intent, revision ? mission.activePlan!.planId : undefined)
+      if (this.state.stopAll.active || engine.record(input.missionId)?.status !== 'planning') return unavailable
+      const committed = await engine.commitPlan({ missionId: input.missionId, ...outcome.plan, reason: revision ? 'step_failed' : 'goal_needs_a_plan', expectedStatus: 'planning', ...(revision ? { expectedPreviousPlanId: mission.activePlan!.planId } : {}) })
+      if (!committed.ok) return unavailable
+      if (revision) for (const blocker of engine.record(input.missionId)?.blockers ?? []) {
+        if (blocker.clearedAt === null && blocker.code === 'step_failed') await engine.setBlocker({ missionId: input.missionId, code: blocker.code, stepId: blocker.stepId, raised: false })
+      }
+      if (!(await engine.autonomyTransition({ missionId: input.missionId, to: 'active', reason: 'plan_committed' })).ok) return unavailable
+      return outcome
+    } catch {
+      if (!this.state.stopAll.active && engine.record(input.missionId)?.status === 'planning') {
+        await engine.autonomyTransition({ missionId: input.missionId, to: 'blocked', reason: 'intent_ambiguous' }).catch(() => undefined)
+      }
+      return { ok: false, reason: 'planning_failed' }
+    } finally { this.missionPlanning.delete(input.missionId) }
+  }
+
+  private observeVerifiedMissionStep(event: AnyCoreEvent): void {
+    if (event.type !== 'mission.step.transitioned' || !['verified', 'failed'].includes(event.payload.to)) return
+    const { missionId, planId, stepId } = event.payload
+    // Publication happens inside the current decision. Wait for its final transition,
+    // then use live state; never replay events, queue retries, or call a model here.
+    const pending = this.missionAdvancing.get(missionId) ?? Promise.resolve(null)
+    void pending.then(async () => {
+      const content = await this.missionEngine?.privateContent(missionId)
+      const mission = this.missionEngine?.record(missionId)
+      if (content?.chatBinding) {
+        if (mission?.activePlan?.planId !== planId || content.executionPlan?.planId !== planId) return
+        await this.chatMissions?.settled(missionId)
+        return
+      }
+      if (event.payload.to !== 'verified') return
+      if (this.stopped || !this.persistence.durable || this.state.stopAll.active || mission?.status !== 'active' || mission.activePlan?.planId !== planId
+        || !content?.executionPlan?.continueAfterVerification || content.executionPlan.planId !== planId
+        || !mission.activePlan.steps.some(step => step.stepId === stepId && step.status === 'verified')) return
+      await this.advanceMissionDecision(missionId, 'event', { type: event.type })
+    }).catch(() => undefined)
+  }
+
+  private observeLearningSource(event: AnyCoreEvent): void {
+    if (this.learningEngine === undefined) return
+    if (event.type !== 'work.step.verified' && event.type !== 'work.step.failed') return
+    const stepId = 'stepId' in event.payload && typeof event.payload.stepId === 'string' ? event.payload.stepId : null
+    if (!stepId) return
+
+    void (async () => {
+      // Yield to let WorkEngine's event subscription finish updating its snapshot.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      try {
+        const workSnapshot = this.workEngine?.snapshot()
+        if (!workSnapshot) return
+        const step = workSnapshot.steps.get(stepId)
+        if (!step) return
+        const verification = [...workSnapshot.verifications.values()].find((v) => v.stepId === stepId) ?? null
+        const run = workSnapshot.runs.get(step.runId)
+        const missionId = run?.parentId
+        const missionContent = missionId ? await this.missionEngine?.privateContent(missionId) : null
+        const nowIso = (this.options.now ?? (() => new Date()))().toISOString()
+
+        await admitWorkStepOutcome(this.learningEngine!, {
+          step,
+          verification,
+          missionContent,
+          nowIso,
+        })
+      } catch (error) {
+        console.error('[freya.core] learning observation threw', describe(error))
+      }
+    })()
+  }
+
   /**
    * Advance one Mission by one decision.
    *
@@ -5383,19 +6022,29 @@ state: {
    * no default of "tick": a caller says why it is asking, and that reason is journalled with
    * the decision.
    *
-   * There is deliberately **no** method here that loops until a Mission settles, and no
-   * timer that calls this on a cadence. A Mission advances because somebody asked it to,
-   * once — and the absence of a loop is the enforcement of "no hidden continuous
-   * inference", which a scheduler would have quietly reintroduced.
+   * Each call makes one decision. Opted-in private plans also reach this same boundary
+   * from a newly verified durable event. No timer or background model loop is involved.
    */
   async advanceMission(missionId: string, trigger: DecisionTrigger): Promise<StepOutcome | null> {
-    if (this.missionAutonomy === undefined) return null
-    const outcome = await this.missionAutonomy.step(missionId, trigger, null)
-    // Closed *after* the decision, and only for a Mission that settled — see the method's
-    // own note. Doing it after rather than before means the assignment was open for every
-    // step that used it, so the workforce's audit trail shows the work as in flight.
-    if (outcome !== null) await this.releaseMissionAssignments(missionId)
-    return outcome
+    return this.advanceMissionDecision(missionId, trigger, null)
+  }
+
+  private async advanceMissionDecision(missionId: string, trigger: DecisionTrigger, delivered: { type: string } | null): Promise<StepOutcome | null> {
+    if (this.missionAutonomy === undefined || this.stopped) return null
+    const content = await this.missionEngine?.privateContent(missionId)
+    if (content?.chatBinding && (!this.chatResearchAvailable() || content.chatBinding.paused || !await this.chatMissionAuthorized(missionId))) return null
+    if (this.missionAdvancing.has(missionId) || this.missionPlanning.has(missionId)) return null
+    const mission = this.missionEngine?.record(missionId)
+    // A failed intelligent planning attempt cannot drop into the legacy fixture planner.
+    if (mission && mission.spend.modelCalls > 0 && mission.activePlan === null) return null
+    const pending = this.missionAutonomy.step(missionId, trigger, delivered)
+    this.missionAdvancing.set(missionId, pending)
+    try {
+      const outcome = await pending
+      // Release assignments only once the mission settles.
+      if (outcome !== null) await this.releaseMissionAssignments(missionId)
+      return outcome
+    } finally { this.missionAdvancing.delete(missionId) }
   }
 
   /**
@@ -5423,8 +6072,36 @@ state: {
    * Mission's delegation look finished, which is the same class of lie as a completed step
    * that never ran.
    *
-   * Every failure is swallowed: a Mission's outcome does not depend on its paperwork being
-   * tidied, and a refusal here must not turn a completed Mission into a failed one.
+   * ## Authoritative store, not a retention slice
+   *
+   * The Mission's own projection does not list every assignment; the workforce
+   * projection does, but `WorkerView.assignments` is a *retention slice* and
+   * the projection also exposes `assignmentsTotal` / `assignmentsHidden` to
+   * say so. A Mission with more steps than the slice holds would have left
+   * the missing ones open in the old code — a "leak" the board knew about
+   * (the hidden count) but the closer did not. The C2-B fix reads the
+   * authoritative store through `listAssignmentsForMission`, which the
+   * engine exposes from its own `state.assignments` map; nothing in the
+   * projection's slice can hide a row from the closer.
+   *
+   * ## Diagnostics, not silent swallow
+   *
+   * The old code did `await scope.cancelAssignment(...).catch(() => undefined)`.
+   * That was the right shape to avoid turning a completed Mission into a
+   * failed one — a refusal here is not a reason to invalidate the
+   * Mission's outcome — but a refusal with **no log, no event, no count**
+   * is not the same as "not failing", it is *unobservable* failing. The
+   * new code logs a single warning per refused cancellation with the
+   * assignment id, the mission id, the reason returned, and the running
+   * counters of opened / closed / refused. The Mission's outcome stays
+   * untouched, but a person reading the log can tell that cleanup is
+   * incomplete and act on it.
+   *
+   * Cancellation is idempotent: `settleAssignment(id, 'cancelled', ...)`
+   * already refuses a transition from a terminal status, and a re-issued
+   * call is a no-op rather than a chain of follow-on errors. The caller
+   * can invoke `releaseMissionAssignments` more than once and the second
+   * call walks the same authoritative list and finds nothing left to do.
    */
   private async releaseMissionAssignments(missionId: string): Promise<void> {
     const workforce = this.workforceEngine
@@ -5434,18 +6111,42 @@ state: {
     if (!isTerminalMissionStatus(projection.status)) return
 
     const scope = workforce.ownerScope()
-    // Read through the **workers**, which is the only place a retained assignment list
-    // appears on this projection. `WorkerView.assignments` is a retention slice, so a Mission
-    // with more steps than the slice holds could leave some open; that is preferable to a
-    // second enumeration that could disagree with the one the board shows.
-    for (const worker of scope.projection().workers) {
-      for (const assignment of worker.assignments) {
-        if (assignment.missionId !== missionId) continue
-        // `open` is the nonterminal status. `isTerminalAssignmentStatus` is used rather than
-        // a string compare so a new terminal status cannot slip past and be "closed" twice.
-        if (isTerminalAssignmentStatus(assignment.status)) continue
-        await scope.cancelAssignment(assignment.assignmentId).catch(() => undefined)
+    // The authoritative list, not the projection's retention slice. The
+    // engine reads its own `state.assignments` map and returns every row
+    // tagged with this mission id, terminal or not, so a closed-form
+    // filter is enough to drive the closer.
+    const linked = scope.listAssignmentsForMission(missionId)
+    let closed = 0
+    let alreadyTerminal = 0
+    let refused = 0
+    for (const entry of linked) {
+      if (isTerminalAssignmentStatus(entry.status)) {
+        // Idempotency: a re-issue finds the assignment already closed and
+        // skips it. A re-issue happens whenever the closer runs twice for
+        // the same mission, which is fine.
+        alreadyTerminal += 1
+        continue
       }
+      const outcome = await scope.cancelAssignment(entry.assignmentId)
+      if (outcome.ok) {
+        closed += 1
+        continue
+      }
+      // Refused cancellation is not a Mission failure. The Mission is
+      // already terminal — its outcome is settled. The refusal is a
+      // housekeeping problem (the workforce could not find the assignment
+      // by id, the worker is no longer in scope, the deadline was set to
+      // the past and the transition was refused) and the right thing to
+      // do is make it visible, not let it propagate.
+      refused += 1
+      console.warn(
+        `[freya.core] releaseMissionAssignments could not cancel ${entry.assignmentId} for mission ${missionId}: ${outcome.reason ?? 'no reason'}`,
+      )
+    }
+    if (refused > 0) {
+      console.warn(
+        `[freya.core] releaseMissionAssignments for ${missionId}: closed=${closed} already-terminal=${alreadyTerminal} refused=${refused} total=${linked.length}`,
+      )
     }
   }
 
@@ -5582,6 +6283,17 @@ state: {
     const verifier = this.requireWorkRegistry().verifier(input.verifier)
     if (verifier === undefined) return { ok: false, reason: `no such verifier: ${input.verifier}` }
 
+    const content = await this.requireMission().privateContent(input.missionId)
+    const privatePlan = content?.executionPlan
+    if (privatePlan && !this.persistence.durable) return { ok: false, reason: 'Durable execution history is unavailable.' }
+    if (privatePlan && capability.verifier !== input.verifier) return { ok: false, reason: 'The registered verifier binding changed.' }
+    const mission = this.requireMission().record(input.missionId)
+    const privateStep = privatePlan?.steps.find(step => step.stepId === input.stepId)
+    if (privatePlan && (privatePlan.planId !== mission?.activePlan?.planId || !privateStep
+      || privateStep.capability !== input.capability || privateStep.verifier !== input.verifier)) return { ok: false, reason: 'Private execution binding does not match the validated plan.' }
+    if (!privatePlan && !input.capability.startsWith('test.')) return { ok: false, reason: 'A real capability requires encrypted execution inputs.' }
+    if (this.stopped || input.signal.aborted || this.state.stopAll.active) return { ok: false, reason: 'Execution was stopped.' }
+
     const created = await engine.createRun({
       steps: [
         {
@@ -5589,22 +6301,8 @@ state: {
           label: input.stepId,
           capability: input.capability,
           verifier: input.verifier,
-          // The verifier's **expected value**, which a verifier must be able to check
-          // against.
-          //
-          // This is not a shortcut around verification — it is the only way the check can
-          // happen at all. `test.record.matches` compares the observation against
-          // `input.expect`; a Mission Run built with no input leaves it null and the
-          // verifier reports "the step declared no expected result to check against" on
-          // every single attempt. The Mission then retried to its ceiling and blocked, which
-          // looked exactly like a Mission whose work kept failing.
-          //
-          // The value is the **step id** — Core's own identifier — and not anything derived
-          // from the goal, because the goal is private and this input is journalled into the
-          // Work plan. `test.record` echoes its label into `data.produced`, so a comparison
-          // against the step id is a genuine check that the capability returned what the
-          // step it was given produced, rather than one that passes unconditionally.
-          input: { expect: input.stepId },
+          // Real inputs stay private in Work. Only legacy test fixtures use an echo input.
+          input: privateStep ? privateStep.input : { expect: input.stepId },
           // The **request**, never the decision. Work's Guard decides whether this becomes
           // a gate, and a person decides it.
           ...(input.requiresApproval ? { requiresApproval: true } : {}),
@@ -5630,7 +6328,10 @@ state: {
       return { ok: false, reason: attached.reason ?? 'the Run could not be attached' }
     }
 
-    const started = await engine.startRun(runId)
+    const abort = () => { void engine.cancelRun(runId, 'Mission execution was cancelled.').catch(() => undefined) }
+    input.signal.addEventListener('abort', abort, { once: true })
+    if (input.signal.aborted) abort()
+    const started = await engine.startRun(runId).finally(() => input.signal.removeEventListener('abort', abort))
     if (!started.ok) return { ok: false, reason: started.reason ?? 'the Run could not start' }
 
     const snapshot = engine.snapshot()
@@ -6938,6 +7639,15 @@ state: {
             status: this.status(),
             conversation: { operation: 'cancelled', cancelled: result.cancelled },
           }
+        }
+
+        case 'conversation.mission.decide': {
+          const conversationId = readString(envelope.payload, 'conversationId')
+          const proposalMessageId = readString(envelope.payload, 'proposalMessageId')
+          const decision = readString(envelope.payload, 'decision')
+          if (!this.guard.evaluate(this.owner, 'mission.manage').allowed || !this.chatMissions || !conversationId || !proposalMessageId || !decision) return { requestId, ok: false, refusal: { reason: 'An authorized chat Mission decision is required.' } }
+          const outcome = await this.chatMissions.decide(conversationId, proposalMessageId, decision)
+          return outcome.ok ? { requestId, ok: true, conversation: { operation: 'mission', missionId: outcome.missionId, decision } } : { requestId, ok: false, refusal: { reason: outcome.reason ?? 'Mission decision refused.' } }
         }
 
         /* ------------------------------------------------------------------ *
@@ -8517,7 +9227,7 @@ state: {
             'mission.fail': () => engine.fail(missionId),
             // Completion is not a status setter. It asks a verifier, and completes the
             // Mission only if the verifier establishes the outcome.
-            'mission.requestCompletion': () => engine.requestCompletion(missionId),
+            'mission.requestCompletion': () => this.completeMission(missionId),
           }
           const run = operations[envelope.command]
           if (run === undefined) {
@@ -9742,6 +10452,40 @@ case 'forge.run': {
     })
   }
 
+  /**
+   * The Learning store.
+   *
+   * The canonical path is the one encrypted Vault: when a Vault is configured,
+   * Learning records live in the one SQLCipher database under `domain = 'learning'`.
+   * When no Vault is configured or opening it fails, Learning falls back to an
+   * explicitly ephemeral store that says so — never to a different durable store,
+   * never to plaintext, and never to a second encrypted file.
+   */
+  private async buildLearningStore(): Promise<LearningStore> {
+    if (this.options.learningStore) return this.options.learningStore
+    const vault = await this.ensureVault()
+    if (this.options.vault && vault !== null) {
+      try {
+        const store = new VaultLearningStore(vault)
+        await store.open()
+        return store
+      } catch (error) {
+        console.error('[freya.core] encrypted Vault Learning store unavailable', describe(error))
+        this.recordRuntimeFault('core.learning', 'learning_store_open_failed', 'Learning records could not be encrypted', error)
+        return new MemoryLearningStore({
+          mode: 'ephemeral',
+          faultReason: `Learning records could not be encrypted: ${describe(error)}`,
+        })
+      }
+    }
+    return new MemoryLearningStore({
+      mode: 'ephemeral',
+      faultReason:
+        this.vaultFault ??
+        'no encrypted Vault is available on this machine, so Freya is keeping learning records in memory only and they will not survive a restart',
+    })
+  }
+
   private async buildBrainStore(): Promise<BrainStore> {
     if (this.options.brainStore) return this.options.brainStore
     if (this.options.brainKey) {
@@ -10853,6 +11597,7 @@ function toTurnView(turn: {
   outcome: string
   reason: string | null
   assistantMessage: {
+    missionProposal?: ChatMissionProposal
     messageId: string
     role: 'user' | 'assistant'
     content: string
@@ -10874,6 +11619,7 @@ function toTurnView(turn: {
     assistantMessage: turn.assistantMessage
       ? {
           messageId: turn.assistantMessage.messageId,
+          ...(turn.assistantMessage.missionProposal ? { missionProposal: turn.assistantMessage.missionProposal } : {}),
           role: turn.assistantMessage.role,
           content: turn.assistantMessage.content,
           createdAt: turn.assistantMessage.createdAt,
@@ -11212,7 +11958,7 @@ export function createCore(options: CoreOptions): Core {
   return new FreyaCore(options)
 }
 
-export type { AnyCoreEvent }
+export type { AnyCoreEvent, ExecutiveDecisionOutcome, ExecutiveState }
 
 /**
  * A research result as the renderer sees it.

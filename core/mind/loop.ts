@@ -109,6 +109,7 @@ export interface ToolIteration {
   readonly report: ModelMessage
 }
 
+import { renderMissionProposal } from './mission-proposal'
 export type LoopOutcome =
   /** The model produced an answer. `text` is what it said, plus the tool footer. */
   | { readonly kind: 'answer'; readonly text: string; readonly providerId: string; readonly model: string; readonly iterations: readonly ToolIteration[] }
@@ -396,6 +397,10 @@ export async function runToolLoop(
     // an invented one.
     if (deps.signal.aborted) {
       return { kind: 'cancelled', reason: cancellationReason(deps.signal), providerContacted, iterations }
+    }
+
+    if (observation.kind === 'ok' && observation.missionProposal) {
+      return { kind: 'answer', text: renderMissionProposal(observation.missionProposal), providerId: outcome.providerId, model: outcome.model, iterations }
     }
 
     // The transcript of the loop, in provider order: what the model said, then

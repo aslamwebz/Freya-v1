@@ -44,6 +44,7 @@ async function start(options: { skillKey?: Uint8Array | null } = {}): Promise<Fi
     dataPath,
     providers: [fake],
     attentionObserveSources: false,
+    testCapabilities: true,
     ...(options.skillKey === undefined ? {} : { skillKey: options.skillKey }),
   })
   await core.start()
@@ -90,7 +91,7 @@ function procedure(name: string, summary = 'Reads a file and produces a bounded 
 describe('the projection is truthful about what exists', () => {
   it('reports unavailable before start, and says it has no domain', () => {
     const dir = join(tmpdir(), 'never-created')
-    const core = createCore({ dataPath: join(dir, 'events.jsonl'), providers: [] })
+    const core = createCore({ dataPath: join(dir, 'events.jsonl'), providers: [], testCapabilities: true })
     const projection = core.skills()
     expect(projection.health).toBe('unavailable')
     expect(projection.reason).toBe(NO_SKILL_DOMAIN_REASON)
@@ -436,7 +437,7 @@ describe('restart recovery keeps the journal authoritative for status', () => {
     const dataPath = join(dir, 'events.jsonl')
     const fake = new FakeModelProvider()
     try {
-      const first = createCore({ dataPath, providers: [fake], skillKey: SKILL_KEY, attentionObserveSources: false })
+      const first = createCore({ dataPath, providers: [fake], skillKey: SKILL_KEY, attentionObserveSources: false, testCapabilities: true })
       await first.start()
       await first.handleCommand({
         command: 'skill.admit',
@@ -445,7 +446,7 @@ describe('restart recovery keeps the journal authoritative for status', () => {
       })
       await first.stop('first process ends')
 
-      const second = createCore({ dataPath, providers: [fake], skillKey: SKILL_KEY, attentionObserveSources: false })
+      const second = createCore({ dataPath, providers: [fake], skillKey: SKILL_KEY, attentionObserveSources: false, testCapabilities: true })
       await second.start()
       const projection = second.skills()
       expect(projection.counts.retained).toBe(1)
@@ -479,10 +480,10 @@ describe('restart recovery keeps the journal authoritative for status', () => {
       // A journal with no `skill.admitted` at all, but a store that claims to hold one.
       // Nothing here writes such a file legitimately; the point is that the engine
       // would refuse it anyway.
-      const first = createCore({ dataPath, providers: [fake], skillKey: SKILL_KEY, attentionObserveSources: false })
+      const first = createCore({ dataPath, providers: [fake], skillKey: SKILL_KEY, attentionObserveSources: false, testCapabilities: true })
       await first.start()
       await first.stop('ends')
-      const second = createCore({ dataPath, providers: [fake], skillKey: SKILL_KEY, attentionObserveSources: false })
+      const second = createCore({ dataPath, providers: [fake], skillKey: SKILL_KEY, attentionObserveSources: false, testCapabilities: true })
       await second.start()
       expect(second.skills().counts.retained).toBe(0)
       await second.stop('ends')

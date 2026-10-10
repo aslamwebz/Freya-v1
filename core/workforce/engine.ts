@@ -257,6 +257,15 @@ export class WorkforceEngine {
       assignContext: (workerId, contextRef) => this.assignContext(workerId, contextRef),
       assign: (input) => this.assign(input),
       cancelAssignment: (assignmentId) => this.settleAssignment(assignmentId, 'cancelled', WORKFORCE_REASONS.owner),
+      // Read the authoritative map directly, not the projection's retention
+      // slice. A Mission with more steps than the slice holds cannot leak
+      // assignments the slice never named: every assignment the engine
+      // knows about for this mission is in the returned list, including
+      // ones the board would have called "hidden".
+      listAssignmentsForMission: (missionId) =>
+        [...this.state.assignments.values()]
+          .filter((a) => a.missionId === missionId)
+          .map((a) => ({ assignmentId: a.assignmentId, status: a.status })),
       stopAll: (reason) => this.stopAll(reason),
       settled: () => this.settled(),
       resume: () => this.resume(),

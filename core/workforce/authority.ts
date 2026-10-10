@@ -7,6 +7,7 @@ import {
   normaliseWorkforceName,
   specialisationAllows,
   workerPrincipalId,
+  type AssignmentStatus,
   type WorkerBudget,
   type WorkforceClaim,
   type WorkforceCommandOutcome,
@@ -130,6 +131,26 @@ export interface WorkforceOwnerScope {
     missionId?: string | null
   }): Promise<WorkforceCommandOutcome>
   cancelAssignment(assignmentId: string): Promise<WorkforceCommandOutcome>
+  /**
+   * Enumerate the assignments attached to a Mission, in the authoritative store.
+   *
+   * The Mission lifecycle opens a `workforce.claim` per delegation and nothing
+   * else closes them. The `projection().workers[*].assignments` view is a
+   * retention slice — a Mission with more steps than the slice holds would
+   * leave some open without showing the gap on the board. This enumeration
+   * reads the authoritative map instead, so the closer that the Mission
+   * lifecycle runs at terminal status can never silently miss an assignment
+   * the board would have called *hidden*.
+   *
+   * Closed-form filter: ids and statuses only. A caller that needs a worker
+   * id, a team id or a budget cell reads it from the assignment record
+   * itself; the filter exists so the closer can avoid a second enumeration
+   * that could disagree with this one.
+   */
+  listAssignmentsForMission(missionId: string): readonly {
+    readonly assignmentId: string
+    readonly status: AssignmentStatus
+  }[]
   /** STOP ALL. Synchronous with respect to the decision, like the gateway's own close. */
   stopAll(reason: string): void
   /**

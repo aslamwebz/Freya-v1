@@ -78,6 +78,7 @@ async function started(options: Partial<CoreOptions> = {}): Promise<Harness> {
     dataPath: join(dir, 'events.jsonl'),
     providers: [provider],
     missionKey: new Uint8Array(32).fill(9),
+    testCapabilities: true,
     ...options,
   })
   await core.start()
@@ -415,6 +416,7 @@ describe('the read/manage split is real, not decorative', () => {
     const revived = createCore({
       dataPath: join(dir, 'events.jsonl'),
       missionKey: new Uint8Array(32).fill(9),
+      testCapabilities: true,
     })
     await revived.start()
     core = revived
@@ -498,6 +500,7 @@ describe('a tampered journal cannot manufacture an outcome', () => {
     const revived = createCore({
       dataPath: path,
       missionKey: new Uint8Array(32).fill(9),
+      testCapabilities: true,
     })
     await revived.start()
     core = revived
@@ -558,7 +561,7 @@ describe('the activity feed describes a Mission without describing its text', ()
     await core?.stop('test-teardown')
     core = undefined
 
-    const revived = createCore({ dataPath: join(dir, 'events.jsonl'), missionKey: new Uint8Array(32).fill(9) })
+    const revived = createCore({ dataPath: join(dir, 'events.jsonl'), missionKey: new Uint8Array(32).fill(9), testCapabilities: true })
     await revived.start()
     core = revived
     const wholeFeed = JSON.stringify(revived.activity())
@@ -758,6 +761,7 @@ describe('STOP ALL outranks Missions', () => {
     const revived = createCore({
       dataPath: join(dir, 'events.jsonl'),
       missionKey: new Uint8Array(32).fill(9),
+      testCapabilities: true,
     })
     await revived.start()
     core = revived
@@ -803,6 +807,7 @@ describe('the Mission projection is derived, not assembled', () => {
     const revived = createCore({
       dataPath: join(dir, 'events.jsonl'),
       missionKey: new Uint8Array(32).fill(9),
+      testCapabilities: true,
     })
     await revived.start()
     core = revived

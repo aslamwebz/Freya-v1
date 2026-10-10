@@ -47,6 +47,7 @@ export interface ConversationMirror {
     attachments?: readonly ModelAttachment[],
   ): Promise<ConversationCommandOutcome>
   cancelTurn(turnId: string): Promise<ConversationCommandOutcome>
+  decideMission(conversationId: string, proposalMessageId: string, decision: 'approve' | 'reject' | 'cancel' | 'resume'): Promise<ConversationCommandOutcome>
 
   /**
    * Forget the shared mirror. For tests.
@@ -217,6 +218,7 @@ export function createConversationMirror(): ConversationMirror {
     },
 
     cancelTurn: (turnId) => submit('conversation.turn.cancel', { turnId }),
+    decideMission: (conversationId, proposalMessageId, decision) => submit('conversation.mission.decide', { conversationId, proposalMessageId, decision }),
 
     async attach(): Promise<() => void> {
       const attachment = ++generation

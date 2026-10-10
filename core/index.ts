@@ -1700,6 +1700,7 @@ class FreyaCore implements Core {
   private metacognitionStore: MetacognitionStore | undefined
   private strategyLifecycle: StrategyLifecycleManager | undefined
   private evolutionStoreInstance: EvolutionStore | undefined
+  private readonly observedMissions = new Set<string>()
   /**
    * The canonical encrypted Vault, or null when the host supplied none or it could
    * not be opened. Held privately so that Mission content has one owner of the
@@ -2815,6 +2816,14 @@ class FreyaCore implements Core {
     this.evolutionStoreInstance = await this.buildEvolutionStore()
     this.strategyLifecycle = new StrategyLifecycleManager(this.evolutionStoreInstance, this.metacognitionStore)
     await this.strategyLifecycle.initialize()
+
+    // Authoritative Metacognition & Evolution Event Observer (P1 Findings 3 & 5)
+    this.fabric.subscribe((event) => {
+      if (this.metacognitionEngine === undefined) return
+      if (event.type === 'mission.completed' || event.type === 'mission.failed') {
+        void this.observeAuthoritativeMission(event)
+      }
+    })
 
     // Context sits beside Missions rather than above them: it reads which Mission is
     // current and nothing else, and it is built here so the two are wired in one place.
@@ -5646,6 +5655,90 @@ private async buildForge(): Promise<void> {
         break
       default:
         break
+    }
+  }
+
+  /**
+   * Authoritative production performance observation and regression monitoring.
+   * Wires Metacognition & Evolution directly to real Mission lifecycle events (P1 Findings 3 & 5).
+   */
+  private async observeAuthoritativeMission(event: AnyCoreEvent): Promise<void> {
+    if (this.metacognitionEngine === undefined) return
+    const p = event.payload as Record<string, unknown>
+    const missionId = typeof p.missionId === 'string' ? p.missionId : null
+    if (!missionId) return
+
+    // Deduplication check: prevent duplicated observations from replayed events or repeated deliveries
+    if (this.observedMissions.has(missionId)) return
+    this.observedMissions.add(missionId)
+
+    const mission = this.missionEngine?.record(missionId)
+    const isCompleted = event.type === 'mission.completed'
+    const verified = isCompleted && mission?.verification?.state === 'passed'
+
+    // Compute measured duration if timestamps exist, otherwise null (never fabricate)
+    let durationMs: number | null = null
+    const startTimeStr = mission?.activatedAt ?? mission?.createdAt
+    if (startTimeStr) {
+      const end = mission?.settledAt ? Date.parse(mission.settledAt) : Date.parse(event.occurredAt)
+      const start = Date.parse(startTimeStr)
+      if (!Number.isNaN(start) && !Number.isNaN(end)) {
+        durationMs = Math.max(0, end - start)
+      }
+    }
+
+    // Measure action step attempts from attached runs
+    let actionAttempts = 0
+    let toolErrors = 0
+    if (mission?.childRuns) {
+      for (const runId of mission.childRuns) {
+        const stepIds = this.workEngine?.snapshot().runSteps.get(runId) ?? []
+        actionAttempts += stepIds.length
+        for (const stepId of stepIds) {
+          const step = this.workEngine?.snapshot().steps.get(stepId)
+          if (step?.status === 'failed') toolErrors++
+        }
+      }
+    }
+    if (actionAttempts === 0) actionAttempts = 1
+    if (!isCompleted && toolErrors === 0) toolErrors = 1
+
+    const rawErrorMessage = typeof p.reason === 'string' ? p.reason : (mission?.reason ?? null)
+
+    // Resolve active strategy version if present
+    const activeStrategy = this.strategyLifecycle?.getActiveStrategy()
+    const hasResearchStep = mission?.childRuns?.some((runId) => {
+      const stepIds = this.workEngine?.snapshot().runSteps.get(runId) ?? []
+      return stepIds.some((stepId) => {
+        const step = this.workEngine?.snapshot().steps.get(stepId)
+        return step?.capability?.startsWith('research')
+      })
+    })
+
+    const taskType = activeStrategy?.kind ?? (hasResearchStep ? 'research' : 'general')
+
+    const telemetry = await this.metacognitionEngine.observeMission({
+      missionId,
+      runId: mission?.childRuns[0],
+      taskType,
+      outcome: isCompleted ? (verified ? 'success' : 'partial') : 'failure',
+      verified,
+      verificationReason:
+        mission?.verification?.reason ?? (isCompleted ? 'Mission verified' : rawErrorMessage),
+      actionAttempts,
+      toolErrors,
+      durationMs,
+      // Strictly maintain null when unmeasured; never synthesize numbers
+      modelTokens: null,
+      modelCalls: null,
+      externalRequests: null,
+      rawErrorMessage,
+    })
+
+    // Automatic Regression Monitoring (Finding 5)
+    // If an active strategy was used, feed the telemetry to evaluate for regressions
+    if (activeStrategy && this.strategyLifecycle) {
+      await this.strategyLifecycle.monitorAndEvaluateRegression([telemetry])
     }
   }
 

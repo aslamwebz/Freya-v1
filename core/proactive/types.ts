@@ -179,11 +179,26 @@ export interface ProactiveAdvisoryProposal {
   readonly overrideReason?: string
 }
 
+export type ActionLevel = 1 | 2 | 3
+
+export interface ProactiveGovernedDecision {
+  readonly decisionId: string
+  readonly observationId: string
+  readonly decision: ProactiveCandidateAction
+  readonly level: ActionLevel
+  readonly actionRef: string | null
+  readonly reason: string
+  readonly requiresApproval: boolean
+  readonly executed: boolean
+  readonly outcome?: string
+}
+
 export interface ObservationIngestResult {
   readonly ok: boolean
   readonly observation?: NormalizedObservation
   readonly assessment?: RelevanceAssessment
   readonly proposal?: ProactiveAdvisoryProposal
+  readonly decision?: ProactiveGovernedDecision
   readonly reason?: string
   readonly dropCode?: ObservationDropReason
 }

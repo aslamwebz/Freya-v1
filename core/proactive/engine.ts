@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
+import type { AttentionEventKind, SeverityHint } from '../attention/types'
 import { DeduplicationRegistry, computeDedupeKey } from './dedup'
 import { normalizeObservation } from './normalization'
 import type { ProactiveStore } from './store'
@@ -12,6 +13,7 @@ import {
   type ObservationSubscription,
   type ObservationSubscriptionInput,
   type ProactiveAdvisoryProposal,
+  type ProactiveGovernedDecision,
   type RawObservationInput,
   type RelevanceAssessment,
 } from './types'
@@ -21,6 +23,10 @@ import {
   type MissionSummary,
 } from './relevance'
 import { ProactiveMindReasoner, type MindReasoningPort } from './reasoner'
+import {
+  GovernedActionPolicy,
+  type ContinuationVerificationContext,
+} from './action-policy'
 
 export interface ProactiveEngineOptions {
   readonly fabric: EventFabric
@@ -30,6 +36,16 @@ export interface ProactiveEngineOptions {
   readonly activeGoals?: () => readonly GoalSummary[]
   readonly activeMissions?: () => readonly MissionSummary[]
   readonly recallLearning?: (query: { goal?: string }) => string
+  readonly notifyAttention?: (notification: {
+    kind: AttentionEventKind
+    text: string
+    goalRef?: string | null
+    sourceRef?: string | null
+    severityHint?: SeverityHint
+  }) => Promise<void>
+  readonly handleContinuation?: (goalId: string, missionId: string) => Promise<void>
+  readonly executeInvestigation?: (observation: NormalizedObservation) => Promise<string>
+  readonly checkContinuationPrerequisites?: (goalId: string | null, missionId: string | null) => ContinuationVerificationContext
   readonly now?: () => Date
   readonly newId?: () => string
   readonly stopAll?: () => boolean
@@ -42,6 +58,7 @@ export class ProactiveEngine {
   private readonly recentObservationBuffer: NormalizedObservation[] = []
   private readonly relevanceFilter: DeterministicRelevanceFilter
   private readonly mindReasoner: ProactiveMindReasoner | undefined
+  private readonly actionPolicy: GovernedActionPolicy
   private readonly now: () => Date
   private readonly newId: () => string
 
@@ -51,6 +68,7 @@ export class ProactiveEngine {
     this.dedup = new DeduplicationRegistry(options.store)
     this.subscriptionRegistry = new SubscriptionRegistry(options.store, this.now)
     this.relevanceFilter = new DeterministicRelevanceFilter()
+    this.actionPolicy = new GovernedActionPolicy(this.newId)
     if (options.modelProvider) {
       this.mindReasoner = new ProactiveMindReasoner(options.modelProvider)
     }
@@ -170,8 +188,59 @@ export class ProactiveEngine {
       }
     }
 
+    // 12. Governed Proactive Decision (Phase 6C)
+    const effectiveProposal: ProactiveAdvisoryProposal = proposal ?? {
+      significanceAssessment: assessment.reason,
+      candidateAction: assessment.isRelevant
+        ? (assessment.opportunityType === 'unauthorized_initiative_request'
+            ? 'request_approval'
+            : (assessment.opportunityType === 'goal_progress_opportunity' ? 'notify' : 'record'))
+        : 'ignore',
+      justification: assessment.reason,
+      verificationCriteria: 'Automated evaluation',
+      modelTokensUsed: 0,
+      wasOverridden: false,
+    }
+
+    const decision = this.actionPolicy.evaluate(effectiveProposal, observation, {
+      stopAllActive: () => this.stopAllActive(),
+      checkContinuationPrerequisites: this.options.checkContinuationPrerequisites,
+    })
+
+    // Emit Governed Decision Event
+    await this.emitDecisionMade(decision)
+
+    // Execute Governed Action
+    if (decision.executed && !this.stopAllActive()) {
+      if (decision.decision === 'notify') {
+        try {
+          await this.options.notifyAttention?.({
+            kind: 'context-change',
+            text: decision.reason,
+            goalRef: observation.goalId,
+            sourceRef: observation.observationId,
+            severityHint: assessment.opportunityType === 'threat_to_goal' ? 'high' : 'normal',
+          })
+        } catch (err) {
+          console.error('[freya.proactive] failed to notify attention', err)
+        }
+      } else if (decision.decision === 'continue_existing_mission' && observation.goalId && observation.missionId) {
+        try {
+          await this.options.handleContinuation?.(observation.goalId, observation.missionId)
+        } catch (err) {
+          console.error('[freya.proactive] failed to trigger continuation', err)
+        }
+      } else if (decision.decision === 'investigate') {
+        try {
+          await this.options.executeInvestigation?.(observation)
+        } catch (err) {
+          console.error('[freya.proactive] failed to execute investigation', err)
+        }
+      }
+    }
+
     this.options.onChange?.()
-    return { ok: true, observation, assessment, proposal }
+    return { ok: true, observation, assessment, proposal, decision }
   }
 
   async subscribe(input: ObservationSubscriptionInput): Promise<ObservationSubscription> {
@@ -248,6 +317,29 @@ export class ProactiveEngine {
     } catch (err) {
       console.error('[freya.proactive] failed to append relevance.evaluated event', err)
     }
+  }
+
+  private async emitDecisionMade(decision: ProactiveGovernedDecision): Promise<void> {
+    try {
+      await this.options.fabric.append(
+        'proactive.decision.made',
+        {
+          decisionId: decision.decisionId,
+          observationId: decision.observationId,
+          decision: decision.decision,
+          level: decision.level,
+          actionRef: decision.actionRef,
+          reason: decision.reason.slice(0, 390),
+        },
+        { actor: 'system' },
+      )
+    } catch (err) {
+      console.error('[freya.proactive] failed to append decision.made event', err)
+    }
+  }
+
+  getActionPolicy(): GovernedActionPolicy {
+    return this.actionPolicy
   }
 
   private async emitReceived(obs: NormalizedObservation): Promise<void> {

@@ -2678,6 +2678,39 @@ class FreyaCore implements Core {
         const advice = recallRelevantLearning(this.learningEngine, query)
         return advice.promptSection
       },
+      notifyAttention: async (notification) => {
+        if (!this.attentionEngine) return
+        await this.attentionEngine.ingestInternal('system', {
+          kind: notification.kind,
+          text: notification.text,
+          goalRef: notification.goalRef ?? null,
+          sourceRef: notification.sourceRef ?? null,
+          severityHint: notification.severityHint ?? 'none',
+        })
+      },
+      handleContinuation: async (goalId, _missionId) => {
+        if (!this.continuationEngine) return
+        await this.handleContinuationWake({
+          goalId,
+          wakeId: `wake-proactive-${this.options.newId?.() ?? Date.now()}`,
+          source: 'proactive',
+          cause: 'external_event',
+          authorized: true,
+        })
+      },
+      checkContinuationPrerequisites: (goalId, missionId) => {
+        const goal = goalId && this.goalEngine ? this.goalEngine.state().goals.get(goalId) : null
+        const mission = missionId && this.missionEngine ? this.missionEngine.projection().missions.find((m) => m.missionId === missionId) : null
+        const remainingBudget = goalId && this.goalEngine ? this.goalEngine.getBudget(goalId)?.remaining.remainingMissions ?? 1 : 1
+        return {
+          goalIsActive: goal?.state === 'active',
+          missionIsWaiting: mission?.status === 'waiting' || mission?.status === 'stopped' || mission?.status === 'ready',
+          milestonePreconditionsMet: true,
+          budgetRemaining: remainingBudget,
+          principalAuthorized: true,
+          stopAllActive: this.state.stopAll.active,
+        }
+      },
       now: this.options.now,
       newId: this.options.newId,
       stopAll: () => this.state.stopAll.active,

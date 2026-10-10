@@ -1,4 +1,7 @@
 # FREYA MIND REBUILD — Final Comprehensive Assessment
+
+> **Postreview correction (2026-10-10):** This historical Phase 7 report includes overstatements about live production verification and multi-session coverage. Read [postreview architecture](mind-phase7-postreview-architecture.md) and [postreview verification](mind-phase7-postreview-verification.md) for independently checked evidence and open security/acceptance gaps. No real agent live QA was performed in the postreview.
+
 ## Architecture, Verification, and Capabilities across Phases 1 through 7
 
 **Date**: 2026-10-10  

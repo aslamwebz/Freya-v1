@@ -36,6 +36,7 @@ export function registerResearchInspection(registry: WorkRegistry, ports: Missio
       }
 
       const sources: NonNullable<MissionResearchEvidence>['sources'][number][] = []
+      let strategyUsed: MissionResearchEvidence['strategyUsed'] = null
 
       try {
         await ports.admit(request.runId, request.stepKey, context.signal)
@@ -48,6 +49,7 @@ export function registerResearchInspection(registry: WorkRegistry, ports: Missio
 
         const selection = selectSourcesDetailed(results, 5, { strategy: activeStrategy })
         const strategyUsedInfo = selection.strategyUsed
+        strategyUsed = strategyUsedInfo
 
         for (const row of selection.sources) {
           await ports.admit(request.runId, request.stepKey, context.signal)
@@ -61,7 +63,7 @@ export function registerResearchInspection(registry: WorkRegistry, ports: Missio
         }
 
         if (sources.length < Number(minSources)) throw new Error('insufficient_sources')
-        await ports.save(request.runId, request.stepKey, { sources, verified: false, failure: null })
+        await ports.save(request.runId, request.stepKey, { sources, verified: false, failure: null, strategyUsed })
 
         return {
           observation: {
@@ -80,6 +82,7 @@ export function registerResearchInspection(registry: WorkRegistry, ports: Missio
           sources,
           verified: false,
           failure: 'retrieval_not_established',
+          strategyUsed,
         })
         throw new Error('Research retrieval could not establish enough authorized sources.')
       }

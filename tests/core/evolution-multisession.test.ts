@@ -37,8 +37,8 @@ function makeAcceptanceScenarios(): ExperimentScenario[] {
         query: 'Raft consensus paper invariants',
         candidateSources: [
           {
-            url: 'https://unreliable-link.example.com/raft',
-            domain: 'unreliable-link.example.com',
+            url: 'https://unreliable-link.fixture.org/raft',
+            domain: 'unreliable-link.fixture.org',
             previouslyVerified: false,
             contentAvailable: false,
             text: '',
@@ -70,8 +70,8 @@ function makeAcceptanceScenarios(): ExperimentScenario[] {
         query: 'LLVM IR SSA form properties',
         candidateSources: [
           {
-            url: 'https://broken-mirror.example.org/llvm',
-            domain: 'broken-mirror.example.org',
+            url: 'https://broken-mirror.fixture.net/llvm',
+            domain: 'broken-mirror.fixture.net',
             previouslyVerified: false,
             contentAvailable: false,
             text: '',
@@ -84,8 +84,8 @@ function makeAcceptanceScenarios(): ExperimentScenario[] {
             text: 'LLVM Language Reference Manual defines the SSA-based representation...',
           },
           {
-            url: 'https://mapping-high-level.example.org/ir',
-            domain: 'mapping-high-level.example.org',
+            url: 'https://mapping-high-level.fixture.net/ir',
+            domain: 'mapping-high-level.fixture.net',
             previouslyVerified: true,
             contentAvailable: true,
             text: 'SSA form ensures that every variable is assigned exactly once...',
@@ -103,8 +103,8 @@ function makeAcceptanceScenarios(): ExperimentScenario[] {
         query: 'Kyber and Dilithium NIST standards',
         candidateSources: [
           {
-            url: 'https://stale-cache.example.com/pq',
-            domain: 'stale-cache.example.com',
+            url: 'https://stale-cache.fixture.org/pq',
+            domain: 'stale-cache.fixture.org',
             previouslyVerified: false,
             contentAvailable: false,
             text: '',
@@ -305,6 +305,8 @@ describe('Phase 7D — End-to-End Multi-Session Verified Evolution Acceptance', 
     // Introduce controlled deterioration (2 consecutive strategy failures)
     await metacognition!.observeMission({
       missionId: 'msn-regress-1',
+      strategyId: candidate.candidateId,
+      strategyVersion: candidate.version,
       taskType: 'research_inspection',
       outcome: 'failure',
       verified: false,
@@ -314,6 +316,8 @@ describe('Phase 7D — End-to-End Multi-Session Verified Evolution Acceptance', 
 
     await metacognition!.observeMission({
       missionId: 'msn-regress-2',
+      strategyId: candidate.candidateId,
+      strategyVersion: candidate.version,
       taskType: 'research_inspection',
       outcome: 'failure',
       verified: false,

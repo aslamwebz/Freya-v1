@@ -20,8 +20,8 @@ function makeTestScenarios(): ExperimentScenario[] {
         query: 'TypeScript compiler architecture',
         candidateSources: [
           {
-            url: 'https://flaky-blog.example.com/ts',
-            domain: 'flaky-blog.example.com',
+            url: 'https://flaky-blog.fixture.org/ts',
+            domain: 'flaky-blog.fixture.org',
             previouslyVerified: false,
             contentAvailable: false, // Baseline fails here
             text: '',
@@ -53,8 +53,8 @@ function makeTestScenarios(): ExperimentScenario[] {
         query: 'Raft consensus algorithm invariants',
         candidateSources: [
           {
-            url: 'https://unverified-forum.example.com/p/123',
-            domain: 'unverified-forum.example.com',
+            url: 'https://unverified-forum.fixture.org/p/123',
+            domain: 'unverified-forum.fixture.org',
             previouslyVerified: false,
             contentAvailable: false, // Baseline fails here
             text: '',
@@ -87,8 +87,8 @@ function makeTestScenarios(): ExperimentScenario[] {
         query: 'SHA256 vs BLAKE3 performance benchmarks',
         candidateSources: [
           {
-            url: 'https://random-gist.example.com/bench',
-            domain: 'random-gist.example.com',
+            url: 'https://random-gist.fixture.org/bench',
+            domain: 'random-gist.fixture.org',
             previouslyVerified: false,
             contentAvailable: false,
             text: '',
@@ -171,16 +171,16 @@ describe('Phase 7C — Controlled Experimentation & Independent Evaluation', () 
 
       // Unavailable content
       const badContent = independentlyVerifyScenarioResult(scenario, [
-        { url: 'https://example.com/1', text: '', contentAvailable: false },
-        { url: 'https://example.com/2', text: 'ok', contentAvailable: true },
+        { url: 'https://public-fixture.org/1', text: '', contentAvailable: false },
+        { url: 'https://public-fixture.org/2', text: 'ok', contentAvailable: true },
       ])
       expect(badContent.verdict).toBe('failed')
       expect(badContent.reason).toContain('empty or unavailable')
 
       // Valid check
       const validCheck = independentlyVerifyScenarioResult(scenario, [
-        { url: 'https://example.com/1', text: 'Valid content excerpt 1', contentAvailable: true },
-        { url: 'https://example.com/2', text: 'Valid content excerpt 2', contentAvailable: true },
+        { url: 'https://public-fixture.org/1', text: 'Valid content excerpt 1', contentAvailable: true },
+        { url: 'https://public-fixture.org/2', text: 'Valid content excerpt 2', contentAvailable: true },
       ])
       expect(validCheck.verdict).toBe('passed')
     })
@@ -206,29 +206,29 @@ describe('Phase 7C — Controlled Experimentation & Independent Evaluation', () 
               // In this holdout, unverified sources are fresh and available,
               // while previouslyVerified sources have suffered bit rot/outages.
               {
-                url: 'https://fresh-domain.example.com/spec',
-                domain: 'fresh-domain.example.com',
+                url: 'https://fresh-domain.fixture.org/spec',
+                domain: 'fresh-domain.fixture.org',
                 previouslyVerified: false,
                 contentAvailable: true,
                 text: 'Fresh specification details...',
               },
               {
-                url: 'https://docs.example.org/spec2',
-                domain: 'docs.example.org',
+                url: 'https://docs.fixture.net/spec2',
+                domain: 'docs.fixture.net',
                 previouslyVerified: false,
                 contentAvailable: true,
                 text: 'Second fresh specification source...',
               },
               {
-                url: 'https://old-domain.example.com/stale',
-                domain: 'old-domain.example.com',
+                url: 'https://old-domain.fixture.org/stale',
+                domain: 'old-domain.fixture.org',
                 previouslyVerified: true,
                 contentAvailable: false,
                 text: '',
               },
               {
-                url: 'https://archive.example.org/stale2',
-                domain: 'archive.example.org',
+                url: 'https://archive.fixture.net/stale2',
+                domain: 'archive.fixture.net',
                 previouslyVerified: true,
                 contentAvailable: false,
                 text: '',

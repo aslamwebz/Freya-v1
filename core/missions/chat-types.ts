@@ -23,6 +23,8 @@ export interface MissionResearchEvidence {
   readonly sources: readonly ResearchSource[]
   readonly verified: boolean
   readonly failure: string | null
+  /** Actual production strategy selected for this research execution. */
+  readonly strategyUsed?: { readonly id: string; readonly version: string } | null
 }
 
 export interface ConversationMissionView {

@@ -14,6 +14,8 @@ import type {
   MeasurementCriterion,
   StrategyCandidate,
 } from './strategy'
+import type { SearchResult } from '../research/types'
+import { selectSourcesDetailed } from '../research/evidence'
 
 export type ExperimentStatus =
   | 'pending'
@@ -149,60 +151,79 @@ export function executeSourceSelection(
   readonly tokensUsed: number
   readonly toolErrors: number
   readonly securityViolations: number
+  readonly durationMs: number
 } {
-  let actionsCount = 0
-  let tokensUsed = 0
-  let toolErrors = 0
+  const t0 = performance.now()
   let securityViolations = 0
 
-  // Security check: if parameters attempt to inject forbidden capabilities
-  if (candidateParams['unlimited_budget'] || candidateParams['bypass_guard']) {
+  // Security check: reject unauthorized or dangerous parameter injection
+  if (
+    candidateParams['unlimited_budget'] ||
+    candidateParams['bypass_guard'] ||
+    candidateParams['eval_code']
+  ) {
     securityViolations++
   }
 
   const rawSources = scenario.input.candidateSources
+  // Use the SAME source-ranking implementation as production research.
+  // Fixture-provided verification evidence is represented as metadata, never
+  // as an injected trusted-domain override to the production selector.
+  const searchResults: SearchResult[] = rawSources.map((s, idx) => ({
+    title: s.domain,
+    url: s.url,
+    snippet: s.text,
+    sourceDomain: s.domain,
+    rank: idx + 1,
+    publishedAt: null,
+    retrievedAt: new Date().toISOString(),
+    metadata: s.previouslyVerified ? { verified: 'true' } : undefined,
+  }))
 
-  if (strategyType === 'baseline') {
-    // Baseline: inspects top expectedRequiredSources sequentially without verification preference
-    const candidates = rawSources.slice(0, scenario.expectedRequiredSources)
-    const selected: (typeof scenario.input.candidateSources)[number][] = []
-    for (const src of candidates) {
-      actionsCount++
-      tokensUsed += 250
-      if (src.contentAvailable) {
-        selected.push(src)
-      } else {
-        toolErrors++ // Encountered unavailable source
-      }
-    }
-    return { selectedSources: selected, actionsCount, tokensUsed, toolErrors, securityViolations }
-  } else {
-    // Candidate: prioritizes verified domains and checks host diversity
-    const prioritizeVerified = Boolean(candidateParams['prioritizeVerifiedDomains'] ?? true)
+  const strategy =
+    strategyType === 'candidate'
+      ? {
+          strategyId: 'candidate-strategy',
+          kind: 'research_source_ranking',
+          version: '2.0.0',
+          parameters: candidateParams,
+        }
+      : null
 
-    const sorted = [...rawSources].sort((a, b) => {
-      if (prioritizeVerified && a.previouslyVerified !== b.previouslyVerified) {
-        return a.previouslyVerified ? -1 : 1
-      }
-      return 0
-    })
+  const { sources: chosen } = selectSourcesDetailed(
+    searchResults,
+    scenario.expectedRequiredSources,
+    { strategy },
+  )
 
-    // Candidate takes top expectedRequiredSources according to its ranked order
-    const candidates = sorted.slice(0, scenario.expectedRequiredSources)
-    const selected: (typeof scenario.input.candidateSources)[number][] = []
+  const sourceMap = new Map(rawSources.map((s) => [s.url, s]))
+  const selected: (typeof scenario.input.candidateSources)[number][] = []
+  let toolErrors = 0
+  let actionsCount = 0
 
-    for (const src of candidates) {
-      actionsCount++
-      tokensUsed += 200
-
-      if (src.contentAvailable) {
-        selected.push(src)
+  for (const item of chosen) {
+    actionsCount++
+    const original = sourceMap.get(item.url)
+    if (original) {
+      if (original.contentAvailable && original.text.trim().length > 0) {
+        selected.push(original)
       } else {
         toolErrors++
       }
     }
+  }
 
-    return { selectedSources: selected, actionsCount, tokensUsed, toolErrors, securityViolations }
+  // Deterministic source selection uses 0 model tokens
+  const tokensUsed = 0
+  const durationMs = Math.max(0.01, performance.now() - t0)
+
+  return {
+    selectedSources: selected,
+    actionsCount,
+    tokensUsed,
+    toolErrors,
+    securityViolations,
+    durationMs,
   }
 }
 
@@ -226,10 +247,12 @@ export class ControlledExperimentRunner {
 
     // 2. Execute scenarios against both baseline and candidate
     for (const scenario of scenarios) {
-      // Check ceiling limits before execution
+      // Conservative pre-reservation check: ensure ceilings not exceeded
+      const estimatedActions = scenario.expectedRequiredSources * 2
+      const estimatedTokens = 0
       if (
-        totalTokensConsumed >= budget.maxTokens ||
-        totalActionsExecuted >= ceilings.maxActions
+        totalTokensConsumed + estimatedTokens > budget.maxTokens ||
+        totalActionsExecuted + estimatedActions > ceilings.maxActions
       ) {
         return this.buildCeilingExceededReport(
           experimentId,
@@ -254,7 +277,7 @@ export class ControlledExperimentRunner {
         toolErrors: baseExec.toolErrors,
         actionsCount: baseExec.actionsCount,
         tokensUsed: baseExec.tokensUsed,
-        durationMs: 50,
+        durationMs: baseExec.durationMs,
         securityViolations: baseExec.securityViolations,
         verifierVerdict: baseVerify.verdict,
         verifierReason: baseVerify.reason,
@@ -276,11 +299,50 @@ export class ControlledExperimentRunner {
         toolErrors: candExec.toolErrors,
         actionsCount: candExec.actionsCount,
         tokensUsed: candExec.tokensUsed,
-        durationMs: 45,
+        durationMs: candExec.durationMs,
         securityViolations: candExec.securityViolations,
         verifierVerdict: candVerify.verdict,
         verifierReason: candVerify.reason,
       })
+
+      // Immediate security violation disqualification
+      if (candExec.securityViolations > 0) {
+        return {
+          experimentId,
+          candidateId: candidate.candidateId,
+          status: 'failed',
+          baselinePerformance: this.aggregate(baselineResults),
+          candidatePerformance: this.aggregate(candidateResults),
+          holdoutPerformance: {
+            baselinePassRate: 0,
+            candidatePassRate: 0,
+          },
+          dimensions: {
+            correctness: false,
+            verificationSuccess: false,
+            resourceCost: 'worse',
+            securitySafe: false,
+          },
+          outcome: 'disqualified_security_regression',
+          confidence: 'strong',
+          isPromotionEligible: false,
+          reason:
+            'Candidate disqualified: security or policy violations detected during experiment execution.',
+          completedAt: new Date().toISOString(),
+        }
+      }
+
+      // Post-operation budget check
+      if (
+        totalTokensConsumed > budget.maxTokens ||
+        totalActionsExecuted > ceilings.maxActions
+      ) {
+        return this.buildCeilingExceededReport(
+          experimentId,
+          candidate.candidateId,
+          'Experiment halted: budget ceiling exhausted during execution.',
+        )
+      }
     }
 
     // 3. Aggregate Performance

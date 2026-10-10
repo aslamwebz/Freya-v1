@@ -16,14 +16,21 @@ describe('Milestone 3 — Automatic Performance Observation from Authoritative M
   let origin: string
   let searches: string[]
   let reads: string[]
+  let forceSearchUnavailable: boolean
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'freya-auto-obs-'))
     searches = []
     reads = []
+    forceSearchUnavailable = false
     server = createServer((request, response) => {
       const url = new URL(request.url!, 'http://localhost')
       if (url.pathname === '/search') {
+        if (forceSearchUnavailable) {
+          response.setHeader('content-type', 'application/json')
+          response.end('[]')
+          return
+        }
         searches.push(url.searchParams.get('q')!)
         response.setHeader('content-type', 'application/json')
         response.end(
@@ -261,12 +268,8 @@ describe('Milestone 3 — Automatic Performance Observation from Authoritative M
     expect(telemetriesAfterDuplicate).toHaveLength(1)
   })
 
-  it('automatically observes and attributes mission failures from authoritative events', async () => {
+  it('does not create misleading telemetry from a forged failure event for an unknown mission', async () => {
     await startCore()
-    const metacognition = core!.metacognition()
-    expect(metacognition).toBeDefined()
-
-    // Trigger an authoritative mission failure event
     const internal = core as unknown as {
       observeAuthoritativeMission(event: unknown): Promise<void>
     }
@@ -274,27 +277,38 @@ describe('Milestone 3 — Automatic Performance Observation from Authoritative M
       type: 'mission.failed',
       sequence: 100,
       occurredAt: new Date().toISOString(),
+      payload: { missionId: 'msn-nonexistent', reason: 'insufficient_sources' },
+    })
+    expect(await core!.metacognition()!.getTelemetries()).toHaveLength(0)
+  })
+
+  it('does not fabricate terminal failure telemetry for a legitimately blocked Mission', async () => {
+    const { conversationId } = await startCore()
+    forceSearchUnavailable = true
+    const turn = await core!.handleCommand({
+      command: 'conversation.turn.submit',
+      requestId: 'fail-turn-1',
       payload: {
-        missionId: 'msn-failed-defect',
-        reason: 'retrieval_not_established: insufficient_sources',
+        conversationId,
+        text: 'Research models and verify the pricing evidence.',
       },
     })
+    if (turn.conversation?.operation !== 'turn') throw new Error('Expected conversation turn')
+    const proposalMessageId = turn.conversation.turn.assistantMessage?.messageId
+    if (!proposalMessageId) throw new Error('Expected Mission proposal')
+    const decision = await core!.handleCommand({
+      command: 'conversation.mission.decide',
+      requestId: 'fail-approve-1',
+      payload: { conversationId, proposalMessageId, decision: 'approve' },
+    })
+    expect(decision.ok).toBe(true)
 
-    const telemetries = await metacognition!.getTelemetries()
-    expect(telemetries).toHaveLength(1)
-    const failureTelemetry = telemetries[0]!
-
-    expect(failureTelemetry.missionId).toBe('msn-failed-defect')
-    expect(failureTelemetry.outcome).toBe('failure')
-    expect(failureTelemetry.verified).toBe(false)
-    expect(failureTelemetry.failureAttribution).toBeDefined()
-    expect(failureTelemetry.failureAttribution?.category).toBe('strategy_defect')
-    expect(failureTelemetry.failureAttribution?.isStrategyDefect).toBe(true)
-
-    // Summary must reflect the failure
-    const summary = await metacognition!.getSummary()
-    expect(summary.totalMissions).toBe(1)
-    expect(summary.successRate).toBe(0.0)
-    expect(summary.verificationRate).toBe(0.0)
+    await vi.waitFor(
+      () => expect(core!.mission().missions[0]?.status).toBe('blocked'),
+      { timeout: 7000 },
+    )
+    // Blocked awaiting a recovery or further authorization is not terminal.
+    // The observer only records authoritative completion/failure, never guesses.
+    expect(await core!.metacognition()!.getTelemetries()).toHaveLength(0)
   })
 })

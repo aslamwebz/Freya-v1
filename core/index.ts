@@ -1701,6 +1701,7 @@ class FreyaCore implements Core {
   private strategyLifecycle: StrategyLifecycleManager | undefined
   private evolutionStoreInstance: EvolutionStore | undefined
   private readonly observedMissions = new Set<string>()
+  private readonly observingMissions = new Set<string>()
   /**
    * The canonical encrypted Vault, or null when the host supplied none or it could
    * not be opened. Held privately so that Mission content has one owner of the
@@ -2816,12 +2817,18 @@ class FreyaCore implements Core {
     this.evolutionStoreInstance = await this.buildEvolutionStore()
     this.strategyLifecycle = new StrategyLifecycleManager(this.evolutionStoreInstance, this.metacognitionStore)
     await this.strategyLifecycle.initialize()
+    // Persisted telemetry makes event replay idempotent across Core restarts.
+    for (const item of await this.metacognitionEngine.getTelemetries()) {
+      this.observedMissions.add(item.missionId)
+    }
 
     // Authoritative Metacognition & Evolution Event Observer (P1 Findings 3 & 5)
     this.fabric.subscribe((event) => {
       if (this.metacognitionEngine === undefined) return
       if (event.type === 'mission.completed' || event.type === 'mission.failed') {
-        void this.observeAuthoritativeMission(event)
+        void this.observeAuthoritativeMission(event).catch((error: unknown) => {
+          console.error('[freya.core] mission metacognition observation failed', error)
+        })
       }
     })
 
@@ -5668,77 +5675,77 @@ private async buildForge(): Promise<void> {
     const missionId = typeof p.missionId === 'string' ? p.missionId : null
     if (!missionId) return
 
-    // Deduplication check: prevent duplicated observations from replayed events or repeated deliveries
-    if (this.observedMissions.has(missionId)) return
-    this.observedMissions.add(missionId)
+    // Concurrent deliveries and persisted replays must not double-count a mission.
+    if (this.observedMissions.has(missionId) || this.observingMissions.has(missionId)) return
+    this.observingMissions.add(missionId)
+    try {
+      const mission = this.missionEngine?.record(missionId)
+      // Do not derive observations for fabricated/nonexistent mission IDs.
+      if (!mission) return
+      const isCompleted = event.type === 'mission.completed'
+      const verified = isCompleted && mission.verification?.state === 'passed'
 
-    const mission = this.missionEngine?.record(missionId)
-    const isCompleted = event.type === 'mission.completed'
-    const verified = isCompleted && mission?.verification?.state === 'passed'
-
-    // Compute measured duration if timestamps exist, otherwise null (never fabricate)
-    let durationMs: number | null = null
-    const startTimeStr = mission?.activatedAt ?? mission?.createdAt
-    if (startTimeStr) {
-      const end = mission?.settledAt ? Date.parse(mission.settledAt) : Date.parse(event.occurredAt)
-      const start = Date.parse(startTimeStr)
-      if (!Number.isNaN(start) && !Number.isNaN(end)) {
-        durationMs = Math.max(0, end - start)
+      let durationMs: number | null = null
+      const startTimeStr = mission.activatedAt ?? mission.createdAt
+      if (startTimeStr) {
+        const end = mission.settledAt ? Date.parse(mission.settledAt) : Date.parse(event.occurredAt)
+        const start = Date.parse(startTimeStr)
+        if (Number.isFinite(start) && Number.isFinite(end)) durationMs = Math.max(0, end - start)
       }
-    }
 
-    // Measure action step attempts from attached runs
-    let actionAttempts = 0
-    let toolErrors = 0
-    if (mission?.childRuns) {
-      for (const runId of mission.childRuns) {
-        const stepIds = this.workEngine?.snapshot().runSteps.get(runId) ?? []
-        actionAttempts += stepIds.length
-        for (const stepId of stepIds) {
-          const step = this.workEngine?.snapshot().steps.get(stepId)
+      let actionAttempts = 0
+      let toolErrors = 0
+      let hasResearchStep = false
+      const snapshot = this.workEngine?.snapshot()
+      for (const runId of mission.childRuns ?? []) {
+        for (const stepId of snapshot?.runSteps.get(runId) ?? []) {
+          actionAttempts++
+          const step = snapshot?.steps.get(stepId)
           if (step?.status === 'failed') toolErrors++
+          if (step?.capability?.startsWith('research')) hasResearchStep = true
         }
       }
-    }
-    if (actionAttempts === 0) actionAttempts = 1
-    if (!isCompleted && toolErrors === 0) toolErrors = 1
 
-    const rawErrorMessage = typeof p.reason === 'string' ? p.reason : (mission?.reason ?? null)
+      // Provenance comes from evidence saved by the actual Work executor.
+      // Merely having an active strategy does NOT prove that a mission used it.
+      const content = await this.missionEngine?.privateContent(missionId, true)
+      const evidenceEntries = Object.values(content?.researchEvidence ?? {})
+      const usedVersions = evidenceEntries
+        .map((entry) => entry.strategyUsed)
+        .filter((entry): entry is { readonly id: string; readonly version: string } =>
+          typeof entry?.id === 'string' && typeof entry?.version === 'string',
+        )
+      const strategyUsed = usedVersions.length > 0 && usedVersions.length === evidenceEntries.length && usedVersions.every(
+        (entry) => entry.id === usedVersions[0]?.id && entry.version === usedVersions[0]?.version,
+      ) ? usedVersions[0] : null
 
-    // Resolve active strategy version if present
-    const activeStrategy = this.strategyLifecycle?.getActiveStrategy()
-    const hasResearchStep = mission?.childRuns?.some((runId) => {
-      const stepIds = this.workEngine?.snapshot().runSteps.get(runId) ?? []
-      return stepIds.some((stepId) => {
-        const step = this.workEngine?.snapshot().steps.get(stepId)
-        return step?.capability?.startsWith('research')
+      const rawErrorMessage = typeof p.reason === 'string' ? p.reason : (mission.reason ?? null)
+      await this.metacognitionEngine!.observeMission({
+        missionId,
+        runId: mission.childRuns[0],
+        taskType: hasResearchStep ? 'research' : 'general',
+        strategyId: strategyUsed?.id ?? null,
+        strategyVersion: strategyUsed?.version ?? null,
+        outcome: isCompleted ? (verified ? 'success' : 'partial') : 'failure',
+        verified,
+        verificationReason:
+          mission.verification?.reason ?? (isCompleted ? 'Mission completed without recorded verification reason' : rawErrorMessage),
+        actionAttempts,
+        toolErrors,
+        durationMs,
+        modelTokens: null,
+        modelCalls: null,
+        externalRequests: null,
+        rawErrorMessage,
       })
-    })
+      this.observedMissions.add(missionId)
 
-    const taskType = activeStrategy?.kind ?? (hasResearchStep ? 'research' : 'general')
-
-    const telemetry = await this.metacognitionEngine.observeMission({
-      missionId,
-      runId: mission?.childRuns[0],
-      taskType,
-      outcome: isCompleted ? (verified ? 'success' : 'partial') : 'failure',
-      verified,
-      verificationReason:
-        mission?.verification?.reason ?? (isCompleted ? 'Mission verified' : rawErrorMessage),
-      actionAttempts,
-      toolErrors,
-      durationMs,
-      // Strictly maintain null when unmeasured; never synthesize numbers
-      modelTokens: null,
-      modelCalls: null,
-      externalRequests: null,
-      rawErrorMessage,
-    })
-
-    // Automatic Regression Monitoring (Finding 5)
-    // If an active strategy was used, feed the telemetry to evaluate for regressions
-    if (activeStrategy && this.strategyLifecycle) {
-      await this.strategyLifecycle.monitorAndEvaluateRegression([telemetry])
+      if (strategyUsed && this.strategyLifecycle) {
+        const telemetries = await this.metacognitionEngine!.getTelemetries()
+        await this.strategyLifecycle.monitorAndEvaluateRegression(telemetries)
+      }
+    } finally {
+      this.observingMissions.delete(missionId)
     }
   }
 

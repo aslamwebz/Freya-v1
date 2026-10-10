@@ -370,31 +370,34 @@ export class StrategyLifecycleManager {
       return { regressionDetected: false, reason: null }
     }
 
-    // Inspect telemetries for the active strategy
-    const relevant = recentTelemetries.filter((t) => t.outcome !== 'cancelled')
-    if (relevant.length < 2) {
+    // Only count outcome evidence that is PROVEN to have used this exact
+    // version. Unrelated Missions, old strategy runs, and ordinary permission
+    // denials must never revoke an active promotion.
+    const active = this.activeStrategy
+    const relevant = [...recentTelemetries]
+      .filter((t) =>
+        t.strategyId === active.strategyId &&
+        t.strategyVersion === active.version &&
+        t.outcome !== 'cancelled' &&
+        Date.parse(t.recordedAt) >= Date.parse(active.activatedAt),
+      )
+      .sort((a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt))
+    // Keep the latest observation for each mission; replay does not count twice.
+    const unique = [...new Map(relevant.map((t) => [t.missionId, t])).values()]
+    if (unique.length < 2) {
       return { regressionDetected: false, reason: null }
     }
 
-    // 1. Security violation check: instant rollback trigger
-    const securityFailures = relevant.filter(
-      (t) => t.failureAttribution?.category === 'external_denial',
-    )
-    if (securityFailures.length > 0) {
-      const reason = `Security violation detected under active strategy ${this.activeStrategy.version}: ${securityFailures[0]?.failureAttribution?.reason}`
-      await this.rollbackStrategy(this.activeStrategy.strategyId, reason)
-      return { regressionDetected: true, reason }
-    }
-
-    // 2. Consecutive strategy failures check
-    const last2 = relevant.slice(-2)
+    // A denial by the owner/Guard is an authorization working as designed,
+    // not evidence that source ranking broke its security boundaries.
+    const last2 = unique.slice(-2)
     const consecutiveFailures = last2.every(
       (t) => t.outcome === 'failure' && t.failureAttribution?.isStrategyDefect === true,
     )
 
     if (consecutiveFailures) {
-      const reason = `Consecutive strategy defects detected (2 consecutive failed missions) under active strategy ${this.activeStrategy.version}.`
-      await this.rollbackStrategy(this.activeStrategy.strategyId, reason)
+      const reason = `Consecutive strategy defects detected (2 consecutive failed missions) under active strategy ${active.version}.`
+      await this.rollbackStrategy(active.strategyId, reason)
       return { regressionDetected: true, reason }
     }
 

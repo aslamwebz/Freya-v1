@@ -25,6 +25,9 @@ export interface PerformanceTelemetry {
   readonly missionId: string
   readonly runId?: string
   readonly taskType: string
+  /** Version actually applied to this mission, not merely active during observation. */
+  readonly strategyId?: string | null
+  readonly strategyVersion?: string | null
   readonly outcome: 'success' | 'failure' | 'partial' | 'cancelled'
   readonly verified: boolean
   readonly verificationReason?: string | null

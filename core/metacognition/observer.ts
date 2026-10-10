@@ -85,6 +85,8 @@ export interface ObserveMissionOptions {
   readonly missionId: string
   readonly runId?: string
   readonly taskType?: string
+  readonly strategyId?: string | null
+  readonly strategyVersion?: string | null
   readonly outcome: 'success' | 'failure' | 'partial' | 'cancelled'
   readonly verified: boolean
   readonly verificationReason?: string | null
@@ -120,6 +122,8 @@ export class PerformanceObserver {
       missionId: options.missionId,
       runId: options.runId,
       taskType: options.taskType ?? 'general',
+      strategyId: options.strategyId ?? null,
+      strategyVersion: options.strategyVersion ?? null,
       outcome: options.outcome,
       verified: options.verified,
       verificationReason: options.verificationReason ?? null,

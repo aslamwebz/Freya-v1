@@ -2144,3 +2144,182 @@
 .chat-mission-actions { display: flex; gap: 8px; }
 .chat-mission-actions button { padding: 6px 10px; border-radius: 6px; cursor: pointer; }
 .chat-mission-actions button:disabled { opacity: .5; cursor: default; }
+
+/* Streamlined, browser-focused workspace ? the tabs own the chrome.
+   The old fixed right split gave the browser ~52% of the desktop and the
+   inherited flex sizing let its native page collapse to 160px high. */
+.chats[data-browser-expanded][data-workspace-open] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.chats[data-browser-expanded] > .chats-thread,
+.chats[data-browser-expanded] > .chats-dock-divider {
+  display: none;
+}
+.chats[data-browser-expanded] > .chats-right-workspace {
+  width: 100%;
+  min-width: 0;
+  border-left: 0;
+}
+/* Browser tabs replace BOTH the workspace-type bar and the redundant
+   Browser/isolated heading. The compact Views selector still reaches Sources,
+   Canvas, Documents, Media, Charts, Execution and Files. */
+.chats-right-workspace[data-active-tab='browser'] > .chats-rw-head {
+  display: none;
+}
+.chats-right-workspace[data-active-tab='browser'] > .chats-rw-body {
+  overflow: hidden;
+}
+.chats-right-workspace[data-active-tab='browser'] > .chats-rw-body > .chats-browser {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+}
+.chats-browser-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 8px;
+  border-bottom: 1px solid #739cb32b;
+  background: #0a1420e6;
+}
+.chats-browser-tabbar .chats-browser-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 0;
+  padding: 5px 0 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  border-bottom: 0;
+}
+.chats-browser-tabbar .chats-browser-tab {
+  flex: 0 0 clamp(112px, 14vw, 182px);
+  min-width: 0;
+  max-width: 182px;
+  height: 32px;
+  padding: 3px 5px 3px 9px;
+  border-radius: 8px 8px 0 0;
+  gap: 4px;
+}
+.chats-browser-tabbar .chats-browser-tab > button:first-child {
+  display: block;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chats-browser-tabbar .chats-browser-tab-title {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+.chats-browser-tab-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+.chats-browser-runtime {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #e2af78;
+}
+.chats-browser-runtime[data-runtime='active'] {
+  background: #76d9bc;
+  box-shadow: 0 0 6px #76d9bc70;
+}
+.chats-browser-control,
+.chats-browser-view-switch {
+  height: 27px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #a1bed0;
+  cursor: pointer;
+}
+.chats-browser-control {
+  width: 28px;
+  padding: 0;
+  font: 500 19px/1 system-ui, sans-serif;
+}
+.chats-browser-control:hover,
+.chats-browser-control:focus-visible,
+.chats-browser-view-switch:hover,
+.chats-browser-view-switch:focus-visible {
+  border-color: #48677d;
+  color: #e9f8ff;
+  background: #183042;
+}
+.chats-browser-control:disabled { opacity: .45; cursor: default; }
+.chats-browser-close:hover { background: #3d2530; color: #ffbdc2; }
+.chats-browser-view-switch {
+  max-width: 67px;
+  padding: 0 4px;
+  font-size: 10px;
+}
+.chats-browser-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-bottom: 1px solid #739cb32b;
+  background: #0a1420ba;
+}
+.chats-browser-bar > button {
+  flex: 0 0 auto;
+  min-height: 27px;
+  padding: 3px 8px;
+  border: 1px solid #46647950;
+  border-radius: 6px;
+  background: #0e2232;
+  color: #b1ccda;
+  cursor: pointer;
+}
+.chats-browser-bar > button:disabled { opacity: .45; cursor: default; }
+.chats-browser-bar > button:not(:disabled):hover {
+  border-color: #6499b4;
+  color: #e7f7ff;
+}
+.chats-browser-bar > input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 29px;
+  padding: 0 10px;
+  border: 1px solid #486b8266;
+  border-radius: 7px;
+  background: #111d29;
+  color: #e4f3fc;
+  font: 12px/1.3 system-ui, sans-serif;
+}
+.chats-browser-bar > input:focus-visible {
+  outline: 1px solid #71c8e3;
+  outline-offset: 0;
+}
+.chats-browser-native {
+  flex: 1 1 0;
+  min-height: 0;
+}
+@media (max-width: 680px) {
+  .chats-browser-view-switch { max-width: 52px; }
+  .chats-browser-tabbar { gap: 3px; padding: 0 4px; }
+  .chats-browser-tab-controls { gap: 1px; }
+  .chats-browser-runtime { display: none; }
+  .chats-browser-bar { padding: 5px; }
+}

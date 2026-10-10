@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { dockBrowserView, onBrowserState, readBrowserState, runBrowserCommand, type RuntimeStatus } from '../../platform/browserClient'
-import { addressAsQuery, normalizeOpenInputUrl, sharedDockedBrowserStore, tabOriginLabel, type DockedBrowserStore, type DockedTab, type DockedTabOrigin, type DockedTabStatus } from './dockedBrowserStore'
+import { addressAsQuery, normalizeOpenInputUrl, sharedDockedBrowserStore, type DockedBrowserStore, type DockedTab, type DockedTabOrigin, type DockedTabStatus } from './dockedBrowserStore'
 import type { SemanticBrowserResult, SemanticSnapshot } from '../../../core/browser/service'
+import type { RightWorkspaceTab } from './rightWorkspaceStore'
 
 export { sharedDockedBrowserStore, createDockedBrowserStore, normalizeOpenInputUrl, tabOriginLabel } from './dockedBrowserStore'
 export type { DockedBrowserSnapshot, DockedBrowserStore, DockedTab, DockedTabOrigin } from './dockedBrowserStore'
@@ -60,11 +61,14 @@ export async function openUrlInDockedBrowser(
  * projection every 800 ms whether or not anything had changed, and the cost of that grows with
  * the tab count. One read on mount, then a subscription.
  */
-export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHandled, onClose }: {
+export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHandled, onClose, expanded, onToggleExpanded, onViewChange }: {
   requestedUrl: string | null
   requestedOrigin?: DockedTabOrigin
   onRequestedUrlHandled(): void
   onClose(): void
+  expanded?: boolean
+  onToggleExpanded?(): void
+  onViewChange?(view: RightWorkspaceTab): void
 }) {
   const store = sharedDockedBrowserStore()
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
@@ -274,22 +278,33 @@ export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHan
   }
 
   return <aside className="chats-browser" aria-label="Browsed tabs workspace">
-    <header className="chats-browser-head">
-      <b>Browser</b>
-      <div>
-        <small data-runtime={status}>{statusLabel[status]}</small>
-        <button type="button" aria-label="Open a new tab" onClick={() => void openNewTab()}>+</button>
-        <button type="button" aria-label="Close browser workspace" onClick={onClose}>×</button>
+    <div className="chats-browser-tabbar">
+      <div className="chats-browser-tabs" role="tablist" aria-label="Browser tabs">
+        {snapshot.tabs.map((item) => <div key={item.id} className={`chats-browser-tab${item.id === tab?.id ? ' on' : ''}`} data-origin={item.origin.kind} data-status={item.status} data-created-by={item.createdBy}>
+          <button type="button" role="tab" aria-selected={item.id === tab?.id} onClick={() => void activateTab(item)} title={item.liveUrl ?? item.url ?? item.title}>
+            <span className="chats-browser-tab-title">{item.title}</span>
+          </button>
+          <button type="button" className="chats-browser-tab-close" aria-label={`Close ${item.title}`} disabled={busy} onClick={() => void closeTab(item)}>?</button>
+        </div>)}
       </div>
-    </header>
-    <div className="chats-browser-tabs" role="tablist">
-      {snapshot.tabs.map((item) => <div key={item.id} className={`chats-browser-tab${item.id === tab?.id ? ' on' : ''}`} data-origin={item.origin.kind} data-status={item.status} data-created-by={item.createdBy}>
-        <button role="tab" aria-selected={item.id === tab?.id} onClick={() => void activateTab(item)} title={item.liveUrl ?? item.url ?? item.title}>
-          <span>{item.title}</span>
-          <small>{tabOriginLabel(item.origin)}</small>
-        </button>
-        <button aria-label={`Close ${item.title}`} disabled={busy} onClick={() => void closeTab(item)}>×</button>
-      </div>)}
+      <div className="chats-browser-tab-controls">
+        <span className="chats-browser-runtime" data-runtime={status} role="status" title={`Browser ${statusLabel[status]}`} aria-label={`Browser ${statusLabel[status]}`} />
+        <button type="button" className="chats-browser-control" aria-label="Open a new tab" title="New tab" disabled={busy} onClick={() => void openNewTab()}>+</button>
+        {onToggleExpanded ? <button type="button" className="chats-browser-control" onClick={onToggleExpanded}
+          aria-label={expanded ? 'Show chat beside browser' : 'Expand browser'} title={expanded ? 'Split with chat' : 'Expand browser'}>{expanded ? '?' : '?'}</button> : null}
+        {onViewChange ? <select className="chats-browser-view-switch" aria-label="Switch workspace view" title="Other workspaces" value="browser"
+          onChange={(event) => onViewChange(event.target.value as RightWorkspaceTab)}>
+          <option value="browser">Views</option>
+          <option value="sources">Sources</option>
+          <option value="canvas">Canvas</option>
+          <option value="documents">Documents</option>
+          <option value="media">Media</option>
+          <option value="charts">Charts</option>
+          <option value="execution">Execution</option>
+          <option value="files">Files</option>
+        </select> : null}
+        <button type="button" className="chats-browser-control chats-browser-close" aria-label="Close browser workspace" title="Close browser panel" onClick={onClose}>?</button>
+      </div>
     </div>
     <form className="chats-browser-bar" onSubmit={(event) => { event.preventDefault(); void submitAddress() }}>
       <button type="button" aria-label="Back" disabled={busy || !tab?.canGoBack} onClick={() => void goBack()}>←</button>
@@ -297,12 +312,8 @@ export function DockedBrowser({ requestedUrl, requestedOrigin, onRequestedUrlHan
       <button type="button" aria-label="Reload" disabled={busy || tab?.status !== 'ready'} onClick={() => void reload()}>↻</button>
       <input aria-label="Browser address or search" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Address or search" />
       <button type="submit" disabled={status !== 'active' || busy}>Go</button>
+      <button type="button" onClick={() => void inspect()} disabled={status !== 'active' || tab?.status !== 'ready'} title="Read the active page">Read page</button>
     </form>
-    <div className="chats-browser-actions">
-      <button type="button" onClick={() => void inspect()} disabled={status !== 'active' || tab?.status !== 'ready'}>Read page</button>
-      {tab?.origin.kind === 'link' ? <small title={tab.origin.ownerText}>{tabOriginLabel(tab.origin)} · {tab.origin.ownerText}</small> : null}
-      {snapshot.tabs.length > 0 ? <small>{snapshot.tabs.length} tab{snapshot.tabs.length === 1 ? '' : 's'}</small> : null}
-    </div>
     <div className="chats-browser-native" ref={viewport} data-session-id={tab?.liveUrl ?? ''} data-status={tab?.status ?? 'none'} aria-label="Browser page">
       {empty}
       {snapshotView === null ? null : <pre className="chats-browser-snapshot" aria-label="Page snapshot">{snapshotView.rendered}</pre>}

@@ -1,6 +1,7 @@
 import type { UiSnapshot } from '../../ui-v2/state/contract'
 import { MISSION_SECTIONS, LIBRARY_SECTIONS, OFFICE_SECTIONS, resolveRoute } from '../state/routes'
 import { MindWorkspace } from './MindWorkspace'
+import { WorkflowsWorkspace } from '../workflows/WorkflowsWorkspace'
 import { ContextTabs, WorkspaceFrame } from './WorkspaceFrame'
 import { OfficeScene } from '../office/OfficeRoom'
 import { NotConnected, ResourceGate } from './WorkspaceResource'
@@ -9,6 +10,7 @@ export { NotConnected } from './WorkspaceResource'
 export function UnifiedWorkspace({ path, snapshot, onNavigate }: { path: string; snapshot: UiSnapshot; onNavigate: (path: string) => void }) {
   const route = resolveRoute(path)
   if (route.destination === 'mind') return <MindWorkspace section={route.section} snapshot={snapshot} onNavigate={onNavigate} />
+  if (route.destination === 'workflows') return <WorkflowsWorkspace section={route.section} core={snapshot.core} onNavigate={onNavigate} />
   if (route.destination === 'missions') return <WorkspaceFrame title="Missions" description="Outcomes, execution and the evidence behind them." icon="mission">
     <ContextTabs label="Missions sections" tabs={MISSION_SECTIONS.map(id => ({ id, label: id[0]!.toUpperCase() + id.slice(1) }))}
       selected={route.section} onSelect={id => onNavigate(`missions/${id}`)}>

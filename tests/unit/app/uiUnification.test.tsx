@@ -52,18 +52,31 @@ function primary(name: string) {
   return within(nav).getByRole('button', { name: name === 'Chats' ? /Open Chats|conversation list/ : name })
 }
 
-describe('the shipping seven-destination app', () => {
+describe('the shipping primary destinations', () => {
   it('offers exactly the approved primary destinations and can open each', () => {
     render(<Harness />)
     const nav = screen.getByRole('navigation', { name: 'Primary' })
     expect(Array.from(nav.querySelectorAll('.hd-place, .chats-history-title'), node => node.textContent?.trim()))
-      .toEqual(['Home', 'Chats', 'Mind', 'Missions', 'Library', 'Office', 'Settings'])
-    for (const name of ['Mind', 'Missions', 'Library', 'Office', 'Settings', 'Chats', 'Home']) {
+      .toEqual(['Home', 'Chats', 'Mind', 'Missions', 'Workflows', 'Library', 'Office', 'Settings'])
+    for (const name of ['Mind', 'Missions', 'Workflows', 'Library', 'Office', 'Settings', 'Chats', 'Home']) {
       fireEvent.click(primary(name))
       expect(primary(name)).toHaveAttribute('aria-current', 'page')
     }
     expect(screen.getByRole('region', { name: 'Freya containment dashboard' })).toBeInTheDocument()
     expect(screen.getByAltText(/Chibi Freya/)).toBeInTheDocument()
+  })
+
+  it('remembers Workflows subpages and keeps their tabs horizontal', () => {
+    render(<Harness initial="workflows" />)
+    const tabs = screen.getByRole('tablist', { name: 'Workflows sections' })
+    expect(tabs).toHaveAttribute('aria-orientation', 'horizontal')
+    expect(within(tabs).getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Tasks', 'Running', 'Scheduling', 'Workflows'])
+    fireEvent.click(within(tabs).getByRole('tab', { name: 'Scheduling' }))
+    fireEvent.click(primary('Chats'))
+    fireEvent.click(primary('Workflows'))
+    expect(screen.getByRole('tabpanel', { name: 'Scheduling' })).toBeInTheDocument()
+    fireEvent.click(within(tabs).getByRole('tab', { name: 'Workflows' }))
+    expect(screen.getByRole('tabpanel', { name: 'Workflows' })).toHaveTextContent('No workflows yet.')
   })
 
   it('keeps chat draft and the eight-icon right rail across workspace changes', () => {
@@ -226,7 +239,7 @@ describe('the shipping seven-destination app', () => {
     fireEvent.click(primary('Chats'))
     expect(screen.getByRole('searchbox', { name: 'Search conversations' })).toBeInTheDocument()
     const nav = screen.getByRole('navigation', { name: 'Primary' })
-    expect(within(nav).getAllByRole('button')).toHaveLength(7)
+    expect(within(nav).getAllByRole('button')).toHaveLength(8)
     expect(within(nav).queryByRole('searchbox')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     fireEvent.click(primary('Mind'))

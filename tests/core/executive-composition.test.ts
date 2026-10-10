@@ -10,6 +10,7 @@ import { testVaultKey } from './testKey'
 import { bindingAvailable, loadTestBinding } from './vault/binding'
 import { workforceOwnerScope } from '../../core/testing'
 import { evaluateExecutiveDecision } from '../../core/executive'
+import type { MissionSummaryView } from '../../core/missions/types'
 
 let dir: string
 let core: Core | undefined
@@ -68,16 +69,8 @@ describe('Phase 4A — Unified Executive Composition', () => {
     const id2 = m2.mission!.missionId!
 
     // Mark goals ready
-    await core.handleCommand({
-      command: 'mission.ready',
-      requestId: 'ready-m1',
-      payload: { missionId: id1 },
-    })
-    await core.handleCommand({
-      command: 'mission.ready',
-      requestId: 'ready-m2',
-      payload: { missionId: id2 },
-    })
+    await core.readyMission(id1)
+    await core.readyMission(id2)
 
     // Assign explicit priority: id1 = routine, id2 = urgent
     const priorityMap = new Map([
@@ -135,11 +128,7 @@ describe('Phase 4A — Unified Executive Composition', () => {
     const idB = mB.mission!.missionId!
 
     // Mark mB ready
-    await core.handleCommand({
-      command: 'mission.ready',
-      requestId: 'ready-mb',
-      payload: { missionId: idB },
-    })
+    await core.readyMission(idB)
 
     // Evaluate directly with pure function: idA is pending approval, idB is ready
     const simulatedMissions = [
@@ -202,7 +191,7 @@ describe('Phase 4A — Unified Executive Composition', () => {
         blockers: [],
         pendingApproval: null,
       },
-    ]
+    ] as unknown as MissionSummaryView[]
 
     const outcome = evaluateExecutiveDecision({
       missions: simulatedMissions,
@@ -299,11 +288,7 @@ describe('Phase 4A — Unified Executive Composition', () => {
     const worker = await scope.createWorker({ name: 'WorkerExec', specialisation: 'general' })
     await scope.assignCapability(worker.workerId!, 'cognition.request')
 
-    await core.handleCommand({
-      command: 'mission.ready',
-      requestId: 'ready-restart-m',
-      payload: { missionId },
-    })
+    await core.readyMission(missionId)
 
     const session1Decision = core.executiveDecision()
     expect(session1Decision.decision).toBe('start')

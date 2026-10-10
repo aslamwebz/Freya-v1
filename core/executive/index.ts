@@ -82,5 +82,7 @@ export {
   type ExecutiveDecisionInput,
   type ExecutiveCandidateEvaluation,
   type ExecutiveDecisionOutcome,
+  type ExecutiveBudgetLimit,
+  type ExecutiveBudgetSpend,
 } from './decision'
 

@@ -28,7 +28,13 @@ import {
   type RankedItem,
 } from './types'
 import { prioritize, type WorkItemMetadata } from './prioritizer'
-import { coordinateItem, type WorkerInfo, type CoordinationItem, type CoordinatorContext } from './coordinator'
+import {
+  coordinateItem,
+  shouldPreempt,
+  type WorkerInfo,
+  type CoordinationItem,
+  type CoordinatorContext,
+} from './coordinator'
 import { projectExecutiveState } from './projection'
 
 export type ExecutiveDecisionKind =
@@ -39,6 +45,18 @@ export type ExecutiveDecisionKind =
   | 'pause'
   | 'escalate'
   | 'no_action'
+
+export interface ExecutiveBudgetLimit {
+  readonly maxActions?: number
+  readonly maxModelCalls?: number
+  readonly maxExternalRequests?: number
+}
+
+export interface ExecutiveBudgetSpend {
+  readonly actions?: number
+  readonly modelCalls?: number
+  readonly externalRequests?: number
+}
 
 export interface ExecutiveDecisionInput {
   readonly missions: readonly MissionSummaryView[]
@@ -51,6 +69,10 @@ export interface ExecutiveDecisionInput {
   readonly maxConcurrentWorkers?: number
   readonly pendingApprovals?: ReadonlySet<string>
   readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+  readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+  readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+  readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+  readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
 }
 
 export interface ExecutiveCandidateEvaluation {
@@ -88,6 +110,78 @@ function priorityToImportance(priority: MissionPriority): ImportanceLevel {
     default:
       return 'normal'
   }
+}
+
+function getBudgetLimit(
+  missionId: string,
+  limits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>,
+): ExecutiveBudgetLimit | undefined {
+  if (!limits) return undefined
+  if (limits instanceof Map) return limits.get(missionId)
+  return (limits as Record<string, ExecutiveBudgetLimit>)[missionId]
+}
+
+function getBudgetSpend(
+  missionId: string,
+  spends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>,
+): ExecutiveBudgetSpend | undefined {
+  if (!spends) return undefined
+  if (spends instanceof Map) return spends.get(missionId)
+  return (spends as Record<string, ExecutiveBudgetSpend>)[missionId]
+}
+
+function getRequiredSpecialisations(
+  missionId: string,
+  specs?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>,
+): readonly string[] {
+  if (!specs) return []
+  if (specs instanceof Map) return specs.get(missionId) ?? []
+  return (specs as Record<string, readonly string[]>)[missionId] ?? []
+}
+
+function getMissionAge(
+  missionId: string,
+  ages?: ReadonlyMap<string, number> | Readonly<Record<string, number>>,
+): number {
+  if (!ages) return 0
+  if (ages instanceof Map) return ages.get(missionId) ?? 0
+  return (ages as Record<string, number>)[missionId] ?? 0
+}
+
+function checkBudgetExhausted(
+  mission: MissionSummaryView,
+  limit?: ExecutiveBudgetLimit,
+  spend?: ExecutiveBudgetSpend,
+): { exhausted: boolean; reason: string | null } {
+  if (mission.blockers.includes('budget_exhausted')) {
+    return { exhausted: true, reason: 'budget_exhausted' }
+  }
+
+  if (mission.budgetRemaining) {
+    if (mission.budgetRemaining.actions <= 0) {
+      return { exhausted: true, reason: 'actions_exhausted' }
+    }
+    if (mission.budgetRemaining.modelCalls <= 0) {
+      return { exhausted: true, reason: 'model_calls_exhausted' }
+    }
+    if (mission.budgetRemaining.externalRequests <= 0) {
+      return { exhausted: true, reason: 'external_requests_exhausted' }
+    }
+  }
+
+  if (limit && spend) {
+    if (limit.maxActions !== undefined && (spend.actions ?? 0) >= limit.maxActions) {
+      return { exhausted: true, reason: 'actions_limit_reached' }
+    }
+    if (limit.maxModelCalls !== undefined && (spend.modelCalls ?? 0) >= limit.maxModelCalls) {
+      return { exhausted: true, reason: 'model_calls_limit_reached' }
+    }
+    if (limit.maxExternalRequests !== undefined && (spend.externalRequests ?? 0) >= limit.maxExternalRequests) {
+      return { exhausted: true, reason: 'external_requests_limit_reached' }
+    }
+  }
+
+  return { exhausted: false, reason: null }
 }
 
 /**
@@ -208,6 +302,10 @@ export function evaluateExecutiveDecision(input: ExecutiveDecisionInput): Execut
     const deadlineMs = mission.deadlineAt ? instantMs(mission.deadlineAt) : null
     const isDeadlineExpired = deadlineMs !== null && nowMs >= deadlineMs
 
+    const limit = getBudgetLimit(mission.missionId, input.budgetLimits)
+    const spend = getBudgetSpend(mission.missionId, input.budgetSpends)
+    const budgetCheck = checkBudgetExhausted(mission, limit, spend)
+
     let eligible = true
     let blockerReason: string | null = null
     let proposal: ExecutiveDecisionKind = 'start'
@@ -218,16 +316,16 @@ export function evaluateExecutiveDecision(input: ExecutiveDecisionInput): Execut
       blockerReason = 'deadline_expired'
       proposal = 'escalate'
       blockedMissions.push({ missionId: mission.missionId, reason: 'deadline_expired' })
+    } else if (budgetCheck.exhausted) {
+      eligible = false
+      blockerReason = 'budget_exhausted'
+      proposal = 'pause'
+      blockedMissions.push({ missionId: mission.missionId, reason: 'budget_exhausted' })
     } else if (mission.pendingApproval !== null) {
       eligible = false
       blockerReason = `approval_pending:${mission.pendingApproval.approvalId}`
       proposal = 'defer'
       deferredMissions.push({ missionId: mission.missionId, reason: blockerReason })
-    } else if (mission.blockers.includes('budget_exhausted')) {
-      eligible = false
-      blockerReason = 'budget_exhausted'
-      proposal = 'pause'
-      blockedMissions.push({ missionId: mission.missionId, reason: 'budget_exhausted' })
     } else if (mission.blockers.length > 0) {
       eligible = false
       blockerReason = `blocked:${mission.blockers[0] ?? 'unknown'}`
@@ -254,10 +352,14 @@ export function evaluateExecutiveDecision(input: ExecutiveDecisionInput): Execut
           ? 'defer'
           : 'none'
 
+    const ageBonus = getMissionAge(mission.missionId, input.missionAges)
+    const effectiveCreatedAtMs = (instantMs(mission.createdAt) ?? nowMs) - ageBonus
+    const effectiveCreatedAt = new Date(effectiveCreatedAtMs).toISOString()
+
     workItems.push({
       itemId: mission.missionId,
       kind: 'mission',
-      createdAt: mission.createdAt,
+      createdAt: effectiveCreatedAt,
       deadlineAt: mission.deadlineAt,
       ownerImportance: importance,
       ownerIntent,
@@ -267,9 +369,18 @@ export function evaluateExecutiveDecision(input: ExecutiveDecisionInput): Execut
       confidence: 'high',
       verificationPending: mission.currentStep?.status === 'running',
       approvalPending: mission.pendingApproval !== null,
-      budgetExhausted: mission.blockers.includes('budget_exhausted'),
+      budgetExhausted: budgetCheck.exhausted,
       stopAllActive: false,
     })
+
+    const inFlightCheckpoint = mission.status === 'active' && mission.currentStep?.status === 'running'
+    const reasoning = [
+      `Status: ${mission.status}`,
+      `Priority: ${explicitPriority}`,
+      ...(blockerReason ? [`Blocker: ${blockerReason}`] : ['Eligible for execution']),
+      ...(inFlightCheckpoint ? ['In-flight mission continues to safe checkpoint.'] : []),
+      ...(ageBonus > 0 ? [`Fairness: mission accumulated age (${ageBonus}ms) to prevent starvation.`] : []),
+    ]
 
     candidateEvaluations.push({
       missionId: mission.missionId,
@@ -278,11 +389,7 @@ export function evaluateExecutiveDecision(input: ExecutiveDecisionInput): Execut
       eligible,
       blockerReason,
       decisionProposal: proposal,
-      reasoning: [
-        `Status: ${mission.status}`,
-        `Priority: ${explicitPriority}`,
-        ...(blockerReason ? [`Blocker: ${blockerReason}`] : ['Eligible for execution']),
-      ],
+      reasoning,
       deadlineAt: mission.deadlineAt,
       assignedWorkerId: null,
     })
@@ -308,8 +415,50 @@ export function evaluateExecutiveDecision(input: ExecutiveDecisionInput): Execut
     }
   }
 
-  // 8. Handle case where all open missions are ineligible (blocked or deferred)
+  // 8. Handle case where all open missions are ineligible (blocked, deferred, or budget exhausted)
   if (!chosenCandidate) {
+    const pauseCandidate = candidateEvaluations.find((c) => c.blockerReason === 'budget_exhausted')
+    if (pauseCandidate) {
+      const nextAction: BoundedAction = {
+        actionId: `action-pause-${pauseCandidate.missionId}`,
+        kind: 'wait',
+        target: pauseCandidate.missionId,
+        maxDurationMs: EXECUTIVE_LIMITS.maxWaitMs,
+        maxAttempts: 1,
+        deadlineAt: now,
+      }
+      const whatMatters: RankedItem[] = candidateEvaluations.map((c, idx) => ({
+        itemId: c.missionId,
+        rank: idx + 1,
+        priority: c.tier,
+        urgency: 'immediate',
+        importance: priorityToImportance(c.priority),
+        reasoning: c.reasoning,
+        blockedReason: c.blockerReason,
+        uncertainty: [],
+      }))
+      const state: ExecutiveState = {
+        whatMatters: whatMatters.slice(0, EXECUTIVE_LIMITS.maxWhatMattersItems),
+        why: [`Mission ${pauseCandidate.missionId} exhausted its budget and is paused.`],
+        whatIsBlocked: blockedMissions.map((b) => `${b.missionId}: ${b.reason}`),
+        whatIsUncertain: [],
+        nextBoundedAction: nextAction,
+        generatedAt: now,
+      }
+      return {
+        decision: 'pause',
+        selectedMissionId: pauseCandidate.missionId,
+        reason: 'budget_exhausted',
+        explanation: `Mission ${pauseCandidate.missionId} has exhausted its budget and is paused.`,
+        assignedWorkerId: null,
+        evaluatedAt: now,
+        candidates: candidateEvaluations,
+        blockedMissions,
+        deferredMissions,
+        state,
+      }
+    }
+
     const whatMatters: RankedItem[] = candidateEvaluations.map((c, idx) => ({
       itemId: c.missionId,
       rank: idx + 1,
@@ -344,9 +493,11 @@ export function evaluateExecutiveDecision(input: ExecutiveDecisionInput): Execut
     }
   }
 
-  // 9. Resource Allocation (Worker Assignment if needed)
+  // 9. Resource Allocation (Worker Assignment & Specialisation Matching)
   let assignedWorkerId: string | null = null
   if (workerPool.length > 0) {
+    const reqSpecs = getRequiredSpecialisations(chosenCandidate.missionId, input.requiredSpecialisations)
+
     const coordItem: CoordinationItem = {
       itemId: chosenCandidate.missionId,
       requiredCapabilities: ['cognition.request'],
@@ -356,7 +507,7 @@ export function evaluateExecutiveDecision(input: ExecutiveDecisionInput): Execut
       runId: null,
       requiresApproval: false,
       approvalId: null,
-      allowedSpecialisations: [],
+      allowedSpecialisations: reqSpecs,
     }
 
     const coordContext: CoordinatorContext = {
@@ -376,15 +527,67 @@ export function evaluateExecutiveDecision(input: ExecutiveDecisionInput): Execut
 
     if (coordResult.decision === 'proceed' && coordResult.workerId) {
       assignedWorkerId = coordResult.workerId
-    } else if (coordResult.decision === 'wait' || coordResult.blockedReason === 'no_workers_available') {
-      // If workers are required and all are busy, defer
-      if (chosenCandidate.decisionProposal === 'start' && workerPool.every((w) => w.status !== 'idle')) {
-        const deferredState = projectExecutiveState({
-          now,
-          prioritization: prioResult,
-          plans: [],
-          confidence: 'high',
-        })
+      const wIdx = workerPool.findIndex((w) => w.workerId === coordResult.workerId)
+      if (wIdx >= 0) {
+        const current = workerPool[wIdx]!
+        workerPool[wIdx] = {
+          ...current,
+          currentOpenAssignments: current.currentOpenAssignments + 1,
+          remainingBudget: Math.max(0, current.remainingBudget - 1),
+        }
+      }
+    } else {
+      const deferredState = projectExecutiveState({
+        now,
+        prioritization: prioResult,
+        plans: [],
+        confidence: 'high',
+      })
+
+      if (reqSpecs.length > 0) {
+        const matchingWorkers = workerPool.filter((w) => reqSpecs.includes(w.specialisation))
+        if (
+          matchingWorkers.length === 0 ||
+          matchingWorkers.every((w) => w.status !== 'idle' || w.currentOpenAssignments >= w.maxOpenAssignments)
+        ) {
+          return {
+            decision: 'defer',
+            selectedMissionId: chosenCandidate.missionId,
+            reason: 'specialised_worker_unavailable',
+            explanation: `Mission ${chosenCandidate.missionId} requires specialisation [${reqSpecs.join(', ')}], but no matching worker is currently idle.`,
+            assignedWorkerId: null,
+            evaluatedAt: now,
+            candidates: candidateEvaluations,
+            blockedMissions,
+            deferredMissions: [
+              ...deferredMissions,
+              { missionId: chosenCandidate.missionId, reason: 'specialised_worker_unavailable' },
+            ],
+            state: deferredState,
+          }
+        }
+      }
+
+      if (coordResult.blockedReason === 'preemption-required' || shouldPreempt(coordItem, coordContext)) {
+        return {
+          decision: 'defer',
+          selectedMissionId: chosenCandidate.missionId,
+          reason: 'preemption_required',
+          explanation: `Mission ${chosenCandidate.missionId} is urgent, but all workers are busy. In-flight work continues to safe checkpoint before preemption.`,
+          assignedWorkerId: null,
+          evaluatedAt: now,
+          candidates: candidateEvaluations,
+          blockedMissions,
+          deferredMissions: [
+            ...deferredMissions,
+            { missionId: chosenCandidate.missionId, reason: 'preemption_required' },
+          ],
+          state: deferredState,
+        }
+      }
+
+      const workingCount = workerPool.filter((w) => w.status === 'working').length
+      if (workingCount > 0 && workerPool.every((w) => w.status !== 'idle' || w.currentOpenAssignments >= w.maxOpenAssignments)) {
         return {
           decision: 'defer',
           selectedMissionId: chosenCandidate.missionId,
@@ -394,8 +597,80 @@ export function evaluateExecutiveDecision(input: ExecutiveDecisionInput): Execut
           evaluatedAt: now,
           candidates: candidateEvaluations,
           blockedMissions,
-          deferredMissions,
+          deferredMissions: [
+            ...deferredMissions,
+            { missionId: chosenCandidate.missionId, reason: 'workers_busy' },
+          ],
           state: deferredState,
+        }
+      }
+
+      return {
+        decision: 'defer',
+        selectedMissionId: chosenCandidate.missionId,
+        reason: 'worker_unavailable',
+        explanation: `Mission ${chosenCandidate.missionId} is ready, but no suitable worker is available.`,
+        assignedWorkerId: null,
+        evaluatedAt: now,
+        candidates: candidateEvaluations,
+        blockedMissions,
+        deferredMissions: [
+          ...deferredMissions,
+          { missionId: chosenCandidate.missionId, reason: 'worker_unavailable' },
+        ],
+        state: deferredState,
+      }
+    }
+  }
+
+  // Update candidate evaluation with assigned worker id
+  const finalCandidates = candidateEvaluations.map((c) => {
+    if (c.missionId === chosenCandidate!.missionId) {
+      return {
+        ...c,
+        assignedWorkerId,
+      }
+    }
+    return c
+  })
+
+  // Evaluate other candidates for resource claim conflict / worker capacity in this pass
+  const finalDeferredMissions = [...deferredMissions]
+  if (workerPool.length > 0) {
+    for (const ranked of prioResult.ranked) {
+      if (ranked.itemId === chosenCandidate.missionId) continue
+      const cand = finalCandidates.find((c) => c.missionId === ranked.itemId)
+      if (cand && cand.eligible) {
+        const reqSpecs = getRequiredSpecialisations(cand.missionId, input.requiredSpecialisations)
+        const nextCoordItem: CoordinationItem = {
+          itemId: cand.missionId,
+          requiredCapabilities: ['cognition.request'],
+          requiredBudget: 1,
+          priority: cand.priority === 'urgent' ? 1.0 : cand.priority === 'important' ? 0.75 : 0.5,
+          missionId: cand.missionId,
+          runId: null,
+          requiresApproval: false,
+          approvalId: null,
+          allowedSpecialisations: reqSpecs,
+        }
+        const nextCoordContext: CoordinatorContext = {
+          now,
+          items: [nextCoordItem],
+          workers: workerPool,
+          activeDelegations: [],
+          stopAllActive: false,
+          budgetRemaining: 100,
+          pendingApprovals: new Set(),
+          maxConcurrentAssignments: 10,
+          guardCleared: true,
+          governorAuthorized: true,
+        }
+        const res = coordinateItem(nextCoordItem, nextCoordContext)
+        if (res.decision !== 'proceed') {
+          finalDeferredMissions.push({
+            missionId: cand.missionId,
+            reason: res.blockedReason === 'no-eligible-worker' ? 'workers_busy' : (res.blockedReason ?? 'workers_busy'),
+          })
         }
       }
     }
@@ -425,9 +700,9 @@ export function evaluateExecutiveDecision(input: ExecutiveDecisionInput): Execut
     explanation: `Selected mission ${chosenCandidate.missionId} (${chosenCandidate.priority}) to ${chosenCandidate.decisionProposal}.`,
     assignedWorkerId,
     evaluatedAt: now,
-    candidates: candidateEvaluations,
+    candidates: finalCandidates,
     blockedMissions,
-    deferredMissions,
+    deferredMissions: finalDeferredMissions,
     state: {
       ...projectedState,
       nextBoundedAction: nextAction,

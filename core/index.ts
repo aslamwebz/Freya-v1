@@ -25,7 +25,13 @@ import { registerResearchInspection } from './work/research-inspection'
 import { createMissionProposalTool } from './mind/mission-proposal'
 import { ChatMissionIntegration } from './missions/chat-integration'
 import type { ChatMissionProposal } from './missions/chat-types'
-import { evaluateExecutiveDecision, type ExecutiveDecisionOutcome, type ExecutiveState } from './executive'
+import {
+  evaluateExecutiveDecision,
+  type ExecutiveDecisionOutcome,
+  type ExecutiveState,
+  type ExecutiveBudgetLimit,
+  type ExecutiveBudgetSpend,
+} from './executive'
 import { LearningEngine } from './learning/engine'
 import type { LearningStore } from './learning/store'
 import { VaultLearningStore, MemoryLearningStore } from './vault/repositories/learning-store'
@@ -1160,9 +1166,21 @@ untimeNotice, which states what the runtime cannot do, because a
   /** Withdraw an admitted knowledge record (retracts claim, destroying claim text while retaining audit trail). */
   withdrawLearningClaim(recordId: string): Promise<LearningWriteOutcome>
   /** The explainable Executive decision for competing goals and resource allocation (Phase 4). */
-  executiveDecision(options?: { readonly explicitPriorities?: ReadonlyMap<string, MissionPriority> }): ExecutiveDecisionOutcome
+  executiveDecision(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveDecisionOutcome
   /** The explainable Executive state projection (Phase 4). */
-  executiveState(options?: { readonly explicitPriorities?: ReadonlyMap<string, MissionPriority> }): ExecutiveState
+  executiveState(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveState
   /**
    * The World & self summary and its subscription.
    *
@@ -4187,13 +4205,57 @@ private async buildForge(): Promise<void> {
     return this.learningEngine.withdraw(recordId)
   }
 
-  executiveDecision(options?: { readonly explicitPriorities?: ReadonlyMap<string, MissionPriority> }): ExecutiveDecisionOutcome {
+  executiveDecision(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveDecisionOutcome {
     const nowIso = (this.options.now ?? (() => new Date()))().toISOString()
     const missions = this.missionEngine?.projection().missions ?? []
     const workforce = this.safeWorkforce()
     const workers = workforce?.workers ?? []
     const stopAllActive = this.state.stopAll.active
     const guardMayManage = this.guard.evaluate(this.owner, 'mission.manage').allowed
+
+    // Extract durable mission spend and budget if available from mission engine
+    const internalMissions = this.missionEngine
+      ? (
+          this.missionEngine as unknown as {
+            state?: {
+              missions: Map<
+                string,
+                {
+                  budget?: { maxActions: number; maxModelCalls: number; maxExternalRequests: number }
+                  spend?: { actions: number; modelCalls: number; externalRequests: number }
+                }
+              >
+            }
+          }
+        ).state?.missions
+      : undefined
+
+    const derivedSpends = new Map<string, ExecutiveBudgetSpend>()
+    const derivedLimits = new Map<string, ExecutiveBudgetLimit>()
+    if (internalMissions) {
+      for (const [id, m] of internalMissions.entries()) {
+        if (m.budget) {
+          derivedLimits.set(id, {
+            maxActions: m.budget.maxActions,
+            maxModelCalls: m.budget.maxModelCalls,
+            maxExternalRequests: m.budget.maxExternalRequests,
+          })
+        }
+        if (m.spend) {
+          derivedSpends.set(id, {
+            actions: m.spend.actions,
+            modelCalls: m.spend.modelCalls,
+            externalRequests: m.spend.externalRequests,
+          })
+        }
+      }
+    }
 
     return evaluateExecutiveDecision({
       missions,
@@ -4202,10 +4264,20 @@ private async buildForge(): Promise<void> {
       guardMayManage,
       now: nowIso,
       explicitPriorities: options?.explicitPriorities,
+      budgetLimits: options?.budgetLimits ?? derivedLimits,
+      budgetSpends: options?.budgetSpends ?? derivedSpends,
+      requiredSpecialisations: options?.requiredSpecialisations,
+      missionAges: options?.missionAges,
     })
   }
 
-  executiveState(options?: { readonly explicitPriorities?: ReadonlyMap<string, MissionPriority> }): ExecutiveState {
+  executiveState(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveState {
     return this.executiveDecision(options).state
   }
 

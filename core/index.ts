@@ -99,11 +99,22 @@ import {
   VaultConversationStore,
   VaultMissionStore,
   VaultGoalStore,
+  VaultProactiveStore,
   VaultResearchSessionStore,
   VaultWorldStore,
   type VaultBinding,
   type VaultKeyProvider,
 } from './vault'
+import {
+  ProactiveEngine,
+  type ProactiveStore,
+  MemoryProactiveStore,
+  type NormalizedObservation,
+  type ObservationSubscription,
+  type ObservationSubscriptionInput,
+  type ObservationIngestResult,
+  type RawObservationInput,
+} from './proactive'
 import { GoalEngine } from './longhorizon/engine'
 import type { GoalStore } from './longhorizon/store'
 import { MemoryGoalStore } from './longhorizon/memory-store'
@@ -559,6 +570,8 @@ export interface CoreOptions {
   missionStore?: MissionStore
   /** Overrides the Goal content store wholesale. For tests. */
   goalStore?: GoalStore
+  /** Overrides the Proactive content store wholesale. For tests. */
+  proactiveStore?: ProactiveStore
   /**
    * Life History's own independent secure key, from the keyring.
    *
@@ -1045,6 +1058,26 @@ export interface Core {
    * Handle an authorized continuation wake (Phase 5C).
    */
   handleContinuationWake(wake: ContinuationWake): Promise<ContinuationDecisionOutcome>
+  /**
+   * Ingest and normalize an event observation (Phase 6A).
+   */
+  ingestObservation(input: RawObservationInput): Promise<ObservationIngestResult>
+  /**
+   * Register an authorized external observation source subscription (Phase 6A).
+   */
+  subscribeObservationSource(input: ObservationSubscriptionInput): Promise<ObservationSubscription>
+  /**
+   * Revoke an observation source subscription (Phase 6A).
+   */
+  revokeObservationSource(subscriptionId: string): Promise<boolean>
+  /**
+   * List active observation source subscriptions (Phase 6A).
+   */
+  observationSubscriptions(): readonly ObservationSubscription[]
+  /**
+   * Read recent normalized observations (Phase 6A).
+   */
+  recentObservations(limit?: number): readonly NormalizedObservation[]
   /**
    * Core's account of the workforce: workers, teams, and what each is doing.
    *
@@ -1633,6 +1666,8 @@ class FreyaCore implements Core {
   private chatMissions: ChatMissionIntegration | undefined
   private learningEngine: LearningEngine | undefined
   private learningStore: LearningStore | undefined
+  private proactiveEngine: ProactiveEngine | undefined
+  private proactiveStore: ProactiveStore | undefined
   /**
    * The canonical encrypted Vault, or null when the host supplied none or it could
    * not be opened. Held privately so that Mission content has one owner of the
@@ -2590,6 +2625,67 @@ class FreyaCore implements Core {
       onChange: () => this.publishLearning(),
     })
 
+    this.proactiveStore = await this.buildProactiveStore()
+    this.proactiveEngine = new ProactiveEngine({
+      fabric: this.fabric,
+      store: this.proactiveStore,
+      now: this.options.now,
+      newId: this.options.newId,
+      stopAll: () => this.state.stopAll.active,
+      onChange: () => this.publishProactive(),
+    })
+    await this.proactiveEngine.open()
+
+    // Internal observation listener
+    this.fabric.subscribe((event) => {
+      if (this.proactiveEngine === undefined) return
+      if (event.type === 'longhorizon.goal.milestone-settled') {
+        const p = event.payload as Record<string, unknown>
+        const goalId = typeof p.goalId === 'string' ? p.goalId : null
+        const milestoneId = typeof p.milestoneId === 'string' ? p.milestoneId : null
+        const outcome = typeof p.outcome === 'string' ? p.outcome : 'unknown'
+        if (milestoneId) {
+          void this.proactiveEngine.ingest({
+            sourceType: 'internal',
+            sourceId: 'longhorizon',
+            sourceRef: milestoneId,
+            rawSummary: `Milestone ${milestoneId} settled as ${outcome}`,
+            goalId,
+            milestoneId,
+            predicate: 'milestone-settled',
+          })
+        }
+      } else if (event.type === 'mission.step.transitioned') {
+        const p = event.payload as Record<string, unknown>
+        const stepId = typeof p.stepId === 'string' ? p.stepId : null
+        const missionId = typeof p.missionId === 'string' ? p.missionId : null
+        const to = typeof p.to === 'string' ? p.to : 'unknown'
+        if (stepId) {
+          void this.proactiveEngine.ingest({
+            sourceType: 'internal',
+            sourceId: 'missions',
+            sourceRef: stepId,
+            rawSummary: `Mission step ${stepId} transitioned to ${to}`,
+            missionId,
+            predicate: 'step-transitioned',
+          })
+        }
+      } else if (event.type === 'workforce.worker.transitioned') {
+        const p = event.payload as Record<string, unknown>
+        const workerId = typeof p.workerId === 'string' ? p.workerId : null
+        const to = typeof p.to === 'string' ? p.to : 'unknown'
+        if (workerId) {
+          void this.proactiveEngine.ingest({
+            sourceType: 'internal',
+            sourceId: 'workforce',
+            sourceRef: workerId,
+            rawSummary: `Worker ${workerId} status transitioned to ${to}`,
+            predicate: 'worker-availability-changed',
+          })
+        }
+      }
+    })
+
     // Context sits beside Missions rather than above them: it reads which Mission is
     // current and nothing else, and it is built here so the two are wired in one place.
     //
@@ -3069,6 +3165,8 @@ class FreyaCore implements Core {
       await this.goalEngine?.close()
       await this.goalStore?.close()
       await this.learningStore?.close()
+      await this.proactiveEngine?.close()
+      await this.proactiveStore?.close()
       // The Vault owns the Mission store's connection, so it closes after the engine
       // has flushed. Closing it here keeps the one encrypted database's lifetime
       // inside Core's own.
@@ -5661,6 +5759,35 @@ private async buildForge(): Promise<void> {
       }
     }
     return await this.continuationEngine.handleWake(wake)
+  }
+
+  async ingestObservation(input: RawObservationInput): Promise<ObservationIngestResult> {
+    if (this.proactiveEngine === undefined) {
+      return { ok: false, reason: 'proactive engine unavailable' }
+    }
+    return this.proactiveEngine.ingest(input)
+  }
+
+  async subscribeObservationSource(input: ObservationSubscriptionInput): Promise<ObservationSubscription> {
+    if (this.proactiveEngine === undefined) {
+      throw new Error('proactive engine unavailable')
+    }
+    return this.proactiveEngine.subscribe(input)
+  }
+
+  async revokeObservationSource(subscriptionId: string): Promise<boolean> {
+    if (this.proactiveEngine === undefined) {
+      return false
+    }
+    return this.proactiveEngine.revoke(subscriptionId)
+  }
+
+  observationSubscriptions(): readonly ObservationSubscription[] {
+    return this.proactiveEngine?.subscriptions() ?? []
+  }
+
+  recentObservations(limit?: number): readonly NormalizedObservation[] {
+    return this.proactiveEngine?.recentObservations(limit) ?? []
   }
 
   goals(): GoalProjectionView {
@@ -9560,6 +9687,133 @@ state: {
           }
         }
 
+        /* ---------------------------------------------------- proactive */
+
+        case 'proactive.status.read': {
+          const decision = this.guard.evaluate(this.owner, 'proactive.status.read')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'proactive.status.read', requestId)
+            return {
+              requestId,
+              ok: false,
+              status: this.status(),
+              refusal: { reason: decision.reason },
+              proactive: { operation: 'refused', ok: false, reason: decision.reason },
+            }
+          }
+          return {
+            requestId,
+            ok: true,
+            status: this.status(),
+            proactive: {
+              operation: 'status',
+              ok: true,
+              subscriptions: this.observationSubscriptions(),
+              recentObservations: this.recentObservations(),
+            },
+          }
+        }
+
+        case 'proactive.observation.ingest': {
+          const decision = this.guard.evaluate(this.owner, 'proactive.ingest')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'proactive.ingest', requestId)
+            return {
+              requestId,
+              ok: false,
+              status: this.status(),
+              refusal: { reason: decision.reason },
+              proactive: { operation: 'refused', ok: false, reason: decision.reason },
+            }
+          }
+          const payload = envelope.payload as Record<string, unknown>
+          const sourceType = typeof payload?.sourceType === 'string' ? payload.sourceType : null
+          const sourceId = typeof payload?.sourceId === 'string' ? payload.sourceId : null
+          const rawSummary = typeof payload?.rawSummary === 'string' ? payload.rawSummary : null
+          if (!sourceType || !sourceId || !rawSummary) {
+            return {
+              requestId,
+              ok: false,
+              status: this.status(),
+              refusal: { reason: 'malformed observation input: sourceType, sourceId, and rawSummary are required' },
+              proactive: { operation: 'refused', ok: false, reason: 'malformed observation input' },
+            }
+          }
+          const result = await this.ingestObservation(payload as unknown as RawObservationInput)
+          return {
+            requestId,
+            ok: result.ok,
+            status: this.status(),
+            refusal: result.ok ? undefined : { reason: result.reason ?? 'ingest failed' },
+            proactive: {
+              operation: 'ingest',
+              ok: result.ok,
+              reason: result.reason,
+              observationId: result.observation?.observationId,
+            },
+          }
+        }
+
+        case 'proactive.subscription.manage': {
+          const decision = this.guard.evaluate(this.owner, 'proactive.manage')
+          if (!decision.allowed) {
+            await this.recordGuard(decision, this.owner.id, 'proactive.manage', requestId)
+            return {
+              requestId,
+              ok: false,
+              status: this.status(),
+              refusal: { reason: decision.reason },
+              proactive: { operation: 'refused', ok: false, reason: decision.reason },
+            }
+          }
+          const payload = envelope.payload as Record<string, unknown>
+          const action = typeof payload?.action === 'string' ? payload.action : null
+          if (action === 'revoke') {
+            const subscriptionId = typeof payload?.subscriptionId === 'string' ? payload.subscriptionId : null
+            if (!subscriptionId) {
+              return {
+                requestId,
+                ok: false,
+                status: this.status(),
+                refusal: { reason: 'subscriptionId required for revoke' },
+                proactive: { operation: 'refused', ok: false, reason: 'subscriptionId required' },
+              }
+            }
+            const revoked = await this.revokeObservationSource(subscriptionId)
+            return {
+              requestId,
+              ok: revoked,
+              status: this.status(),
+              proactive: { operation: 'revoke', ok: revoked, subscriptionId },
+            }
+          } else if (action === 'subscribe') {
+            try {
+              const sub = await this.subscribeObservationSource(payload as unknown as ObservationSubscriptionInput)
+              return {
+                requestId,
+                ok: true,
+                status: this.status(),
+                proactive: { operation: 'subscribe', ok: true, subscriptionId: sub.subscriptionId },
+              }
+            } catch (err) {
+              return {
+                requestId,
+                ok: false,
+                status: this.status(),
+                refusal: { reason: (err as Error).message },
+                proactive: { operation: 'refused', ok: false, reason: (err as Error).message },
+              }
+            }
+          }
+          return {
+            requestId,
+            ok: false,
+            status: this.status(),
+            refusal: { reason: 'unrecognised action for proactive.subscription.manage' },
+            proactive: { operation: 'refused', ok: false, reason: 'unknown action' },
+          }
+        }
+
         /* --------------------------------------------------------- life */
 
         case 'life.status.read': {
@@ -10665,6 +10919,24 @@ case 'forge.run': {
         ? `Goal content is held in memory only: ${this.vaultFault ?? 'the encrypted Vault is not configured'}`
         : 'the encrypted Vault is not configured',
     })
+  }
+
+  /**
+   * Build the Proactive content store (Phase 6 Proactive Intelligence).
+   */
+  private async buildProactiveStore(): Promise<ProactiveStore> {
+    if (this.options.proactiveStore) return this.options.proactiveStore
+    const vault = await this.ensureVault()
+    if (vault !== null) return new VaultProactiveStore(vault)
+    return new MemoryProactiveStore({
+      faultReason: this.options.vault !== undefined
+        ? `Proactive content is held in memory only: ${this.vaultFault ?? 'the encrypted Vault is not configured'}`
+        : 'the encrypted Vault is not configured',
+    })
+  }
+
+  private publishProactive(): void {
+    this.publishConsciousness()
   }
 
   /**

@@ -3333,6 +3333,66 @@ const PAYLOAD_RULES: {
       isBoundedReason(p.reason) &&
       isBoundedLabelList(p.missing),
   ),
+
+  'proactive.observation.received': workRule(
+    ['observationId', 'sourceType', 'sourceId', 'trust', 'dedupeKey', 'observedAt', 'goalId', 'milestoneId', 'evidenceRef'],
+    (p) =>
+      isEventId(p.observationId) &&
+      isNonEmptyString(p.sourceType) &&
+      isNonEmptyString(p.sourceId) &&
+      isNonEmptyString(p.trust) &&
+      isNonEmptyString(p.dedupeKey) &&
+      isInstant(p.observedAt) &&
+      isNullableRef(p.goalId) &&
+      isNullableRef(p.milestoneId) &&
+      isNullableRef(p.evidenceRef),
+  ),
+
+  'proactive.observation.dropped': workRule(
+    ['sourceType', 'sourceId', 'dedupeKey', 'reason'],
+    (p) =>
+      isNonEmptyString(p.sourceType) &&
+      isNonEmptyString(p.sourceId) &&
+      isNonEmptyString(p.dedupeKey) &&
+      isBoundedReason(p.reason),
+  ),
+
+  'proactive.subscription.updated': workRule(
+    ['subscriptionId', 'sourceId', 'active', 'expiresAt'],
+    (p) =>
+      isEventId(p.subscriptionId) &&
+      isNonEmptyString(p.sourceId) &&
+      typeof p.active === 'boolean' &&
+      (p.expiresAt === null || isInstant(p.expiresAt)),
+  ),
+
+  'proactive.relevance.evaluated': workRule(
+    ['observationId', 'goalId', 'classification', 'isRelevant', 'confidence', 'reasoningApplied'],
+    (p) =>
+      isEventId(p.observationId) &&
+      isNullableRef(p.goalId) &&
+      isNonEmptyString(p.classification) &&
+      typeof p.isRelevant === 'boolean' &&
+      typeof p.confidence === 'number' &&
+      Number.isFinite(p.confidence) &&
+      p.confidence >= 0 &&
+      p.confidence <= 1 &&
+      typeof p.reasoningApplied === 'boolean',
+  ),
+
+  'proactive.decision.made': workRule(
+    ['decisionId', 'observationId', 'decision', 'level', 'actionRef', 'reason'],
+    (p) =>
+      isEventId(p.decisionId) &&
+      isEventId(p.observationId) &&
+      isNonEmptyString(p.decision) &&
+      typeof p.level === 'number' &&
+      Number.isInteger(p.level) &&
+      p.level >= 1 &&
+      p.level <= 3 &&
+      isNullableRef(p.actionRef) &&
+      isBoundedReason(p.reason),
+  ),
 }
 
 const RUNTIME_STATUS_SET: ReadonlySet<string> = new Set<string>(RUNTIME_STATUSES)

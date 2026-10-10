@@ -101,6 +101,11 @@ export const CAPABILITIES = [
   'goal.status.read',
   'goal.manage',
 
+  // Proactive Intelligence (Phase 6).
+  'proactive.status.read',
+  'proactive.manage',
+  'proactive.ingest',
+
   /**
    * Skills (Phase 17). Two, and the split is the same one `work.*` and `mission.*`
    * make.
@@ -727,6 +732,10 @@ export type CoreCommandName =
   | 'goal.roadmap.set'
   | 'goal.milestone.settle'
   | 'goal.budget.set'
+  /* ------------------------------------------------------------ proactive */
+  | 'proactive.status.read'
+  | 'proactive.observation.ingest'
+  | 'proactive.subscription.manage'
   /* -------------------------------------------------------------- life */
   /**
    * Phase 21. Three reads and nothing else.
@@ -1207,6 +1216,24 @@ export interface CoreCommandResult {
    * projection. The projection itself arrives on its own channel.
    */
   connectors?: ConnectorCommandOutcome
+
+  /**
+   * The proactive view of a proactive command's result (Phase 6).
+   */
+  proactive?: ProactiveCommandOutcome
+}
+
+/**
+ * What a Proactive command produced (Phase 6A).
+ */
+export interface ProactiveCommandOutcome {
+  operation: 'status' | 'ingest' | 'subscribe' | 'revoke' | 'refused'
+  ok: boolean
+  reason?: string
+  observationId?: string
+  subscriptionId?: string
+  subscriptions?: readonly unknown[]
+  recentObservations?: readonly unknown[]
 }
 
 /**

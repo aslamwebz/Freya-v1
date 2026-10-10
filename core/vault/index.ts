@@ -32,3 +32,4 @@ export {
 
 export { VaultConversationStore } from './repositories/conversation-store'
 export { VaultGoalStore, MAX_VAULT_GOAL_BYTES } from './repositories/goal-store'
+export { VaultProactiveStore } from './repositories/proactive-store'

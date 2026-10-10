@@ -986,8 +986,7 @@ function requestedDisplayNumber(): number | null {
  * not start underneath its taskbar.
  */
 function boundsForRequestedDisplay(): Electron.Rectangle | null {
-  const requested = requestedDisplayNumber()
-  if (requested === null) return null
+  const requested = requestedDisplayNumber() ?? 1
 
   const primary = screen.getPrimaryDisplay()
   const secondary = screen

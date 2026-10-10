@@ -14,7 +14,7 @@
     "install:shortcut": "node scripts/install-shortcut.mjs",
     "freya": "node bin/freya.mjs",
     "freya:mcp": "node bin/freya-mcp.mjs",
-    "start": "npm run build && node scripts/launch.mjs 2",
+    "start": "npm run build && node scripts/launch.mjs 1",
     "start:display2": "npm run build && node scripts/launch.mjs 2",
     "electron:dev": "node scripts/build-electron.mjs && electron . --dev",
     "dev:desktop": "node scripts/dev-desktop.mjs",

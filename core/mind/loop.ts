@@ -93,12 +93,34 @@ import {
  * boundary, and neither should move as a side effect of adding a feature.
  */
 export function budgetFor(iteration: number, perTurnAllowance: number): number {
-  const continuations = MIND_TOOL_LIMITS.maxProviderCalls - 1
-  const first = Math.max(
-    1,
-    perTurnAllowance - MIND_TOOL_LIMITS.followUpOutputTokens * continuations,
-  )
-  return iteration === 0 ? first : Math.min(MIND_TOOL_LIMITS.followUpOutputTokens, perTurnAllowance)
+  const maxCalls = MIND_TOOL_LIMITS.maxProviderCalls
+  if (maxCalls <= 1) return perTurnAllowance
+  const finalIteration = maxCalls - 1
+  const intermediateCount = maxCalls - 2
+
+  // For the standard perTurnAllowance (7680):
+  // - First call gets CONVERSATION_LIMITS.maxOutputTokensPerAnswer (3072).
+  // - Intermediate tool continuation calls (1..8) get 384 each (8 * 384 = 3072).
+  // - Final synthesis call (iteration 9) gets 1536.
+  // Their sum exactly equals 7680: 3072 + 3072 + 1536 = 7680.
+  const targetFirst = Math.min(3_072, perTurnAllowance)
+  const targetFinal = 1_536
+
+  if (perTurnAllowance >= 7_680) {
+    if (iteration === 0) return targetFirst
+    if (iteration === finalIteration) return targetFinal
+    const remainingForIntermediate = perTurnAllowance - targetFirst - targetFinal
+    return Math.floor(remainingForIntermediate / intermediateCount)
+  }
+
+  // Graceful fallback for smaller allowances:
+  const finalShare = Math.max(1, Math.floor(perTurnAllowance * 0.2))
+  const intermediateShare = Math.max(1, Math.floor((perTurnAllowance * 0.4) / intermediateCount))
+  const firstShare = Math.max(1, perTurnAllowance - intermediateShare * intermediateCount - finalShare)
+
+  if (iteration === 0) return firstShare
+  if (iteration === finalIteration) return finalShare
+  return intermediateShare
 }
 
 /** One step of the loop, for the Mind's own record. Never content. */
@@ -182,6 +204,7 @@ export async function runToolLoop(
   let messages = baseMessages
   let providerContacted = false
   let toolCallsUsed = 0
+  let lastToolCallRequest: { tool: string; argsJson: string } | null = null
   const ledger = new SourceLedger(deps.carriedSources)
   const invoke: MindToolRegistry['invoke'] = async request => {
     if (deps.blockedTools?.includes(request.name)) {
@@ -361,12 +384,25 @@ export async function runToolLoop(
         report: renderObservation(observation),
       })
     } else {
+      const argsJson = JSON.stringify(parsed.arguments)
+      const lastOkIteration = iterations[iterations.length - 1]
+      const isConsecutiveDuplicate =
+        lastToolCallRequest !== null &&
+        lastToolCallRequest.tool === parsed.tool &&
+        lastToolCallRequest.argsJson === argsJson &&
+        lastOkIteration?.observation.kind === 'ok'
+
       // The ceiling on *executions* is separate from the ceiling on calls, so a
       // turn that spends its iterations on malformed requests still cannot run
       // more than `maxToolCalls` bodies.
       const room = toolCallsUsed < MIND_TOOL_LIMITS.maxToolCalls
       const invocation = room
-        ? await invoke({ name: parsed.tool, arguments: parsed.arguments, signal: deps.signal })
+        ? await invoke({
+            name: parsed.tool,
+            arguments: parsed.arguments,
+            signal: deps.signal,
+            skipExecution: isConsecutiveDuplicate,
+          })
         : {
             observation: {
               kind: 'failed' as const,
@@ -376,8 +412,16 @@ export async function runToolLoop(
             },
             executed: false,
           }
-      if (invocation.executed) toolCallsUsed += 1
-      observation = invocation.observation
+
+      if (invocation.observation.kind === 'denied') {
+        observation = invocation.observation
+        lastToolCallRequest = null
+      } else {
+        lastToolCallRequest = { tool: parsed.tool, argsJson }
+        if (invocation.executed) toolCallsUsed += 1
+        observation = invocation.observation
+      }
+
       iterations.push({
         step: {
           index: iterations.length + 1,
@@ -406,7 +450,14 @@ export async function runToolLoop(
     // The transcript of the loop, in provider order: what the model said, then
     // what the tool returned, as quoted data. The owner's question is no longer
     // last, which is correct — it is no longer the only thing being answered.
-    messages = [...messages, { role: 'assistant', content: outcome.text }, iterations[iterations.length - 1]!.report]
+    let nextReport = iterations[iterations.length - 1]!.report
+    if (iteration >= MIND_TOOL_LIMITS.maxProviderCalls - 3) {
+      nextReport = {
+        role: nextReport.role,
+        content: `${nextReport.content}\n\n[System guidance: You have performed ${iterations.length} tool operations and are approaching the turn limit. Please synthesize your final response now using the evidence collected, without requesting further tools.]`,
+      }
+    }
+    messages = [...messages, { role: 'assistant', content: outcome.text }, nextReport]
   }
 
   // Unreachable while `maxProviderCalls > 0`, and stated rather than left

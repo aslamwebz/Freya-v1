@@ -117,6 +117,13 @@ const SNAPSHOT_SCRIPT = String.raw`((limit, withText) => {
     const tag = node.tagName.toLowerCase();
     const id = node.id || '';
     if (SAFE.test(id)) return '#' + id;
+    if (tag === 'a') {
+      const rawHref = node.getAttribute && node.getAttribute('href');
+      if (rawHref) {
+        const safeHref = rawHref.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        if (safeHref.length <= 160) return 'a[href="' + safeHref + '"]';
+      }
+    }
     const name = node.getAttribute && node.getAttribute('name');
     if (name && QUOTED.test(name)) return tag + '[name="' + name + '"]';
     const classes = String((node.className || '')).split(/\s+/).filter(c => SAFE.test(c)).slice(0, 2);
@@ -151,6 +158,10 @@ const SNAPSHOT_SCRIPT = String.raw`((limit, withText) => {
     // unlabelled icons would otherwise be a page nothing can refer to.
     const image = node.querySelector && node.querySelector('img[alt]');
     if (image && image.getAttribute('alt')) return clean(image.getAttribute('alt'), 120);
+    if (node.tagName === 'A') {
+      const href = node.getAttribute && node.getAttribute('href');
+      if (href) return clean(href, 120);
+    }
     return '';
   };
 
@@ -216,6 +227,10 @@ const SNAPSHOT_SCRIPT = String.raw`((limit, withText) => {
       protected: type === 'password' || type === 'hidden' || autocomplete.toLowerCase().indexOf('one-time-code') !== -1 || autocomplete.toLowerCase().indexOf('current-password') !== -1 || autocomplete.toLowerCase().indexOf('cc-') === 0 || PROTECTED_HINT.test(hint),
       disabled: node.disabled === true || node.getAttribute('aria-disabled') === 'true'
     };
+    if (tag === 'A') {
+      const href = node.getAttribute && node.getAttribute('href');
+      if (href) entry.href = clean(href, 200);
+    }
     if (tag === 'SELECT') {
       entry.options = Array.from(node.options || []).slice(0, 64).map(o => clean(o.label || o.text || o.value, 80));
     }
@@ -293,6 +308,7 @@ export interface SurfaceSnapshotPayload {
     readonly selector: string
     readonly protected: boolean
     readonly disabled: boolean
+    readonly href?: string
     readonly options?: readonly string[]
   }>
 }
@@ -548,9 +564,18 @@ export class ElectronFreyaBrowserPage implements FreyaBrowserLivePage {
     this.title = null
     this.url = null
     this.loading = false
-    // A code, never Electron's prose: the description can carry a hostname and a path, and
-    // the projection that reads this must not be able to leak a URL Freya refused.
-    this.error = 'load-failed'
+    // A safe diagnostic code, never Electron's prose (which could leak internal paths or URLs):
+    if (errorCode === -105) {
+      this.error = 'dns-failed: net::ERR_NAME_NOT_RESOLVED'
+    } else if (errorCode === -102) {
+      this.error = 'connection-refused: net::ERR_CONNECTION_REFUSED'
+    } else if (errorCode === -118) {
+      this.error = 'timed-out: net::ERR_CONNECTION_TIMED_OUT'
+    } else if (errorCode <= -200 && errorCode >= -202) {
+      this.error = 'cert-error: net::ERR_CERT_COMMON_NAME_INVALID'
+    } else {
+      this.error = 'load-failed'
+    }
     void description
     this.publish()
   }
@@ -845,10 +870,10 @@ export class ElectronFreyaBrowserPage implements FreyaBrowserLivePage {
     try {
       await this.contents.loadURL(url)
     } catch {
-      return { ok: false, finalUrl: null, code: 'navigate-failed' }
+      return { ok: false, finalUrl: null, code: this.error ?? 'navigate-failed' }
     }
     const landed = this.url
-    if (this.closed || landed === null) return { ok: false, finalUrl: null, code: 'navigate-failed' }
+    if (this.closed || landed === null) return { ok: false, finalUrl: null, code: this.error ?? 'navigate-failed' }
     if (this.revision === startRevision) {
       // Electron reported a load and the counter did not move, which means nothing about
       // the page was actually replaced. The revision is the honest witness.

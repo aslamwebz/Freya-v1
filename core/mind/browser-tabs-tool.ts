@@ -234,7 +234,7 @@ export function createBrowserTabsTool(options: BrowserTabsToolOptions): MindTool
           }
           const result = await send({ op: 'open', url, origin: { kind: 'link', from: 'chat', ownerText: 'browser_tabs' }, createdBy: 'freya' })
           if (!result.ok) return refusal(result, issued)
-          return { summary: `Opened ${String(result.data.tabId)} on ${String(result.data.url ?? url)}.`, sources: [], provenance: provenance(issued) }
+          return { summary: `Opened ${String(result.data.tabId)} on ${String(result.data.url ?? url)}. Use 'snapshot' to read page elements and text.`, sources: [], provenance: provenance(issued) }
         }
 
         case 'close': {
@@ -334,7 +334,7 @@ export function createBrowserTabsTool(options: BrowserTabsToolOptions): MindTool
           const target: 'top' | 'bottom' | number = to === 'top' || to === 'bottom' ? to : Number.isFinite(Number(to)) && to !== '' ? Number(to) : 'bottom'
           const result = await send({ op: 'scroll', tabId: tab, to: target })
           if (!result.ok) return refusal(result, issued)
-          return { summary: `Scrolled; the page is now at ${String(result.data.top)}.`, sources: [], provenance: provenance(issued) }
+          return { summary: `Scrolled; the page is now at ${String(result.data.top)}. Use 'snapshot' to read newly visible elements and text.`, sources: [], provenance: provenance(issued) }
         }
 
         case 'back':

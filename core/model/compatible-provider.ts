@@ -2,7 +2,7 @@ import { ModelRequestCancelled, readFinishReason, throwIfAborted, validateModelA
 import type { ProviderStatus } from '../protocol/core-protocol'
 
 export type CompatibleProviderId = 'minimax' | 'local' | 'openai'
-export interface CompatibleConfig { apiKey: string; baseUrl: string; model: string; liveEnabled: boolean; vision: boolean }
+export interface CompatibleConfig { apiKey: string; baseUrl: string; model: string; liveEnabled: boolean; vision: boolean; timeoutMs?: number }
 
 /** Fixed credential recipients. This policy is separate from NanoGPT's policy. */
 export function approveCompatibleEndpoint(id: CompatibleProviderId, raw: string): URL {
@@ -15,6 +15,43 @@ export function approveCompatibleEndpoint(id: CompatibleProviderId, raw: string)
     if (!origins.includes(url.origin)) throw new Error('Provider credential recipient refused.')
   }
   return url
+}
+
+/**
+ * Clean and validate provider completion text.
+ *
+ * Sanitizes provider-specific transport artifacts, strips multimodal hallucination lines,
+ * redacts credentials, and guards against autoregressive degeneration loops (repeating token patterns).
+ */
+export function cleanProviderCompletion(rawText: string, apiKey?: string): { text: string; corrupted: boolean; reason?: string } {
+  let text = apiKey && apiKey.length > 0 ? rawText.split(apiKey).join('[redacted]') : rawText
+
+  // Strip known multimodal VTT internal notes leaked by MiniMax media models
+  text = text.replace(/^(?:VTTEmbedded_note:|VTTEmbedded:)[^\r\n]*(?:\r?\n|$)/gmi, '')
+
+  // Detect degenerative repetition loops: substring of 3..60 characters repeating >= 4 times consecutively
+  const loopMatch = text.match(/(.{3,60}?)\1{3,}/su)
+  if (loopMatch && loopMatch.index !== undefined) {
+    const loopStart = loopMatch.index
+    const prefix = text.slice(0, loopStart).trim()
+    if (prefix.length > 0) {
+      text = prefix
+    } else {
+      return { text: '', corrupted: true, reason: 'Provider response degenerated into a repetitive protocol loop.' }
+    }
+  }
+
+  // Strip dangling delimiter tokens when they do not enclose an active tool envelope
+  if (!/<tool_call>|FREYA_TOOL_CALL/i.test(text)) {
+    text = text.replace(/(?:\]?<\]minimax\[>(?:\[ya ism\]|\[)?|\[ya ism\]|<\]minimax>|\[minimax\])+/gi, '').trim()
+  }
+
+  const cleaned = text.trim()
+  if (cleaned.length === 0 && rawText.trim().length > 0) {
+    return { text: '', corrupted: true, reason: 'Provider output contained only malformed protocol artifacts.' }
+  }
+
+  return { text: cleaned, corrupted: false }
 }
 
 /** MiniMax protocol: https://platform.minimax.io/docs/api-reference/text-openai-api
@@ -44,7 +81,8 @@ export class CompatibleModelProvider implements ModelProvider {
     // Local endpoints never receive a credential, even if a malformed caller supplied one.
     const headers: Record<string, string> = { 'content-type': 'application/json' }
     if (this.id !== 'local') headers.authorization = `Bearer ${config.apiKey}`
-    const signal = AbortSignal.any([options.signal, AbortSignal.timeout(30_000)])
+    const timeoutMs = config.timeoutMs ?? 60_000
+    const signal = AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)])
     try {
       const response = await this.fetchImpl(target, { method: 'POST', redirect: 'manual', signal, headers, body: JSON.stringify({ model: request.model ?? config.model, max_tokens: request.maxOutputTokens, messages: request.messages.map((message) => {
         const parts = validateModelAttachments(message.attachments)
@@ -56,8 +94,11 @@ export class CompatibleModelProvider implements ModelProvider {
       const choice = body.choices?.[0]
       if (typeof choice?.message?.content !== 'string') throw new Error('Provider returned no text completion.')
       const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
-      const text = config.apiKey ? choice.message.content.split(config.apiKey).join('[redacted]') : choice.message.content
-      return { requestId: request.requestId, providerId: this.id, model: request.model ?? config.model, text, inputTokens: count(body.usage?.prompt_tokens), outputTokens: count(body.usage?.completion_tokens), finishReason: readFinishReason(choice.finish_reason) }
+      const cleaned = cleanProviderCompletion(choice.message.content, config.apiKey)
+      if (cleaned.corrupted) {
+        throw new Error(`Provider returned unreadable output: ${cleaned.reason}`)
+      }
+      return { requestId: request.requestId, providerId: this.id, model: request.model ?? config.model, text: cleaned.text, inputTokens: count(body.usage?.prompt_tokens), outputTokens: count(body.usage?.completion_tokens), finishReason: readFinishReason(choice.finish_reason) }
     } catch (error) {
       if (options.signal.aborted) throw new ModelRequestCancelled('cancelled during provider request')
       if (signal.aborted) {

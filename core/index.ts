@@ -23,6 +23,8 @@ import { proposeMissionPlan, type MissionGoalRequest, type MissionGoalOutcome } 
 import { registerFileInspection } from './work/file-inspection'
 import { registerResearchInspection } from './work/research-inspection'
 import { createMissionProposalTool } from './mind/mission-proposal'
+import { createMissionsListTool } from './mind/missions-list-tool'
+import { createWorkspaceReportTool } from './mind/workspace-file-tool'
 import { ChatMissionIntegration } from './missions/chat-integration'
 import type { ChatMissionProposal } from './missions/chat-types'
 import {
@@ -880,6 +882,8 @@ export interface CoreOptions {
     /** Narrowed ceilings. Can only *lower* the code-owned limits. */
     limits?: LifeLoopLimitRequest
   }
+  /** Approved workspace root directory for saving verified reports. */
+  workspaceRoot?: string
 }
 
 /**
@@ -2391,7 +2395,22 @@ class FreyaCore implements Core {
        */
       tools: (() => {
         const tools = [
-          ...(this.researchIntegration && this.conversationStore.mode === 'encrypted' && this.options.missionKey ? [createMissionProposalTool()] : []),
+          ...(this.researchIntegration && this.conversationStore.mode === 'encrypted' ? [createMissionProposalTool()] : []),
+          createMissionsListTool({
+            getMissions: () => (this.missionEngine ? this.missionEngine.projection().missions.map((m) => ({
+              id: m.missionId,
+              status: m.status,
+              currentStep: m.currentStep ? { stepId: m.currentStep.stepId, status: m.currentStep.status } : null,
+              progress: {
+                completedSteps: m.progress.steps.verified,
+                totalSteps: m.progress.steps.total,
+              },
+              blockers: m.blockers,
+            })) : []),
+          }),
+          createWorkspaceReportTool({
+            workspaceRoot: this.options.workspaceRoot ?? process.cwd(),
+          }),
           ...(this.researchIntegration
             ? [createWebSearchTool({
               searchWeb: (query, vertical, signal, site) => this.researchIntegration!.searchWeb(query, vertical, signal, site),

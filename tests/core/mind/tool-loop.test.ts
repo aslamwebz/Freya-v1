@@ -664,6 +664,30 @@ describe('the iteration ceiling', () => {
     expect(log.queries.length).toBeLessThanOrEqual(MIND_TOOL_LIMITS.maxToolCalls)
   })
 
+  it('detects consecutive duplicate tool requests and prevents redundant executions', async () => {
+    const log = { queries: [] as string[] }
+    const h = await harness({
+      tools: [searchTool([result()], log)],
+      script: [
+        toolCall('web_search', { query: 'same-query' }),
+        toolCall('web_search', { query: 'same-query' }),
+        'answer from collected evidence',
+      ],
+    })
+
+    const outcome = await submit(h)
+
+    expect(outcome.outcome).toBe('completed')
+    // Only the first call executed the body; the second consecutive duplicate was intercepted
+    expect(log.queries).toEqual(['same-query'])
+    // The provider received guidance on the duplicate iteration
+    expect(
+      h.provider.requests[2]?.messages.some((m) =>
+        m.content.includes('Duplicate tool request detected'),
+      ),
+    ).toBe(true)
+  })
+
   it('records each iteration as its own accounted provider call', async () => {
     const h = await harness({
       tools: [searchTool([result()])],
@@ -1226,6 +1250,37 @@ describe('the wire protocol is strict', () => {
       known,
     )
     expect(parsed.kind).toBe('invalid')
+  })
+
+  it('reads tool requests emitted inside <tool_call> envelopes', () => {
+    expect(parseToolResponse('<tool_call>\n{"tool":"web_search","query":"q"}\n</tool_call>', known)).toEqual({
+      kind: 'request',
+      tool: 'web_search',
+      arguments: { query: 'q' },
+    })
+  })
+
+  it('reads <tool_call> requests wrapped with leading prose and provider delimiter noise', () => {
+    const raw = `There isn't a tool called browserState - the closest is browser_tabs. I'll open the tabs.]<]minimax[>[<tool_call>\n{"tool":"web_search","query":"q"}\n</tool_call>`
+    expect(parseToolResponse(raw, known)).toEqual({
+      kind: 'request',
+      tool: 'web_search',
+      arguments: { query: 'q' },
+    })
+  })
+
+  it('recovers complete JSON inside <tool_call> missing closing sentinel with leading prose', () => {
+    const raw = `I will open the URLs in tabs.]<]minimax[>[<tool_call>\n{"tool":"web_search","query":"Sri Lanka"}`
+    expect(parseToolResponse(raw, known)).toEqual({
+      kind: 'request',
+      tool: 'web_search',
+      arguments: { query: 'Sri Lanka' },
+    })
+  })
+
+  it('refuses multiple <tool_call> envelopes in the same reply', () => {
+    const one = '<tool_call>\n{"tool":"web_search","query":"q"}\n</tool_call>'
+    expect(parseToolResponse([one, one].join('\n'), known).kind).toBe('invalid')
   })
 })
 

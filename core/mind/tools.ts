@@ -541,6 +541,8 @@ export class MindToolRegistry {
     readonly name: string
     readonly arguments: Readonly<Record<string, string>>
     readonly signal?: AbortSignal
+    readonly skipExecution?: boolean
+    readonly skipReason?: string
   }): Promise<ToolInvocation> {
     const tool = this.byName.get(request.name)
     const named = request.name
@@ -568,6 +570,21 @@ export class MindToolRegistry {
     if (request.signal?.aborted || this.stopped()) {
       return {
         observation: failedObservation(tool.name, tool.capability, 'the turn was stopped before the tool ran'),
+        executed: false,
+      }
+    }
+
+    if (request.skipExecution === true) {
+      return {
+        observation: {
+          kind: 'failed',
+          tool: tool.name,
+          capability: tool.capability,
+          reason:
+            request.skipReason ??
+            `Duplicate tool request detected. You already executed '${tool.name}' with these exact arguments in the previous step and received the result above. ` +
+            `Do not repeat the same call. Either proceed with the next planned step or synthesize your final answer from the evidence already collected.`,
+        },
         executed: false,
       }
     }
@@ -716,20 +733,47 @@ export function parseToolResponse(text: string, known: (name: string) => boolean
   // request look like "mostly prose". An unclosed tag is left alone, because the
   // request may sit after it and there is no reliable end to cut at.
   const withoutReasoning = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/giu, '')
-  const trimmed = withoutReasoning.trim()
+  let trimmed = withoutReasoning.trim()
 
-  // Locate the envelope rather than assuming it sits at position zero.
-  const open = trimmed.indexOf(TOOL_CALL_OPEN)
-  if (open === -1) return { kind: 'answer' }
+  // Clean leading provider delimiter noise if attached to tool envelope
+  trimmed = trimmed.replace(/\]?<\]minimax\[>\[?/gi, '')
 
-  const closing = trimmed.indexOf(TOOL_CALL_CLOSE, open)
+  // Determine whether this text carries a Freya tool envelope or an alternative provider tool envelope.
+  const freyaOpen = trimmed.indexOf(TOOL_CALL_OPEN)
+  const altMatch = trimmed.match(/\[?<tool_call>\]?/i)
+  const hasAlt = altMatch && altMatch.index !== undefined
+
+  // Neither envelope present -> this is a direct prose answer.
+  if (freyaOpen === -1 && !hasAlt) return { kind: 'answer' }
+
+  // Use the envelope that appears first if both were somehow present
+  const useFreya = freyaOpen !== -1 && (!hasAlt || freyaOpen <= (altMatch?.index ?? Infinity))
+  const open = useFreya ? freyaOpen : altMatch!.index!
+  const openMarker = useFreya ? TOOL_CALL_OPEN : altMatch![0]
+  const closeMarker = useFreya ? TOOL_CALL_CLOSE : '</tool_call>'
+
+  let closing = -1
+  let closeMarkerLen = 0
+  if (useFreya) {
+    closing = trimmed.indexOf(closeMarker, open)
+    closeMarkerLen = closeMarker.length
+  } else {
+    const altCloseMatch = trimmed.slice(open + openMarker.length).match(/\[?<\/tool_call>\]?/i)
+    if (altCloseMatch && altCloseMatch.index !== undefined) {
+      closing = open + openMarker.length + altCloseMatch.index
+      closeMarkerLen = altCloseMatch[0].length
+    }
+  }
+
   if (closing === -1) {
     // Some text-only providers emit the entire JSON object but omit just the
     // closing sentinel. Recover ONLY an exact single JSON object with a known
     // tool and at least one valid string argument; no prose, fences, trailing
     // bytes, or multiple requests can enter this compatibility path.
-    const candidate = trimmed.slice(open + TOOL_CALL_OPEN.length).trim()
-    if (open === 0 && candidate.length <= MIND_TOOL_LIMITS.maxRequestChars
+    const candidate = trimmed.slice(open + openMarker.length).trim()
+    const proseBefore = trimmed.slice(0, open).trim()
+    const allowUnclosed = useFreya ? open === 0 : proseBefore.length <= MIND_TOOL_LIMITS.maxToolCallProseChars
+    if (allowUnclosed && candidate.length <= MIND_TOOL_LIMITS.maxRequestChars
         && candidate.startsWith('{') && candidate.endsWith('}')) {
       try {
         const value: unknown = JSON.parse(candidate)
@@ -747,24 +791,20 @@ export function parseToolResponse(text: string, known: (name: string) => boolean
   }
 
   // Two envelopes is not a request; it is a reply that could be read two ways.
-  //
-  // The search starts *after* the closing marker, not after the opening one,
-  // because `FREYA_TOOL_CALL_END` begins with `FREYA_TOOL_CALL`. Looking after the
-  // opening marker finds the closing marker itself and reports every well-formed
-  // request as a duplicate.
-  const afterClose = closing + TOOL_CALL_CLOSE.length
-  if (trimmed.indexOf(TOOL_CALL_OPEN, afterClose) !== -1) {
+  const afterClose = closing + closeMarkerLen
+  const rest = trimmed.slice(afterClose)
+  if (rest.indexOf(TOOL_CALL_OPEN) !== -1 || /\[?<tool_call>\]?/i.test(rest)) {
     return { kind: 'invalid', reason: 'the reply contained more than one tool request' }
   }
 
   // Surrounding prose is discarded, never read. Capped so a long ramble cannot
   // ride along with a request.
-  const prose = trimmed.slice(0, open).length + trimmed.slice(closing + TOOL_CALL_CLOSE.length).length
+  const prose = trimmed.slice(0, open).length + rest.length
   if (prose > MIND_TOOL_LIMITS.maxToolCallProseChars) {
     return { kind: 'invalid', reason: 'the reply was mostly prose around a tool request' }
   }
 
-  let body = trimmed.slice(open + TOOL_CALL_OPEN.length, closing).trim()
+  let body = trimmed.slice(open + openMarker.length, closing).trim()
   // Models habitually wrap JSON in a Markdown code fence, even inside the
   // envelope. The fence is presentation; the JSON inside it is the request. Strip
   // a surrounding ```lang ... ``` pair so a good request is not lost to it. A body

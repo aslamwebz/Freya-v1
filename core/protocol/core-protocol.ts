@@ -151,6 +151,7 @@ export const CAPABILITIES = [
   'foundry.status.read',
   'foundry.artifact.manage',
   'foundry.activation.manage',
+  'workspace.report.save',
   // Relay — Phase 16.
   //
   // Email, calendar, GitHub and external connectors through bounded capabilities

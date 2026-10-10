@@ -1093,7 +1093,7 @@ export class MindService {
         // by the time we reach this branch (see `think`), so the prose stored
         // here is the model's own words without any block shaped like the
         // code's footer. A forge is therefore impossible from the store side.
-        content: cognition.text,
+        content: boundAssistantMessageContent(cognition.text),
         createdAt: endedAt,
         turnId,
         // What the lookups really returned, kept as typed items beside the prose. The
@@ -1431,7 +1431,7 @@ export class MindService {
       messageId: this.newId(),
       conversationId: input.conversationId,
       role: 'assistant',
-      content: renderTruncatedAnswer(cognition.text, footer),
+      content: boundAssistantMessageContent(renderTruncatedAnswer(cognition.text, footer)),
       createdAt: endedAt,
       turnId: turn.turnId,
       // A cut-off answer still looked things up, and the cards it earned are still real.
@@ -1771,5 +1771,15 @@ function conversationFault(error: unknown): string {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown error'
+}
+
+function boundAssistantMessageContent(
+  content: string,
+  limit: number = CONVERSATION_LIMITS.maxMessageCharacters,
+): string {
+  if (content.length <= limit) return content
+  const notice = '\n\n[Response safely preserved up to maximum message length]'
+  const sliceLen = Math.max(0, limit - notice.length)
+  return `${content.slice(0, sliceLen)}${notice}`
 }
 

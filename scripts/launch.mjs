@@ -23,7 +23,7 @@ import { join } from 'node:path'
 
 const require = createRequire(import.meta.url)
 
-const DISPLAY = process.argv[2] ?? process.env.FREYA_DISPLAY ?? ''
+const DISPLAY = process.argv[2] ?? process.env.FREYA_DISPLAY ?? '1'
 if (DISPLAY !== '' && (!Number.isInteger(Number(DISPLAY)) || Number(DISPLAY) < 0)) {
   console.error(`display must be a non-negative integer, got: ${DISPLAY}`)
   process.exit(2)

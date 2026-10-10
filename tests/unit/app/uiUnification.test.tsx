@@ -57,8 +57,8 @@ describe('the shipping primary destinations', () => {
     render(<Harness />)
     const nav = screen.getByRole('navigation', { name: 'Primary' })
     expect(Array.from(nav.querySelectorAll('.hd-place, .chats-history-title'), node => node.textContent?.trim()))
-      .toEqual(['Home', 'Chats', 'Mind', 'Missions', 'Workflows', 'Library', 'Office', 'Settings'])
-    for (const name of ['Mind', 'Missions', 'Workflows', 'Library', 'Office', 'Settings', 'Chats', 'Home']) {
+      .toEqual(['Home', 'Chats', 'Mind', 'Missions', 'Workflows', 'World', 'Library', 'Office', 'Settings'])
+    for (const name of ['Mind', 'Missions', 'Workflows', 'World', 'Library', 'Office', 'Settings', 'Chats', 'Home']) {
       fireEvent.click(primary(name))
       expect(primary(name)).toHaveAttribute('aria-current', 'page')
     }
@@ -77,6 +77,14 @@ describe('the shipping primary destinations', () => {
     expect(screen.getByRole('tabpanel', { name: 'Scheduling' })).toBeInTheDocument()
     fireEvent.click(within(tabs).getByRole('tab', { name: 'Workflows' }))
     expect(screen.getByRole('tabpanel', { name: 'Workflows' })).toHaveTextContent('No workflows yet.')
+  })
+  it('remembers the separate news World pages and leaves collection off', () => {
+    render(<Harness initial="world" />)
+    expect(primary('World')).toHaveAttribute('aria-current', 'page')
+    fireEvent.click(screen.getByRole('tab', { name: 'Product research' }))
+    fireEvent.click(primary('Chats'))
+    fireEvent.click(primary('World'))
+    expect(screen.getByRole('tabpanel', { name: 'Product research' })).toHaveTextContent('Collection is off')
   })
 
   it('keeps chat draft and the eight-icon right rail across workspace changes', () => {
@@ -132,9 +140,9 @@ describe('the shipping primary destinations', () => {
     expect(screen.getByRole('tabpanel', { name: 'Memory' })).toBeInTheDocument()
     fireEvent.click(primary('Library'))
     const tabs = screen.getByRole('tablist', { name: 'Library sections' })
-    expect(within(tabs).getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Knowledge', 'People', 'World', 'Files', 'Search'])
+    expect(within(tabs).getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Knowledge', 'People', 'Files', 'Search'])
     expect(tabs).toHaveAttribute('aria-orientation', 'horizontal')
-    for (const name of ['Knowledge', 'People', 'World', 'Files', 'Search']) {
+    for (const name of ['Knowledge', 'People', 'Files', 'Search']) {
       fireEvent.click(within(tabs).getByRole('tab', { name }))
       expect(screen.getByRole('tabpanel', { name })).toHaveTextContent(/not connected/i)
     }
@@ -143,7 +151,7 @@ describe('the shipping primary destinations', () => {
   it.each([
     ['focus', 'Mind', 'Focus & Attention'], ['memory', 'Mind', 'Memory'],
     ['library/mind/focus', 'Mind', 'Focus & Attention'], ['library/mind/memory', 'Mind', 'Memory'], ['library/mind', 'Mind', 'Overview'],
-    ['people', 'Library', 'People'], ['world', 'Library', 'World'],
+    ['people', 'Library', 'People'], ['world', 'World', 'Daily digest'], ['library/world', 'World', 'Daily digest'],
     ['life', 'Mind', 'Memory'], ['workforce', 'Office', 'Agents'],
     ['work', 'Missions', 'Runs'], ['files', 'Library', 'Files'],
     ['library/search', 'Library', 'Search'], ['office/scene', 'Office', 'Office scene'],
@@ -239,7 +247,7 @@ describe('the shipping primary destinations', () => {
     fireEvent.click(primary('Chats'))
     expect(screen.getByRole('searchbox', { name: 'Search conversations' })).toBeInTheDocument()
     const nav = screen.getByRole('navigation', { name: 'Primary' })
-    expect(within(nav).getAllByRole('button')).toHaveLength(8)
+    expect(within(nav).getAllByRole('button')).toHaveLength(9)
     expect(within(nav).queryByRole('searchbox')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     fireEvent.click(primary('Mind'))

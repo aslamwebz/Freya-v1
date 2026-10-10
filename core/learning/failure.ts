@@ -56,19 +56,9 @@ export function categorizeFailure(
     category = 'authorization_denied'
     advisedCorrection = 'Do not request actions requiring unauthorized capabilities; request user grant or use permitted capabilities.'
   } else if (
-    rawCategory === 'verification_failure' ||
-    stepContext?.verifier ||
-    rawReason.includes('verifier') ||
-    rawReason.includes('verification') ||
-    rawReason.includes('missing') ||
-    rawReason.includes('not found') ||
-    rawReason.includes('did not match') ||
-    rawReason.includes('source')
-  ) {
-    category = 'verification_failure'
-    advisedCorrection = 'The observation failed verifier criteria. Select an alternative path, query, or target rather than repeating this check.'
-  } else if (
     rawCategory === 'execution_error' ||
+    rawReason.includes('unreachable') ||
+    rawReason.includes('503') ||
     rawReason.includes('timeout') ||
     rawReason.includes('network') ||
     rawReason.includes('connection') ||
@@ -77,6 +67,17 @@ export function categorizeFailure(
   ) {
     category = 'execution_error'
     advisedCorrection = 'The capability failed during runtime execution. Adjust input format, verify environmental prerequisites, or try a fallback capability.'
+  } else if (
+    rawCategory === 'verification_failure' ||
+    rawReason.includes('verifier') ||
+    rawReason.includes('verification') ||
+    rawReason.includes('missing') ||
+    rawReason.includes('not found') ||
+    rawReason.includes('did not match') ||
+    rawReason.includes('checksum')
+  ) {
+    category = 'verification_failure'
+    advisedCorrection = 'The observation failed verifier criteria. Select an alternative path, query, or target rather than repeating this check.'
   } else if (rawReason.includes('budget') || rawReason.includes('deadline') || rawReason.includes('limit')) {
     category = 'resource_exhausted'
     advisedCorrection = 'The task approached resource limits. Consolidate operations into fewer steps.'

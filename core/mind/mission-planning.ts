@@ -10,6 +10,7 @@ export interface MissionGoalRequest {
   readonly missionId: string
   readonly grantId: string
   readonly continueAfterVerification?: boolean
+  readonly revision?: boolean
 }
 
 export interface MissionPlanningInput extends MissionGoalRequest {
@@ -122,7 +123,7 @@ request: (intent: CognitionIntent) => Promise<CognitionOutcome>): Promise<Missio
     proposed.push({ stepId, capability: entry.name, verifier: entry.binding.verifier, dependsOn: raw.dependsOn.map(dependency => `${stepPrefix}-s${dependency + 1}`) })
     privateSteps.push({ stepId, capability: entry.name, verifier: entry.binding.verifier, intent: raw.intent, input: clean.value })
   }
-  if (failedPrivate && isPlanRepeatingFailure(privateSteps, failedPrivate)) {
+  if (failedPrivate && structuredFailure?.category === 'verification_failure' && isPlanRepeatingFailure(privateSteps, failedPrivate)) {
     return { ok: false, reason: 'invalid_proposal' }
   }
   const validated = plan({ missionId: input.missionId, steps: proposed }, capabilities, input.budget, input.now)

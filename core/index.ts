@@ -25,6 +25,14 @@ import { registerResearchInspection } from './work/research-inspection'
 import { createMissionProposalTool } from './mind/mission-proposal'
 import { ChatMissionIntegration } from './missions/chat-integration'
 import type { ChatMissionProposal } from './missions/chat-types'
+import {
+  evaluateExecutiveDecision,
+  isExecutiveTriggerEvent,
+  type ExecutiveDecisionOutcome,
+  type ExecutiveState,
+  type ExecutiveBudgetLimit,
+  type ExecutiveBudgetSpend,
+} from './executive'
 import { LearningEngine } from './learning/engine'
 import type { LearningStore } from './learning/store'
 import { VaultLearningStore, MemoryLearningStore } from './vault/repositories/learning-store'
@@ -69,7 +77,7 @@ import { isAssignableToWorker, isTerminalAssignmentStatus, workerPrincipalId } f
 import type { WORKFORCE_LIMITS } from './workforce/types'
 import type { WorkforceProjection, WorkforceWorkerDetail } from './workforce/types'
 import { MissionEngine, type WorkPort } from './missions/engine'
-import type { MissionCapabilityPort } from './missions/autonomy/types'
+import type { MissionCapabilityPort, MissionPriority } from './missions/autonomy/types'
 import type { MissionAuthorityPort } from './missions/autonomy/authority'
 import type { WorkRisk } from './work/types'
 import {
@@ -962,7 +970,7 @@ export interface Core {
    * `null` means the runtime is not built, which a surface can render rather than crash on.
    */
   advanceMission(missionId: string, trigger: DecisionTrigger): Promise<StepOutcome | null>
-  planMissionGoal(input: MissionGoalRequest): Promise<MissionGoalOutcome>
+  planMissionGoal(input: MissionGoalRequest, revision?: boolean): Promise<MissionGoalOutcome>
   /**
    * One worker with its mailbox, decrypted from this process's memory.
    *
@@ -1177,6 +1185,26 @@ untimeNotice, which states what the runtime cannot do, because a
   correctLearningClaim(recordId: string, replacement: { claim: string; reason: string }): Promise<LearningWriteOutcome>
   /** Withdraw an admitted knowledge record (retracts claim, destroying claim text while retaining audit trail). */
   withdrawLearningClaim(recordId: string): Promise<LearningWriteOutcome>
+  /** The explainable Executive decision for competing goals and resource allocation (Phase 4). */
+  executiveDecision(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveDecisionOutcome
+  /** The explainable Executive state projection (Phase 4). */
+  executiveState(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveState
+  /** Subscribe to event-driven Executive decisions (Phase 4C). */
+  onExecutiveDecision(listener: (outcome: ExecutiveDecisionOutcome) => void): () => void
+  /** The last event-driven Executive decision outcome (Phase 4C). */
+  lastExecutiveDecision(): ExecutiveDecisionOutcome | null
   /**
    * The World & self summary and its subscription.
    *
@@ -1402,6 +1430,8 @@ class FreyaCore implements Core {
   private readonly attentionListeners = new Set<(projection: AttentionProjection) => void>()
   private readonly lifeLoopListeners = new Set<(projection: LifeLoopProjection) => void>()
   private readonly runtimeListeners = new Set<(projection: RuntimeProjection) => void>()
+  private readonly executiveListeners = new Set<(outcome: ExecutiveDecisionOutcome) => void>()
+  private lastExecutiveDecisionOutcome: ExecutiveDecisionOutcome | null = null
   /**
    * The Phase 40 runtime activation controller.
    *
@@ -2058,6 +2088,7 @@ class FreyaCore implements Core {
       this.observeLifeLoopSource(event)
       this.observeVerifiedMissionStep(event)
       this.observeLearningSource(event)
+      this.observeExecutiveSource(event)
       // Life History derives from authoritative events live. The engine is
       // idempotent, so a replayed event cannot duplicate an entry.
       if (!event.type.startsWith('life.')) void this.lifeEngine?.observe(event)
@@ -4262,6 +4293,123 @@ private async buildForge(): Promise<void> {
     return this.learningEngine.withdraw(recordId)
   }
 
+  executiveDecision(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveDecisionOutcome {
+    const nowIso = (this.options.now ?? (() => new Date()))().toISOString()
+    const missions = this.missionEngine?.projection().missions ?? []
+    const workforce = this.safeWorkforce()
+    const workers = workforce?.workers ?? []
+    const stopAllActive = this.state.stopAll.active
+    const guardMayManage = this.guard.evaluate(this.owner, 'mission.manage').allowed
+
+    // Extract durable mission spend and budget if available from mission engine
+    const internalMissions = this.missionEngine
+      ? (
+          this.missionEngine as unknown as {
+            state?: {
+              missions: Map<
+                string,
+                {
+                  budget?: { maxActions: number; maxModelCalls: number; maxExternalRequests: number }
+                  spend?: { actions: number; modelCalls: number; externalRequests: number }
+                }
+              >
+            }
+          }
+        ).state?.missions
+      : undefined
+
+    const derivedSpends = new Map<string, ExecutiveBudgetSpend>()
+    const derivedLimits = new Map<string, ExecutiveBudgetLimit>()
+    if (internalMissions) {
+      for (const [id, m] of internalMissions.entries()) {
+        if (m.budget) {
+          derivedLimits.set(id, {
+            maxActions: m.budget.maxActions,
+            maxModelCalls: m.budget.maxModelCalls,
+            maxExternalRequests: m.budget.maxExternalRequests,
+          })
+        }
+        if (m.spend) {
+          derivedSpends.set(id, {
+            actions: m.spend.actions,
+            modelCalls: m.spend.modelCalls,
+            externalRequests: m.spend.externalRequests,
+          })
+        }
+      }
+    }
+
+    return evaluateExecutiveDecision({
+      missions,
+      workers,
+      stopAllActive,
+      guardMayManage,
+      now: nowIso,
+      explicitPriorities: options?.explicitPriorities,
+      budgetLimits: options?.budgetLimits ?? derivedLimits,
+      budgetSpends: options?.budgetSpends ?? derivedSpends,
+      requiredSpecialisations: options?.requiredSpecialisations,
+      missionAges: options?.missionAges,
+    })
+  }
+
+  executiveState(options?: {
+    readonly explicitPriorities?: ReadonlyMap<string, MissionPriority>
+    readonly budgetLimits?: ReadonlyMap<string, ExecutiveBudgetLimit> | Readonly<Record<string, ExecutiveBudgetLimit>>
+    readonly budgetSpends?: ReadonlyMap<string, ExecutiveBudgetSpend> | Readonly<Record<string, ExecutiveBudgetSpend>>
+    readonly requiredSpecialisations?: ReadonlyMap<string, readonly string[]> | Readonly<Record<string, readonly string[]>>
+    readonly missionAges?: ReadonlyMap<string, number> | Readonly<Record<string, number>>
+  }): ExecutiveState {
+    return this.executiveDecision(options).state
+  }
+
+  /** Subscribe to event-driven Executive decisions (Phase 4C). */
+  onExecutiveDecision(listener: (outcome: ExecutiveDecisionOutcome) => void): () => void {
+    this.executiveListeners.add(listener)
+    if (this.lastExecutiveDecisionOutcome !== null) {
+      try {
+        listener(this.lastExecutiveDecisionOutcome)
+      } catch (error) {
+        console.error('[freya.core] Immediate executive listener threw', error)
+      }
+    }
+    return () => {
+      this.executiveListeners.delete(listener)
+    }
+  }
+
+  /** The last event-driven Executive decision outcome (Phase 4C). */
+  lastExecutiveDecision(): ExecutiveDecisionOutcome | null {
+    return this.lastExecutiveDecisionOutcome
+  }
+
+  private observeExecutiveSource(event: AnyCoreEvent): void {
+    if (!isExecutiveTriggerEvent(event.type)) return
+    queueMicrotask(() => {
+      if (this.stopped) return
+      try {
+        const outcome = this.executiveDecision()
+        this.lastExecutiveDecisionOutcome = outcome
+        for (const listener of [...this.executiveListeners]) {
+          try {
+            listener(outcome)
+          } catch (error) {
+            console.error('[freya.core] Executive listener threw', error)
+          }
+        }
+      } catch (error) {
+        console.error('[freya.core] observeExecutiveSource threw', error)
+      }
+    })
+  }
+
+
   /**
    * Evaluate `skill.manage` for the owner and record the decision, or answer the
    * refusal.
@@ -5574,7 +5722,7 @@ private async buildForge(): Promise<void> {
       recordDecision: (input) => engine.recordDecision(input),
       charge: (input) => engine.charge(input),
       noteBudgetExceeded: (input) => engine.noteBudgetExceeded(input),
-      requestCompletion: (missionId) => this.completeMission(missionId),
+      requestCompletion: (missionId, options) => this.completeMission(missionId, options),
       writeIntent: (missionId, intent) => engine.writeIntent(missionId, intent),
       readIntent: (missionId) => engine.readIntent(missionId),
     }
@@ -5721,8 +5869,8 @@ state: {
   }
 
   /** Trusted host entry: an existing owner grant authorizes one model proposal. */
-  async planMissionGoal(input: MissionGoalRequest): Promise<MissionGoalOutcome> {
-    return this.planChatMissionGoal(input, false)
+  async planMissionGoal(input: MissionGoalRequest, revision = false): Promise<MissionGoalOutcome> {
+    return this.planChatMissionGoal(input, revision || input.revision === true)
   }
 
   private chatResearchAvailable(): boolean {
@@ -5740,9 +5888,9 @@ state: {
     return !!binding && binding.ownerId === this.owner.id && this.chatMissionGrantAvailable(id, binding.grantId)
   }
 
-  private async completeMission(id: string): Promise<MissionCommandOutcome> {
+  private async completeMission(id: string, options?: { verifierId?: string; requiredRunIds?: readonly string[] }): Promise<MissionCommandOutcome> {
     const content = await this.requireMission().privateContent(id)
-    return content?.chatBinding && this.chatMissions ? this.chatMissions.complete(id) : this.requireMission().requestCompletion(id)
+    return content?.chatBinding && this.chatMissions ? this.chatMissions.complete(id) : this.requireMission().requestCompletion(id, options)
   }
 
   private async planChatMissionGoal(input: MissionGoalRequest, revision: boolean): Promise<MissionGoalOutcome> {
@@ -5753,7 +5901,7 @@ state: {
     const mission = engine.record(input.missionId)
     if (!mission || (revision ? !mission.activePlan || mission.status !== 'blocked' || mission.planRevisions !== 1 : !!mission.activePlan || !['draft', 'ready'].includes(mission.status))) return unavailable
     const content = await engine.privateContent(input.missionId, true)
-    if (!content || (revision ? !content.chatBinding || !content.executionPlan : !!content.executionPlan) || this.missionPlanning.has(input.missionId)) return unavailable
+    if (!content || (revision ? !content.executionPlan : !!content.executionPlan) || this.missionPlanning.has(input.missionId)) return unavailable
     if (content.chatBinding && (!this.chatResearchAvailable() || !await this.chatMissionAuthorized(input.missionId) || content.chatBinding.paused)) return unavailable
     const now = (this.options.now ?? (() => new Date()))()
     const deadline = Math.min(Date.parse(mission.deadlineAt), Date.parse(mission.activatedAt ?? mission.createdAt) + mission.budget.maxDurationMs)
@@ -11810,7 +11958,7 @@ export function createCore(options: CoreOptions): Core {
   return new FreyaCore(options)
 }
 
-export type { AnyCoreEvent }
+export type { AnyCoreEvent, ExecutiveDecisionOutcome, ExecutiveState }
 
 /**
  * A research result as the renderer sees it.

@@ -12,7 +12,7 @@ import {
 } from '../../core/learning/failure'
 import { proposeMissionPlan, type MissionPlanningInput } from '../../core/mind/mission-planning'
 import { recallRelevantLearning } from '../../core/learning/recall'
-import { DEFAULT_MISSION_BUDGET, type MissionPlanRecord } from '../../core/missions/autonomy/types'
+import { DEFAULT_MISSION_BUDGET, type MissionCapabilityPort, type MissionPlanRecord } from '../../core/missions/autonomy/types'
 
 let dir: string
 let core: Core | undefined
@@ -101,7 +101,7 @@ describe('Phase 3C — Failure Learning and Correction', () => {
   })
 
   describe('Corrective Mission Replanning', () => {
-    const mockCapabilities = {
+    const mockCapabilities: MissionCapabilityPort = {
       known: () => ['filesystem.inspect'],
       lookup: (name: string) =>
         name === 'filesystem.inspect'

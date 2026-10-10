@@ -1,4 +1,5 @@
 import type { Core } from './index'
+import type { StrategyLifecycleManager, EvolutionStore } from './evolution'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
 import type { PrincipalId } from './protocol/core-protocol'
 import type { SubordinateWorkerScope, WorkforceOwnerScope } from './workforce/authority'
@@ -101,4 +102,18 @@ export function skillOwnerScope(core: Core): SkillOwnerScope {
  */
 export function lifeOwnerScope(core: Core): LifeOwnerScope {
   return (core as unknown as AuthorityIssuer).issueLifeOwnerScope()
+}
+
+/**
+ * Evolution mutation seam for controlled integration tests only.
+ * The production Core interface exposes copies of read-only evolution data.
+ */
+export function evolutionInternals(core: Core): {
+  lifecycle: StrategyLifecycleManager | undefined
+  store: EvolutionStore | undefined
+} {
+  return (core as unknown as { issueEvolutionInternals(): {
+    lifecycle: StrategyLifecycleManager | undefined
+    store: EvolutionStore | undefined
+  } }).issueEvolutionInternals()
 }

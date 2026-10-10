@@ -28,6 +28,12 @@
 - Two **distinct consecutive** mission failures classified as strategy defects under the active version invoke the existing governed rollback.
 - The rollback and promotion records are persisted by the Evolution store when its SQLCipher Vault is available.
 
+## Production Core exposure (follow-up hardening)
+
+- The public `Core.evolution()` and `Core.evolutionStore()` no longer return the mutable lifecycle manager and Evolution store. Instead, callers receive frozen read-only facades with detached candidate, active-strategy and history records.
+- Mutating the strategy lifecycle in a controlled test uses an explicit `core/testing.ts` integration seam, not the public `Core` interface.
+- This is a defense-in-depth reduction in agent-visible capability. Genuine authenticated owner decisions for evolution promotion are **still not implemented** as a trusted IPC/owner UI gateway; approval strings supplied to lifecycle methods are not credentials.
+
 ## Important remaining constraints
 
 1. **Owner authorization boundary:** The lifecycle currently accepts an asserted `decidedBy: 'owner'` / `callerPrincipal` from its method inputs. A string is not independently authenticated owner identity. Raw evolution lifecycle and store accessors on Core are not a verified, owner-gated production UI/API command path. This must be fixed before enabling owner promotions through an untrusted surface.

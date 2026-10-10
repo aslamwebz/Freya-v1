@@ -1099,13 +1099,14 @@ export interface Core {
    */
   metacognition(): MetacognitionEngine | undefined
   /**
-   * Strategy lifecycle manager (Phase 7D).
+   * Read-only evolution status. Never expose the mutable lifecycle or its approval
+   * verbs through Core's public surface (an agent can hold a Core reference).
    */
-  evolution(): StrategyLifecycleManager | undefined
+  evolution(): Readonly<Pick<StrategyLifecycleManager, 'getActiveStrategy' | 'getPromotionHistory' | 'getRollbackHistory'>> | undefined
   /**
-   * Evolution store (Phase 7B).
+   * Read-only candidate information. Approval records and store writes remain Core-owned.
    */
-  evolutionStore(): EvolutionStore | undefined
+  evolutionStore(): Readonly<Pick<EvolutionStore, 'mode' | 'durable' | 'faultReason' | 'getCandidate' | 'readCandidates'>> | undefined
   /**
    * Core's account of the workforce: workers, teams, and what each is doing.
    *
@@ -6027,12 +6028,41 @@ private async buildForge(): Promise<void> {
     return this.metacognitionEngine
   }
 
-  evolution(): StrategyLifecycleManager | undefined {
-    return this.strategyLifecycle
+  evolution(): ReturnType<Core['evolution']> {
+    const lifecycle = this.strategyLifecycle
+    if (!lifecycle) return undefined
+    // Return data snapshots, NOT the manager instance or its mutable internal records.
+    return Object.freeze({
+      getActiveStrategy: (scope?: string) => {
+        const active = lifecycle.getActiveStrategy(scope)
+        return active ? structuredClone(active) : null
+      },
+      getPromotionHistory: () => structuredClone(lifecycle.getPromotionHistory()),
+      getRollbackHistory: () => structuredClone(lifecycle.getRollbackHistory()),
+    })
   }
 
-  evolutionStore(): EvolutionStore | undefined {
-    return this.evolutionStoreInstance
+  evolutionStore(): ReturnType<Core['evolutionStore']> {
+    const store = this.evolutionStoreInstance
+    if (!store) return undefined
+    return Object.freeze({
+      get mode() { return store.mode },
+      get durable() { return store.durable },
+      get faultReason() { return store.faultReason },
+      readCandidates: async () => structuredClone(await store.readCandidates()),
+      getCandidate: async (id: string) => {
+        const candidate = await store.getCandidate(id)
+        return candidate ? structuredClone(candidate) : null
+      },
+    })
+  }
+
+  /**
+   * Internal test seam, deliberately absent from Core's public interface.
+   * The production surface exposes ONLY the read-only evolution views above.
+   */
+  issueEvolutionInternals(): { lifecycle: StrategyLifecycleManager | undefined; store: EvolutionStore | undefined } {
+    return { lifecycle: this.strategyLifecycle, store: this.evolutionStoreInstance }
   }
 
   goals(): GoalProjectionView {

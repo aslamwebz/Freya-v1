@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { evolutionInternals } from '../../core/testing'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import { createCore, type Core } from '../../core/index'
@@ -156,7 +157,7 @@ describe('Phase 7D — End-to-End Multi-Session Verified Evolution Acceptance', 
     await core.start()
 
     const metacognition = core.metacognition()
-    const evolution = core.evolution()
+    const { lifecycle: evolution, store: mutableEvolutionStore } = evolutionInternals(core)
 
     expect(metacognition).toBeDefined()
     expect(evolution).toBeDefined()
@@ -208,7 +209,7 @@ describe('Phase 7D — End-to-End Multi-Session Verified Evolution Acceptance', 
     expect(candidate.status).toBe('pending')
 
     // Propose candidate into evolution store
-    await core.evolutionStore()!.writeCandidate(candidate)
+    await mutableEvolutionStore!.writeCandidate(candidate)
 
     // -------------------------------------------------------------------------
     // STAGE 3 — Controlled Experimentation & Independent Evaluation

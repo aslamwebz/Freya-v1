@@ -2629,6 +2629,55 @@ class FreyaCore implements Core {
     this.proactiveEngine = new ProactiveEngine({
       fabric: this.fabric,
       store: this.proactiveStore,
+      modelProvider: this.options.providers?.[0],
+      getGoal: (goalId) => {
+        if (!this.goalEngine) return null
+        const record = this.goalEngine.state().goals.get(goalId)
+        if (!record) return null
+        const content = this.goalEngine.getContent(goalId)
+        return {
+          goalId: record.goalId,
+          state: record.state,
+          title: content?.title ?? record.goalId,
+          milestones: (content?.roadmap?.milestones ?? []).map((m) => ({
+            milestoneId: m.milestoneId,
+            status: m.status,
+            criteria: m.acceptanceCriteria,
+          })),
+        }
+      },
+      activeGoals: () => {
+        if (!this.goalEngine) return []
+        return [...this.goalEngine.state().goals.values()]
+          .filter((g) => g.state === 'active')
+          .map((g) => {
+            const content = this.goalEngine?.getContent(g.goalId)
+            return {
+              goalId: g.goalId,
+              state: g.state,
+              title: content?.title ?? g.goalId,
+              milestones: (content?.roadmap?.milestones ?? []).map((m) => ({
+                milestoneId: m.milestoneId,
+                status: m.status,
+                criteria: m.acceptanceCriteria,
+              })),
+            }
+          })
+      },
+      activeMissions: () => {
+        if (!this.missionEngine) return []
+        return this.missionEngine.projection().missions
+          .filter((m) => m.status === 'active')
+          .map((m) => ({
+            missionId: m.missionId,
+            state: m.status,
+          }))
+      },
+      recallLearning: (query) => {
+        if (!this.learningEngine) return ''
+        const advice = recallRelevantLearning(this.learningEngine, query)
+        return advice.promptSection
+      },
       now: this.options.now,
       newId: this.options.newId,
       stopAll: () => this.state.stopAll.active,

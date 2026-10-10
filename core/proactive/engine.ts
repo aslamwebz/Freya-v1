@@ -11,12 +11,25 @@ import {
   type ObservationIngestResult,
   type ObservationSubscription,
   type ObservationSubscriptionInput,
+  type ProactiveAdvisoryProposal,
   type RawObservationInput,
+  type RelevanceAssessment,
 } from './types'
+import {
+  DeterministicRelevanceFilter,
+  type GoalSummary,
+  type MissionSummary,
+} from './relevance'
+import { ProactiveMindReasoner, type MindReasoningPort } from './reasoner'
 
 export interface ProactiveEngineOptions {
   readonly fabric: EventFabric
   readonly store: ProactiveStore
+  readonly modelProvider?: MindReasoningPort
+  readonly getGoal?: (goalId: string) => GoalSummary | null
+  readonly activeGoals?: () => readonly GoalSummary[]
+  readonly activeMissions?: () => readonly MissionSummary[]
+  readonly recallLearning?: (query: { goal?: string }) => string
   readonly now?: () => Date
   readonly newId?: () => string
   readonly stopAll?: () => boolean
@@ -27,6 +40,8 @@ export class ProactiveEngine {
   private readonly dedup: DeduplicationRegistry
   private readonly subscriptionRegistry: SubscriptionRegistry
   private readonly recentObservationBuffer: NormalizedObservation[] = []
+  private readonly relevanceFilter: DeterministicRelevanceFilter
+  private readonly mindReasoner: ProactiveMindReasoner | undefined
   private readonly now: () => Date
   private readonly newId: () => string
 
@@ -35,6 +50,10 @@ export class ProactiveEngine {
     this.newId = options.newId ?? (() => randomUUID())
     this.dedup = new DeduplicationRegistry(options.store)
     this.subscriptionRegistry = new SubscriptionRegistry(options.store, this.now)
+    this.relevanceFilter = new DeterministicRelevanceFilter()
+    if (options.modelProvider) {
+      this.mindReasoner = new ProactiveMindReasoner(options.modelProvider)
+    }
   }
 
   async open(): Promise<void> {
@@ -127,8 +146,32 @@ export class ProactiveEngine {
     // 9. Emit Journal Event
     await this.emitReceived(observation)
 
+    // 10. Deterministic Relevance Assessment
+    const assessment = this.evaluateRelevance(observation)
+
+    // Emit Relevance Event
+    await this.emitRelevanceEvaluated(observation, assessment)
+
+    // 11. Bounded Mind Reasoning (only when warranted and reasoner configured)
+    let proposal: ProactiveAdvisoryProposal | undefined
+    if (assessment.warrantsReasoning && this.mindReasoner !== undefined) {
+      const goal = assessment.goalId ? this.options.getGoal?.(assessment.goalId) ?? null : null
+      const learningAdvice = this.options.recallLearning?.({ goal: goal?.title ?? observation.claim.rawSummary })
+      try {
+        proposal = await this.mindReasoner.reason({
+          observation,
+          assessment,
+          goal,
+          activeMissions: this.options.activeMissions?.(),
+          learningAdvice,
+        })
+      } catch (err) {
+        console.error('[freya.proactive] reasoning error', err)
+      }
+    }
+
     this.options.onChange?.()
-    return { ok: true, observation }
+    return { ok: true, observation, assessment, proposal }
   }
 
   async subscribe(input: ObservationSubscriptionInput): Promise<ObservationSubscription> {
@@ -175,7 +218,37 @@ export class ProactiveEngine {
     return await this.dedup.isDuplicate(dedupeKey)
   }
 
+  evaluateRelevance(observation: NormalizedObservation): RelevanceAssessment {
+    return this.relevanceFilter.evaluate(observation, {
+      getGoal: this.options.getGoal,
+      activeGoals: this.options.activeGoals,
+      activeMissions: this.options.activeMissions,
+    })
+  }
+
   /* -------------------------------------------------------------- internal */
+
+  private async emitRelevanceEvaluated(
+    obs: NormalizedObservation,
+    assessment: RelevanceAssessment,
+  ): Promise<void> {
+    try {
+      await this.options.fabric.append(
+        'proactive.relevance.evaluated',
+        {
+          observationId: obs.observationId,
+          goalId: assessment.goalId,
+          classification: assessment.opportunityType,
+          isRelevant: assessment.isRelevant,
+          confidence: assessment.confidence,
+          reasoningApplied: assessment.warrantsReasoning && this.mindReasoner !== undefined,
+        },
+        { actor: 'system' },
+      )
+    } catch (err) {
+      console.error('[freya.proactive] failed to append relevance.evaluated event', err)
+    }
+  }
 
   private async emitReceived(obs: NormalizedObservation): Promise<void> {
     try {

@@ -563,6 +563,10 @@ export class GoalEngine {
     return goal.checkpoints.length === 0 || goal.verifiedCheckpoints < goal.checkpoints.length
   }
 
+  getContent(goalId: string): GoalContent | null {
+    return this.contentCache.get(goalId) ?? null
+  }
+
   toTruthPort(): GoalTruthPort {
     return {
       isGoalOpen: (goalId: string) => {

@@ -132,9 +132,58 @@ export interface ObservationSubscriptionInput {
   readonly consentGranted?: boolean
 }
 
+export const OPPORTUNITY_TYPES = [
+  'goal_progress_opportunity',
+  'threat_to_goal',
+  'resource_unblocked',
+  'stalled_work',
+  'information_update',
+  'scheduled_obligation',
+  'unauthorized_initiative_request',
+  'unclassified_noise',
+] as const
+
+export type OpportunityType = (typeof OPPORTUNITY_TYPES)[number]
+
+export const PROACTIVE_CANDIDATE_ACTIONS = [
+  'ignore',
+  'record',
+  'defer',
+  'notify',
+  'request_approval',
+  'investigate',
+  'continue_existing_mission',
+] as const
+
+export type ProactiveCandidateAction = (typeof PROACTIVE_CANDIDATE_ACTIONS)[number]
+
+export interface RelevanceAssessment {
+  readonly isRelevant: boolean
+  readonly opportunityType: OpportunityType
+  readonly confidence: number
+  readonly goalId: string | null
+  readonly milestoneId: string | null
+  readonly reason: string
+  readonly warrantsReasoning: boolean
+  readonly tokensCost: number
+}
+
+export interface ProactiveAdvisoryProposal {
+  readonly significanceAssessment: string
+  readonly candidateAction: ProactiveCandidateAction
+  readonly justification: string
+  readonly verificationCriteria: string
+  readonly modelTokensUsed: number
+  readonly rawModelResponse?: string
+  readonly wasOverridden: boolean
+  readonly overrideReason?: string
+}
+
 export interface ObservationIngestResult {
   readonly ok: boolean
   readonly observation?: NormalizedObservation
+  readonly assessment?: RelevanceAssessment
+  readonly proposal?: ProactiveAdvisoryProposal
   readonly reason?: string
   readonly dropCode?: ObservationDropReason
 }

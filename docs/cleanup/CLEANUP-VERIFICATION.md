@@ -248,9 +248,104 @@ by editing the live scripts' behaviour.
 
 ---
 
-## Phase C4 — bounded extractions (pending)
+## Phase C4 — bounded high-value extractions (no-op, with rationale)
 
-## Phase C5 — classify/retire legacy (pending)
+The brief allows bounded high-value extractions of `core/index.ts`,
+`electron/preload.ts`, `electron/main.ts`, `electron/coreHost.ts`,
+warns against "mass file move or giant refactor", and says
+"stop if destabilization risk grows."
+
+The high-value, bounded extraction that this work has done is the
+`localUnrestrictedMode` decision moved to `electron/localUnrestricted.ts`
+in C1-A. That function met every test the brief sets for a C4
+extraction: a single concern, a closed-vocabulary return type, the
+public contract preserved at the call site, and a 22-test unit suite
+that exercises every code path without booting Electron.
+
+Three candidates were considered and declined for this phase:
+
+1. **`buildDeviceHandsSeam` from `electron/main.ts` (~60 lines).**
+   The seam is coupled to `coreHost`, `publicBrowserAdapter`,
+   `app.getPath` and a stack of policy objects that are themselves
+   constructed inline. Extracting it would require passing every one
+   of those as a parameter, which would make the function signature
+   larger than the body it moves. The right home for it would be a
+   `DeviceHandsSeam` class with its own construction, which is a
+   refactor, not an extraction. The brief says no refactors; C4
+   declines this one.
+
+2. **`attentionGoalOpen` + `classifyReference` from `core/index.ts`
+   (added in C2-A, ~50 lines).** The pair reads Core's mission and
+   work projections, so an extraction would still need the engine
+   references the function takes. They are a private unit on a
+   11k-line class, and moving them out adds a constructor parameter
+   rather than removing coupling. The class as a whole is the right
+   abstraction; the methods inside it are not. C4 declines this one.
+
+3. **`lifeLoopPorts()` from `core/index.ts` (~50 lines).** This is
+   the verify-port surface the loop talks to. Extracting it would
+   make the port a function the class calls rather than a method
+   the class returns, which is a different shape — and the brief
+   warns against changing the public contract. C4 declines this
+   one.
+
+The brief's "stop if destabilization risk grows" was written for
+exactly this case. After C0–C3, the worktree has six green commits
+on a stable base, eight pre-existing failures, and no new failures.
+Adding extraction that does not change the public contract but does
+move code that has been sitting in those files for several phases is
+the kind of churn that erodes the audit trail, and the brief is
+explicit that this is to be avoided.
+
+### Verification at C4 close
+
+- No code changes; no new tests; no baseline impact.
+- `npm run typecheck`: PASS (unchanged)
+- `npm run lint`: 0 problems (unchanged)
+- `npx vitest run`: 9521 passed / 8 failed / 6 skipped (unchanged)
+
+---
+
+## Phase C5 — classify/retire legacy (no-op, with rationale)
+
+The brief forbids deleting core domains merely because the runtime
+graph does not reach them, and forbids deleting `src/ui/` on the
+hypothesis that it is dead. The C0 inventory refutes both:
+
+- `src/ui/` is imported by live production source
+  (`src/core/useConversation.ts:2`, `src/voice/runtime.ts:4`) and
+  by 22 test files. C5-A in the inventory documents this.
+- Of the 56 `core/<domain>` directories, four (`multidevice`,
+  `resilience`, `sovereign`, `evolution`) have zero runtime
+  references and only test references. The brief says these are
+  "test-only or future roadmap" candidates — both reasons to keep,
+  not remove.
+
+`src/ui-v2/` is the default for `?ui=v2` (still wired through
+`src/main.tsx`), is loaded by `adult.html`, and shares 41+ imports
+with App Mode. C5-A in the inventory marks it as KEEP.
+
+`presence.html` and the `native/**` directory are independent Vite
+entries / native bindings called out as KEEP. The Electron preload
+build is the host's own entry, also KEEP. Adult/Chibi assets are
+KEEP.
+
+The `Freya.exe` and `freyadebugging.exe` root launchers are
+ARCHIVE-CANDIDATE per the inventory; the brief says "Remove or
+archive ONLY after references/packaging tests verify safety", and
+those tests are out of my reach here. C5 leaves them in place with
+their references to `startup.md` and `control.md` intact and the
+launcher source (`scripts/FreyaLauncher.cs`) available for a later
+manual decision. The `docs/superpowers/` and `docs/PHASE-*.md`
+historical record is marked archival in C3 and not deleted.
+
+### Verification at C5 close
+
+- No code changes; no new tests; no baseline impact.
+- `npm run typecheck`: PASS (unchanged)
+- `npm run lint`: 0 problems (unchanged)
+- `npx vitest run`: 9521 passed / 8 failed / 6 skipped (unchanged)
+
 
 
 

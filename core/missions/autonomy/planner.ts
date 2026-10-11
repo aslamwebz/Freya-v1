@@ -1,5 +1,5 @@
 import type { WorkRisk } from '../../work/types'
-import type { MissionReason } from '../types'
+import type { MissionReason } from '../reasons'
 import {
   DEFAULT_MISSION_BUDGET,
   type MissionBudget,

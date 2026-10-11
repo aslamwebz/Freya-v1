@@ -1,6 +1,6 @@
 import type { Capability } from '../../../shared/contracts/capabilities'
 import type { WorkRisk } from '../../work/types'
-import type { MissionReason } from '../types'
+import type { MissionReason } from '../reasons'
 
 /**
  * THE MISSION AUTONOMY VOCABULARY.

@@ -1,4 +1,6 @@
 import type { CognitionIntent } from '../authority'
+import type { MissionExecutionPlan } from '../missions/execution-plan'
+export type { MissionExecutionPlan } from '../missions/execution-plan'
 import type { CognitionOutcome } from '../cognition/service'
 import type { MissionBudget, MissionCapabilityPort, MissionPlanRecord } from '../missions/autonomy/types'
 import { plan, type PlanStepRequest } from '../missions/autonomy/planner'
@@ -23,21 +25,6 @@ export interface MissionPlanningInput extends MissionGoalRequest {
   readonly previousExecution?: MissionExecutionPlan
   readonly failure?: unknown
   readonly learningAdvice?: LearningAdviceContext
-}
-
-/** Private content: encrypted with the goal, never placed in event payloads. */
-export interface MissionExecutionPlan {
-  readonly planId: string
-  readonly continueAfterVerification: boolean
-  readonly steps: readonly {
-    readonly stepId: string
-    readonly capability: string
-    readonly verifier: string
-    readonly intent: string
-    readonly input: Record<string, unknown>
-  }[]
-  readonly consideredLessons?: readonly string[]
-  readonly adaptiveRationale?: string | null
 }
 
 export type MissionGoalOutcome =

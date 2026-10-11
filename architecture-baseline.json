@@ -371,15 +371,7 @@
     "src/voice/output.ts -> core/voice/types.ts",
     "src/voice/runtime.ts -> core/voice/types.ts"
   ],
-  "cyclicEdges": [
-    "core/mind/mission-planning.ts -> core/missions/autonomy/planner.ts",
-    "core/mind/mission-planning.ts -> core/missions/autonomy/types.ts",
-    "core/missions/autonomy/planner.ts -> core/missions/autonomy/types.ts",
-    "core/missions/autonomy/planner.ts -> core/missions/types.ts",
-    "core/missions/autonomy/types.ts -> core/missions/types.ts",
-    "core/missions/types.ts -> core/mind/mission-planning.ts",
-    "core/missions/types.ts -> core/missions/autonomy/types.ts"
-  ],
+  "cyclicEdges": [],
   "dependencyBags": [
     "core/metacognition/observer.ts: generic dependency container context #2c2a3efa40454f8ba637c2bd0e6a845fe0b44b073065e364924cf6a9fa3f93f6"
   ],

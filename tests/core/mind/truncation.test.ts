@@ -418,23 +418,49 @@ describe('a reply that stopped to ask for a tool', () => {
 })
 
 describe('a reply cut off while emitting a tool call', () => {
-  it('is reported as truncation, and no tool runs on half-written arguments', async () => {
+  it('never runs a tool on half-written arguments, and tells the model it was cut off', async () => {
     // The subtle case. A strict parser would call this envelope "not closed", the
     // loop would tell the model its request could not be read, and the turn would
     // end as though Freya had merely made a formatting mistake — the silent
     // downgrade the finish reason exists to prevent.
+    //
+    // So the envelope is never parsed and never executed. What the loop does with
+    // it is *recover*: the model is told, truthfully, that its request was cut off
+    // before it finished, and given another call to produce one that fits. That is
+    // different from spending a call on a reply known to be incomplete in order to
+    // guess what it meant — the guess is never made, and nothing runs until the
+    // model produces a complete request of its own accord.
     const h = await harness({
       script: [{ text: 'FREYA_TOOL_CALL\n{"tool":"web_search","query":"a th', finishReason: 'length' }],
     })
 
     const result = await submit(h)
 
+    // The invariant, unchanged: nothing ran on the fragment.
+    expect(h.queries).toEqual([])
+    // The turn still ends truthfully when recovery cannot produce a usable request.
     expect(result.outcome).toBe('failed')
     expect(result.reason).toContain('cut off before it finished')
-    expect(h.queries).toEqual([])
-    // No second call was spent trying to repair a reply known to be incomplete.
-    expect(h.provider.calls).toBe(1)
     expect(result.assistantMessage?.content ?? '').toContain('cut off before it finished')
+    // And it spent no more than the bounded recovery allows.
+    expect(h.provider.calls).toBeLessThanOrEqual(3)
+  })
+
+  it('completes normally when the model retries with a complete request', async () => {
+    // The recovery is worth having only if a well-behaved second attempt succeeds.
+    const h = await harness({
+      script: [
+        { text: 'FREYA_TOOL_CALL\n{"tool":"web_search","query":"a th', finishReason: 'length' },
+        { text: toolCall('web_search', { query: 'a thing' }), finishReason: 'tool_calls' },
+        { text: 'here is what I found', finishReason: 'stop' },
+      ],
+    })
+
+    const result = await submit(h)
+
+    expect(result.outcome).toBe('completed')
+    expect(h.queries).toEqual(['a thing'])
+    expect(result.assistantMessage?.content ?? '').toContain('here is what I found')
   })
 
   it('is reported as truncation even when the tool envelope happens to parse', async () => {

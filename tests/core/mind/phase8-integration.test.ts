@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 describe('Phase 8: Token Budget & Continuation Synthesis', () => {
-  it('gives iteration 9 a 1,536-token answer budget while total sum equals perTurnAllowance (7,680)', () => {
+  it('gives every continuation the documented follow-up allowance while total sum equals perTurnAllowance (7,680)', () => {
     const allowance = CONVERSATION_LIMITS.maxOutputTokensPerTurn
     expect(allowance).toBe(7_680)
 
@@ -17,21 +17,37 @@ describe('Phase 8: Token Budget & Continuation Synthesis', () => {
     expect(budgetFor(0, allowance)).toBe(CONVERSATION_LIMITS.maxOutputTokensPerAnswer)
     expect(budgetFor(0, allowance)).toBe(3_072)
 
-    // Intermediate tool continuation calls (1..8)
-    for (let i = 1; i <= 8; i++) {
-      expect(budgetFor(i, allowance)).toBe(384)
+    // Answer-bearing calls (0..1) and envelope calls (2..7) are weighted against
+    // each other so both can actually finish on the live endpoint: a grounded
+    // answer needs ~2048 to return `stop`, and an envelope on a model that emits
+    // its reasoning inline needs room for that reasoning plus the JSON.
+    const answerShare = budgetFor(0, allowance)
+    const envelopeShare = budgetFor(MIND_TOOL_LIMITS.answerCalls, allowance)
+    expect(answerShare).toBeGreaterThan(envelopeShare)
+    for (let i = 0; i < MIND_TOOL_LIMITS.answerCalls; i++) {
+      expect(budgetFor(i, allowance)).toBe(answerShare)
+    }
+    for (let i = MIND_TOOL_LIMITS.answerCalls; i < MIND_TOOL_LIMITS.maxProviderCalls; i++) {
+      expect(budgetFor(i, allowance)).toBe(envelopeShare)
     }
 
-    // Iteration 9 (final synthesis call)
-    expect(budgetFor(9, allowance)).toBe(1_536)
-
-    // Sum across all 10 calls
+    // Sum across all calls
     let total = 0
     for (let i = 0; i < MIND_TOOL_LIMITS.maxProviderCalls; i++) {
       total += budgetFor(i, allowance)
     }
-    expect(total).toBe(7_680)
     expect(total).toBeLessThanOrEqual(allowance)
+    expect(total).toBeGreaterThan(allowance - MIND_TOOL_LIMITS.maxProviderCalls)
+  })
+
+  it('never budgets an answer-bearing call below the cost of finishing one', () => {
+    // The regression that mattered: 384 was handed out here. Against MiniMax-M3 a
+    // grounded answer returns `length` at every budget below 2048, so the turn died
+    // holding its own evidence.
+    const allowance = CONVERSATION_LIMITS.maxOutputTokensPerTurn
+    for (let i = 0; i < MIND_TOOL_LIMITS.answerCalls; i++) {
+      expect(budgetFor(i, allowance)).toBeGreaterThanOrEqual(2048)
+    }
   })
 
   it('bounds gracefully for smaller token allowances', () => {

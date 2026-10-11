@@ -384,7 +384,7 @@ describe('research citation continuity', () => {
     // capability guidance must not displace the actual question from last place.
     expect(h.provider.requests[1]?.messages.at(-2)?.content).toContain('Stored search evidence')
     expect(h.provider.requests[1]?.messages.at(-1)?.content).toBe('Summarise source 2 without searching again.')
-    const guidance = h.provider.requests[1]?.messages.find(message => message.content.includes('Optional lookup tools for this turn.'))
+    const guidance = h.provider.requests[1]?.messages.find(message => message.content.includes('Lookup tools for this turn.'))
     expect(guidance?.role).toBe('system')
   })
 

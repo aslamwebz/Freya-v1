@@ -24,12 +24,13 @@ describe('World news and research pages', () => {
     }
     expect(screen.queryByText(/entities|evidence records|connections/)).toBeNull()
   })
-  it('keeps unconfigured sources and collection visibly empty without working scheduler controls', () => {
-    render(<WorldWorkspace section="sources" onNavigate={() => {}} />)
-    expect(screen.getByText('No sources configured.')).toBeInTheDocument()
-    expect(screen.getByText('No collection schedules configured.')).toBeInTheDocument()
-    expect(screen.getByText(/timezone/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /start|enable|run|save/i })).toBeNull()
+  it('exposes an owner-reviewed Goal draft, never a fake active schedule', () => {
+    render(<WorldWorkspace section="sources" onNavigate={() => {} } />)
+    expect(screen.getByRole('heading', { name: 'First Goal: Daily Digest' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Topics (comma separated)')).toBeInTheDocument()
+    expect(screen.getByLabelText('Time zone')).toBeInTheDocument()
+    expect(screen.getByText(/no recurring execution has been authorized/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create draft Goal in Core' })).toBeDisabled()
     expect(screen.queryByText(/next run|last updated/i)).toBeNull()
   })
   it('offers a working link from the digest empty state to its setup page', () => {

@@ -10,3 +10,12 @@
 .wn-reading-empty button:focus-visible { outline: 2px solid #7cdfff; outline-offset: 3px; }
 .wn-setup { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 @media (max-width: 760px) { .wn-setup { grid-template-columns: minmax(0, 1fr); } .wn-reading-empty { min-height: 280px; } .wn-reading-empty h2 { font-size: 21px; } }
+
+.wn-digest-setup { align-items: start; }
+.wn-goal-form { display: grid; gap: 9px; margin-top: 20px; }
+.wn-goal-form label { color: #b5c9da; font-size: 12px; }
+.wn-goal-form input, .wn-goal-form textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px 12px; color: #e2f3ff; background: #06121caa; border: 1px solid #83a9c155; border-radius: 8px; font: inherit; }
+.wn-goal-form input:focus-visible, .wn-goal-form textarea:focus-visible { outline: 2px solid #7cdfff; outline-offset: 2px; }
+.wn-digest-setup button { width: fit-content; max-width: 100%; padding: 10px 14px; font: inherit; color: #a9e9ff; border: 1px solid #7cdfff66; border-radius: 8px; background: #7cdfff12; cursor: pointer; }
+.wn-digest-setup button:disabled { opacity: .5; cursor: not-allowed; }
+.wn-digest-setup .uw-record p { line-height: 1.65; }

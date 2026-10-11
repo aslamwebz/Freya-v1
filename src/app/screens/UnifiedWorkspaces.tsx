@@ -1,4 +1,5 @@
 import type { UiSnapshot } from '../../ui-v2/state/contract'
+import { VaultWorkspace } from '../explorer/VaultWorkspace'
 import { MISSION_SECTIONS, LIBRARY_SECTIONS, resolveRoute } from '../state/routes'
 import { MindWorkspace } from './MindWorkspace'
 import { WorkflowsWorkspace } from '../workflows/WorkflowsWorkspace'
@@ -11,6 +12,7 @@ export { NotConnected } from './WorkspaceResource'
 
 export function UnifiedWorkspace({ path, snapshot, onNavigate }: { path: string; snapshot: UiSnapshot; onNavigate: (path: string) => void }) {
   const route = resolveRoute(path)
+  if (route.destination === 'vault') return <VaultWorkspace />
   if (route.destination === 'mind') return <MindWorkspace section={route.section} snapshot={snapshot} onNavigate={onNavigate} />
   if (route.destination === 'workflows') return <WorkflowsWorkspace section={route.section} core={snapshot.core} onNavigate={onNavigate} />
   if (route.destination === 'world') return <WorldWorkspace section={route.section} onNavigate={onNavigate} />

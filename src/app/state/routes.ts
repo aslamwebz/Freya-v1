@@ -1,8 +1,8 @@
-export type Destination = 'home' | 'chat' | 'mind' | 'missions' | 'workflows' | 'world' | 'library' | 'office' | 'settings'
+export type Destination = 'home' | 'chat' | 'mind' | 'vault' | 'missions' | 'workflows' | 'world' | 'library' | 'office' | 'settings'
 
 export const PRIMARY_DESTINATIONS = [
   ['home', 'Home', 'home'], ['chat', 'Chats', 'chat'], ['mind', 'Freya', 'mind'], ['missions', 'Missions', 'mission'],
-  ['workflows', 'Workflows', 'widgets'], ['world', 'World', 'world'], ['library', 'Library', 'memory'], ['office', 'War Room', 'workforce'], ['settings', 'Settings', 'settings'],
+  ['workflows', 'Workflows', 'widgets'], ['world', 'World', 'world'], ['vault', 'Vault', 'memory'], ['library', 'Library', 'memory'], ['office', 'War Room', 'workforce'], ['settings', 'Settings', 'settings'],
 ] as const
 
 export const MIND_SECTIONS = ['overview', 'system', 'map', 'memory', 'self', 'focus'] as const
@@ -28,7 +28,7 @@ const aliases: Readonly<Record<string, string>> = {
   harness: 'settings/advanced/harness', context: 'settings/advanced/context', security: 'settings/security', 'settings/advanced/security': 'settings/security', diagnostics: 'settings/advanced/diagnostics',
 }
 const valid = new Set<string>([
-  'home', 'chat', ...MIND_SECTIONS.map(id => `mind/${id}`), ...MISSION_SECTIONS.map(id => `missions/${id}`), ...WORKFLOW_SECTIONS.map(id => `workflows/${id}`),
+  'home', 'chat', 'vault', ...MIND_SECTIONS.map(id => `mind/${id}`), ...MISSION_SECTIONS.map(id => `missions/${id}`), ...WORKFLOW_SECTIONS.map(id => `workflows/${id}`),
   ...LIBRARY_SECTIONS.map(id => `library/${id}`),
   ...WORLD_SECTIONS.map(id => `world/${id}`),
   ...OFFICE_SECTIONS.map(id => `office/${id}`), ...SETTINGS_SECTIONS.map(id => `settings/${id}`),

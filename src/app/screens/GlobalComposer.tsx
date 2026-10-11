@@ -16,6 +16,7 @@ import { sharedRightWorkspaceStore } from '../chat/rightWorkspaceStore'
 import { sharedComposerDraftStore } from '../chat/composerDraftStore'
 import { conversationMirror } from '../../platform/conversationClient'
 import { MiniChatControls } from '../chat/MiniChatControls'
+import type { TurnIntentHints } from '../../../core/mind/tool-intent'
 
 function VoiceDockButton({ voice, onPress, onRelease }: {
   voice: VoiceView
@@ -195,7 +196,7 @@ export function GlobalComposer({
   onSend: (
     text: string,
     mode: ComposerMode,
-    intents?: { readonly webSearch?: boolean; readonly browserUse?: boolean },
+    intents?: TurnIntentHints,
   ) => Promise<boolean>
   onStopResponse: () => void
   onVoicePress: () => void
@@ -278,7 +279,8 @@ export function GlobalComposer({
   const handleModeChange = useCallback(
     (newMode: ComposerMode) => {
       setMode(newMode)
-      draftStore.setDraft(activeConversationId, { mode: newMode })
+      if (newMode !== 'chat') setWantWeb(true)
+      draftStore.setDraft(activeConversationId, { mode: newMode, ...(newMode !== 'chat' ? { wantWeb: true } : {}) })
     },
     [activeConversationId, draftStore],
   )
@@ -359,7 +361,7 @@ export function GlobalComposer({
     draftStore.setDraft(submittedConversationId, { text: '' })
     onNotice?.('')
     try {
-      const accepted = await onSend(textToSend, mode, { webSearch: wantWeb, browserUse: wantBrowser })
+      const accepted = await onSend(textToSend, mode, { webSearch: wantWeb, browserUse: wantBrowser, ...(thinkingLevel !== 'auto' ? { reasoningEffort: thinkingLevel } : {}) })
       if (!accepted) {
         // Restore only when no replacement text was typed in the meantime.
         if (draftStore.getDraft(submittedConversationId).text === '') {
@@ -633,7 +635,7 @@ export function GlobalComposer({
                 {wantBrowser ? 'On' : 'Off'}
               </span>
             </button>
-            <ThinkingSelector value={thinkingLevel} onChange={handleThinkingChange} />
+            <ThinkingSelector value={thinkingLevel} onChange={handleThinkingChange} defaultModel={defaultModel} />
             <ModelSelector defaultModel={defaultModel} />
           </div>
           {inFlight ? (

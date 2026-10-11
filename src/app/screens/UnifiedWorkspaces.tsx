@@ -5,6 +5,7 @@ import { WorkflowsWorkspace } from '../workflows/WorkflowsWorkspace'
 import { WorldWorkspace } from '../world/WorldWorkspace'
 import { ContextTabs, WorkspaceFrame } from './WorkspaceFrame'
 import { WarRoomWorkspace } from '../office/WarRoomWorkspace'
+import { GoalRecords } from './GoalRecords'
 import { NotConnected, ResourceGate } from './WorkspaceResource'
 export { NotConnected } from './WorkspaceResource'
 
@@ -27,7 +28,7 @@ export function UnifiedWorkspace({ path, snapshot, onNavigate }: { path: string;
       }}</ResourceGate> : route.section === 'activity' ? <ResourceGate resource={snapshot.activity} title="Activity">{data => data.length ? <div className="uw-records">
         {data.map(item => <article className="uw-record" key={item.id}><h2>{item.text}</h2><p><time dateTime={new Date(item.at).toISOString()}>{new Date(item.at).toLocaleString('en-GB')}</time> · Event {item.sequence}</p></article>)}
       </div> : <p className="uw-empty">No recent activity reported.</p>}</ResourceGate>
-        : <NotConnected title="Goals">Long-term goals are kept separately from bounded missions. Their records are not available here yet.</NotConnected>}
+        : <GoalRecords />}
     </ContextTabs>
   </WorkspaceFrame>
   if (route.destination === 'library') {

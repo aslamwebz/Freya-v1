@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { AnchoredMenu } from './AnchoredMenu'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { COMPOSER_MODES, type ComposerMode } from '../chat/modes'
 
@@ -15,11 +16,13 @@ export function ModeSelector({ mode, onChange }: {
   onChange: (mode: ComposerMode) => void
 }) {
   const [open, setOpen] = useState(false)
+  const anchorRef = useRef<HTMLButtonElement>(null)
   const current = COMPOSER_MODES.find((item) => item.id === mode) ?? COMPOSER_MODES[0]!
 
   return (
     <div className="hd-select hd-mode-select">
       <button
+        ref={anchorRef}
         type="button"
         className="hd-tool hd-tool-mode"
         aria-haspopup="menu"
@@ -31,7 +34,7 @@ export function ModeSelector({ mode, onChange }: {
         <Glyph name={current.icon} size={16} />
       </button>
       {open ? (
-        <ul className="hd-menu hd-menu-mode" role="menu" aria-label="Freya mode">
+        <AnchoredMenu anchorRef={anchorRef} onClose={() => setOpen(false)} label="Freya mode">
           {COMPOSER_MODES.map((item) => (
             <li key={item.id}>
               <button
@@ -48,7 +51,7 @@ export function ModeSelector({ mode, onChange }: {
               </button>
             </li>
           ))}
-        </ul>
+        </AnchoredMenu>
       ) : null}
     </div>
   )

@@ -75,6 +75,15 @@ afterEach(() => {
 })
 
 describe('Chat media preview', () => {
+  it('keeps ordinary page cards opening their source in the browser', async () => {
+    installBridge()
+    const onOpenBrowserUrl = vi.fn()
+    render(<MediaGrid items={[item({ kind: 'page', title: 'Source page' })]} onOpenBrowserUrl={onOpenBrowserUrl} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Source page' }))
+    expect(onOpenBrowserUrl).toHaveBeenCalledExactlyOnceWith('https://example.test/source', 'page')
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('opens an image inside a modal using host-fetched bytes', async () => {
     const bridge = installBridge()
     render(<MediaGrid items={[item({ title: 'Nebula' })]} />)
@@ -196,7 +205,7 @@ describe('the hosted player view', () => {
     // empty in the meantime.
   })
 
-  it('opens the default dock directly when a browser workspace is provided', async () => {
+  it('previews video first and opens the browser only on the explicit fallback action', async () => {
     const onOpenBrowserUrl = vi.fn()
     installBridge()
     render(<MediaGrid items={[item({
@@ -209,7 +218,27 @@ describe('the hosted player view', () => {
     })]} onOpenBrowserUrl={onOpenBrowserUrl} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Preview Queue tutorial' }))
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Media preview' })).toBeInTheDocument()
+    expect(onOpenBrowserUrl).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: "Open this page in Freya's browser" }))
     expect(onOpenBrowserUrl).toHaveBeenCalledWith('https://example.test/source', 'video')
+  })
+
+  it('focuses the close button, confines keyboard focus, and restores the preview trigger', async () => {
+    installBridge()
+    render(<MediaGrid items={[item({ kind: 'video', title: 'Focus video', embedUrl: 'https://www.youtube.com/embed/focus' })]} />)
+    const trigger = await screen.findByRole('button', { name: 'Preview Focus video' })
+    trigger.focus()
+    fireEvent.click(trigger)
+    const close = screen.getByRole('button', { name: 'Close preview' })
+    expect(close).toHaveFocus()
+    const frame = (await screen.findAllByTitle('Focus video')).find((node) => node.tagName === 'IFRAME')!
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
+    expect(frame).toHaveFocus()
+    fireEvent.keyDown(frame, { key: 'Tab' })
+    expect(close).toHaveFocus()
+    fireEvent.keyDown(close, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(trigger).toHaveFocus()
   })
 })

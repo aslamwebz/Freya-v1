@@ -1,0 +1,8 @@
+.freya-preview-dialog { position: fixed; inset: 0; z-index: 11000; display: grid; place-items: center; padding: 16px; background: #000b; }
+.freya-preview-dialog.chats-overlay { z-index: 11000; }
+.freya-preview-dialog.chats-overlay .chats-overlay-panel { box-sizing: border-box; width: min(100%, 1080px); max-height: calc(100dvh - 32px); }
+.freya-eye-dialog-panel { width: min(760px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto; border: 1px solid #557c9570; border-radius: 12px; background: #0c1928; color: #dff4fb; padding: 16px; box-sizing: border-box; }
+.freya-eye-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.freya-eye-dialog-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.freya-eye-dialog-header button { border: 1px solid #557c9570; border-radius: 6px; background: transparent; color: inherit; padding: 5px 10px; font: inherit; cursor: pointer; }
+.freya-preview-dialog button:focus-visible, .freya-preview-dialog select:focus-visible { outline: 2px solid #84e8ff; outline-offset: 2px; }

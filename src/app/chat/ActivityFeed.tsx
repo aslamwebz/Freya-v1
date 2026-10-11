@@ -172,15 +172,18 @@ export function ActivityFeed({
         <b>Activity</b>
         <small>{String(rows.length)} event{rows.length === 1 ? '' : 's'}</small>
       </header>
-      <ol className="f-activity-rows">
+      <table className="f-activity-table" aria-label="Activity during this turn">
+        <thead><tr><th scope="col">Status</th><th scope="col">Event</th><th scope="col">Time</th></tr></thead>
+        <tbody>
         {rows.map((event) => (
-          <li key={event.id} data-tone={event.tone} className="f-activity-row">
-            <span className="f-activity-tag" aria-hidden="true">{toneLabel(event.tone)}</span>
-            <span className="f-activity-text">{event.text}</span>
-            <time className="f-activity-time" dateTime={new Date(event.at).toISOString()}>{relativeTime(event.at, now)}</time>
-          </li>
+          <tr key={event.id} data-tone={event.tone} className="f-activity-row">
+            <td><span className="f-activity-tag">{toneLabel(event.tone)}</span></td>
+            <td className="f-activity-text">{event.text}</td>
+            <td><time className="f-activity-time" dateTime={new Date(event.at).toISOString()}>{relativeTime(event.at, now)}</time></td>
+          </tr>
         ))}
-      </ol>
+        </tbody>
+      </table>
       {hidden > 0 ? (
         <footer className="f-activity-foot">
           <small>{String(hidden)} more event{hidden === 1 ? '' : 's'} not shown.</small>

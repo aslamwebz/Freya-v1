@@ -179,7 +179,7 @@ describe('GlobalComposer', () => {
     fireEvent.change(input(), { target: { value: 'find 100 cat videos' } })
     fireEvent.submit(screen.getByRole('form', { name: 'Freya composer' }))
 
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('find 100 cat videos', 'eye', { webSearch: false, browserUse: false }))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('find 100 cat videos', 'eye', { webSearch: true, browserUse: false }))
   })
 
   it('turns the send control into a real stop-response control while generating', () => {

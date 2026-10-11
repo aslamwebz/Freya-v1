@@ -8,6 +8,8 @@ import { sendMessage } from '../ui-v2/chat/sendMessage'
 import { researchMirror } from '../platform/researchClient'
 import { routeEyePrompt, type ComposerMode, type WorkspaceResearchView } from './chat/modes'
 import { routeChatIntent, routePromptIntent } from './chat/intent'
+import { composerPolicy } from './chat/composerPolicy'
+import type { TurnIntentHints } from '../../core/mind/tool-intent'
 import {
   attachmentTray,
   collectModelAttachments,
@@ -93,7 +95,7 @@ export function App({
   const send = async (
     text: string,
     mode: ComposerMode,
-    hints?: { readonly webSearch?: boolean; readonly browserUse?: boolean },
+    hints?: TurnIntentHints,
     selectedConversationId?: string | null,
   ): Promise<boolean> => {
     setNoticeConversationId(null)
@@ -107,10 +109,9 @@ export function App({
     // A button that changed the text would be the contamination class this whole
     // seam exists to prevent, and a bug report is the friendliest of the
     // responses it gets if it tries.
-    const intents = {
-      ...(hints?.webSearch === true ? { webSearch: true } : {}),
-      ...(hints?.browserUse === true ? { browserUse: true } : {}),
-    }
+    const policy = composerPolicy(mode, hints)
+    const intents = policy.intents
+    mode = policy.mode
 
     // File bytes travel as bounded attachment parts through the canonical turn.
     // Plain text files are included as untrusted reference text; PDF/image bytes
@@ -143,7 +144,7 @@ export function App({
      * answer about the web instead of about the file. So an attachment keeps the
      * turn in Chat unless the owner explicitly asked for a search.
      */
-    const inferred = mode === 'chat' && drafts.length === 0
+    const inferred = mode === 'chat' && drafts.length === 0 && intents.webSearch !== false
       ? routePromptIntent(text, { activeEyeSession: activeEyeSessionId !== null })
       : null
     const effectiveMode: ComposerMode =
@@ -154,7 +155,7 @@ export function App({
           : mode
     const autoNewEye = mode === 'chat' && inferred?.kind === 'eye-new'
 
-    if (intents.browserUse || routeChatIntent(text, { activeEyeSession: false }).kind === 'native_browser_task') setBrowserOpen(true)
+    if (intents.browserUse || (intents.browserUse !== false && routeChatIntent(text, { activeEyeSession: false }).kind === 'native_browser_task')) setBrowserOpen(true)
 
     if (effectiveMode === 'chat') {
       setResearchView(null)
@@ -284,7 +285,6 @@ export function App({
     setScreen('chat')
     setBrowserOpen(true)
     openUrlInDockedBrowser(sharedDockedBrowserStore(), url, { origin })
-    setBrowserRequestedUrl(url)
   }, [])
 
 

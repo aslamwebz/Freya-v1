@@ -4,6 +4,7 @@ import type { MediaItem } from '../../../core/media/types'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { hostBridge } from '../../platform/host'
 import './media.css'
+import { PreviewDialog } from './PreviewDialog'
 
 const images = new Map<string, string>()
 const pendingImages = new Map<string, Promise<string | null>>()
@@ -175,12 +176,16 @@ export function MediaGrid({ items, onOpenBrowserUrl }: {
             key={`${item.kind}:${item.url}:${String(index)}`}
             item={item}
             index={index}
-            onOpen={(selected) => { const found = items[selected]; if (onOpenBrowserUrl && found) onOpenBrowserUrl(found.page || found.url, found.kind === 'document' ? 'document' : found.kind); else setOpenIndex(selected) }}
+            onOpen={(selected) => {
+              const item = items[selected]
+              if (item?.kind === 'page' && onOpenBrowserUrl) onOpenBrowserUrl(item.page || item.url, 'page')
+              else setOpenIndex(selected)
+            }}
           />
         ))}
       </div>
       {openIndex === null ? null : (
-        <MediaOverlay
+        <MediaPreview
           items={items}
           index={openIndex}
           onIndex={setOpenIndex}
@@ -201,7 +206,7 @@ export function MediaGrid({ items, onOpenBrowserUrl }: {
  * view is drawn over. When no bridge exists — tests, a plain browser — the box
  * degrades to a plain sandboxed iframe, which is where that path is acceptable.
  */
-function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
+export function MediaPreview({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
   readonly items: readonly MediaItem[]
   readonly index: number
   readonly onIndex: (next: number) => void
@@ -236,8 +241,7 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
-      else if (event.key === 'ArrowRight' && many) onIndex((index + 1) % items.length)
+      if (event.key === 'ArrowRight' && many) onIndex((index + 1) % items.length)
       else if (event.key === 'ArrowLeft' && many) onIndex((index - 1 + items.length) % items.length)
     }
     window.addEventListener('keydown', onKey)
@@ -334,7 +338,7 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
   }, [bridge, fallbackPoster, item])
 
   return (
-    <div className="chats-overlay" role="dialog" aria-modal="true" aria-label="Media preview" onClick={onClose}>
+    <PreviewDialog className="chats-overlay" label="Media preview" onClose={onClose}>
       <div className="chats-overlay-panel" onClick={(event) => event.stopPropagation()}>
         <header className="chats-overlay-bar">
           <span className="chats-overlay-name">{item.title || 'Preview'}</span>
@@ -354,7 +358,7 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
               Open in browser
             </button>
           ) : null}
-          <button type="button" className="chats-overlay-close" onClick={onClose} aria-label="Close preview">×</button>
+          <button type="button" data-dialog-close className="chats-overlay-close" onClick={onClose} aria-label="Close preview">×</button>
         </header>
         <div className="chats-overlay-stage">
           {many ? (
@@ -431,6 +435,6 @@ function MediaOverlay({ items, index, onIndex, onClose, onOpenBrowserUrl }: {
           ) : null}
         </div>
       </div>
-    </div>
+    </PreviewDialog>
   )
 }

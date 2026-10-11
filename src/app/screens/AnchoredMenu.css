@@ -1,0 +1,36 @@
+.freya-anchored-menu {
+  z-index: 10000;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 5px;
+  overflow-y: auto;
+  list-style: none;
+  color: #dff4fb;
+  background: #0c1928;
+  border: 1px solid #557c9570;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px #0008;
+}
+.freya-anchored-menu > li > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.freya-anchored-menu > li > button:hover,
+.freya-anchored-menu > li > button:focus-visible {
+  background: #20394e;
+  outline: 1px solid #84e8ff;
+  outline-offset: -1px;
+}
+.freya-anchored-menu > li > button[aria-checked='true'] { background: #163246; }
+.freya-anchored-menu b { display: block; font-size: 12px; font-weight: 600; }
+.freya-anchored-menu small { display: block; margin-top: 3px; color: #94adbf; font-size: 11px; }

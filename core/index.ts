@@ -30,10 +30,17 @@ import type { CoreOwnerPort } from './runtime/owner-port'
 import { proposeMissionPlan, type MissionGoalRequest, type MissionGoalOutcome } from './mind/mission-planning'
 import { registerFileInspection } from './work/file-inspection'
 import { registerResearchInspection } from './work/research-inspection'
+import { registerMissionBrowser, type MissionBrowserContext } from './work/browser-wiring'
+import { BROWSER_MISSION_CAPABILITIES } from './work/browser-inspection'
 import { createMissionProposalTool } from './mind/mission-proposal'
 import { createMissionsListTool } from './mind/missions-list-tool'
 import { createWorkspaceReportTool } from './mind/workspace-file-tool'
 import { ChatMissionIntegration } from './missions/chat-integration'
+import {
+  chatMissionAuthorized,
+  chatResearchAvailable,
+  type ChatMissionGrantEnvironment,
+} from './missions/chat-authorization'
 import type { ChatMissionProposal } from './missions/chat-types'
 import {
   evaluateExecutiveDecision,
@@ -2668,6 +2675,10 @@ class FreyaCore implements Core {
         return id ? (await this.missionEngine?.privateContent(id))?.researchEvidence?.[stepKey] ?? null : null
       },
     })
+    // This is the same browser `core/mind/browser-tool.ts` already uses — one runtime, one
+    // session table, one Device Hands gate chain. Registered only when the host mounted a
+    // browser, so a Core with none never advertises a step it could not run.
+    registerMissionBrowser(this.workRegistry, this.dualBrowser, this.missionBrowserContext())
     registerFoundryWorkCapabilities(this.workRegistry, this.requireFoundry())
     // Phase 6's fixture capabilities are the only executable capabilities the
     // shipped Core would otherwise have, and they exist to prove the Work engine
@@ -4179,94 +4190,67 @@ class FreyaCore implements Core {
    * The guard is also what keeps the projection honest about a subsystem it cannot
    * see: `null` becomes a stated absence rather than a silently empty section.
    */
-  private safeBrain(): BrainProjection | null {
+  /**
+   * Read one subsystem's projection for the conscious context, or state its absence.
+   *
+   * ## Why this is one function rather than ten
+   *
+   * These were ten methods with the same body and a different subsystem name in the log line.
+   * A `try/catch` per subsystem invites the twelfth to be added without the catch, and a
+   * conscious context that crashes on one unavailable subsystem is exactly the failure this
+   * exists to prevent — so the guard belongs somewhere it cannot be forgotten.
+   *
+   * `null` means **stated absence**, never an empty projection: a window renders "not
+   * connected" rather than a section of zeroes, which is the honest difference between
+   * "nothing happened" and "I cannot see it".
+   */
+  private safe<T>(name: string, read: () => T): T | null {
     try {
-      return this.brain()
+      return read()
     } catch (error) {
-      console.error('[freya.core] Brain read for the conscious context threw', error)
+      console.error(`[freya.core] ${name} read for the conscious context threw`, error)
       return null
     }
+  }
+
+  private safeBrain(): BrainProjection | null {
+    return this.safe('Brain', () => this.brain())
   }
 
   private safeWork(): WorkProjection | null {
-    try {
-      return this.work()
-    } catch (error) {
-      console.error('[freya.core] Work read for the conscious context threw', error)
-      return null
-    }
+    return this.safe('Work', () => this.work())
   }
 
   private safeMission(): MissionProjection | null {
-    try {
-      return this.mission()
-    } catch (error) {
-      console.error('[freya.core] Mission read for the conscious context threw', error)
-      return null
-    }
+    return this.safe('Mission', () => this.mission())
   }
 
   private safeWorkforce(): WorkforceProjection | null {
-    try {
-      return this.workforce()
-    } catch (error) {
-      console.error('[freya.core] Workforce read for the conscious context threw', error)
-      return null
-    }
+    return this.safe('Workforce', () => this.workforce())
   }
 
   private safeSkills(): SkillProjection | null {
-    try {
-      return this.skills()
-    } catch (error) {
-      console.error('[freya.core] Skills read for the conscious context threw', error)
-      return null
-    }
+    return this.safe('Skills', () => this.skills())
   }
 
   private safePersonality(): PersonalityProjection | null {
-    try {
-      return this.personality()
-    } catch (error) {
-      console.error('[freya.core] Personality read for the conscious context threw', error)
-      return null
-    }
+    return this.safe('Personality', () => this.personality())
   }
 
   private safeAttention(): AttentionProjection | null {
-    try {
-      return this.attention()
-    } catch (error) {
-      console.error('[freya.core] Attention read for the conscious context threw', error)
-      return null
-    }
+    return this.safe('Attention', () => this.attention())
   }
 
   private safeContext(): ContextProjectionView | null {
-    try {
-      return this.context()
-    } catch (error) {
-      console.error('[freya.core] Context read for the conscious context threw', error)
-      return null
-    }
+    return this.safe('Context', () => this.context())
   }
 
   private safeOffice(): OfficeProjection | null {
-    try {
-      return this.office()
-    } catch (error) {
-      console.error('[freya.core] Office read for the conscious context threw', error)
-      return null
-    }
+    return this.safe('Office', () => this.office())
   }
 
   private safeRelay(): RelayProjection | null {
-    try {
-      return this.relay()
-    } catch (error) {
-      console.error('[freya.core] Relay read for the conscious context threw', error)
-      return null
-    }
+    return this.safe('Relay', () => this.relay())
   }
 
   onConsciousness(listener: (projection: ConsciousContextProjection) => void): () => void {
@@ -6538,6 +6522,69 @@ private async buildForge(): Promise<void> {
   }
 
   /**
+   * Which capabilities a plan may name.
+   *
+   * **Two gates, both needed.** *Surface availability*: a capability whose surface is not
+   * mounted must not be planned, or the model picks it because the goal called for it and the
+   * Mission commits a plan it can never run. *Live authority*: `missionAuthorityPort`'s
+   * `mayUse` re-binds the registered action to Guard authority for the owner principal right
+   * now, so a capability authorised at boot and not authorised now is refused now.
+   *
+   * **The list is closed, not a prefix.** `name.startsWith('browser.')` would be one edit
+   * from admitting anything later added to Work under that namespace — including one that
+   * acts rather than reads — and nobody would notice that review. The set is imported from
+   * the module that registers the capabilities, so registration and the planner cannot
+   * disagree.
+   *
+   * **Non-chat Missions are unchanged**: they may plan any registered capability Guard allows.
+   * This narrowing is only for a Mission bound to a conversation, where the owner approved a
+   * specific scope in a specific conversation and nothing outside it was authorised.
+   */
+  /**
+   * The eight facts about a Mission that only Core can answer, for the browser wiring.
+   *
+   * Every one is a live read at the moment it is asked — `privateContent` goes to the
+   * encrypted store, `record` is the folded Mission, `charge` writes a budget event — so a
+   * Mission that stopped, was paused, lost its grant or ran out of budget is refused when it
+   * tries to spend, not when it started.
+   *
+   * `missionBrowserEvidence` returns `null` for a Mission with no conversation binding,
+   * which is the same refusal `registerResearchInspection`'s admission makes: without an
+   * owner-approved scope there is nothing an external request is being spent against.
+   */
+  private missionBrowserContext(): MissionBrowserContext {
+    return {
+      runMissionId: runId => this.workEngine?.snapshot().runs.get(runId)?.parentId ?? null,
+      missionStatus: missionId => this.missionEngine?.record(missionId)?.status ?? null,
+      missionBrowserEvidence: async (missionId, requireDurable) => {
+        const content = await this.missionEngine?.privateContent(missionId, requireDurable)
+        return content?.chatBinding === undefined ? null : { browserEvidence: content.browserEvidence }
+      },
+      missionOwnsRun: (missionId, runId) => this.missionEngine?.record(missionId)?.childRuns.includes(runId) === true,
+      missionHasBrowserStep: (missionId, stepId) =>
+        this.missionEngine?.record(missionId)?.activePlan?.steps
+          .some(step => step.stepId === stepId && BROWSER_MISSION_CAPABILITIES.has(step.capability)) === true,
+      missionMaySpendExternally: async missionId => {
+        const content = await this.missionEngine?.privateContent(missionId, false)
+        return content?.chatBinding !== undefined && content.chatBinding.paused === false &&
+          this.chatResearchAvailable() && await this.chatMissionAuthorized(missionId)
+      },
+      chargeMissionExternalRequest: async missionId =>
+        (await this.requireMission().charge({ missionId, modelCalls: 0, actions: 0, externalRequests: 1, retries: 0, delegations: 0 })).ok,
+      saveMissionBrowserEvidence: async (missionId, stepId, evidence) =>
+        this.requireMission().updateChatContent(missionId, content => ({
+          ...content, browserEvidence: { ...content.browserEvidence, [stepId]: evidence },
+        })),
+    }
+  }
+
+  private mayPlanChatCapability(name: string, isChatMission: boolean): boolean {
+    if (isChatMission && name !== 'research.search'
+      && !(BROWSER_MISSION_CAPABILITIES.has(name) && this.dualBrowser !== null)) return false
+    return this.missionAuthorityPort().mayUse(name)
+  }
+
+  /**
    * The authority gate's view of the world.
    *
    * Three reads and no grants. There is no `requestApproval` here, and there is no method
@@ -6652,18 +6699,29 @@ state: {
   }
 
   private chatResearchAvailable(): boolean {
-    return !!this.researchIntegration && this.operational && !this.stopped && this.persistence.durable && !this.state.stopAll.active && this.conversationStore.mode === 'encrypted'
-      && (['mission.manage', 'work.execute', 'research.start', 'search.web', 'browser.read', 'cognition.request'] as const).every(capability => this.guard.evaluate(this.owner, capability).allowed)
-  }
-
-  private chatMissionGrantAvailable(id: string, grantId: string): boolean {
-    const grant = this.ownerAuthority.grants().find(candidate => candidate.goalId === id && candidate.id === grantId)
-    return !!grant && isGrantActive(grant, (this.options.now ?? (() => new Date()))()) && grant.actor === this.owner.id && grant.backgroundAllowed
+    return chatResearchAvailable({
+      researchPresent: !!this.researchIntegration,
+      operational: this.operational,
+      stopped: this.stopped,
+      durable: this.persistence.durable,
+      stopAllActive: this.state.stopAll.active,
+      conversationEncrypted: this.conversationStore.mode === 'encrypted',
+      holdsOwnerCapability: capability => this.guard.evaluate(this.owner, capability).allowed,
+    })
   }
 
   private async chatMissionAuthorized(id: string): Promise<boolean> {
-    const binding = (await this.missionEngine?.privateContent(id, true))?.chatBinding
-    return !!binding && binding.ownerId === this.owner.id && this.chatMissionGrantAvailable(id, binding.grantId)
+    return chatMissionAuthorized(id, this.chatMissionGrantEnvironment())
+  }
+
+  /** The per-Mission authorization facts, read live at every question. */
+  private chatMissionGrantEnvironment(): ChatMissionGrantEnvironment {
+    return {
+      ownerId: this.owner.id,
+      grants: () => this.ownerAuthority.grants(),
+      now: () => (this.options.now ?? (() => new Date()))(),
+      bindingFor: async missionId => (await this.missionEngine?.privateContent(missionId, true))?.chatBinding ?? null,
+    }
   }
 
   private async completeMission(id: string, options?: { verifierId?: string; requiredRunIds?: readonly string[] }): Promise<MissionCommandOutcome> {
@@ -6705,7 +6763,7 @@ state: {
       const outcome = await proposeMissionPlan({ ...input, goal: content.intent, successCriteria: content.successCriteria, budget: mission.budget, maxSteps, now,
         learningAdvice,
         ...(revision ? { previousPlan: mission.activePlan!, previousExecution: content.executionPlan, failure: content.researchEvidence } : {}) },
-        this.missionCapabilityPort(), name => (!content.chatBinding || name === 'research.search') && this.missionAuthorityPort().mayUse(name), intent => this.ownerAuthority.request(intent))
+        this.missionCapabilityPort(), name => this.mayPlanChatCapability(name, content.chatBinding !== undefined), intent => this.ownerAuthority.request(intent))
       // Owner cancellation, correction and STOP ALL win over a delayed provider answer.
       const current = engine.record(input.missionId)
       const latest = await engine.privateContent(input.missionId)

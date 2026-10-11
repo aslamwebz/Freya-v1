@@ -16,6 +16,7 @@ export function ControlCenter() {
   const [error, setError] = useState('')
   const [selected, select] = useState<ComponentName>('core')
   const [busy, setBusy] = useState(false)
+  const [resource, setResource] = useState<string | null>(null)
   useEffect(() => {
     let active = true, running = false
     const read = async () => {
@@ -45,6 +46,7 @@ export function ControlCenter() {
       return <button className="cc-panel" key={component} data-state={observation?.state ?? 'unavailable'} aria-pressed={selected === component} onClick={() => select(component)}><small>{component === 'freya' ? 'INTELLIGENCE' : 'RUNTIME'}</small><h2>{component === 'core' ? 'Freya Core' : component === 'freya' ? 'Freya' : 'Superapp'}</h2><b className="cc-state">{observation?.state ?? 'Awaiting response'}</b><p>PID {observation?.pid ?? '—'}</p><small>{observation?.source ?? 'runtime.health'}<br />Last successful update · {observation?.lastSuccessAt ? new Date(observation.lastSuccessAt).toLocaleTimeString('en-GB') : 'None'}</small></button>
     })}</section>
     <section className="cc-panel cc-detail"><h2>{selected} diagnostics</h2><p>{detail?.detail ?? 'No health response received.'}</p><dl><dt>Heartbeat</dt><dd>{detail?.health?.lastProgressAt ?? 'Missing'}</dd><dt>Instance</dt><dd>{detail?.health?.instanceId ?? 'Unavailable'}</dd></dl>{Object.entries(detail?.health?.dependencies ?? {}).map(([name, dependency]) => <p key={name}>{name} · {dependency.state} · {dependency.checkedAt}</p>)}<button disabled={busy} onClick={() => void action(() => window.freyaCenter!.restart(selected))}>Restart {selected}…</button></section>
+    <section className="cc-services" aria-label="Core services">{snapshot?.inventory?.nodes.filter(node => !['source', 'dependency', 'event', 'process'].includes(node.type)).map(node => <button key={node.id} className="cc-service" data-state={node.status} onClick={() => setResource(resource === node.id ? null : node.id)}><span>{node.name}</span><b>{node.status}</b><small>{node.source} · {node.updatedAt ?? 'No successful update reported'}</small>{resource === node.id && <p>{node.purpose}</p>}</button>) ?? <p>Core service observations unavailable.</p>}</section>
     <footer><span>Health is reported by the processes. Missing responses clear previous success.</span><button className="cc-stop" disabled={busy} onClick={() => void action(() => window.freyaCenter!.stopAll())}>STOP ALL</button></footer>
   </main>
 }

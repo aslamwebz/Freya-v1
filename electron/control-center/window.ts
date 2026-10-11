@@ -4,15 +4,21 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { connectRpc } from '../../shared/runtime/rpc'
 import type { ControlCenterSnapshot, ProcessObservation } from '../../shared/contracts/control-center'
 import type { ComponentName } from '../../shared/contracts/runtime'
+import type { ExplorerSnapshot } from '../../shared/contracts/explorer'
 
 export class ControlCenterWindow {
   private window: BrowserWindow | null = null
-  constructor(private readonly root: string, private readonly profile: string, private readonly open: (route: string) => void, private readonly stopAll: () => Promise<unknown>) {}
+  constructor(private readonly root: string, private readonly profile: string, private readonly open: (route: string) => void, private readonly stopAll: () => Promise<unknown>, private readonly inventory: () => Promise<ExplorerSnapshot | undefined>) {}
   register(): void {
     const assertSender = (event: Electron.IpcMainInvokeEvent) => { if (event.sender !== this.window?.webContents) throw new Error('Control Center owner window required') }
     ipcMain.handle('freya:center:read', async event => {
       assertSender(event)
-      try { return { profile: this.profile, observations: await this.supervisor<ProcessObservation[]>('status') } satisfies ControlCenterSnapshot }
+      try {
+        const observations = await this.supervisor<ProcessObservation[]>('status')
+        const core = observations.find(row => row.component === 'core')
+        const inventory = core?.health ? await this.inventory().catch(() => undefined) : undefined
+        return { profile: this.profile, observations, inventory } satisfies ControlCenterSnapshot
+      }
       catch { return { profile: this.profile, observations: (['core', 'freya', 'superapp'] as ComponentName[]).map(component => ({ component, pid: null, state: 'disconnected', source: 'supervisor: runtime.health', checkedAt: new Date().toISOString(), lastSuccessAt: null, health: null, detail: 'Supervisor unavailable. Start Freya from its CMD launcher.' })) } satisfies ControlCenterSnapshot }
     })
     ipcMain.handle('freya:center:open', (event, route: unknown) => {
@@ -36,10 +42,10 @@ export class ControlCenterWindow {
   }
   async show(): Promise<void> {
     if (this.window && !this.window.isDestroyed()) { this.window.restore(); this.window.show(); this.window.focus(); return }
-    let bounds = { width: 1040, height: 760 }
+    let bounds: Electron.Rectangle | { width: number; height: number } = { width: 1040, height: 760 }
     try {
       const saved = JSON.parse(await readFile(join(this.profile, 'control-center-window.json'), 'utf8'))
-      if ([saved.x, saved.y, saved.width, saved.height].every(Number.isFinite) && screen.getAllDisplays().some(display => saved.x < display.workArea.x + display.workArea.width && saved.x + saved.width > display.workArea.x && saved.y < display.workArea.y + display.workArea.height && saved.y + saved.height > display.workArea.y)) bounds = saved
+      if ([saved.x, saved.y, saved.width, saved.height].every(Number.isFinite) && screen.getAllDisplays().some(display => saved.x < display.workArea.x + display.workArea.width && saved.x + saved.width > display.workArea.x && saved.y < display.workArea.y + display.workArea.height && saved.y + saved.height > display.workArea.y)) bounds = { x: Math.round(saved.x), y: Math.round(saved.y), width: Math.max(780, Math.min(1800, Math.round(saved.width))), height: Math.max(560, Math.min(1400, Math.round(saved.height))) }
     } catch { /* First launch uses native placement. */ }
     const window = new BrowserWindow({ ...bounds, minWidth: 780, minHeight: 560, title: 'Freya Control Center', show: false, backgroundColor: '#03080e', webPreferences: { preload: join(this.root, 'dist-electron', 'control-center-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } })
     this.window = window

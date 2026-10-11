@@ -1,3 +1,5 @@
+import type { ExplorerSnapshot, SourceResult } from '../../shared/contracts/explorer'
+import type { VaultResult } from '../../shared/contracts/vault-explorer'
 export type { PrincipalId } from '../../shared/contracts/identity'
 export { CAPABILITIES, ALL_CAPABILITIES, WORKER_CAPABILITIES } from '../../shared/contracts/capabilities'
 export type { Capability } from '../../shared/contracts/capabilities'
@@ -41,6 +43,9 @@ import type { MissionDetail } from '../missions/types'
 /* ----------------------------------------------------------------- RPC */
 
 export type CoreCommandName =
+  | 'system.explorer.read'
+  | 'development.source'
+  | 'vault.explorer'
   | 'core.status.read'
   | 'core.command.submit'
   | 'security.status.read'
@@ -499,6 +504,9 @@ export interface CoreCommandEnvelope {
 }
 
 export interface CoreCommandResult {
+  explorer?: ExplorerSnapshot
+  source?: SourceResult
+  vault?: VaultResult
   matrix?: MatrixCommandOutcome
   requestId: string
   ok: boolean

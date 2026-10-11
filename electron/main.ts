@@ -1834,7 +1834,7 @@ app.whenReady().then(async () => {
         })
     }
 
-    controlCenter = new ControlCenterWindow(ROOT, app.getPath('userData'), openWorkspace, () => requireCore().submit({ command: 'security.stopAll', requestId: 'center-stop-all', payload: { reason: 'Control Center emergency STOP ALL' } }))
+    controlCenter = new ControlCenterWindow(ROOT, app.getPath('userData'), openWorkspace, () => requireCore().submit({ command: 'security.stopAll', requestId: 'center-stop-all', payload: { reason: 'Control Center emergency STOP ALL' } }), async () => (await requireCore().submit({ command: 'system.explorer.read', requestId: 'center-inventory' })).explorer)
     controlCenter.register()
     desktopMode = 'hidden'
     mainWindow = createWindow()

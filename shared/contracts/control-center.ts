@@ -1,4 +1,5 @@
 import type { ComponentHealth, ComponentName } from './runtime'
+import type { ExplorerSnapshot } from './explorer'
 
 export type ObservedState = 'healthy' | 'starting' | 'degraded' | 'disconnected' | 'stopped' | 'unavailable'
 export interface ProcessObservation {
@@ -14,4 +15,5 @@ export interface ProcessObservation {
 export interface ControlCenterSnapshot {
   profile: string
   observations: ProcessObservation[]
+  inventory?: ExplorerSnapshot
 }

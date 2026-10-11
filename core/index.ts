@@ -1,3 +1,5 @@
+import { SourceWorkspace } from './explorer/source-workspace'
+import { systemExplorer, EXPLORER_COMMANDS, handleExplorerCommand } from './explorer/commands'
 import type { MissionRuntime } from './missions/process-contract'
 import type { ProcessGoals } from './longhorizon/process-store'
 import type { ProcessWorkforce } from './workforce/process-store'
@@ -1431,6 +1433,7 @@ untimeNotice, which states what the runtime cannot do, because a
 
 
 class FreyaCore implements Core {
+  private sourceWorkspace: SourceWorkspace | null = null
   private currentLifecycle: CoreLifecycle = 'booting'
   private fabric!: EventFabric
   private state: CoreState = initialCoreState()
@@ -7922,6 +7925,15 @@ state: {
         const matrix = await this.matrixService!.execute(command as MatrixCommandName, envelope.payload)
         return { requestId, ok: matrix.ok, matrix, ...(!matrix.ok ? { refusal: { reason: matrix.reason ?? 'Matrix refused the request.' } } : {}) }
       }
+      if (EXPLORER_COMMANDS.has(command)) return await handleExplorerCommand(envelope, {
+        owner: this.owner, guard: this.guard, stopped: this.state.stopAll.active, vaultFault: this.vaultFault,
+        ensureVault: () => this.ensureVault(), newId: () => this.newId(),
+        audit: payload => this.fabric.append('command.received', payload, { actor: this.owner.id, correlationId: requestId, source: 'renderer' }),
+        world: () => this.requireWorld().relations({ focusEntityId: null, kinds: null, maxDepth: 1 }),
+        records: () => this.learningEngine?.listRecords(), learningEncrypted: this.learning().persistence.mode === 'encrypted',
+        source: () => this.sourceWorkspace ??= SourceWorkspace.forProfile(this.options.workspaceRoot ?? process.cwd(), this.options.dataPath),
+        system: () => systemExplorer(this.runtime(), this.status(), this.toolCatalogue(), { skills: this.skills(), workforce: this.workforce(), missions: this.mission(), goals: this.goals(), activity: this.activity(), voice: this.voice(), work: this.work(), vault: this.vault ? 'encrypted' : this.vaultFault ? 'unavailable' : 'unconfigured', intelligence: this.processRuntime ? this.processRuntime.mind.connected : null }),
+      })
       switch (command) {
         case 'core.status.read':
           return { requestId, ok: true, status: this.status() }

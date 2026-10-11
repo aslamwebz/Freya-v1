@@ -1,5 +1,6 @@
 import { requestsNewLookup, retrievalRestrictions, routeChatIntent } from '../research/chat-intent'
 import { boundAssistantMessageContent, canvasField, chartsField, mediaField, renderTruncatedAnswer, sourcesField } from './content-bounds'
+import { MindContextEnrichment } from './context-enrichment'
 export { renderTruncatedAnswer } from './content-bounds'
 import { validateModelAttachments, type ModelAttachment } from '../model/provider'
 import { randomUUID } from 'node:crypto'
@@ -27,13 +28,8 @@ import {
   type ConversationTurn,
   type TerminalTurnOutcome,
 } from '../conversation/types'
-import {
-  buildExpressionForTurn,
-  withExpressionBlock,
-  type ExpressionMemory,
-  type ExpressionTurnResult,
-} from './expression'
-import type { CueKind, CueUsageLedger, InteractionFact, RelationshipItem } from '../personality/types'
+import { withExpressionBlock, type ExpressionMemory } from './expression'
+import type { InteractionFact, RelationshipItem } from '../personality/types'
 import { runToolLoop, type ToolIteration } from './loop'
 import { initialToolRequestForOwnerText, type TurnIntentHints } from './tool-intent'
 import { MIND_TOOL_LIMITS, renderToolFooter, type MindToolRegistry, type ToolSource } from './tools'
@@ -495,17 +491,12 @@ export class MindService {
   private readonly runtimeFacts: () => readonly string[]
   private readonly selectedModel: () => string | null
   private readonly selectedProviderId: () => string | null
-  private readonly recall: ((query: string) => ReferenceKnowledge | null) | null
-  private readonly turnContext: TurnContextReader | null
   private readonly onTurnStateChange: () => void
   private readonly onTurnExperience: ((experience: TurnExperience) => Promise<void>) | null
-  private readonly expressionMemory: ExpressionMemory | null
-  private readonly interactionFacts: () => readonly InteractionFact[]
-  private readonly relationshipItems: () => readonly RelationshipItem[]
-  private readonly preferenceTokens: () => readonly string[]
   private readonly onOwnerMessage: ((message: OwnerMessageEvent) => void) | null
   private readonly tools: MindToolRegistry | null
   private readonly matrixSpaceIds: (conversationId: string) => readonly string[]
+  private readonly contextEnrichment: MindContextEnrichment
 
   /**
    * Per-turn cancellation, for turns that may make more than one call.
@@ -563,16 +554,19 @@ export class MindService {
     this.runtimeFacts = options.runtimeFacts ?? (() => [])
     this.selectedModel = options.selectedModel ?? (() => null)
     this.selectedProviderId = options.selectedProviderId ?? (() => null)
-    this.recall = options.recall ?? null
-    this.turnContext = options.turnContext ?? null
     this.matrixSpaceIds = options.matrixSpaceIds ?? (() => [])
     this.onTurnStateChange = options.onTurnStateChange ?? (() => {})
     this.onTurnExperience = options.onTurnExperience ?? null
-    this.expressionMemory = options.expressionMemory ?? null
-    this.interactionFacts = options.interactionFacts ?? (() => [])
-    this.relationshipItems = options.relationshipItems ?? (() => [])
-    this.preferenceTokens = options.preferenceTokens ?? (() => [])
     this.onOwnerMessage = options.onOwnerMessage ?? null
+    this.contextEnrichment = new MindContextEnrichment({
+      recall: options.recall ?? null,
+      turnContext: options.turnContext ?? null,
+      now: this.now,
+      expressionMemory: options.expressionMemory ?? null,
+      interactionFacts: options.interactionFacts ?? (() => []),
+      relationshipItems: options.relationshipItems ?? (() => []),
+      preferenceTokens: options.preferenceTokens ?? (() => []),
+    })
     const tools = options.tools ?? null
     // An empty registry is treated as no registry. A Core that wired the seam and
     // found no search provider configured must get the single-call path, not a
@@ -599,116 +593,6 @@ export class MindService {
       this.onOwnerMessage(message)
     } catch (error) {
       console.error('[freya.mind] the owner message could not be reported', error)
-    }
-  }
-
-  /**
-   * What Freya remembers about this text, as reference material.
-   *
-   * Never throws. A Brain that is unavailable, empty or unhappy returns null, and
-   * the turn proceeds with no reference block. The alternative — letting a memory
-   * failure become a turn failure — would mean a corrupt Brain stops Freya
-   * answering, which would be a security-relevant failure mode dressed up as a
-   * reliability one.
-   */
-  private recalledFor(text: string): ReferenceKnowledge | null {
-    if (this.recall === null) return null
-    try {
-      return this.recall(text)
-    } catch (error) {
-      // Logged and swallowed. The fault is the Brain's to report through its own
-      // health; here it must only mean "no reference material this turn".
-      console.error('[freya.mind] recall failed; continuing without reference memory', error)
-      return null
-    }
-  }
-
-  /**
-   * What the owner put in scope for this turn, as a provider message.
-   *
-   * Never throws. A Context source that is unavailable, empty or unhappy returns
-   * null, and the turn proceeds with no shared material — the same degradation as a
-   * Brain that cannot recall. A shared file is an enrichment, and letting its
-   * failure become a turn failure would mean a damaged Context store stops Freya
-   * answering questions that never needed it.
-   *
-   * Called exactly once per turn, here, on the way to a call the Mind was already
-   * going to make. Nothing in Core reads the Context store in the background, so
-   * idle Freya compiles nothing and spends nothing.
-   */
-  private sharedContextFor(text: string, conversationId: string): ModelMessage | null {
-    if (this.turnContext === null) return null
-    try {
-      return this.turnContext({ text, conversationId, now: this.now() })?.message ?? null
-    } catch (error) {
-      // Logged and swallowed, for the reason above: a turn must not be lost to its
-      // enrichment. The fault belongs to the Context domain's own health reporting.
-      console.error('[freya.mind] turn context compile failed; continuing without it', error)
-      return null
-    }
-  }
-
-  /**
-   * Plan this turn's expression, or null when there is no usable ledger.
-   *
-   * Personality expression enters the Mind through the injected
-   * `ExpressionMemory`, and nowhere else. The contract is fail-closed: **no
-   * readable ledger means no expression block and no cue reads or writes**.
-   *
-   *  - **No seam** — the Core has not wired personality expression, so the Mind
-   *    emits exactly the packet it produced before this feature existed.
-   *  - **A seam that throws** — an unreadable ledger is never treated as an empty
-   *    one.
-   *  - **A seam that reports `null`** — the ledger is unavailable, which is the
-   *    same claim as throwing for this purpose. An empty ledger would re-offer
-   *    the same cues on every turn forever, and the Mind cannot distinguish
-   *    "nothing was used" from "I cannot tell what was used" once the answer is
-   *    `null`.
-   *
-   * A wired memory therefore represents the ordinary first turn with
-   * `emptyCueLedger()`, not `null`. Never throws; a turn is never lost to its
-   * style enrichment.
-   */
-  private expressionForTurn(at: string): ExpressionTurnResult | null {
-    if (this.expressionMemory === null) return null
-    let ledger: CueUsageLedger | null
-    try {
-      ledger = this.expressionMemory.readLedger()
-    } catch (error) {
-      console.error(
-        '[freya.mind] expression memory read failed; continuing without expression guidance',
-        error,
-      )
-      return null
-    }
-    if (ledger === null) return null
-    try {
-      return buildExpressionForTurn({
-        now: at,
-        facts: this.interactionFacts(),
-        relationship: this.relationshipItems(),
-        contextTokens: this.preferenceTokens(),
-        ledger,
-      })
-    } catch (error) {
-      console.error('[freya.mind] expression planning failed; continuing without it', error)
-      return null
-    }
-  }
-
-  /**
-   * Record cue use after a turn, once a provider was actually reached.
-   *
-   * Never throws. A memory that cannot record is logged and swallowed — a failed
-   * anti-repetition record must not fail a turn that already has a stored answer.
-   * The caller decides *whether* a cue was spent; this only performs the write.
-   */
-  private recordCueUse(cueId: string, kind: CueKind, at: string): void {
-    if (this.expressionMemory === null) return
-    try {
-      this.expressionMemory.recordCueUse(cueId, kind, at)
-    } catch (error) {
-      console.error('[freya.mind] expression memory write failed; continuing', error)
     }
   }
 
@@ -872,7 +756,7 @@ export class MindService {
             // Read-only, and inside the same try as compilation so that a Brain which
             // cannot answer degrades to no reference block rather than failing a
             // turn. Forgetting is not a reason to refuse to answer.
-            referenceKnowledge: this.recalledFor(text),
+            referenceKnowledge: this.contextEnrichment.recalledFor(text),
           },
           this.budget,
         )
@@ -888,7 +772,7 @@ export class MindService {
       // fields the Phase 9 red-team suite asserts, and this block arrives as a
       // separate `user`-role message the compiler was never asked to trust.
       const carriedMessages = attachments.length ? compiled.messages.map((message, index) => index === compiled.messages.length - 1 ? { ...message, attachments } : message) : compiled.messages
-      const withContext = withTurnContext(carriedMessages, this.sharedContextFor(text, input.conversationId))
+      const withContext = withTurnContext(carriedMessages, this.contextEnrichment.sharedContextFor(text, input.conversationId))
 
       // --- 4b. expression planning, into the SAME provider call --------------
       //
@@ -900,7 +784,7 @@ export class MindService {
       // Without a usable expression-memory seam there is no block at all: the
       // personality layer enters through that seam and nowhere else. See
       // `expressionForTurn`.
-      const expression = this.expressionForTurn(startedAt)
+      const expression = this.contextEnrichment.expressionForTurn(startedAt)
       const messages = withExpressionBlock(withContext, expression?.block ?? null)
 
       // Record what context was actually assembled before the provider is asked.
@@ -933,7 +817,7 @@ export class MindService {
       // way the gateway reports it, never inferred from how far the turn got.
       if (expression !== null && cognition.kind !== 'denied' && cognition.providerContacted) {
         for (const cue of expression.offeredCueIds) {
-          this.recordCueUse(cue.cueId, cue.kind, startedAt)
+          this.contextEnrichment.recordCueUse(cue.cueId, cue.kind, startedAt)
         }
       }
 

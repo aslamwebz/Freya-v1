@@ -1,4 +1,5 @@
 import type { MissionRuntime } from './missions/process-contract'
+import type { ProcessGoals } from './longhorizon/process-store'
 import { ProcessBrain } from './brain/process-store'
 import { validateModelAttachments } from './model/provider'
 import { randomUUID } from 'node:crypto'
@@ -141,7 +142,7 @@ import {
   type ObservationIngestResult,
   type RawObservationInput,
 } from './proactive'
-import { GoalEngine } from './longhorizon/engine'
+import { GoalEngine, type GoalEngineOptions } from './longhorizon/engine'
 import type { GoalStore } from './longhorizon/store'
 import { MemoryGoalStore } from './longhorizon/memory-store'
 import { VerificationEngine } from './longhorizon/verification'
@@ -1708,9 +1709,9 @@ class FreyaCore implements Core {
    */
   private workEngine: WorkEngine | undefined
   private missionEngine: MissionRuntime | undefined
-  private goalEngine: GoalEngine | undefined
+  private goalEngine: GoalEngine | ProcessGoals | undefined
   private goalStore: GoalStore | undefined
-  private continuationEngine: ContinuationEngine | undefined
+  private continuationEngine: ContinuationEngine | ProcessGoals['continuation'] | undefined
   private chatMissions: ChatMissionIntegration | undefined
   private learningEngine: LearningEngine | undefined
   private learningStore: LearningStore | undefined
@@ -2659,7 +2660,7 @@ class FreyaCore implements Core {
     this.missionEngine = this.processRuntime?.missions(missionOptions) ?? new MissionEngine(missionOptions)
     await this.missionEngine.open()
 
-    const goalVerificationEngine = new VerificationEngine({
+    const goalVerificationEngine = this.processRuntime ? undefined : new VerificationEngine({
       fabric: this.fabric,
       goals: {
         recordCheckpointOutcome: (goalId, checkpointId, outcome, reason, attempts) =>
@@ -2675,7 +2676,7 @@ class FreyaCore implements Core {
     })
 
     this.goalStore = await this.buildGoalStore()
-    this.goalEngine = new GoalEngine({
+    const goalOptions: GoalEngineOptions = {
       fabric: this.fabric,
       store: this.goalStore,
       continuation: {
@@ -2684,7 +2685,7 @@ class FreyaCore implements Core {
             id: 'default',
             verify: async () => ({ established: true, reason: GOAL_REASONS.verification_passed }),
           }
-          const res = await goalVerificationEngine.verify(goalId, checkpointId, defaultVerifier, signal)
+          const res = await goalVerificationEngine!.verify(goalId, checkpointId, defaultVerifier, signal)
           return {
             established: res.outcome === 'passed',
             reason: res.reason ?? (res.outcome === 'passed' ? GOAL_REASONS.verification_passed : GOAL_REASONS.verification_not_established),
@@ -2696,10 +2697,11 @@ class FreyaCore implements Core {
       newId: this.options.newId,
       onChange: () => this.publishGoals(),
       stopAll: () => this.state.stopAll.active,
-    })
+    }
+    this.goalEngine = this.processRuntime?.goals(goalOptions) ?? new GoalEngine(goalOptions)
     await this.goalEngine.open()
 
-    this.continuationEngine = new ContinuationEngine({
+    this.continuationEngine = this.goalEngine instanceof GoalEngine ? new ContinuationEngine({
       fabric: this.fabric,
       goals: this.goalEngine.toTruthPort(),
       principalId: this.owner.id,
@@ -2707,7 +2709,7 @@ class FreyaCore implements Core {
       newId: this.options.newId,
       onChange: () => this.publishGoals(),
       stopAll: () => this.state.stopAll.active,
-    })
+    }) : this.goalEngine.continuation
     await this.continuationEngine.open()
 
     this.learningStore = await this.buildLearningStore()
@@ -6006,7 +6008,7 @@ private async buildForge(): Promise<void> {
 
     const targetMilestone: GoalMilestone | null = milestoneId
       ? (detail.roadmap.milestones.find((m) => m.milestoneId === milestoneId) ?? null)
-      : this.goalEngine.getPlanner().nextEligibleMilestone(detail.roadmap)
+      : await this.goalEngine.getPlanner().nextEligibleMilestone(detail.roadmap)
 
     if (!targetMilestone) return null
     return this.goalEngine.getPlanner().createMissionForMilestone(targetMilestone, detail.content)
@@ -6033,7 +6035,7 @@ private async buildForge(): Promise<void> {
 
     try {
       await store.write(updatedContent)
-      this.goalEngine.updateContent(updatedContent)
+      await this.goalEngine.updateContent(updatedContent)
     } catch (error) {
       return { operation: 'budget-updated', ok: false, reason: error instanceof Error ? error.message : String(error) }
     }
@@ -6178,7 +6180,7 @@ private async buildForge(): Promise<void> {
     }
   }
 
-  private requireGoal(): GoalEngine {
+  private requireGoal(): GoalEngine | ProcessGoals {
     if (this.goalEngine === undefined) {
       throw new Error('the Goal engine is not available')
     }

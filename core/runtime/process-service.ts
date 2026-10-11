@@ -14,6 +14,8 @@ import type { BrainStore } from '../brain/store'
 import type { EventFabric } from '../events/fabric'
 import { ProcessMissions } from '../missions/process-store'
 import type { MissionEngineOptions } from '../missions/engine'
+import { ProcessGoals } from '../longhorizon/process-store'
+import type { GoalEngineOptions } from '../longhorizon/engine'
 
 const projections = ['activity', 'brain', 'work', 'mission', 'workforce', 'personality', 'attention', 'foundry', 'office', 'relay', 'connectors', 'skills', 'forge', 'life', 'world', 'consciousness', 'lifeLoop', 'context', 'goals', 'toolCatalogue', 'voice'] as const
 type CoreProcessPort = { [K in typeof projections[number]]: () => unknown } & {
@@ -45,8 +47,10 @@ export class CoreProcess {
   private readonly owners = new Set<RpcPeer>()
   private brain: ProcessBrain | null = null
   private mission: ProcessMissions | null = null
+  private goal: ProcessGoals | null = null
   memory(store: BrainStore, fabric: EventFabric): ProcessBrain { this.brain = new ProcessBrain(store, fabric); return this.brain }
   missions(options: MissionEngineOptions): ProcessMissions { this.mission = new ProcessMissions(options); return this.mission }
+  goals(options: GoalEngineOptions): ProcessGoals { this.goal = new ProcessGoals(options); return this.goal }
   constructor(private readonly config: ProcessRuntimeOptions, private readonly env: CapabilityEnv, private readonly developer?: 'echo' | 'slow-echo', private readonly owner?: CoreOwnerPort, private readonly workspaceRoot = process.cwd()) {
     const fixture = env as CapabilityEnv & { FREYA_E2E?: string; FREYA_E2E_RESEARCH?: string }
     this.providers = new ProcessProviders(developer, fixture.FREYA_E2E === '1' && fixture.FREYA_E2E_RESEARCH === 'fixtures')
@@ -61,6 +65,7 @@ export class CoreProcess {
           this.providers.connect(peer, statuses)
           await this.brain?.connect(peer)
           await this.mission?.connect(peer)
+          await this.goal?.connect(peer)
           void this.tick(core)
           return { instanceId: this.instanceId, pid: process.pid }
         }
@@ -68,6 +73,7 @@ export class CoreProcess {
         if (method.startsWith('turn.')) return this.mind.handle(method, value)
         if (method.startsWith('brain.')) return this.brain?.handle(method, value)
         if (method.startsWith('mission.')) return this.mission?.handle(method, value)
+        if (method.startsWith('goal.')) return this.goal?.handle(method, value)
         throw new Error('operation unavailable to intelligence process')
       })
     }))

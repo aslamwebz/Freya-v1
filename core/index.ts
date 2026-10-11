@@ -256,13 +256,12 @@ import {
   WORLD_FORBIDDEN_REQUEST_KEYS,
   WORLD_REFUSAL_REASONS,
   type WorldAdmissionRequest,
-  type WorldEntityKind,
   type WorldEvidenceRequest,
-  type WorldGraphOptions,
   type WorldPersistencePort,
   type WorldReferenceRecord,
   type WorldSelfSource,
 } from './world'
+import { worldGraphOptionsFrom, worldKindFrom } from './world/command-parsing'
 import { SkillEngine, type SkillOwnerScope } from './skills/engine'
 import { SkillPersistenceRuntime } from './skillsPersistence'
 import { ForgePersistenceRuntime } from './forgePersistence'
@@ -7487,68 +7486,6 @@ state: {
     return raw as WorldEvidenceRequest
   }
 
-  /** Read the closed `kind` filter off a payload, refusing anything else. */
-  private worldKindFrom(raw: unknown): WorldEntityKind | null | undefined {
-    if (raw === undefined || raw === null) return null
-    if (typeof raw !== 'string') return undefined
-    const kinds = [
-      'person',
-      'project',
-      'organisation',
-      'place',
-      'mission',
-      'run',
-      'task',
-      'worker',
-      'team',
-      'skill',
-      'artifact',
-      'self',
-    ] as const
-    return (kinds as readonly string[]).includes(raw) ? (raw as WorldEntityKind) : undefined
-  }
-
-  /** Build the graph read's bounded options, refusing anything unbounded. */
-  private worldGraphOptionsFrom(raw: unknown): WorldGraphOptions | { refusal: string } {
-    if (raw === undefined || raw === null) {
-      return { focusEntityId: null, kinds: null, maxDepth: 1 }
-    }
-    if (typeof raw !== 'object' || Array.isArray(raw)) {
-      return { refusal: 'a graph read takes an object' }
-    }
-    const payload = raw as Record<string, unknown>
-    const allowed = ['focusEntityId', 'kinds', 'maxDepth']
-    for (const key of Object.keys(payload)) {
-      if (!allowed.includes(key)) return { refusal: 'a graph read accepts only focusEntityId, kinds and maxDepth' }
-    }
-    const focus = payload.focusEntityId
-    if (focus !== undefined && focus !== null && (typeof focus !== 'string' || focus.length > 128)) {
-      return { refusal: 'focusEntityId is not a usable entity id' }
-    }
-    let kinds: readonly WorldEntityKind[] | null = null
-    if (payload.kinds !== undefined && payload.kinds !== null) {
-      if (!Array.isArray(payload.kinds) || payload.kinds.length > 12) {
-        return { refusal: 'kinds must be a short list of entity kinds' }
-      }
-      const resolved: WorldEntityKind[] = []
-      for (const entry of payload.kinds) {
-        const kind = this.worldKindFrom(entry)
-        if (kind === undefined || kind === null) return { refusal: 'kinds must contain only entity kinds' }
-        resolved.push(kind)
-      }
-      kinds = resolved
-    }
-    const maxDepth = payload.maxDepth === undefined || payload.maxDepth === null ? 1 : payload.maxDepth
-    if (typeof maxDepth !== 'number' || !Number.isInteger(maxDepth) || maxDepth < 0 || maxDepth > 2) {
-      return { refusal: 'maxDepth is 0, 1 or 2' }
-    }
-    return {
-      focusEntityId: (focus as string | null | undefined) ?? null,
-      kinds,
-      maxDepth,
-    }
-  }
-
   /**
    * The narrow read port Skills have on Work.
    *
@@ -11031,7 +10968,7 @@ case 'forge.run': {
               return this.worldRefusal(requestId, 'unknown-field', 'the entity list accepts only kind and includeWithdrawn')
             }
           }
-          const kind = this.worldKindFrom(payload.kind)
+          const kind = worldKindFrom(payload.kind)
           if (kind === undefined) {
             return this.worldRefusal(requestId, 'unknown-kind', 'that is not an entity kind this Core knows')
           }
@@ -11071,7 +11008,7 @@ case 'forge.run': {
         case 'world.relations.read': {
           const guarded = await this.guardWorld(requestId, 'world.status.read')
           if (guarded !== null) return guarded
-          const options = this.worldGraphOptionsFrom(envelope.payload)
+          const options = worldGraphOptionsFrom(envelope.payload)
           if ('refusal' in options) {
             return this.worldRefusal(requestId, 'invalid-graph-read', options.refusal)
           }

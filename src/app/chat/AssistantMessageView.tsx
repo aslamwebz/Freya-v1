@@ -98,11 +98,28 @@ export function AssistantMessageView({
   const hasMatched = parts.matchedSources.length > 0
   const hasRelated = parts.relatedSources.length > 0
   const searches = (steps ?? []).filter(step => step.tool === 'web_search')
-  const failedSearch = searches.some(step => step.outcome === 'failed')
-  const deniedSearch = searches.some(step => step.outcome === 'denied')
-  const searchStatus = failedSearch ? 'Search failed. No sources were retrieved for the failed step.'
-    : deniedSearch ? 'Search was blocked. No sources were retrieved for the blocked step.'
-      : searches.length > 0 && searches.every(step => step.sourceCount === 0) ? 'The search returned no sources.' : ''
+  const searchCount = searches.length
+  const succeeded = searches.filter(step => step.sourceCount > 0)
+  const failed = searches.filter(step => step.outcome === 'failed')
+  const denied = searches.filter(step => step.outcome === 'denied')
+  // The banner has to agree with the list printed under it.
+  //
+  // It used to read `failedSearch = searches.some(failed)`, which claims "no
+  // sources were retrieved" the moment *any* one lookup fails -- including on a
+  // turn where five of six searches returned results and ten sources are on
+  // screen directly below the sentence denying them. A turn that did its work
+  // and partly failed was rendered as a turn that did nothing, which is the one
+  // reading the owner cannot reconcile with what they just watched happen.
+  //
+  // So the claim is scoped to the case it can actually make. When some lookups
+  // did return sources, the honest thing is to count the ones that did not.
+  const searchStatus = searchCount === 0 ? ''
+    : succeeded.length === 0 && denied.length > 0 ? 'Search was blocked. No sources were retrieved for the blocked step.'
+      : succeeded.length === 0 && failed.length > 0 ? 'Search failed. No sources were retrieved for the failed step.'
+        : failed.length > 0 ? `Search ran ${searchCount} times and ${failed.length} did not return results.`
+          : denied.length > 0 ? `Search ran ${searchCount} times and ${denied.length} was blocked.`
+            : succeeded.length < searchCount ? `Search ran ${searchCount} times and returned no sources.`
+              : ''
   const nonSearches = (steps ?? []).filter(step => step.tool !== 'web_search')
   const failedTool = nonSearches.some(step => step.outcome === 'failed')
   const deniedTool = nonSearches.some(step => step.outcome === 'denied')
@@ -110,7 +127,7 @@ export function AssistantMessageView({
     : deniedTool ? 'One or more tool operations were blocked by Core Guard.' : ''
   const hasMeta = hasThinking || hasSteps || hasMatched || hasRelated || unverifiedFooter.length > 0
     || (retrieved !== undefined && retrieved > 0) || (mediaCount !== undefined && mediaCount > 0)
-    || toolStatus.length > 0
+    || toolStatus.length > 0 || searchStatus.length > 0
 
   // Ranks need not be contiguous or arrive in array order. Missing ranks stay
   // literal text in RichMessage; they must not point at another source.

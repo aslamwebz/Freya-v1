@@ -205,11 +205,18 @@ const ADDRESS = /\d{1,6}\s+[A-Za-z][A-Za-z .'-]{3,48}(?:street|st\.?|road|rd\.?|
 /** Obvious non-contact strings that would otherwise flood the findings list. */
 function isNoiseEmail(value: string): boolean {
   const domain = value.slice(value.indexOf('@') + 1).toLowerCase()
-  // Asset filenames and example domains are almost always rendered as text but never as a
+  // Asset filenames and example **TLDs** are almost always rendered as text but never as a
   // way to reach a company, and reporting them would bury the real addresses.
-  return /\.(png|jpe?g|gif|svg|webp|ico|css|js|json|woff2?)$/iu.test(domain) ||
-    /^(example|test|yourdomain|domain|email|sentry|wixpress|cloudflare|godaddy|wordpress)\./iu.test(domain) ||
-    /@sentry\./iu.test(domain)
+  //
+  // The placeholder test is anchored on the TLD (`example.com`, `example.test`, `example.invalid`)
+  // rather than on the domain *starting* with "example", because real organisations do use
+  // domains like `example.lk` or `example.co.uk` and refusing those would silently drop the
+  // exact addresses this capability exists to find.
+  if (/\.(png|jpe?g|gif|svg|webp|ico|css|js|json|woff2?)$/iu.test(domain)) return true
+  if (/\.(example|test|invalid|localhost)$/iu.test(domain)) return true
+  // A single-label domain cannot receive mail from the public internet.
+  if (!domain.includes('.')) return true
+  return /@sentry\./iu.test(domain)
 }
 
 function isNoisePhone(value: string): boolean {

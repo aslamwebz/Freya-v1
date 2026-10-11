@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { ConversationStore } from '../conversation/store'
-import type { MissionEngine } from './engine'
+import type { MissionRuntime as MissionEngine } from './process-contract'
 import { CHAT_MISSION_POLICY, type ConversationMissionView } from './chat-types'
 import type { MissionGoalOutcome } from '../mind/mission-planning'
 import type { CognitionIntent } from '../authority'

@@ -912,11 +912,11 @@ export class MissionEngine {
     return read?.ok ? read.value : null
   }
 
-  async updateChatContent(missionId: string, update: (content: MissionContent) => MissionContent): Promise<void> {
+  async updateChatContent(missionId: string, update: (content: MissionContent) => MissionContent | Promise<MissionContent>): Promise<void> {
     await this.serialise(missionId, async () => {
       const content = await this.privateContent(missionId, true)
       if (this.closed || !content?.chatBinding) throw new Error('Durable chat Mission content is unavailable.')
-      await this.options.store.write(update(content))
+      await this.options.store.write(await update(content))
       this.options.onChange?.()
     })
   }

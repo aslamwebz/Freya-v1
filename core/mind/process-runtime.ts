@@ -15,6 +15,8 @@ import type { TurnContextBlock } from './turn-context'
 import { processToolBodies } from './process-tools'
 import { ProcessMemory } from '../brain/process-runtime'
 import type { BrainPacket } from '../brain/process-packet'
+import { ProcessMissionRuntime } from '../missions/process-runtime'
+import type { MissionPacket } from '../missions/process-contract'
 
 interface TurnPacket {
   input: MindSubmitInput
@@ -37,6 +39,7 @@ const calls = new Map<string, AbortController>()
 let toolBodies: readonly MindTool[] = []
 const toolCalls = new Map<string, AbortController>()
 const memory = new ProcessMemory()
+const missions = new ProcessMissionRuntime()
 
 async function runTurn(connection: RpcPeer, packet: TurnPacket) {
   const { input, context: c } = packet
@@ -86,6 +89,7 @@ async function connect(): Promise<void> {
       if (peer !== connection) return
       registered = false; peer = null
       memory.disconnect()
+      void missions.close()
       for (const controller of calls.values()) controller.abort()
       for (const controller of toolCalls.values()) controller.abort()
       for (const [id, mind] of minds) mind.cancelTurn(id, 'Core disconnected; the turn will not be retried')
@@ -95,6 +99,9 @@ async function connect(): Promise<void> {
       switch (method) {
         case 'brain.configure': return memory.configure(connection, value as BrainPacket)
         case 'brain.run': return memory.run(value as Parameters<ProcessMemory['run']>[0])
+        case 'mission.configure': return missions.configure(connection, value as MissionPacket)
+        case 'mission.run': return missions.run(value as Parameters<ProcessMissionRuntime['run']>[0])
+        case 'mission.close': return missions.close()
         case 'provider.configure': {
           const config = value as { env: CapabilityEnv & { FREYA_E2E?: string; FREYA_E2E_RESEARCH?: string }; developer?: 'echo' | 'slow-echo'; workspaceRoot: string }
           toolBodies = processToolBodies(config.workspaceRoot)

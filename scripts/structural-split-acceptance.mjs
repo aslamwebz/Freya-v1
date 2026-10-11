@@ -122,6 +122,7 @@ try {
   const mission = await submit('mission.create', { title: 'Process split mission', intent: 'Preserve this mission across independent component restarts.' })
   assert.equal(mission.ok, true, JSON.stringify(mission))
   const missionId = mission.mission.missionId
+  assert.ok(freyaOutput.includes(`Mission create completed; pid=${freya.pid}`), 'the real Mission engine must execute inside Freya')
   const catalogue = await page.evaluate(() => window.freyaHost.coreTools())
   assert.equal(catalogue.health, 'ready')
   for (const name of ['mission_manage', 'goal_manage', 'reminder_manage', 'system_inspect']) assert.ok(catalogue.tools.some(tool => tool.name === name), `missing existing tool ${name}`)
@@ -169,6 +170,7 @@ try {
   assert.ok(restored.conversation.messages[0].content.includes(marker))
   const restoredMission = await submit('mission.read', { missionId })
   assert.equal(restoredMission.ok, true, JSON.stringify(restoredMission))
+  assert.ok(freyaOutput.includes(`Mission detail completed; pid=${freya.pid}`), 'the restarted Freya must read the persisted Mission')
   const journal = await readFile(join(profile, 'core-events.jsonl'), 'utf8')
   assert.ok(!journal.includes(marker), 'private chat content must not be journaled')
   assert.ok(!journal.includes(memoryText), 'private memory content must not be journaled')

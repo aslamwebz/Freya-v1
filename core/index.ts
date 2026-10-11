@@ -1,3 +1,4 @@
+import type { MissionRuntime } from './missions/process-contract'
 import { ProcessBrain } from './brain/process-store'
 import { validateModelAttachments } from './model/provider'
 import { randomUUID } from 'node:crypto'
@@ -1706,7 +1707,7 @@ class FreyaCore implements Core {
    * startup instead of throwing, the same way `brain()` does.
    */
   private workEngine: WorkEngine | undefined
-  private missionEngine: MissionEngine | undefined
+  private missionEngine: MissionRuntime | undefined
   private goalEngine: GoalEngine | undefined
   private goalStore: GoalStore | undefined
   private continuationEngine: ContinuationEngine | undefined
@@ -2640,7 +2641,7 @@ class FreyaCore implements Core {
     // view of it. The engine asks Work about a Run; Work never asks Missions about
     // anything, because Work has no field shaped like a Mission and this phase does
     // not give it one.
-    this.missionEngine = new MissionEngine({
+    const missionOptions = {
       fabric: this.fabric,
       store: await this.buildMissionStore(),
       work: this.workWorkPort(),
@@ -2654,7 +2655,8 @@ class FreyaCore implements Core {
       // Read fresh at the moment of each decision. A Mission that could still be
       // activated after the panic button is a Mission that can go on creating work.
       stopAll: () => this.state.stopAll.active,
-    })
+    }
+    this.missionEngine = this.processRuntime?.missions(missionOptions) ?? new MissionEngine(missionOptions)
     await this.missionEngine.open()
 
     const goalVerificationEngine = new VerificationEngine({
@@ -6288,7 +6290,7 @@ private async buildForge(): Promise<void> {
     }
   }
 
-  private requireMission(): MissionEngine {
+  private requireMission(): MissionRuntime {
     if (this.missionEngine === undefined) {
       throw new Error('the Mission engine is not available')
     }
@@ -6308,7 +6310,7 @@ private async buildForge(): Promise<void> {
    * codebase where an approval can become `approved`.
    */
   private missionAutonomyPort(): MissionEnginePort {
-    const engine = this.missionEngine as MissionEngine
+    const engine = this.missionEngine as MissionRuntime
     return {
       record: (missionId) => engine.record(missionId),
       commitPlan: (input) => engine.commitPlan(input),

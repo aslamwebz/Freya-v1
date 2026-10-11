@@ -10,3 +10,28 @@ export const LIFE_EVENT_TYPES = [
 'life.conflict.detected',
 'life.degraded',
 ] as const
+export interface LifeEventPayloads {
+'life.entry.recorded': {
+    entryId: string
+    kind: string
+    derivation: string
+    confidence: string
+    salience: string
+    status: string
+    revision: number
+    sourceDomain: string
+    sourceId: string | null
+    occurredAtKnown: boolean
+    titleLength: number
+    summaryLength: number
+    bodyLength: number
+    referenceCount: number
+    conflictCount: number
+  }
+
+'life.entry.withdrawn': { entryId: string; revision: number; reason: string }
+
+'life.conflict.detected': { conflictId: string; entryA: string; entryB: string }
+
+'life.degraded': { reason: string }
+}

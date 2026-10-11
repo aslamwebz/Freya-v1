@@ -1,3 +1,4 @@
+import type { PrincipalId } from '../../identity'
 export const FOUNDRY_EVENT_TYPES = [
 // Foundry (Phase 15) — metadata only, and the family where deterministic
   // identity is the whole point.  //
@@ -24,3 +25,102 @@ export const FOUNDRY_EVENT_TYPES = [
 'foundry.app.transitioned',
 'foundry.limit.exceeded',
 ] as const
+export interface FoundryEventPayloads {
+/* ------------------------------------------------------------- foundry */
+
+  'foundry.artifact.created': {
+    artifactId: string
+    hash: string
+    kind: string
+    runId: string
+    stepId: string
+    createdBy: PrincipalId
+    parentHash: string | null
+    specHash: string | null
+    contentLength: number
+  }
+
+'foundry.artifact.transitioned': {
+    artifactId: string
+    toStatus: string
+  }
+
+'foundry.verification.recorded': {
+    verificationId: string
+    artifactHash: string
+    verifierName: string
+    verdict: 'passed' | 'failed' | 'inconclusive'
+    evidenceHash: string
+    evidenceLength: number
+    verifiedAt: string
+    requestedBy: PrincipalId
+  }
+
+'foundry.promotion.recorded': {
+    promotionId: string
+    artifactHash: string
+    fromStatus: string
+    toStatus: string
+    promotedBy: PrincipalId
+    promotedAt: string
+    reason: string
+    verificationId: string
+  }
+
+'foundry.activation.recorded': {
+    activationId: string
+    artifactHash: string
+    fromStatus: string
+    toStatus: string
+    activatedBy: PrincipalId
+    activatedAt: string
+    reason: string
+    expiresAt: string | null
+  }
+
+'foundry.tool.registered': {
+    toolId: string
+    hash: string
+    name: string
+    capability: string
+    createdBy: PrincipalId
+    artifactHash: string
+  }
+
+'foundry.tool.transitioned': {
+    toolId: string
+    toStatus: string
+  }
+
+'foundry.module.registered': {
+    moduleId: string
+    hash: string
+    name: string
+    createdBy: PrincipalId
+    artifactHash: string
+  }
+
+'foundry.module.transitioned': {
+    moduleId: string
+    toStatus: string
+  }
+
+'foundry.app.registered': {
+    appId: string
+    hash: string
+    name: string
+    createdBy: PrincipalId
+    artifactHash: string
+    moduleHashes: string[]
+  }
+
+'foundry.app.transitioned': {
+    appId: string
+    toStatus: string
+  }
+
+'foundry.limit.exceeded': {
+    limit: string
+    reason: string
+  }
+}

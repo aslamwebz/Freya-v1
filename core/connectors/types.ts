@@ -1,3 +1,6 @@
+import { CONNECTOR_FAILURE_CODES, CONNECTOR_KINDS, type ConnectorFailureCode, type ConnectorKind } from '../../shared/contracts/events/vocabulary/connector'
+export { CONNECTOR_FAILURE_CODES, CONNECTOR_KINDS } from '../../shared/contracts/events/vocabulary/connector'
+export type { ConnectorFailureCode, ConnectorKind } from '../../shared/contracts/events/vocabulary/connector'
 /**
  * THE CONNECTOR DOMAIN — Phase 44's vocabulary.
  *
@@ -40,27 +43,11 @@
 
 import type { RelayAction, RelayConnectorId } from '../relay/types'
 
-/* ------------------------------------------------------------- providers */
-
-/**
- * The connectors this build knows how to describe.
- *
- * A **closed** set. `unsupported` is a real state for a connector the host
- * names that this build has no definition for; it is never silently treated as
- * one of these.
- */
-export const CONNECTOR_KINDS = [
-  'gmail',
-  'google-drive',
-  'google-calendar',
-  'github',
-  'telegram',
-] as const
-export type ConnectorKind = (typeof CONNECTOR_KINDS)[number]
 
 export function isConnectorKind(value: unknown): value is ConnectorKind {
   return typeof value === 'string' && (CONNECTOR_KINDS as readonly string[]).includes(value)
 }
+
 
 /* ---------------------------------------------------------------- states */
 
@@ -98,11 +85,14 @@ export const CONNECTOR_STATES = [
   /** Policy refuses the connector in this build or context. */
   'blocked-by-policy',
 ] as const
+
 export type ConnectorState = (typeof CONNECTOR_STATES)[number]
+
 
 export function isConnectorState(value: unknown): value is ConnectorState {
   return typeof value === 'string' && (CONNECTOR_STATES as readonly string[]).includes(value)
 }
+
 
 /** The states in which a read may be attempted. */
 export const CONNECTOR_READABLE_STATES: readonly ConnectorState[] = [
@@ -110,8 +100,10 @@ export const CONNECTOR_READABLE_STATES: readonly ConnectorState[] = [
   'connected-readwrite',
 ]
 
+
 /** The states in which a write may be requested. */
 export const CONNECTOR_WRITABLE_STATES: readonly ConnectorState[] = ['connected-readwrite']
+
 
 /* ------------------------------------------------------------- authority */
 
@@ -123,50 +115,19 @@ export const CONNECTOR_WRITABLE_STATES: readonly ConnectorState[] = ['connected-
  * is chosen by Core's policy table, never by a caller.
  */
 export const CONNECTOR_AUTHORITIES = ['read', 'write', 'destructive'] as const
+
 export type ConnectorAuthority = (typeof CONNECTOR_AUTHORITIES)[number]
+
 
 export function isConnectorAuthority(value: unknown): value is ConnectorAuthority {
   return typeof value === 'string' && (CONNECTOR_AUTHORITIES as readonly string[]).includes(value)
 }
 
-/* ----------------------------------------------------------- failure codes */
-
-/**
- * Why a connector operation did not happen. A closed set, because a failure
- * code a caller can invent is decoration.
- */
-export const CONNECTOR_FAILURE_CODES = [
-  'unsupported',
-  'unconfigured',
-  'credentials_missing',
-  'authorization_required',
-  'scope_missing',
-  'connection_required',
-  'read_only',
-  'blocked_by_policy',
-  'expired',
-  'revoked',
-  'rate_limited',
-  'timeout',
-  'cancelled',
-  'provider_error',
-  'write_unknown',
-  'event_rejected',
-  'event_replayed',
-  'cross_account',
-  'secret_store_unavailable',
-  'invalid_request',
-  'capability_denied',
-  'stop_all',
-  'budget_exceeded',
-  'approval_denied',
-  'approval_expired',
-] as const
-export type ConnectorFailureCode = (typeof CONNECTOR_FAILURE_CODES)[number]
 
 export function isConnectorFailureCode(value: unknown): value is ConnectorFailureCode {
   return typeof value === 'string' && (CONNECTOR_FAILURE_CODES as readonly string[]).includes(value)
 }
+
 
 /* ---------------------------------------------------------------- limits */
 
@@ -206,6 +167,7 @@ export const CONNECTOR_LIMITS = Object.freeze({
   requestTimeoutMs: 20_000,
 })
 
+
 /* --------------------------------------------------------------- records */
 
 /** The scopes a connector grant carries, as a bounded list of labels. */
@@ -216,6 +178,7 @@ export interface ConnectorGrant {
   readonly grantedAt: string
   readonly expiresAt: string | null
 }
+
 
 /**
  * One connector's folded connection record.
@@ -237,6 +200,7 @@ export interface ConnectorConnectionRecord {
   readonly expiresAt: string | null
 }
 
+
 /** A pending or settled authorization request. */
 export interface ConnectorAuthRequestRecord {
   readonly requestId: string
@@ -244,6 +208,7 @@ export interface ConnectorAuthRequestRecord {
   readonly status: 'pending' | 'completed' | 'expired' | 'denied'
   readonly requestedAt: string
 }
+
 
 /**
  * One authenticated external event, as metadata.
@@ -264,6 +229,7 @@ export interface ConnectorEventRecord {
   readonly reason: string | null
 }
 
+
 /** The folded connector state, derived from `connector.*` events. */
 export interface ConnectorFold {
   readonly connections: readonly ConnectorConnectionRecord[]
@@ -273,9 +239,11 @@ export interface ConnectorFold {
   readonly dedupe: readonly string[]
 }
 
+
 export function initialConnectorState(): ConnectorFold {
   return { connections: [], authRequests: [], events: [], dedupe: [] }
 }
+
 
 /* -------------------------------------------------------------- utilities */
 
@@ -288,6 +256,7 @@ export function isConnectorId(value: unknown, max = 128): value is string {
     /^[A-Za-z0-9._:-]+$/.test(value)
   )
 }
+
 
 /**
  * Sanitize a display label into bounded, control-character-free data.
@@ -313,6 +282,7 @@ export function sanitizeConnectorText(value: unknown, max: number): string {
   const collapsed = out.replace(/\s+/g, ' ').trim()
   return collapsed.length > max ? collapsed.slice(0, max) : collapsed
 }
+
 
 /** A connector's mapping onto Relay's action plane. */
 export interface ConnectorRelayMapping {

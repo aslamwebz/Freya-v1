@@ -1,113 +1,21 @@
+import { EVALUATION_AUTHORS, EVALUATION_REASONS, EVALUATION_SUBJECT_KINDS, IMPROVEMENT_TARGETS, SKILL_KINDS, SKILL_REFUSAL_CODES, SKILL_RETIREMENT_REASONS, SKILL_SOURCES, SKILL_STATUSES, SKILL_TRUST_CLASSES, SKILL_VERDICTS, type EvaluationAuthor, type EvaluationReason, type EvaluationSubjectKind, type ImprovementTarget, type SkillKind, type SkillRefusalCode, type SkillRetirementReason, type SkillSource, type SkillStatus, type SkillTrustClass, type SkillVerdict } from '../../shared/contracts/events/vocabulary/skill'
+export { EVALUATION_AUTHORS, EVALUATION_REASONS, EVALUATION_SUBJECT_KINDS, IMPROVEMENT_TARGETS, SKILL_KINDS, SKILL_REFUSAL_CODES, SKILL_RETIREMENT_REASONS, SKILL_SOURCES, SKILL_STATUSES, SKILL_TRUST_CLASSES, SKILL_VERDICTS } from '../../shared/contracts/events/vocabulary/skill'
+export type { EvaluationAuthor, EvaluationReason, EvaluationSubjectKind, ImprovementTarget, SkillKind, SkillRefusalCode, SkillRetirementReason, SkillSource, SkillStatus, SkillTrustClass, SkillVerdict } from '../../shared/contracts/events/vocabulary/skill'
 import { CAPABILITIES, WORKER_CAPABILITIES, type Capability } from '../../shared/contracts/capabilities'
 
-/**
- * THE SKILL DOMAIN — Phase 17's vocabulary.
- *
- * This file is types and closed tables only: no I/O, no clock read, no model, no
- * randomness, no filesystem. It is the shape everything else in `core/skills/` is
- * built from, so admission, evaluation, promotion, selection, the journal fold and
- * the projection can all depend on it without depending on each other.
- *
- * ## What a skill is, and is not
- *
- * A skill is a **bounded reusable procedure**: a named contract (inputs, outputs,
- * preconditions, postconditions), a declared capability requirement, and an ordered
- * sequence of Work steps each naming a *registered* capability and a *registered*
- * verifier. That is the whole of it.
- *
- * A skill is **not** a prompt that carries authority, and this file is where that
- * is made structural rather than aspirational:
- *
- * - **No authority field.** There is no `capability`, `grant`, `allowed`,
- *   `override`, `bypassGuard`, `approve`, `spend`, `clearStopAll` or `model` on any
- *   skill shape. A stored skill never *grants* anything; `requiredCapabilities` is a
- *   **declaration of what the skill will ask for**, checked against what the
- *   executing Run already holds (see `execution.ts`), and adding a field that reads
- *   as authority would be a visible contract change.
- * - **No capability a skill may require.** `SKILL_FORBIDDEN_CAPABILITIES` below is
- *   the load-bearing list: a skill may not require Guard, Governor, approval,
- *   security or grant-governance capabilities, because a reusable procedure that
- *   needs to *decide* whether it may act is not a procedure. Refusing at admission
- *   is the point; the alternative is a skill that launders authority in through its
- *   own declaration.
- * - **No target of self-modification.** `PROTECTED_DOMAINS` names everything a
- *   revision may never touch. Constitution, Identity, Guard, Governor, STOP ALL,
- *   spending and approval policy, capability definitions, security policy, trusted
- *   boot and keyring boundaries are code, and no skill lifecycle reaches code.
- *
- * ## What "verified" means here
- *
- * A skill's status says how far it got through a **code-owned** lifecycle
- * (`candidate → draft → trial → verified → promoted`), and each edge is in one
- * table. Promotion reads *evaluation records*, and an evaluation is produced from
- * deterministic evidence — tests, checks, Work/Mission verification records, explicit
- * owner feedback, completion results. Model commentary is recorded as a
- * **measurement of its length** and is never read by any decision, so "Freya thinks
- * this worked" can never become "this worked".
- *
- * ## Bounded everywhere
- *
- * Every list has a maximum length and every string a maximum character count, both
- * stated in `SKILL_LIMITS`. An unbounded registry of reusable procedures is how a
- * skill store quietly becomes a prompt library.
- */
-
-/* ----------------------------------------------------------------- kinds */
-
-/**
- * What shape of reusable thing a skill is.
- *
- * A closed set, because the kind selects what a plan may contain: a `template`
- * produces text, a `plan` produces Work steps, a `procedure` is an ordered set of
- * steps, and a `tool-sequence` is a bounded sequence of capability calls. Nothing
- * outside this list is accepted, so a skill cannot invent a kind that means
- * "whatever the caller wanted".
- */
-export const SKILL_KINDS = ['procedure', 'template', 'plan', 'tool-sequence'] as const
-export type SkillKind = (typeof SKILL_KINDS)[number]
 
 export function isSkillKind(value: unknown): value is SkillKind {
   return typeof value === 'string' && (SKILL_KINDS as readonly string[]).includes(value)
 }
 
-/* --------------------------------------------------------------- statuses */
-
-/**
- * The promotion lifecycle, as one closed table.
- *
- * ```
- *   candidate → draft → trial → verified → promoted
- *       │         │       │        │          │
- *       └─────────┴───────┴────────┴──────────┴──→ retired | blocked
- * ```
- *
- * `candidate` is what admission produces: something exists, and it has been recorded
- * with a provenance and a contract, and it has proved nothing. `draft` means the
- * owner has looked at it. `trial` means it may be planned into a Run. `verified`
- * means the evidence thresholds were met for *this exact version*. `promoted` means
- * the owner chose it.
- *
- * `retired` and `blocked` are terminal. There is no un-retire edge: a retired skill
- * that turned out to be wanted again is a **new** version, admitted again, with its
- * history visible. That is what stops "just re-enable it, it was fine last time"
- * from being an operation with a button.
- */
-export const SKILL_STATUSES = [
-  'candidate',
-  'draft',
-  'trial',
-  'verified',
-  'promoted',
-  'retired',
-  'blocked',
-] as const
-export type SkillStatus = (typeof SKILL_STATUSES)[number]
 
 export function isSkillStatus(value: unknown): value is SkillStatus {
   return typeof value === 'string' && (SKILL_STATUSES as readonly string[]).includes(value)
 }
 
+
 export const SKILL_TERMINAL_STATUSES = ['retired', 'blocked'] as const
+
 
 /**
  * Every status transition that exists.
@@ -133,17 +41,22 @@ export const SKILL_TRANSITIONS: Readonly<Record<SkillStatus, readonly SkillStatu
   blocked: [],
 })
 
+
 export function canTransitionSkill(from: SkillStatus, to: SkillStatus): boolean {
   return SKILL_TRANSITIONS[from].includes(to)
 }
 
+
 /** Statuses a Run may plan a skill from. Everything else is metadata. */
 export const SELECTABLE_SKILL_STATUSES = ['trial', 'verified', 'promoted'] as const
+
 export type SelectableSkillStatus = (typeof SELECTABLE_SKILL_STATUSES)[number]
+
 
 export function isSelectableSkillStatus(value: SkillStatus): value is SelectableSkillStatus {
   return (SELECTABLE_SKILL_STATUSES as readonly string[]).includes(value)
 }
+
 
 /**
  * How strongly a status prefers selection, lowest number first.
@@ -171,53 +84,16 @@ export function statusPreference(status: SkillStatus): number {
   }
 }
 
-/* ---------------------------------------------------------------- sources */
-
-/**
- * Where a skill came from, as a **closed** set assigned by Core.
- *
- * There is no `web`, `document`, `email`, `connector`, `renderer` or `model` source
- * here, for the reason the Constitution gives as C9: untrusted content stays
- * untrusted, and it cannot become durable owner truth merely by containing
- * imperative language. A window that could name its own source could launder a page's
- * contents in as Core's own judgement, so the renderer's only admission route fixes
- * the source to `owner` and reads nothing from the payload.
- *
- * `improvement` is the controlled-improvement lane: a revision Core derived from
- * recorded evaluations. It is not a trust class (see below) — a revision inherits
- * the trust class of the version it revises.
- */
-export const SKILL_SOURCES = ['owner', 'core', 'mission', 'work', 'improvement'] as const
-export type SkillSource = (typeof SKILL_SOURCES)[number]
 
 export function isSkillSource(value: unknown): value is SkillSource {
   return typeof value === 'string' && (SKILL_SOURCES as readonly string[]).includes(value)
 }
 
-/**
- * How much a skill's *content* is trusted, as opposed to where it came from.
- *
- * The distinction matters because a revision is always `improvement`-sourced yet
- * carries its parent's trust class: deriving a revision from an owner-declared skill
- * does not make it code-owned, and recording that honestly is what stops an
- * improvement loop from laundering trust upward one version at a time.
- *
- * `untrusted-content` is in the vocabulary on purpose. It is a real state a real
- * proposal can be in — a candidate assembled from text a page supplied — and the
- * only thing it may ever reach is `candidate`, from which nothing is selectable. It
- * is recorded rather than refused so the attempt is auditable instead of invisible.
- */
-export const SKILL_TRUST_CLASSES = [
-  'code-owned',
-  'owner-declared',
-  'derived',
-  'untrusted-content',
-] as const
-export type SkillTrustClass = (typeof SKILL_TRUST_CLASSES)[number]
 
 export function isSkillTrustClass(value: unknown): value is SkillTrustClass {
   return typeof value === 'string' && (SKILL_TRUST_CLASSES as readonly string[]).includes(value)
 }
+
 
 /**
  * Trust classes that may ever be *selected* into a Run.
@@ -230,6 +106,7 @@ export function isSkillTrustClass(value: unknown): value is SkillTrustClass {
  */
 export const EXECUTABLE_TRUST_CLASSES = ['code-owned', 'owner-declared', 'derived'] as const
 
+
 /* ---------------------------------------------------------- verification */
 
 /**
@@ -241,27 +118,19 @@ export const EXECUTABLE_TRUST_CLASSES = ['code-owned', 'owner-declared', 'derive
  * would mean a withdrawn promotion and an untested skill looked alike.
  */
 export const SKILL_VERIFICATION_STATES = ['unverified', 'verified', 'failed', 'stale'] as const
+
 export type SkillVerificationState = (typeof SKILL_VERIFICATION_STATES)[number]
+
 
 export function isSkillVerificationState(value: unknown): value is SkillVerificationState {
   return typeof value === 'string' && (SKILL_VERIFICATION_STATES as readonly string[]).includes(value)
 }
 
-/* ------------------------------------------------------------- retirement */
-
-export const SKILL_RETIREMENT_REASONS = [
-  'owner-request',
-  'verification-failed',
-  'unsafe',
-  'superseded',
-  'conflicting-evidence',
-  'boundary-violation',
-] as const
-export type SkillRetirementReason = (typeof SKILL_RETIREMENT_REASONS)[number]
 
 export function isSkillRetirementReason(value: unknown): value is SkillRetirementReason {
   return typeof value === 'string' && (SKILL_RETIREMENT_REASONS as readonly string[]).includes(value)
 }
+
 
 /* ---------------------------------------------------- protected boundaries */
 
@@ -309,27 +178,19 @@ export const PROTECTED_DOMAINS = [
   'core-protocol',
   'core-runtime',
 ] as const
+
 export type ProtectedDomain = (typeof PROTECTED_DOMAINS)[number]
+
 
 export function isProtectedDomain(value: unknown): value is ProtectedDomain {
   return typeof value === 'string' && (PROTECTED_DOMAINS as readonly string[]).includes(value)
 }
 
-/**
- * What controlled improvement *is* allowed to propose a revision of.
- *
- * Deliberately short. An ordinary skill, an ordinary procedure, and an ordinary
- * implementation artifact — and each still has to pass admission, verification and
- * owner promotion like anything else. "Ordinary" is doing real work in that
- * sentence: it is what distinguishes Phase 17's promise ("Freya may improve
- * ordinary implementation/procedures") from the thing Phase 17 may never do.
- */
-export const IMPROVEMENT_TARGETS = ['skill', 'procedure', 'implementation-artifact'] as const
-export type ImprovementTarget = (typeof IMPROVEMENT_TARGETS)[number]
 
 export function isImprovementTarget(value: unknown): value is ImprovementTarget {
   return typeof value === 'string' && (IMPROVEMENT_TARGETS as readonly string[]).includes(value)
 }
+
 
 /* ---------------------------------------------------- capability boundary */
 
@@ -360,6 +221,7 @@ export const SKILL_FORBIDDEN_CAPABILITIES: readonly Capability[] = CAPABILITIES.
     capability === 'work.run.manage',
 )
 
+
 /**
  * Capabilities a worker-run may hold, and therefore the *only* capabilities a skill
  * can require when the executing Run belongs to a worker.
@@ -371,9 +233,11 @@ export const SKILL_FORBIDDEN_CAPABILITIES: readonly Capability[] = CAPABILITIES.
  */
 export const SKILL_WORKER_CAPABILITIES: readonly Capability[] = WORKER_CAPABILITIES
 
+
 export function isSkillCapability(value: unknown): value is Capability {
   return typeof value === 'string' && (CAPABILITIES as readonly string[]).includes(value)
 }
+
 
 /**
  * The capabilities a skill declares, as a writable list during parsing.
@@ -384,9 +248,11 @@ export function isSkillCapability(value: unknown): value is Capability {
  */
 export type SkillRequiredCapabilities = Capability[]
 
+
 export function isForbiddenSkillCapability(value: Capability): boolean {
   return SKILL_FORBIDDEN_CAPABILITIES.includes(value)
 }
+
 
 /* -------------------------------------------------------------- evidence */
 
@@ -410,20 +276,25 @@ export const SKILL_EVIDENCE_KINDS = [
   'completion-result',
   'model-opinion',
 ] as const
+
 export type SkillEvidenceKind = (typeof SKILL_EVIDENCE_KINDS)[number]
+
 
 export function isSkillEvidenceKind(value: unknown): value is SkillEvidenceKind {
   return typeof value === 'string' && (SKILL_EVIDENCE_KINDS as readonly string[]).includes(value)
 }
+
 
 /** The evidence kinds a verdict may be computed from. `model-opinion` is absent. */
 export const DETERMINISTIC_EVIDENCE_KINDS: readonly SkillEvidenceKind[] = SKILL_EVIDENCE_KINDS.filter(
   (kind) => kind !== 'model-opinion',
 )
 
+
 export function isDeterministicEvidence(kind: SkillEvidenceKind): boolean {
   return kind !== 'model-opinion'
 }
+
 
 /**
  * Closed outcome codes per evidence kind.
@@ -441,9 +312,11 @@ export const EVIDENCE_CODES: Readonly<Record<SkillEvidenceKind, readonly string[
   'model-opinion': ['positive', 'negative', 'uncertain'],
 })
 
+
 export function isEvidenceCode(kind: SkillEvidenceKind, value: unknown): value is string {
   return typeof value === 'string' && EVIDENCE_CODES[kind].includes(value)
 }
+
 
 /**
  * Closed metric names.
@@ -460,142 +333,39 @@ export const SKILL_METRIC_NAMES = [
   'stepsVerified',
   'stepsTotal',
 ] as const
+
 export type SkillMetricName = (typeof SKILL_METRIC_NAMES)[number]
+
 
 export function isSkillMetricName(value: unknown): value is SkillMetricName {
   return typeof value === 'string' && (SKILL_METRIC_NAMES as readonly string[]).includes(value)
 }
 
-/* -------------------------------------------------------------- verdicts */
-
-/**
- * What an evaluation concluded.
- *
- * `established` is the only verdict that counts toward promotion, and it is
- * unreachable without deterministic evidence. `contradicted` is stronger than
- * `not-established`: it means the evidence says the outcome was *not* achieved, or
- * the owner said it was not, and it is what blocks promotion outright rather than
- * merely failing to satisfy it.
- */
-export const SKILL_VERDICTS = ['established', 'not-established', 'contradicted', 'inconclusive'] as const
-export type SkillVerdict = (typeof SKILL_VERDICTS)[number]
 
 export function isSkillVerdict(value: unknown): value is SkillVerdict {
   return typeof value === 'string' && (SKILL_VERDICTS as readonly string[]).includes(value)
 }
 
-/**
- * Closed evaluation reason codes.
- *
- * Every one of them is a statement about *what evidence was present*, never about
- * what anyone concluded. `no_deterministic_evidence` is the reason a model opinion
- * alone produces, and it is a first-class tested outcome rather than a special case.
- */
-export const EVALUATION_REASONS = [
-  'owner-confirmed',
-  'owner-rejected',
-  'verification-passed',
-  'verification-failed',
-  'tests-passed',
-  'tests-failed',
-  'checks-failed',
-  'completion-not-established',
-  'completion-cancelled',
-  'no-deterministic-evidence',
-  'only-negative-evidence',
-] as const
-export type EvaluationReason = (typeof EVALUATION_REASONS)[number]
 
 export function isEvaluationReason(value: unknown): value is EvaluationReason {
   return typeof value === 'string' && (EVALUATION_REASONS as readonly string[]).includes(value)
 }
 
-/** What an evaluation was *about*. A closed set, so "subject" cannot be a blob. */
-export const EVALUATION_SUBJECT_KINDS = ['trial-run', 'mission', 'verification', 'owner-report'] as const
-export type EvaluationSubjectKind = (typeof EVALUATION_SUBJECT_KINDS)[number]
 
 export function isEvaluationSubjectKind(value: unknown): value is EvaluationSubjectKind {
   return typeof value === 'string' && (EVALUATION_SUBJECT_KINDS as readonly string[]).includes(value)
 }
 
-/**
- * Who authored an evaluation.
- *
- * `model` is **not** in this list, and that absence is the structural form of "no
- * self-awarded success": there is no spelling of an evaluation that a model produced
- * authoritatively, so a model cannot report its own work as passing. Its opinion is
- * retained only as a length on a `model-opinion` evidence item, which no decision
- * reads.
- */
-export const EVALUATION_AUTHORS = ['system', 'owner'] as const
-export type EvaluationAuthor = (typeof EVALUATION_AUTHORS)[number]
 
 export function isEvaluationAuthor(value: unknown): value is EvaluationAuthor {
   return typeof value === 'string' && (EVALUATION_AUTHORS as readonly string[]).includes(value)
 }
 
-/* --------------------------------------------------------- refusal codes */
-
-/**
- * Closed refusal codes for the skill domain.
- *
- * A code rather than a sentence for the same reason Mission reasons are codes: a
- * decision that cannot be counted cannot be audited, and a refusal somebody cannot
- * examine is indistinguishable from an arbitrary one.
- */
-export const SKILL_REFUSAL_CODES = [
-  // Admission.
-  'invalid-skill-name',
-  'invalid-skill-kind',
-  'contract-incomplete',
-  'contract-oversize',
-  'forbidden-capability-required',
-  'unknown-capability-required',
-  'capability-not-registered',
-  'step-capability-mismatch',
-  'step-verifier-missing',
-  'too-many-steps',
-  'no-steps',
-  'untrusted-content',
-  'boundary-violation',
-  'skill-store-full',
-  'duplicate-identity',
-  'duplicate-version',
-  'no-such-skill',
-  'no-such-version',
-  // Lifecycle.
-  'illegal-transition',
-  'evidence-missing',
-  'evidence-stale',
-  'evidence-contradicted',
-  'evidence-insufficient',
-  'evidence-self-reported',
-  'status-not-selectable',
-  'already-promoted',
-  // Improvement.
-  'no-evaluation-basis',
-  'too-many-proposals',
-  'revision-limit',
-  'identical-revision',
-  'runtime-promotion-unavailable',
-  'artifact-refused',
-  // Execution.
-  'not-in-work',
-  'work-run-unusable',
-  'work-step-missing',
-  'capability-not-granted',
-  'capability-laundering',
-  'stop-all',
-  'not-executable',
-  // Storage and runtime.
-  'store-unavailable',
-  'no-model-calls',
-] as const
-export type SkillRefusalCode = (typeof SKILL_REFUSAL_CODES)[number]
 
 export function isSkillRefusalCode(value: unknown): value is SkillRefusalCode {
   return typeof value === 'string' && (SKILL_REFUSAL_CODES as readonly string[]).includes(value)
 }
+
 
 /* ---------------------------------------------------------------- limits */
 
@@ -656,6 +426,7 @@ export const SKILL_LIMITS = Object.freeze({
   maxSnapshotBytes: 1_048_576,
 })
 
+
 /* ---------------------------------------------------------------- shapes */
 
 /**
@@ -672,6 +443,7 @@ export interface SkillContractEntry {
   readonly description: string
 }
 
+
 /**
  * One Work step a skill declares.
  *
@@ -686,6 +458,7 @@ export interface SkillStepSeed {
   readonly capability: string
   readonly verifier: string
 }
+
 
 /**
  * The declared contract of a skill: what it takes, what it gives, what must be true
@@ -703,6 +476,7 @@ export interface SkillContract {
   readonly preconditions: readonly SkillContractEntry[]
   readonly postconditions: readonly SkillContractEntry[]
 }
+
 
 /**
  * A skill's provenance, as recorded once at admission and never rewritten.
@@ -723,6 +497,7 @@ export interface SkillProvenance {
   /** A closed origin label, e.g. the subsystem that proposed it. Never free text. */
   readonly originRef: string | null
 }
+
 
 /**
  * One skill version, as Core holds it.
@@ -753,6 +528,7 @@ export interface SkillRecord {
   readonly promotedAt: string | null
 }
 
+
 /** One piece of deterministic (or explicitly non-deterministic) evidence. */
 export interface SkillEvidence {
   readonly kind: SkillEvidenceKind
@@ -762,11 +538,13 @@ export interface SkillEvidence {
   readonly at: string
 }
 
+
 /** One measurement. Bounded name, integer value. */
 export interface SkillMetric {
   readonly name: SkillMetricName
   readonly value: number
 }
+
 
 /** One verification record, which only Core's own Work/Mission verifier may produce. */
 export interface SkillVerificationEvidence {
@@ -775,6 +553,7 @@ export interface SkillVerificationEvidence {
   readonly verdict: 'passed' | 'failed'
   readonly at: string
 }
+
 
 /**
  * Model commentary, retained as a measurement and nothing else.
@@ -788,6 +567,7 @@ export interface SkillCommentary {
   readonly chars: number
 }
 
+
 /** Everything one evaluation was computed from. */
 export interface SkillEvaluationInput {
   readonly evidence: readonly SkillEvidence[]
@@ -795,6 +575,7 @@ export interface SkillEvaluationInput {
   readonly metrics: readonly SkillMetric[]
   readonly commentary: SkillCommentary | null
 }
+
 
 /** What `evaluateOutcome` concluded, and why. Pure and total. */
 export interface SkillEvaluationDecision {
@@ -809,6 +590,7 @@ export interface SkillEvaluationDecision {
   /** Model commentary characters *observed*. Never read into the verdict. */
   readonly commentaryChars: number
 }
+
 
 /**
  * One recorded evaluation: the decision plus the metadata needed to audit it.
@@ -829,6 +611,7 @@ export interface SkillEvaluation {
   readonly decision: SkillEvaluationDecision
 }
 
+
 /** One improvement proposal, as Core holds it. */
 export interface SkillProposal {
   readonly proposalId: string
@@ -845,6 +628,7 @@ export interface SkillProposal {
   readonly settledAt: string | null
   readonly settledReason: SkillRefusalCode | null
 }
+
 
 /** What the fold retains. Metadata only — never a contract entry's text. */
 export interface SkillVersionRecord {
@@ -863,6 +647,7 @@ export interface SkillVersionRecord {
   readonly postconditionCount: number
   readonly summaryLength: number
 }
+
 
 /** The fold's per-skill record: status, verification, provenance and counts. */
 export interface SkillStateRecord {
@@ -888,6 +673,7 @@ export interface SkillStateRecord {
   readonly updatedAt: string
 }
 
+
 /* -------------------------------------------------------------- utilities */
 
 /**
@@ -904,6 +690,7 @@ export function isRef(value: unknown): value is string {
     /^[A-Za-z0-9._:-]+$/.test(value)
   )
 }
+
 
 /**
  * Normalise a skill name into the one form identity is derived from.
@@ -930,6 +717,7 @@ export function normaliseSkillName(raw: unknown): string | null {
   return collapsed
 }
 
+
 /**
  * Normalise one contract entry's name, and bound its description.
  *
@@ -953,6 +741,7 @@ export function normaliseContractEntry(
   return { name, description }
 }
 
+
 /**
  * Normalise an applicability tag.
  *
@@ -963,6 +752,7 @@ export function normaliseContractEntry(
 export function normaliseTag(raw: unknown): string | null {
   return normaliseSkillName(raw)
 }
+
 
 /**
  * Control-strip and bound a piece of private text.
@@ -990,12 +780,14 @@ export function sanitiseSkillText(value: unknown, max: number): string {
   return collapsed.length > max ? collapsed.slice(0, max) : collapsed
 }
 
+
 /** Whether a string parses as an instant. No clock read, no repair. */
 export function instantMs(value: unknown): number | null {
   if (typeof value !== 'string') return null
   const ms = Date.parse(value)
   return Number.isFinite(ms) ? ms : null
 }
+
 
 /**
  * The canonical serialisation a content hash is taken over.

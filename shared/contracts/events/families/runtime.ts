@@ -1,3 +1,5 @@
+import type { RuntimeStatus } from '../vocabulary/runtime.ts'
+
 export const RUNTIME_EVENT_TYPES = [
 // Runtime Activation (Phase 40) — metadata only.
   //
@@ -16,3 +18,53 @@ export const RUNTIME_EVENT_TYPES = [
 'runtime.activation.stopped',
 'runtime.activation.reconciled',
 ] as const
+
+export interface RuntimeEventPayloads {
+/* ------------------------------------------------------ runtime activation */
+
+  /**
+   * One domain's registration decision.
+   *
+   * `outcome` is the allowed/blocked verdict; `status` is where the domain now
+   * stands; `missing` names the dependency labels that blocked it, if any.
+   */
+  'runtime.activation.decided': {
+    domainId: string
+    outcome: 'allowed' | 'blocked'
+    status: RuntimeStatus
+    reason: string
+    missing: string[]
+    requestedAt: string
+  }
+
+/** A domain's status changed after it had already been evaluated. */
+  'runtime.activation.changed': {
+    domainId: string
+    from: RuntimeStatus
+    to: RuntimeStatus
+    reason: string
+    missing: string[]
+  }
+
+/** A domain was stopped, with the reason recorded. */
+  'runtime.activation.stopped': {
+    domainId: string
+    reason: string
+    missing: string[]
+  }
+
+/**
+   * A domain was reconciled after a Core restart.
+   *
+   * `previousStatus` is carried rather than read back from state, for Work's
+   * reason: after a restart "what this domain was doing" is precisely the thing
+   * that is no longer knowable from memory.
+   */
+  'runtime.activation.reconciled': {
+    domainId: string
+    previousStatus: RuntimeStatus
+    status: RuntimeStatus
+    reason: string
+    missing: string[]
+  }
+}

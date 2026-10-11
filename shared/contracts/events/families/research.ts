@@ -22,3 +22,68 @@ export const RESEARCH_EVENT_TYPES = [
 'research.failed',
 'research.cancelled',
 ] as const
+export interface ResearchStageEvent {
+  /** The operation id Core issued. An id, never content. */
+  operationId: string
+  /** The managed browser session, when the stage had one. */
+  sessionId: string | null
+  /** A closed enum. A renderer or provider cannot invent a stage name. */
+  stage: string
+  counters: ResearchStageCounters
+  /** Null unless the stage failed. Always a code, never a message. */
+  failureCode: string | null
+}
+
+/**
+ * Counters reported on a research event.
+ *
+ * Every field is an integer this subsystem counted itself. They are named rather
+ * than bundled so a reader can see which budget moved, and they are integers rather
+ * than a duration string so a validator can reject a substituted sentence.
+ */
+export interface ResearchStageCounters {
+  iterations: number
+  queries: number
+  results: number
+  pages: number
+  evidenceChars: number
+  modelTurns: number
+  failures: number
+  durationMs: number
+}
+
+export interface ResearchEventPayloads {
+/* ------------------------------------------------------------- research */
+
+  /**
+   * The one shape every research stage event uses.
+   *
+   * A single shape rather than several, because the fields that must never appear
+   * are easier to guarantee for one type than for eight. Note what is absent: no
+   * query, no URL, no domain, no snippet, no page text, no answer, no provider
+   * diagnostic and no filesystem path. `failureCode` is a closed enum from
+   * `ResearchErrorCode`, so a failure is reported as a code rather than as whatever
+   * a provider chose to throw.
+   */
+  'research.search_started': ResearchStageEvent
+
+'research.search_completed': ResearchStageEvent
+
+'research.search_failed': ResearchStageEvent
+
+'research.read_started': ResearchStageEvent
+
+'research.read_completed': ResearchStageEvent
+
+'research.read_failed': ResearchStageEvent
+
+'research.started': ResearchStageEvent
+
+'research.progress': ResearchStageEvent
+
+'research.completed': ResearchStageEvent
+
+'research.failed': ResearchStageEvent
+
+'research.cancelled': ResearchStageEvent
+}

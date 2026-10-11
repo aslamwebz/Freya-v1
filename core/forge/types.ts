@@ -1,5 +1,10 @@
+import { FORGE_ACCESS_LEVELS, FORGE_ORIGINS, FORGE_REFUSAL_CODES, FORGE_RUNTIME_KINDS, type ForgeAccessLevel, type ForgeOrigin, type ForgeRefusalCode, type ForgeRunFailureCode, type ForgeRunState, type ForgeRuntimeKind, type ForgeStageVerdict, type ForgeValidationStage } from '../../shared/contracts/events/vocabulary/forge'
+export { FORGE_ACCESS_LEVELS, FORGE_ORIGINS, FORGE_REFUSAL_CODES, FORGE_RUN_FAILURE_CODES, FORGE_RUN_STATES, FORGE_RUNTIME_KINDS, FORGE_STAGE_VERDICTS, FORGE_VALIDATION_STAGES } from '../../shared/contracts/events/vocabulary/forge'
+export type { ForgeAccessLevel, ForgeOrigin, ForgeRefusalCode, ForgeRunFailureCode, ForgeRunState, ForgeRuntimeKind, ForgeStageVerdict, ForgeValidationStage } from '../../shared/contracts/events/vocabulary/forge'
 import { CAPABILITIES, type Capability } from '../../shared/contracts/capabilities'
+
 import { deriveSkillId } from '../skills/identity'
+
 
 /**
  * THE FORGE DOMAIN — Phase 48's vocabulary.
@@ -64,34 +69,11 @@ import { deriveSkillId } from '../skills/identity'
 
 export { deriveSkillId as forgeSkillId }
 
-/* ------------------------------------------------------------------- kinds */
-
-/**
- * What shape of bounded thing a Forge package is.
- *
- * Closed because the kind decides which operations its program may contain and
- * what its access declaration is allowed to say. `pure-transform` and
- * `data-pipeline` compute; `research-helper` and `connector-wrapper` describe an
- * act for a downstream, authorised subsystem to perform; `ui-artifact` renders a
- * declarative view; `automation-recipe` emits a bounded list of named steps.
- *
- * None of them is "a plugin", and the list is the honest limit of what this
- * architecture can sandbox. A kind that meant "whatever the generator wanted"
- * would make the whole table decorative.
- */
-export const FORGE_RUNTIME_KINDS = [
-  'pure-transform',
-  'data-pipeline',
-  'research-helper',
-  'connector-wrapper',
-  'ui-artifact',
-  'automation-recipe',
-] as const
-export type ForgeRuntimeKind = (typeof FORGE_RUNTIME_KINDS)[number]
 
 export function isForgeRuntimeKind(value: unknown): value is ForgeRuntimeKind {
   return typeof value === 'string' && (FORGE_RUNTIME_KINDS as readonly string[]).includes(value)
 }
+
 
 /**
  * Operations a program may not contain, by runtime kind.
@@ -109,6 +91,7 @@ export const FORGE_KIND_FORBIDDEN_OPS: Readonly<Record<ForgeRuntimeKind, readonl
   'research-helper': ['plan-connector'],
   'connector-wrapper': ['plan-research'],
 })
+
 
 /* --------------------------------------------------------------- statuses */
 
@@ -150,11 +133,14 @@ export const FORGE_STATUSES = [
   'superseded',
   'removed',
 ] as const
+
 export type ForgeStatus = (typeof FORGE_STATUSES)[number]
+
 
 export function isForgeStatus(value: unknown): value is ForgeStatus {
   return typeof value === 'string' && (FORGE_STATUSES as readonly string[]).includes(value)
 }
+
 
 /** Statuses from which nothing runs, whatever the caller says. */
 export const FORGE_NON_RUNNABLE_STATUSES: readonly ForgeStatus[] = Object.freeze([
@@ -167,6 +153,7 @@ export const FORGE_NON_RUNNABLE_STATUSES: readonly ForgeStatus[] = Object.freeze
   'superseded',
   'removed',
 ])
+
 
 export const FORGE_TRANSITIONS: Readonly<Record<ForgeStatus, readonly ForgeStatus[]>> = Object.freeze({
   candidate: ['generated', 'validating', 'verified', 'rejected'],
@@ -183,31 +170,22 @@ export const FORGE_TRANSITIONS: Readonly<Record<ForgeStatus, readonly ForgeStatu
   removed: [],
 })
 
+
 export function canTransitionForge(from: ForgeStatus, to: ForgeStatus): boolean {
   return FORGE_TRANSITIONS[from].includes(to)
 }
 
-/* ------------------------------------------------------------ provenance */
-
-/**
- * Where a candidate came from.
- *
- * `forge-generated` means a model was asked for it, so its provenance records the
- * model and a hash of the request and never records the response as truth.
- * `acquired-remote` means it came from somewhere else entirely and is therefore
- * *always* untrusted until validated, and always requires approval before it may
- * be enabled. There is no `trusted-remote`.
- */
-export const FORGE_ORIGINS = ['owner-authored', 'forge-generated', 'local-import', 'acquired-remote'] as const
-export type ForgeOrigin = (typeof FORGE_ORIGINS)[number]
 
 export function isForgeOrigin(value: unknown): value is ForgeOrigin {
   return typeof value === 'string' && (FORGE_ORIGINS as readonly string[]).includes(value)
 }
 
+
 /** Signature/trust state. `unsupported` is a real answer, not a placeholder. */
 export const FORGE_SIGNATURE_STATES = ['unsigned', 'unsupported'] as const
+
 export type ForgeSignatureState = (typeof FORGE_SIGNATURE_STATES)[number]
+
 
 export interface ForgeProvenance {
   readonly origin: ForgeOrigin
@@ -220,26 +198,11 @@ export interface ForgeProvenance {
   readonly createdAt: string
 }
 
-/* ----------------------------------------------------------------- access */
-
-/**
- * The access a package *declares*.
- *
- * Two values only, and the names are the point: `denied` and `declared`. There is
- * no `granted` here, because granting is not a package's business — it is Core's,
- * through the capability vocabulary, and the declaration only ever has to be
- * checked against what already exists.
- *
- * A declaration is never an authorisation. `network: 'declared'` says "this
- * package would need the network"; it does not give it one, and in this build the
- * sandbox cannot use one regardless.
- */
-export const FORGE_ACCESS_LEVELS = ['denied', 'declared'] as const
-export type ForgeAccessLevel = (typeof FORGE_ACCESS_LEVELS)[number]
 
 export function isForgeAccessLevel(value: unknown): value is ForgeAccessLevel {
   return typeof value === 'string' && (FORGE_ACCESS_LEVELS as readonly string[]).includes(value)
 }
+
 
 export interface ForgeAccessDeclaration {
   readonly network: ForgeAccessLevel
@@ -249,6 +212,7 @@ export interface ForgeAccessDeclaration {
   readonly process: ForgeAccessLevel
 }
 
+
 export const DENIED_ACCESS: ForgeAccessDeclaration = Object.freeze({
   network: 'denied',
   filesystem: 'denied',
@@ -257,18 +221,24 @@ export const DENIED_ACCESS: ForgeAccessDeclaration = Object.freeze({
   process: 'denied',
 })
 
+
 export const FORGE_ACCESS_FIELDS = ['network', 'filesystem', 'device', 'keyring', 'process'] as const
+
 export type ForgeAccessField = (typeof FORGE_ACCESS_FIELDS)[number]
+
 
 /* ----------------------------------------------------------------- schema */
 
 /** Closed value types. There is no `object` type a program can walk. */
 export const FORGE_FIELD_TYPES = ['string', 'number', 'boolean', 'list', 'record'] as const
+
 export type ForgeFieldType = (typeof FORGE_FIELD_TYPES)[number]
+
 
 export function isForgeFieldType(value: unknown): value is ForgeFieldType {
   return typeof value === 'string' && (FORGE_FIELD_TYPES as readonly string[]).includes(value)
 }
+
 
 export interface ForgeFieldSpec {
   readonly name: string
@@ -280,14 +250,18 @@ export interface ForgeFieldSpec {
   readonly keys: readonly string[]
 }
 
+
 export interface ForgeSchema {
   readonly fields: readonly ForgeFieldSpec[]
 }
 
+
 /* ---------------------------------------------------------------- program */
 
 export type ForgeScalar = string | number | boolean | null
+
 export type ForgeValue = ForgeScalar | ForgeScalar[] | { readonly [key: string]: ForgeValue }
+
 
 export const FORGE_STRING_TRANSFORMS = [
   'upper',
@@ -299,16 +273,24 @@ export const FORGE_STRING_TRANSFORMS = [
   'strip-tags',
   'collapse-space',
 ] as const
+
 export type ForgeStringTransform = (typeof FORGE_STRING_TRANSFORMS)[number]
 
+
 export const FORGE_AGGREGATES = ['sum', 'count', 'min', 'max', 'mean'] as const
+
 export type ForgeAggregate = (typeof FORGE_AGGREGATES)[number]
 
+
 export const FORGE_PREDICATES = ['nonempty', 'numeric', 'longer-than'] as const
+
 export type ForgePredicate = (typeof FORGE_PREDICATES)[number]
 
+
 export const FORGE_VIEWS = ['text', 'list', 'table'] as const
+
 export type ForgeView = (typeof FORGE_VIEWS)[number]
+
 
 /**
  * The operation vocabulary. Closed, and every entry is pure.
@@ -335,6 +317,7 @@ export type ForgeOp =
   | 'ui-view'
   | 'emit-recipe'
 
+
 export const FORGE_OPS: readonly ForgeOp[] = Object.freeze([
   'bind-input',
   'bind-const',
@@ -353,12 +336,15 @@ export const FORGE_OPS: readonly ForgeOp[] = Object.freeze([
   'emit-recipe',
 ])
 
+
 export function isForgeOp(value: unknown): value is ForgeOp {
   return typeof value === 'string' && (FORGE_OPS as readonly string[]).includes(value)
 }
 
+
 /** Every op writes `to`, except `output` which publishes `from`. */
 export const FORGE_OUTPUT_OPS: readonly ForgeOp[] = Object.freeze(['output'])
+
 
 export interface ForgeStep {
   readonly op: ForgeOp
@@ -378,9 +364,11 @@ export interface ForgeStep {
   readonly items?: readonly string[]
 }
 
+
 export interface ForgeProgram {
   readonly steps: readonly ForgeStep[]
 }
+
 
 /* -------------------------------------------------------------- manifest */
 
@@ -407,30 +395,18 @@ export interface ForgeManifest {
   readonly provenance: ForgeProvenance
 }
 
+
 export interface ForgeDependency {
   readonly name: string
   /** Exact version. A range would be a silent upgrade waiting to happen. */
   readonly version: number
 }
 
-/* ------------------------------------------------------------- lifecycle */
-
-export const FORGE_VALIDATION_STAGES = [
-  'manifest',
-  'dependencies',
-  'integrity',
-  'security',
-  'tests',
-  'capabilities',
-  'approval',
-] as const
-export type ForgeValidationStage = (typeof FORGE_VALIDATION_STAGES)[number]
-
-export const FORGE_STAGE_VERDICTS = ['pass', 'fail', 'not-applicable'] as const
-export type ForgeStageVerdict = (typeof FORGE_STAGE_VERDICTS)[number]
 
 export const FORGE_APPROVAL_STATES = ['not-required', 'pending', 'approved', 'refused'] as const
+
 export type ForgeApprovalState = (typeof FORGE_APPROVAL_STATES)[number]
+
 
 export interface ForgeApproval {
   readonly required: boolean
@@ -439,6 +415,7 @@ export interface ForgeApproval {
   readonly decidedAt: string | null
   readonly reason: string | null
 }
+
 
 export interface ForgeTestResult {
   readonly verdict: 'passed' | 'failed' | 'inconclusive'
@@ -449,6 +426,7 @@ export interface ForgeTestResult {
   readonly failureHash: string | null
 }
 
+
 /** What one stage decided, in a form a projection and a test can both read. */
 export interface ForgeStageResult {
   readonly stage: ForgeValidationStage
@@ -456,6 +434,7 @@ export interface ForgeStageResult {
   readonly code: ForgeRefusalCode | null
   readonly reason: string | null
 }
+
 
 export interface ForgeValidationReport {
   /** Always every stage, in pipeline order. A stage never disappears. */
@@ -469,31 +448,6 @@ export interface ForgeValidationReport {
   readonly ranAt: string
 }
 
-/** A run's outcome. `interrupted` is a real state, not a missing one. */
-export const FORGE_RUN_STATES = ['running', 'succeeded', 'failed', 'cancelled', 'interrupted', 'refused'] as const
-export type ForgeRunState = (typeof FORGE_RUN_STATES)[number]
-
-export const FORGE_RUN_FAILURE_CODES = [
-  'input-schema-violation',
-  'output-schema-violation',
-  'input-too-large',
-  'output-too-large',
-  'step-budget-exhausted',
-  'deadline-exceeded',
-  'cancelled',
-  'input-schema-violation',
-  'output-schema-violation',
-  'input-too-large',
-  'output-too-large',
-  'forbidden-operation',
-  'unknown-binding',
-  'type-mismatch',
-  'invalid-data',
-  'forbidden-operation',
-  'program-invalid',
-  'recovery-interrupted',
-] as const
-export type ForgeRunFailureCode = (typeof FORGE_RUN_FAILURE_CODES)[number]
 
 /**
  * The failures that are evidence about the *package* rather than about the caller.
@@ -512,9 +466,11 @@ export const FORGE_PACKAGE_DEFECT_CODES: readonly ForgeRunFailureCode[] = Object
   'forbidden-operation',
 ])
 
+
 export function isForgePackageDefect(code: ForgeRunFailureCode): boolean {
   return FORGE_PACKAGE_DEFECT_CODES.includes(code)
 }
+
 
 export interface ForgeRunMetrics {
   readonly opsUsed: number
@@ -522,6 +478,7 @@ export interface ForgeRunMetrics {
   readonly outputChars: number
   readonly durationMs: number
 }
+
 
 export interface ForgeRunRecord {
   readonly runId: string
@@ -537,82 +494,11 @@ export interface ForgeRunRecord {
   readonly outputHash: string | null
 }
 
-/* ------------------------------------------------------------- refusals */
-
-/**
- * Every refusal Forge can state, in one closed list.
- *
- * Closed so a surface can branch on a code instead of parsing a sentence, and so
- * a test can assert that a refusal is one of these rather than "some string". The
- * list is read by the payload validators in `core/events/validate.ts`, so a code
- * that exists here is a code a journal line may carry.
- */
-export const FORGE_REFUSAL_CODES = [
-  'malformed-command',
-  'no-payload',
-  'unknown-command',
-  'malformed-manifest',
-  'unknown-runtime',
-  'schema-invalid',
-  'dependency-refused',
-  'dependency-missing',
-  'dependency-cycle',
-  'integrity-mismatch',
-  'identical-version',
-  'version-conflict',
-  'downgrade-not-explicit',
-  'no-such-package',
-  'no-such-version',
-  'unknown-capability',
-  'forbidden-capability',
-  'capability-not-registered',
-  'capability-not-held',
-  'approval-required',
-  'approval-refused',
-  'security-finding',
-  'tests-failed',
-  'program-invalid',
-  'impossible-access-declaration',
-  'path-traversal',
-  'protected-core-reference',
-  'forbidden-host-api',
-  'secret-access',
-  'unrestricted-network',
-  'hidden-dependency',
-  'grant-metadata-tampering',
-  'oversized-source',
-  'illegal-transition',
-  'not-installed',
-  'not-enabled',
-  'not-verified',
-  'quarantined',
-  'removed',
-  'stop-all',
-  'cancelled',
-  'input-schema-violation',
-  'output-schema-violation',
-  'input-too-large',
-  'output-too-large',
-  'forbidden-operation',
-  'deadline-exceeded',
-  'run-failed',
-  'run-budget-exceeded',
-  'invalid-input',
-  'invalid-data',
-  'type-mismatch',
-  'unknown-binding',
-  'step-budget-exhausted',
-  'invalid-output',
-  'limit-exceeded',
-  'recovery-interrupted',
-  'degraded-store',
-  'unsupported-runtime',
-] as const
-export type ForgeRefusalCode = (typeof FORGE_REFUSAL_CODES)[number]
 
 export function isForgeRefusalCode(value: unknown): value is ForgeRefusalCode {
   return typeof value === 'string' && (FORGE_REFUSAL_CODES as readonly string[]).includes(value)
 }
+
 
 /** The closed findings a static security scan may report. */
 export const FORGE_SECURITY_FINDINGS = [
@@ -626,7 +512,9 @@ export const FORGE_SECURITY_FINDINGS = [
   'oversized-source',
   'impossible-access-declaration',
 ] as const
+
 export type ForgeSecurityFinding = (typeof FORGE_SECURITY_FINDINGS)[number]
+
 
 /**
  * The specific management capabilities above the prefixes.
@@ -647,6 +535,7 @@ const FORGE_MANAGEMENT_CAPABILITIES: readonly Capability[] = [
   'acquisition.activation.manage',
   'relay.approval.decide',
 ]
+
 
 /* --------------------------------------------------------------- limits */
 
@@ -678,12 +567,14 @@ export const FORGE_LIMITS = Object.freeze({
   maxRejections: 32,
 })
 
+
 /* ------------------------------------------------------------- utilities */
 
 /** The deterministic id of a package, derived from its normalised name. */
 export function forgePackageId(normalisedName: string): string {
   return deriveSkillId(normalisedName)
 }
+
 
 /**
  * Capabilities a package may never declare.
@@ -702,9 +593,11 @@ export const FORGE_FORBIDDEN_CAPABILITIES: readonly Capability[] = CAPABILITIES.
     FORGE_MANAGEMENT_CAPABILITIES.includes(capability),
 )
 
+
 export function isForbiddenForgeCapability(value: Capability): boolean {
   return FORGE_FORBIDDEN_CAPABILITIES.includes(value)
 }
+
 
 /** The name shape: lower-case letters, digits and single dashes. */
 export function normaliseForgeName(raw: unknown): string | null {
@@ -716,12 +609,14 @@ export function normaliseForgeName(raw: unknown): string | null {
   return name
 }
 
+
 /** Bounded, control-character-free text. Used for descriptions and reasons. */
 export function sanitiseForgeText(value: unknown, max: number): string {
   if (typeof value !== 'string') return ''
   // eslint-disable-next-line no-control-regex
   return value.replace(/[ -]/g, ' ').trim().slice(0, max)
 }
+
 
 /**
  * Canonical JSON with fixed key order.
@@ -739,6 +634,7 @@ export function canonicalForgeJson(value: unknown): string {
   const keys = Object.keys(record).sort()
   return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalForgeJson(record[key])}`).join(',')}}`
 }
+
 
 /** The exact bytes the integrity hash is taken over. */
 export function canonicalForgeManifest(manifest: ForgeManifest): string {

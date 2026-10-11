@@ -16,3 +16,39 @@ export const PERSONALITY_EVENT_TYPES = [
   'personality.record_changed',
 'personality.degraded',
 ] as const
+export interface PersonalityEventPayloads {
+// Personality & Relationship. Metadata only, and the exact-key check in
+  // `validate.ts` is what keeps it that way: a hand-edited line cannot smuggle a
+  // recorded text, an owner's clause or a sentence into a payload whose schema has
+  // no slot for one.
+  'personality.record_changed': {
+    operation: 'admitted' | 'rejected' | 'withdrawn' | 'retired' | 'superseded'
+    itemId: string
+    kind: 'fact' | 'preference' | 'habit' | 'catchphrase' | 'inside-joke'
+    /** A code-owned slug. Never a sentence — `isSlug` is checked on recovery. */
+    key: string
+    sourceType:
+      | 'owner-assertion'
+      | 'system-observation'
+      | 'experience-outcome'
+      | 'freya-inference'
+      | 'model-inference'
+      | 'external-untrusted'
+      | 'imported-document'
+    confidence: 'unknown' | 'low' | 'medium' | 'high'
+    lifecycleReason:
+      | 'owner-withdrew-this-record'
+      | 'owner-rejected-this-record'
+      | 'superseded-by-a-newer-record'
+      | 'retention-bound-reached'
+      | null
+    admitted: number
+    retained: number
+  }
+
+'personality.degraded': {
+    reason: string
+    mode: 'encrypted' | 'ephemeral'
+    durable: false
+  }
+}

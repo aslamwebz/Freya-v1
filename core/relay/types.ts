@@ -1,3 +1,6 @@
+import { RELAY_ACTIONS, RELAY_CONNECTORS, RELAY_FAILURE_CODES, RELAY_RISK_CLASSES, type RelayAction, type RelayConnectorId, type RelayFailureCode, type RelayRiskClass } from '../../shared/contracts/events/vocabulary/relay'
+export { RELAY_ACTIONS, RELAY_CONNECTORS, RELAY_FAILURE_CODES, RELAY_RISK_CLASSES } from '../../shared/contracts/events/vocabulary/relay'
+export type { RelayAction, RelayConnectorId, RelayFailureCode, RelayRiskClass } from '../../shared/contracts/events/vocabulary/relay'
 /**
  * THE RELAY DOMAIN — Phase 16's vocabulary.
  *
@@ -38,22 +41,11 @@
 
 import type { Capability } from '../../shared/contracts/capabilities'
 
-/* ------------------------------------------------------------- connectors */
-
-/**
- * The connectors this build can route.
- *
- * A **closed** set. `external` is the generic pattern: the host registers
- * named external connectors (by string id) under it, and registering one
- * widens nothing — the caller still needs `relay.external.invoke`, an approval
- * and a budget, exactly as for a built-in connector.
- */
-export const RELAY_CONNECTORS = ['email', 'calendar', 'github', 'drive', 'telegram', 'external'] as const
-export type RelayConnectorId = (typeof RELAY_CONNECTORS)[number]
 
 export function isRelayConnectorId(value: unknown): value is RelayConnectorId {
   return typeof value === 'string' && (RELAY_CONNECTORS as readonly string[]).includes(value)
 }
+
 
 /**
  * A connector's availability, as the projection reports it.
@@ -64,55 +56,33 @@ export function isRelayConnectorId(value: unknown): value is RelayConnectorId {
  * reads and writes are refused until the host re-registers it.
  */
 export const RELAY_CONNECTOR_STATUSES = ['unavailable', 'ready', 'faulted'] as const
+
 export type RelayConnectorStatus = (typeof RELAY_CONNECTOR_STATUSES)[number]
+
 
 export function isRelayConnectorStatus(value: unknown): value is RelayConnectorStatus {
   return typeof value === 'string' && (RELAY_CONNECTOR_STATUSES as readonly string[]).includes(value)
 }
 
-/* ---------------------------------------------------------------- actions */
-
-/**
- * The closed action vocabulary. Each action is separately bounded: one
- * capability, one validation rule, one risk class, one adapter call.
- *
- * Reads and writes are different names on purpose. `relay.email.read` does not
- * imply `relay.email.send`, and a principal holding every read capability and
- * no write capability can read and nothing else — the type system says so.
- */
-export const RELAY_ACTIONS = [
-  'email.read',
-  'email.draft.create',
-  'email.send',
-  'calendar.read',
-  'calendar.create',
-  'calendar.update',
-  'calendar.cancel',
-  'github.read',
-  'github.issue.create',
-  'github.pr.create',
-  'drive.read',
-  'drive.file.create',
-  'telegram.read',
-  'telegram.send',
-  'external.invoke',
-] as const
-export type RelayAction = (typeof RELAY_ACTIONS)[number]
 
 export function isRelayAction(value: unknown): value is RelayAction {
   return typeof value === 'string' && (RELAY_ACTIONS as readonly string[]).includes(value)
 }
+
 
 /**
  * The read actions. These execute directly under Guard + budget + STOP ALL.
  * They never create an approval and never mutate anything.
  */
 export const RELAY_READ_ACTIONS = ['email.read', 'calendar.read', 'github.read', 'drive.read', 'telegram.read'] as const
+
 export type RelayReadAction = (typeof RELAY_READ_ACTIONS)[number]
+
 
 export function isRelayReadAction(value: RelayAction): value is RelayReadAction {
   return (RELAY_READ_ACTIONS as readonly string[]).includes(value)
 }
+
 
 /**
  * The write/send/mutate actions. Every one of these creates a pending approval
@@ -130,11 +100,14 @@ export const RELAY_WRITE_ACTIONS = [
   'telegram.send',
   'external.invoke',
 ] as const
+
 export type RelayWriteAction = (typeof RELAY_WRITE_ACTIONS)[number]
+
 
 export function isRelayWriteAction(value: RelayAction): value is RelayWriteAction {
   return (RELAY_WRITE_ACTIONS as readonly string[]).includes(value)
 }
+
 
 /** Which connector an action belongs to. */
 export const RELAY_ACTION_CONNECTOR: Readonly<Record<RelayAction, RelayConnectorId>> = Object.freeze({
@@ -155,20 +128,11 @@ export const RELAY_ACTION_CONNECTOR: Readonly<Record<RelayAction, RelayConnector
   'external.invoke': 'external',
 })
 
-/**
- * The risk class of an action, chosen by Core and never by a caller.
- *
- * `read` changes nothing. `routine` mutates account state a person can undo
- * (a draft, an event, an issue). `consequential` sends something to another
- * person or invokes an arbitrary external operation — the two actions whose
- * effect leaves the building.
- */
-export const RELAY_RISK_CLASSES = ['read', 'routine', 'consequential'] as const
-export type RelayRiskClass = (typeof RELAY_RISK_CLASSES)[number]
 
 export function isRelayRiskClass(value: unknown): value is RelayRiskClass {
   return typeof value === 'string' && (RELAY_RISK_CLASSES as readonly string[]).includes(value)
 }
+
 
 export const RELAY_ACTION_RISK: Readonly<Record<RelayAction, RelayRiskClass>> = Object.freeze({
   'email.read': 'read',
@@ -187,6 +151,7 @@ export const RELAY_ACTION_RISK: Readonly<Record<RelayAction, RelayRiskClass>> = 
   'telegram.send': 'consequential',
   'external.invoke': 'consequential',
 })
+
 
 /**
  * The capability each action needs. One action, one capability — the mapping is
@@ -211,6 +176,7 @@ export const RELAY_ACTION_CAPABILITY: Readonly<Record<RelayAction, Capability>> 
   'external.invoke': 'relay.external.invoke',
 })
 
+
 /** The capabilities a connector's actions need, for the projection. */
 export const RELAY_CONNECTOR_CAPABILITIES: Readonly<Record<RelayConnectorId, readonly Capability[]>> =
   Object.freeze({
@@ -221,6 +187,7 @@ export const RELAY_CONNECTOR_CAPABILITIES: Readonly<Record<RelayConnectorId, rea
     telegram: ['relay.telegram.read', 'relay.telegram.send'],
     external: ['relay.external.invoke'],
   })
+
 
 /* --------------------------------------------------------------- statuses */
 
@@ -241,47 +208,29 @@ export const RELAY_ACTION_STATUSES = [
   'denied',
   'cancelled',
 ] as const
+
 export type RelayActionStatus = (typeof RELAY_ACTION_STATUSES)[number]
+
 
 export function isRelayActionStatus(value: unknown): value is RelayActionStatus {
   return typeof value === 'string' && (RELAY_ACTION_STATUSES as readonly string[]).includes(value)
 }
 
+
 export const RELAY_ACTION_TERMINAL_STATUSES = ['completed', 'failed', 'denied', 'cancelled'] as const
+
 export type RelayActionTerminalStatus = (typeof RELAY_ACTION_TERMINAL_STATUSES)[number]
+
 
 export function isTerminalRelayActionStatus(status: RelayActionStatus): status is RelayActionTerminalStatus {
   return (RELAY_ACTION_TERMINAL_STATUSES as readonly string[]).includes(status)
 }
 
-/**
- * Why an action did not happen. A closed set, because a failure code a caller
- * can invent is decoration.
- */
-export const RELAY_FAILURE_CODES = [
-  'unknown_action',
-  'validation_failed',
-  'capability_denied',
-  'stop_all',
-  'budget_exceeded',
-  'connector_unavailable',
-  'connector_faulted',
-  'connection_required',
-  'scope_missing',
-  'rate_limited',
-  'adapter_error',
-  'transient_error',
-  'write_unknown',
-  'approval_denied',
-  'approval_expired',
-  'approval_unknown',
-  'idempotency_replayed',
-] as const
-export type RelayFailureCode = (typeof RELAY_FAILURE_CODES)[number]
 
 export function isRelayFailureCode(value: unknown): value is RelayFailureCode {
   return typeof value === 'string' && (RELAY_FAILURE_CODES as readonly string[]).includes(value)
 }
+
 
 /* ----------------------------------------------------------------- limits */
 
@@ -357,6 +306,7 @@ export const RELAY_LIMITS = Object.freeze({
   maxTelegramSendsPerWindow: 20,
 })
 
+
 /* ----------------------------------------------------------------- shapes */
 
 /** One recipient. An address Core validated; a name is display metadata. */
@@ -365,12 +315,14 @@ export interface RelayRecipient {
   readonly name?: string
 }
 
+
 /** Attachment *metadata* only. Content never enters Relay. */
 export interface RelayAttachmentMeta {
   readonly filename: string
   readonly contentType: string
   readonly sizeBytes: number
 }
+
 
 /** One email message, as a read returns it. */
 export interface RelayEmailMessage {
@@ -385,6 +337,7 @@ export interface RelayEmailMessage {
   readonly attachmentCount: number
 }
 
+
 /** A draft: recipients, subject, body and attachment metadata, separated. */
 export interface RelayEmailDraft {
   readonly to: readonly RelayRecipient[]
@@ -394,10 +347,12 @@ export interface RelayEmailDraft {
   readonly attachments: readonly RelayAttachmentMeta[]
 }
 
+
 /** A send is a draft plus the gate. A draft is never a send. */
 export interface RelayEmailSend extends RelayEmailDraft {
   readonly idempotencyKey: string
 }
+
 
 /** One calendar event, as a read returns it. */
 export interface RelayCalendarEvent {
@@ -409,6 +364,7 @@ export interface RelayCalendarEvent {
   readonly attendeeCount: number
   readonly organizer: string
 }
+
 
 /**
  * A calendar event input.
@@ -425,11 +381,13 @@ export interface RelayCalendarEventInput {
   readonly attendees: readonly string[]
 }
 
+
 /** A GitHub repo reference: `owner/repo`, validated. */
 export interface RelayGitHubRepoRef {
   readonly owner: string
   readonly repo: string
 }
+
 
 /** One GitHub issue, as a read returns it. */
 export interface RelayGitHubIssue {
@@ -441,12 +399,14 @@ export interface RelayGitHubIssue {
   readonly updatedAt: string
 }
 
+
 /** Creating an issue: repo, title, body. No state, no assignee claims. */
 export interface RelayGitHubIssueInput {
   readonly repo: RelayGitHubRepoRef
   readonly title: string
   readonly body: string
 }
+
 
 /**
  * Creating a PR: repo, head branch, base branch, title, body.
@@ -463,6 +423,7 @@ export interface RelayGitHubPrInput {
   readonly body: string
 }
 
+
 /** One Google Drive file, as a read returns it. */
 export interface RelayDriveFile {
   readonly fileId: string
@@ -472,6 +433,7 @@ export interface RelayDriveFile {
   readonly sizeBytes: number | null
   readonly parents: readonly string[]
 }
+
 
 /**
  * Creating a Drive file: name, MIME type and bounded content.
@@ -486,12 +448,14 @@ export interface RelayDriveFileInput {
   readonly content: string
 }
 
+
 /** One Telegram chat, as the allowlist names it. */
 export interface RelayTelegramChat {
   readonly chatId: string
   readonly title: string
   readonly kind: 'private' | 'group' | 'channel'
 }
+
 
 /** One Telegram message, as a read returns it. */
 export interface RelayTelegramMessage {
@@ -502,12 +466,14 @@ export interface RelayTelegramMessage {
   readonly sentAt: string
 }
 
+
 /** Sending a Telegram message. Bounded text, explicit chat. */
 export interface RelayTelegramMessageInput {
   readonly chatId: string
   readonly text: string
   readonly idempotencyKey: string
 }
+
 
 /** A generic external invocation. Bounded in every dimension. */
 export interface RelayExternalInvoke {
@@ -516,6 +482,7 @@ export interface RelayExternalInvoke {
   readonly params: readonly (string | number | boolean)[]
   readonly idempotencyKey: string
 }
+
 
 /** A read query: a bounded filter and a bounded page. */
 export interface RelayReadQuery {
@@ -531,6 +498,7 @@ export interface RelayReadQuery {
    */
   readonly messageId?: string | null
 }
+
 
 /* ----------------------------------------------------------- action state */
 
@@ -557,6 +525,7 @@ export interface RelayActionRecord {
   readonly settledAt: string | null
 }
 
+
 /** One approval record. Single-use: a decided approval is never re-decided. */
 export interface RelayApprovalRecord {
   readonly approvalId: string
@@ -576,6 +545,7 @@ export interface RelayApprovalRecord {
   readonly decidedAt: string | null
 }
 
+
 /** The folded Relay state, derived from `relay.*` events. */
 export interface RelayState {
   readonly actions: readonly RelayActionRecord[]
@@ -594,6 +564,7 @@ export interface RelayState {
   readonly faulted: Readonly<Record<string, string>>
 }
 
+
 export function initialRelayState(): RelayState {
   return {
     actions: [],
@@ -607,6 +578,7 @@ export function initialRelayState(): RelayState {
   }
 }
 
+
 /* -------------------------------------------------------------- utilities */
 
 /** Whether a string is a bounded opaque id. */
@@ -618,6 +590,7 @@ export function isRelayId(value: unknown, max = 128): value is string {
     /^[A-Za-z0-9._:-]+$/.test(value)
   )
 }
+
 
 /**
  * Sanitize a display label into bounded, control-character-free data.
@@ -643,6 +616,7 @@ export function sanitizeRelayText(value: unknown, max: number): string {
   const collapsed = out.replace(/\s+/g, ' ').trim()
   return collapsed.length > max ? collapsed.slice(0, max) : collapsed
 }
+
 
 /** Whether a string parses as an instant. No clock read, no repair. */
 export function relayInstantMs(value: unknown): number | null {

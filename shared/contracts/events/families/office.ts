@@ -9,3 +9,12 @@ export const OFFICE_EVENT_TYPES = [
   'office.presence.requested',
 'office.presence.fulfilled',
 ] as const
+export interface OfficeEventPayloads {
+'office.presence.requested': {
+    workerId: string
+  }
+
+'office.presence.fulfilled': {
+    workerId: string
+  }
+}

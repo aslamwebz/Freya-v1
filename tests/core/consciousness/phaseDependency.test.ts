@@ -467,10 +467,20 @@ describe('this lane owns no durable truth', () => {
 
   it('opens no database and writes no file from the projection', async () => {
     const projection = await codeOf('../../../core/consciousness/projection.ts')
+    const projectionModules = await Promise.all([
+      codeOf('../../../core/consciousness/projection/metadata.ts'),
+      codeOf('../../../core/consciousness/projection/self-focus.ts'),
+      codeOf('../../../core/consciousness/projection/world-life.ts'),
+      codeOf('../../../core/consciousness/projection/attention-work.ts'),
+      codeOf('../../../core/consciousness/projection/agents-practice.ts'),
+      codeOf('../../../core/consciousness/projection/sources.ts'),
+      codeOf('../../../core/consciousness/projection/continuity-evidence.ts'),
+    ])
     const ports = await codeOf('../../../core/consciousness/ports.ts')
     const types = await codeOf('../../../core/consciousness/types.ts')
     for (const [name, source] of [
       ['projection.ts', projection],
+      ...projectionModules.map((source, index) => [`projection module ${index + 1}`, source] as const),
       ['ports.ts', ports],
       ['types.ts', types],
     ] as const) {
@@ -487,7 +497,16 @@ describe('this lane owns no durable truth', () => {
   })
 
   it('reads no clock and no randomness, so replay reproduces it', async () => {
-    const projection = await codeOf('../../../core/consciousness/projection.ts')
+    const projectionModules = await Promise.all([
+      codeOf('../../../core/consciousness/projection/metadata.ts'),
+      codeOf('../../../core/consciousness/projection/self-focus.ts'),
+      codeOf('../../../core/consciousness/projection/world-life.ts'),
+      codeOf('../../../core/consciousness/projection/attention-work.ts'),
+      codeOf('../../../core/consciousness/projection/agents-practice.ts'),
+      codeOf('../../../core/consciousness/projection/sources.ts'),
+      codeOf('../../../core/consciousness/projection/continuity-evidence.ts'),
+    ])
+    const projection = [await codeOf('../../../core/consciousness/projection.ts'), ...projectionModules].join('\n')
     // `now` is an argument. A `Date.now()` or `new Date()` in here would make the
     // snapshot depend on when it was read, and "the same durable state gives the
     // same snapshot" would stop being true - which is the property replay rests on.

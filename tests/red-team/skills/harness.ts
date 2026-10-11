@@ -131,6 +131,7 @@ export async function reopen(fixture: SkillsFixture, key: Uint8Array | null): Pr
     dataPath: fixture.dataPath,
     providers: [fake],
     attentionObserveSources: false,
+    testCapabilities: true,
     ...(key === null ? {} : { skillKey: key }),
   })
   await core.start()

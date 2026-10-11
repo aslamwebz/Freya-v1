@@ -30,7 +30,7 @@ it('plans a natural goal, executes two actual file inspections and continues on 
       { intent: 'Recheck the same file', capability: 'filesystem.inspect', input: { path: file }, dependsOn: [0] },
     ] }),
   }))
-  core = createCore({ dataPath: join(dir, 'events.jsonl'), providers: [provider], missionKey: new Uint8Array(32).fill(9), missionReadRoots: [dir] })
+  core = createCore({ dataPath: join(dir, 'events.jsonl'), providers: [provider], missionKey: new Uint8Array(32).fill(9), missionReadRoots: [dir], testCapabilities: true })
   await core.start()
   const result = await core.handleCommand({ command: 'mission.create', requestId: 'create', payload: { title: 'Inspect file', intent: `Inspect ${file} twice and verify its metadata.` } })
   const id = result.mission!.missionId!
@@ -60,7 +60,7 @@ it('plans a natural goal, executes two actual file inspections and continues on 
   expect(runs(id).every(run => run.status === 'completed' && run.steps.every(step => step.status === 'verified'))).toBe(true)
   expect(complete).toHaveBeenCalledTimes(1)
   await core.stop('restart-completed-mission')
-  core = createCore({ dataPath: join(dir, 'events.jsonl'), providers: [provider], missionKey: new Uint8Array(32).fill(9), missionReadRoots: [dir] })
+  core = createCore({ dataPath: join(dir, 'events.jsonl'), providers: [provider], missionKey: new Uint8Array(32).fill(9), missionReadRoots: [dir], testCapabilities: true })
   await core.start()
   expect(core.mission().missions.find(mission => mission.missionId === id)?.status).toBe('completed')
   expect(runs(id)).toHaveLength(2)
@@ -83,7 +83,7 @@ async function started(options: Partial<CoreOptions> = {}, proposal?: (file: str
       { intent: 'Recheck the same file', capability: 'filesystem.inspect', input: { path: file }, dependsOn: [0] },
     ] }),
   }))
-  const config: CoreOptions = { dataPath: join(dir, 'events.jsonl'), providers: [provider], missionKey: new Uint8Array(32).fill(9), missionReadRoots: [dir], ...options }
+  const config: CoreOptions = { dataPath: join(dir, 'events.jsonl'), providers: [provider], missionKey: new Uint8Array(32).fill(9), missionReadRoots: [dir], testCapabilities: true, ...options }
   core = createCore(config)
   await core.start()
   const result = await core.handleCommand({ command: 'mission.create', requestId: 'create', payload: { title: 'Inspect file', intent: `Inspect ${file} twice and verify its metadata.` } })

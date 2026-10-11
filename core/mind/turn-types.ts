@@ -88,6 +88,8 @@ export interface TurnExperience {
   referenceItemCount: number
   /** True when an answer reached the encrypted store. Says nothing about being right. */
   answerPersisted: boolean
+  /** Actual tool attempts and bounded results; no arguments, page text, or credentials. */
+  toolSteps?: readonly { name: string; capability: string; outcome: string; executed: boolean }[]
 }
 
 /**

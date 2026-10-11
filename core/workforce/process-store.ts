@@ -97,6 +97,9 @@ export class ProcessWorkforce {
       suspendWorker: (...args) => this.owner('suspendWorker', args), resumeWorker: (...args) => this.owner('resumeWorker', args),
       createTeam: (...args) => this.owner('createTeam', args), disbandTeam: (...args) => this.owner('disbandTeam', args), joinTeam: (...args) => this.owner('joinTeam', args), leaveTeam: (...args) => this.owner('leaveTeam', args),
       assignCapability: (...args) => this.owner('assignCapability', args), assignContext: (...args) => this.owner('assignContext', args), assign: (...args) => this.owner('assign', args), cancelAssignment: (...args) => this.owner('cancelAssignment', args),
+      listAssignmentsForMission: missionId => [...this.metadata.assignments.values()]
+        .filter(assignment => assignment.missionId === missionId)
+        .map(assignment => ({ assignmentId: assignment.assignmentId, status: assignment.status })),
       stopAll: reason => this.stopAll(reason), settled: () => this.settled(), resume: () => this.resume(), scopeFor: id => this.scopeFor(id), projection: () => this.projection(), detail: id => this.detail(id) }
   }
   private scopeFor(id: string): SubordinateWorkerScope {

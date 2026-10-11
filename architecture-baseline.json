@@ -629,11 +629,11 @@
       "reason": "Existing engine: strict retention requires this exact unchanged source hash; explicitly ratchet shrinking ceilings."
     },
     "core/workforce/engine.ts": {
-      "ceiling": 924,
+      "ceiling": 928,
       "limit": 600,
       "hash": "d86e5ae58cf6186ad0463019e957cd5055abeb6667efb3395b7de9244e6febf8",
       "retainInStrict": true,
-      "reason": "Existing engine: strict retention requires this exact unchanged source hash; explicitly ratchet shrinking ceilings."
+      "reason": "Existing engine: strict retention requires this exact unchanged source hash; explicitly ratchet shrinking ceilings. Merge reconciliation 2026-10-11: retained existing implementation while joining independently developed branches; this ceiling should be ratcheted down during extraction."
     },
     "core/world/fold.ts": {
       "ceiling": 673,
@@ -643,18 +643,18 @@
       "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode."
     },
     "electron/browser/freyaWindow.ts": {
-      "ceiling": 1001,
+      "ceiling": 1018,
       "limit": 600,
       "hash": "8cc4d60a08de96d930b612e4b82fbad669ddf0ff2d315bac8fc9e22c7db68684",
       "retainInStrict": false,
-      "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode."
+      "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode. Merge reconciliation 2026-10-11: retained existing implementation while joining independently developed branches; this ceiling should be ratcheted down during extraction."
     },
     "electron/coreHost.ts": {
-      "ceiling": 1334,
+      "ceiling": 1336,
       "limit": 600,
       "hash": "19d752521443f39882649ad0aae0a93582d4d0a732a55228d95d8a766686ee9c",
       "retainInStrict": false,
-      "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode."
+      "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode. Merge reconciliation 2026-10-11: retained existing implementation while joining independently developed branches; this ceiling should be ratcheted down during extraction."
     },
     "electron/main.ts": {
       "ceiling": 1477,
@@ -678,11 +678,11 @@
       "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode."
     },
     "src/app/chat/RightWorkspace.tsx": {
-      "ceiling": 1003,
+      "ceiling": 1005,
       "limit": 600,
       "hash": "926adb1906c5f57da6fd59c2953eef214fa63009b3463fdc16f87cad9f6a46c9",
       "retainInStrict": false,
-      "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode."
+      "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode. Merge reconciliation 2026-10-11: retained existing implementation while joining independently developed branches; this ceiling should be ratcheted down during extraction."
     },
     "src/app/screens/Mind.tsx": {
       "ceiling": 605,

@@ -91,7 +91,10 @@ export function normaliseSemanticBrowserRequest(value: unknown): SemanticRequest
       return { ok: true, request: { op: 'tabs' } }
 
     case 'open': {
-      const url = text(row.url, BROWSER_SERVICE_LIMITS.maxUrlChars)
+      // Owner-created blank tabs explicitly send null URLs. A missing URL is
+      // safe for Open: the service creates a real pending tab. Navigation below
+      // still requires a valid and nonempty address.
+      const url = row.url === null ? undefined : text(row.url, BROWSER_SERVICE_LIMITS.maxUrlChars)
       if (url === null) return { ok: false, reason: 'That address is too long or contains control characters.' }
       const activate = row.activate === undefined ? true : row.activate === true
       return {

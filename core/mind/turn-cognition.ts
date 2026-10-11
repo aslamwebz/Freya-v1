@@ -74,8 +74,8 @@ export type MindCognitionOutcome =
       modelWroteFooter: boolean
     }
   | { kind: 'denied'; reason: string }
-  | { kind: 'cancelled'; reason: string; providerContacted: boolean }
-  | { kind: 'failed'; reason: string; providerContacted: boolean }
+  | { kind: 'cancelled'; reason: string; providerContacted: boolean; steps?: readonly ToolIteration[] }
+  | { kind: 'failed'; reason: string; providerContacted: boolean; steps?: readonly ToolIteration[] }
 
 
 export class MindTurnCognition {
@@ -222,10 +222,10 @@ export class MindTurnCognition {
       )
       if (outcome.kind === 'denied') return { kind: 'denied', reason: outcome.reason }
       if (outcome.kind === 'cancelled') {
-        return { kind: 'cancelled', reason: outcome.reason, providerContacted: outcome.providerContacted }
+        return { kind: 'cancelled', reason: outcome.reason, providerContacted: outcome.providerContacted, steps: outcome.iterations }
       }
       if (outcome.kind === 'failed') {
-        return { kind: 'failed', reason: outcome.reason, providerContacted: outcome.providerContacted }
+        return { kind: 'failed', reason: outcome.reason, providerContacted: outcome.providerContacted, steps: outcome.iterations }
       }
       // Carried through rather than re-decided: the loop already refused to spend
       // a further call or execute a tool from a reply it knew was incomplete, and

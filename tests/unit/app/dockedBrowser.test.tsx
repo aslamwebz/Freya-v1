@@ -149,6 +149,8 @@ describe('a session with a valid URL', () => {
     render(<DockedBrowser requestedUrl={null} onRequestedUrlHandled={() => {}} onClose={() => {}} />)
     expect(await screen.findByRole('tab', { name: /Alpha/ })).toBeInTheDocument()
     expect(document.querySelector('.chats-browser-tab[data-origin="link"]')).not.toBeNull()
+    // The compact tab should not duplicate the long owner prompt as a subtitle.
+    expect(screen.queryByText(/find ten sites/)).toBeNull()
   })
 })
 
@@ -390,7 +392,10 @@ describe('many sessions', () => {
     bridge.state.mockResolvedValue(stateWith({ tabs: ten, activeTabId: 'tab-0', tabCount: 10 }))
     render(<DockedBrowser requestedUrl={null} onRequestedUrlHandled={() => {}} onClose={() => {}} />)
     await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(10))
-    fireEvent.click(screen.getByLabelText('Close site0.example.com'))
+    const close = screen.getByLabelText('Close site0.example.com')
+    expect(close).not.toBeDisabled()
+    expect(close.querySelector('.chats-browser-close-glyph')).not.toBeNull()
+    fireEvent.click(close)
     await waitFor(() => expect(bridge.command).toHaveBeenCalledWith(expect.objectContaining({ op: 'close', tabId: 'tab-0' })))
     push(stateWith({ tabs: ten.slice(1), activeTabId: 'tab-1', tabCount: 9 }))
     await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(9))

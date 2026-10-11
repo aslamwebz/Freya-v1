@@ -55,6 +55,7 @@ function installBridge() {
   const revokeObjectURL = vi.fn()
   URL.createObjectURL = createObjectURL as unknown as typeof URL.createObjectURL
   URL.revokeObjectURL = revokeObjectURL as unknown as typeof URL.revokeObjectURL
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
 
   window.freyaHost = {
     isDesktop: true,
@@ -75,15 +76,6 @@ afterEach(() => {
 })
 
 describe('Chat media preview', () => {
-  it('keeps ordinary page cards opening their source in the browser', async () => {
-    installBridge()
-    const onOpenBrowserUrl = vi.fn()
-    render(<MediaGrid items={[item({ kind: 'page', title: 'Source page' })]} onOpenBrowserUrl={onOpenBrowserUrl} />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview Source page' }))
-    expect(onOpenBrowserUrl).toHaveBeenCalledExactlyOnceWith('https://example.test/source', 'page')
-    expect(screen.queryByRole('dialog')).toBeNull()
-  })
-
   it('opens an image inside a modal using host-fetched bytes', async () => {
     const bridge = installBridge()
     render(<MediaGrid items={[item({ title: 'Nebula' })]} />)
@@ -205,7 +197,7 @@ describe('the hosted player view', () => {
     // empty in the meantime.
   })
 
-  it('previews video first and opens the browser only on the explicit fallback action', async () => {
+  it('does not open browser tabs for media clicks, and only opens one preview after repeated clicks', async () => {
     const onOpenBrowserUrl = vi.fn()
     installBridge()
     render(<MediaGrid items={[item({
@@ -217,28 +209,92 @@ describe('the hosted player view', () => {
       playable: false,
     })]} onOpenBrowserUrl={onOpenBrowserUrl} />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Queue tutorial' }))
-    expect(screen.getByRole('dialog', { name: 'Media preview' })).toBeInTheDocument()
+    const button = await screen.findByRole('button', { name: 'Preview Queue tutorial' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(screen.getAllByRole('dialog', { name: 'Media preview' })).toHaveLength(1)
     expect(onOpenBrowserUrl).not.toHaveBeenCalled()
+    expect(document.body.dataset.freyaMediaPreviewOpen).toBeTruthy()
+    const frame = document.querySelector('.chats-overlay-video-embed')
+    expect(frame).not.toBeNull()
+    expect(frame!.getAttribute('src')).toBe('https://www.youtube.com/embed/abc')
+    expect(frame!.getAttribute('allow')).not.toContain('autoplay')
+
     fireEvent.click(screen.getByRole('button', { name: "Open this page in Freya's browser" }))
+    expect(onOpenBrowserUrl).toHaveBeenCalledTimes(1)
     expect(onOpenBrowserUrl).toHaveBeenCalledWith('https://example.test/source', 'video')
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(document.body.dataset.freyaMediaPreviewOpen).toBeUndefined()
   })
 
-  it('focuses the close button, confines keyboard focus, and restores the preview trigger', async () => {
+  it('navigates images, videos, and PDFs from this search in one modal and revokes PDF resources', async () => {
+    const bridge = installBridge()
+    const data = [
+      item({ kind: 'image', title: 'Image A', url: 'https://cdn.example.test/a.jpg' }),
+      item({ kind: 'video', title: 'Video B', url: 'https://www.youtube.com/watch?v=abc', embedUrl: 'https://www.youtube.com/embed/abc?autoplay=1', thumbnailUrl: 'https://i.ytimg.com/vi/abc/hqdefault.jpg' }),
+      item({ kind: 'document', title: 'PDF C', url: 'https://cdn.example.test/c.pdf', thumbnailUrl: null }),
+    ]
+    render(<MediaGrid items={data} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Image A' }))
+    const dialog = screen.getByRole('dialog', { name: 'Media preview' })
+    expect(dialog.textContent).toContain('1 / 3')
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    expect(dialog.textContent).toContain('2 / 3')
+    const iframe = document.querySelector('.chats-overlay-video-embed')
+    expect(iframe).not.toBeNull()
+    expect(iframe!.getAttribute('src')).toBe('https://www.youtube.com/embed/abc')
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    expect(dialog.textContent).toContain('3 / 3')
+    await waitFor(() => expect(bridge.mediaDocument).toHaveBeenCalledWith('https://cdn.example.test/c.pdf'))
+    expect((await screen.findByTitle('PDF C')).getAttribute('src')).toMatch(/^blob:/)
+    fireEvent.click(screen.getByRole('button', { name: 'Previous' }))
+    expect(dialog.textContent).toContain('2 / 3')
+    expect(bridge.revokeObjectURL).toHaveBeenCalled()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(document.body.dataset.freyaMediaPreviewOpen).toBeUndefined()
+  })
+
+  it('allows only one active preview when multiple search results exist in the transcript', async () => {
     installBridge()
-    render(<MediaGrid items={[item({ kind: 'video', title: 'Focus video', embedUrl: 'https://www.youtube.com/embed/focus' })]} />)
-    const trigger = await screen.findByRole('button', { name: 'Preview Focus video' })
-    trigger.focus()
-    fireEvent.click(trigger)
-    const close = screen.getByRole('button', { name: 'Close preview' })
-    expect(close).toHaveFocus()
-    const frame = (await screen.findAllByTitle('Focus video')).find((node) => node.tagName === 'IFRAME')!
-    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
-    expect(frame).toHaveFocus()
-    fireEvent.keyDown(frame, { key: 'Tab' })
-    expect(close).toHaveFocus()
-    fireEvent.keyDown(close, { key: 'Escape' })
+    render(<>
+      <MediaGrid items={[item({ kind: 'audio', title: 'Search One', url: 'https://cdn.public-fixture.org/a.mp3' })]} />
+      <MediaGrid items={[item({ kind: 'audio', title: 'Search Two', url: 'https://cdn.public-fixture.org/b.mp3' })]} />
+    </>)
+    fireEvent.click(screen.getByRole('button', { name: 'Listen to Search One' }))
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    expect(screen.getByLabelText('Search One').getAttribute('autoplay')).toBeNull()
+    // Simulate a second click originating from another transcript result.
+    fireEvent.click(screen.getByRole('button', { name: 'Listen to Search Two' }))
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    expect(screen.getByRole('dialog').textContent).toContain('Search Two')
+    expect(screen.getByLabelText('Search Two').getAttribute('autoplay')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }))
     expect(screen.queryByRole('dialog')).toBeNull()
-    expect(trigger).toHaveFocus()
+  })
+
+  it('does not load private or local audio URLs through the media element', async () => {
+    installBridge()
+    render(<MediaGrid items={[item({
+      kind: 'audio', title: 'Local audio', url: 'http://127.0.0.1:8080/private.mp3',
+    })]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Listen to Local audio' }))
+    expect(screen.getByRole('dialog').textContent).toContain('refused')
+    expect(document.querySelector('audio')).toBeNull()
+  })
+
+  it('refuses to embed unapproved hosted-player URLs', async () => {
+    const bridge = installBridge()
+    render(<MediaGrid items={[item({
+      kind: 'video',
+      title: 'Untrusted player',
+      url: 'https://video.example.test/watch/abc',
+      embedUrl: 'https://example.invalid/?autoplay=1',
+      playable: false,
+    })]} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Untrusted player' }))
+    expect(document.querySelector('.chats-overlay-video-embed')).toBeNull()
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(bridge.mediaVideo).not.toHaveBeenCalled()
   })
 })

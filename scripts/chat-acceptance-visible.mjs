@@ -152,9 +152,10 @@ function acceptanceSettings() {
     // The native browser, on the strict path. Without FREYA_DEVICE_HANDS and
     // FREYA_PUBLIC_BROWSER the browser seam is never built, Core registers no browser
     // tool at all, and Freya has no browser to use — which is TEST 10's whole
-    // requirement. FREYA_LOCAL_UNRESTRICTED=0 is explicit because an unpackaged build
-    // otherwise *defaults to unrestricted*, and this run must exercise the gated path
-    // rather than the one that skips the gate.
+    // requirement. FREYA_LOCAL_UNRESTRICTED=0 is set explicitly so the assumption
+    // is visible at the call site, not inferred from a default. The unpackaged
+    // default is now also strict (C1-A); the explicit assignment here is the
+    // historical record, not a workaround.
     FREYA_DEVICE_HANDS: '1',
     FREYA_PUBLIC_BROWSER: '1',
     FREYA_LOCAL_UNRESTRICTED: '0',

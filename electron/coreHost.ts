@@ -601,6 +601,17 @@ export interface CoreHostOptions {
    * report `durable: false` rather than implying a persistence they do not have.
    */
   missionKey?: Uint8Array | null
+  /**
+   * Opt the Core in to Phase 6's fixture Work capabilities.
+   *
+   * The host is the only place this flag is ever read; the renderer has no name
+   * for it, and Core's own default is `false`. Production Electron sets nothing
+   * here. The Electron e2e and the host-side Work tests pass `true` so the runs
+   * they drive have something to invoke. The capability surface a default Core
+   * exposes is therefore nothing under the `test.*` namespace, which is the
+   * whole point.
+   */
+  testCapabilities?: boolean
   contextKey?: Uint8Array | null
   attentionKey?: Uint8Array | null
   /**
@@ -1225,6 +1236,12 @@ export class ElectronCoreHost implements CoreHost {
           : {}),
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
         ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),
+        // Phase 6 fixture capabilities are gated on an explicit host opt-in (see
+        // `CoreOptions.testCapabilities`). Forwarded whole when set, absent
+        // otherwise, so the Core's own `undefined` default applies. A renderer
+        // cannot set this — the flag is a host-level decision, named for what it
+        // is so a reader can find the call sites with `git grep testCapabilities`.
+        ...(this.options.testCapabilities === true ? { testCapabilities: true } : {}),
         contextKey: this.options.contextKey ?? null,
         attentionKey: this.options.attentionKey ?? null,
         personalityKey: this.options.personalityKey ?? null,

@@ -178,6 +178,7 @@ export async function bootHandsAttackCore(
     newId,
     providers: [provider],
     conversationStore: new MemoryConversationStore({ mode: 'memory' }),
+    testCapabilities: true,
     ...(options.workCapabilities === undefined
       ? {}
       : { workCapabilities: options.workCapabilities }),

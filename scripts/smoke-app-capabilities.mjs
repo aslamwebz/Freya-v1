@@ -9,6 +9,9 @@ const root = resolve(import.meta.dirname, '..')
 const profile = await mkdtemp(join(tmpdir(), 'freya-capabilities-app-'))
 let app
 try {
+  // FREYA_LOCAL_UNRESTRICTED=0 documents the strict path at the call site. Unpackaged
+  // builds default to strict as of C1-A; this explicit assignment is the historical record,
+  // not a workaround.
   const launchOptions = { args: [root, `--user-data-dir=${profile}`, '--freya-display=2'], env: { ...process.env, NODE_ENV: 'production', FREYA_E2E: '1', FREYA_E2E_ALLOW_MULTI_INSTANCE: '1', FREYA_ALLOW_LIVE_MODEL: '1', FREYA_ALLOW_WEB_SEARCH: '0', MINIMAX_API_KEY: 'offline-metadata-fixture', NANOGPT_API_KEY: '', OPENAI_API_KEY: '', BRAVE_SEARCH_API_KEY: '', LOCAL_MODEL_BASE_URL: 'http://127.0.0.1:11434/v1', LOCAL_MODEL_MODEL: 'test-local', FREYA_DEV_PROVIDER: '', FREYA_LOCAL_UNRESTRICTED: '0' } }
   app = await electron.launch(launchOptions)
   const page = await app.firstWindow()

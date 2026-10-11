@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { MissionCard } from './MissionCard'
 import type { CoreActivityEvent } from '../../../core/protocol/activity'
 import type { MediaItem } from '../../../core/media/types'
-import { mediaFromSource } from '../../../core/media/collect'
 import {
   conversationList,
   conversationMirror,
@@ -16,15 +15,13 @@ import type { WorkspaceResearchView } from './modes'
 import { plainTextFromRich, type RichCitation } from './RichMessage'
 import { copyText } from './clipboard'
 import { AssistantMessageView } from './AssistantMessageView'
-import { MediaGrid, MediaPreview } from './MediaCards'
-import { PreviewDialog } from './PreviewDialog'
+import { MediaGrid } from './MediaCards'
 import type { DockedTabOrigin } from './BrowserWorkspace'
 import { EyeSessionControls } from './EyeSessionControls'
 import { openResearchCitationInDockedBrowser } from './eyeHandoff'
 import { ActiveTurnTracker } from './ActiveTurnTracker'
-import { RightWorkspaceRail, UniversalRightWorkspace } from './RightWorkspace'
+import { UniversalRightWorkspace } from './RightWorkspace'
 import { sharedRightWorkspaceStore } from './rightWorkspaceStore'
-import { sharedComposerDraftStore } from './composerDraftStore'
 import './chat.css'
 
 /**
@@ -178,7 +175,6 @@ function ResearchWorkspace({
   onOpenCitation: (url: string) => void
 }) {
   const outcome = view.outcome
-  const [videoPreview, setVideoPreview] = useState<MediaItem | null>(null)
 
   if (outcome.operation === 'refused') {
     return <section className="chats-research-card chats-research-refused"><b>Research unavailable</b><p>{outcome.reason ?? 'Core refused this research request.'}</p></section>
@@ -229,7 +225,7 @@ function ResearchWorkspace({
   const collections = ['Videos Found', 'Images Found', 'Audio Found', 'Files Found', 'Sources'] as const
 
   return (
-    <><section className="chats-research-card" data-mode="eye">
+    <section className="chats-research-card" data-mode="eye">
       <header className="chats-research-head">
         <span><Glyph name="focus" size={17} /><b>Freya's Eye</b></span>
         <small data-state={session.state}>{session.state}</small>
@@ -260,13 +256,7 @@ function ResearchWorkspace({
                     type="button"
                     className="chats-eye-result-card"
                     data-media={result.mediaType}
-                    onClick={() => {
-                      if (result.mediaType !== 'video') { onOpenCitation(result.url); return }
-                      setVideoPreview(mediaFromSource({ ...result, retrievedAt: result.retrievedAt ?? null, vertical: 'videos', duration: result.metadata?.duration }) ?? {
-                        kind: 'video', url: result.url, page: result.url, title: result.title, host: result.sourceDomain,
-                        thumbnailUrl: result.thumbnailUrl, duration: result.metadata?.duration ?? null, bytes: null, pages: null, playable: false,
-                      })
-                    }}
+                    onClick={() => onOpenCitation(result.url)}
                   >
                     <span className="chats-eye-rank">{result.mediaType === 'video' ? '▶' : result.rank}</span>
                     <span>
@@ -274,7 +264,7 @@ function ResearchWorkspace({
                       <small>{result.sourceDomain} · {result.confidence}{result.providerId ? ` · ${result.providerId}` : ''}</small>
                       <em>{result.snippet}</em>
                     </span>
-                    <span className="chats-eye-open"><Glyph name={result.mediaType === 'video' ? 'play' : 'world'} size={12} /> {result.mediaType === 'video' ? 'Preview' : 'Open'}</span>
+                    <span className="chats-eye-open"><Glyph name="world" size={12} /> Open</span>
                   </button>
                 ))}
               </div>
@@ -283,8 +273,6 @@ function ResearchWorkspace({
         })}
       </div>
     </section>
-      {videoPreview ? <MediaPreview items={[videoPreview]} index={0} onIndex={() => {}} onClose={() => setVideoPreview(null)} onOpenBrowserUrl={(url) => onOpenCitation(url)} /> : null}
-    </>
   )
 }
 
@@ -350,7 +338,6 @@ export function Chats({
   const [activeSpeakingTurnId, setActiveSpeakingTurnId] = useState<string | null>(null)
   const logRef = useRef<HTMLDivElement | null>(null)
   const [dismissedCanvasId, setDismissedCanvasId] = useState<string | null>(null)
-  const [savedEyeView, setSavedEyeView] = useState<WorkspaceResearchView | null>(null)
 
   useEffect(() => {
     if (!voiceSpeaking) {
@@ -412,16 +399,6 @@ export function Chats({
   })()
   const rwStore = sharedRightWorkspaceStore()
   const rwSnapshot = useSyncExternalStore(rwStore.subscribe, rwStore.getSnapshot, rwStore.getSnapshot)
-  // The Browser rail icon follows the owner's Chat Browser toggle as well as
-  // an already-open browser session. Toggling it on enables Browser immediately.
-  const composerDraftStore = sharedComposerDraftStore()
-  const composerDrafts = useSyncExternalStore(
-    composerDraftStore.subscribe,
-    composerDraftStore.getSnapshot,
-    composerDraftStore.getSnapshot,
-  )
-  const chatBrowserEnabled = browserOpen ||
-    (composerDrafts[projection?.activeConversationId ?? '__new__']?.wantBrowser ?? false)
   // Chat stays visible by default; fullscreen browser is an explicit owner action.
   const [browserExpanded, setBrowserExpanded] = useState(false)
 
@@ -513,7 +490,7 @@ export function Chats({
             <span className="chats-freya-sigil" aria-hidden="true"><i /><i /><b /></span>
             <span><small>{workspaceLabel}</small><b>{workspaceTitle}</b></span>
           </div>
-          {onResearchViewChange ? <button type="button" className="chats-eye-library" onClick={() => { void researchMirror().listSessions().then((outcome) => setSavedEyeView({ mode: 'eye', outcome })) }}>Saved Eye searches</button> : null}
+          {onResearchViewChange ? <button type="button" className="chats-eye-library" onClick={() => { void researchMirror().listSessions().then((outcome) => onResearchViewChange({ mode: 'eye', outcome })) }}>Saved Eye searches</button> : null}
           <button
             type="button"
             className="chats-workspace-toggle"
@@ -592,11 +569,8 @@ export function Chats({
                       <MediaGrid
                         items={media}
                         onOpenBrowserUrl={(url, kind) => {
-                          if (kind === 'document' || kind === 'pdf') {
-                            rwStore.openDocument()
-                          } else if (kind === 'image' || kind === 'video' || kind === 'audio') {
-                            rwStore.openMedia()
-                          }
+                          // Explicit "Open in Browser" inside the preview is the
+                          // ONLY media action that may create a browser session.
                           onBrowserOpenUrl(url, { kind: 'link', from: 'media', ownerText, mediaKind: kind })
                         }}
                       />
@@ -730,25 +704,6 @@ export function Chats({
             onBrowserOpenUrl={onBrowserOpenUrl}
           />
         </>
-      ) : null}
-      <RightWorkspaceRail
-        open={workspaceOpen}
-        activeTab={rwSnapshot.activeTab}
-        browserEnabled={chatBrowserEnabled}
-        messages={messages}
-        canvas={latestCanvas}
-        onClose={handleWorkspaceClose}
-      />
-      {savedEyeView ? (
-        <PreviewDialog label="Saved Eye searches" onClose={() => setSavedEyeView(null)}>
-          <div className="freya-eye-dialog-panel">
-            <header className="freya-eye-dialog-header">
-              <h2>Saved Eye searches</h2>
-              <button type="button" data-dialog-close aria-label="Close saved Eye searches" onClick={() => setSavedEyeView(null)}>Close</button>
-            </header>
-            <ResearchWorkspace view={savedEyeView} onChange={(view) => { setSavedEyeView(view); onResearchViewChange?.(view) }} onOpenCitation={(url) => { openResearchCitationInDockedBrowser(savedEyeView, url); rwStore.open('browser') }} />
-          </div>
-        </PreviewDialog>
       ) : null}
     </div>
   )

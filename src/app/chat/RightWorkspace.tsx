@@ -4,6 +4,7 @@ import type { ChartSpec } from './ChartView'
 import type { TypedSource } from './assistantParts'
 import type { ToolStepRecord } from '../../../core/mind/tools'
 import type { MediaItem } from '../../../core/media/types'
+import { MediaGrid } from './MediaCards'
 import type { ConversationMessageView } from '../../../core/protocol/conversation'
 import { Glyph } from '../../ui-v2/primitives/Glyph'
 import { copyText } from './clipboard'
@@ -387,15 +388,12 @@ function MediaView({
   readonly mediaItems: readonly MediaItem[]
   readonly onOpenInBrowser: (url: string, title?: string) => void
 }) {
-  const [selectedIndex, setSelectedIndex] = useState(0)
-  const current = mediaItems[selectedIndex] ?? null
-
   if (mediaItems.length === 0) {
     return (
       <div className="chats-rw-empty">
         <Glyph name="dress" size={28} />
         <b>No Media Items</b>
-        <p>Images, video findings, and audio attachments will appear here.</p>
+        <p>Images, videos, and audio found by Freya will appear here.</p>
       </div>
     )
   }
@@ -406,116 +404,14 @@ function MediaView({
         <span className="chats-rw-badge">
           {mediaItems.length} media item{mediaItems.length === 1 ? '' : 's'}
         </span>
-        <div className="chats-rw-media-nav">
-          <button
-            type="button"
-            className="chats-rw-nav-btn"
-            disabled={selectedIndex <= 0}
-            onClick={() => setSelectedIndex((i) => i - 1)}
-            aria-label="Previous media item"
-          >
-            ‹
-          </button>
-          <span>
-            {selectedIndex + 1} / {mediaItems.length}
-          </span>
-          <button
-            type="button"
-            className="chats-rw-nav-btn"
-            disabled={selectedIndex >= mediaItems.length - 1}
-            onClick={() => setSelectedIndex((i) => i + 1)}
-            aria-label="Next media item"
-          >
-            ›
-          </button>
-        </div>
+        <small className="chats-rw-media-hint">Select to preview ? Navigate inside viewer</small>
       </div>
-
-      {current ? (
-        <div className="chats-rw-media-stage">
-          <div className="chats-rw-media-frame">
-            {current.kind === 'video' ? (
-              current.embedUrl ? (
-                <iframe
-                  className="chats-rw-video-embed"
-                  src={current.embedUrl}
-                  title={current.title}
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                />
-              ) : (
-                <div className="chats-rw-video-fallback">
-                  <span className="chats-rw-video-icon">▶</span>
-                  <p>{current.title}</p>
-                </div>
-              )
-            ) : current.kind === 'audio' ? (
-              <div className="chats-rw-audio-frame">
-                <div className="chats-rw-audio-visualizer" aria-hidden="true">
-                  <Glyph name="mic" size={40} />
-                </div>
-                <audio
-                  controls
-                  src={current.url}
-                  className="chats-rw-audio-player"
-                  aria-label={current.title || 'Audio player'}
-                >
-                  Your browser does not support the audio element.
-                </audio>
-              </div>
-            ) : (
-              <img
-                src={current.url}
-                alt={current.title}
-                className="chats-rw-image-preview"
-                loading="lazy"
-              />
-            )}
-          </div>
-          <header className="chats-rw-media-caption">
-            <h4>{current.title}</h4>
-            <small>{current.host || hostOf(current.page)} · {current.kind}</small>
-          </header>
-          <footer className="chats-rw-pane-footer">
-            <button
-              type="button"
-              className="chats-rw-action-btn"
-              onClick={() => onOpenInBrowser(current.page || current.url, current.title)}
-            >
-              <Glyph name="world" size={13} />
-              <span>Open in Browser</span>
-            </button>
-            <button
-              type="button"
-              className="chats-rw-action-btn"
-              onClick={() => void copyText(current.url)}
-            >
-              {current.kind === 'audio' ? 'Copy Audio URL' : current.kind === 'video' ? 'Copy Video URL' : 'Copy Image URL'}
-            </button>
-          </footer>
-        </div>
-      ) : null}
-
-      {mediaItems.length > 1 ? (
-        <div className="chats-rw-thumbnails-strip">
-          {mediaItems.map((item, idx) => (
-            <button
-              key={`${item.kind}:${item.url}:${idx}`}
-              type="button"
-              className={`chats-rw-thumb-btn ${idx === selectedIndex ? 'active' : ''}`}
-              onClick={() => setSelectedIndex(idx)}
-              aria-label={`View ${item.title}`}
-            >
-              {item.kind === 'audio' ? (
-                <span className="chats-rw-thumb-audio" aria-hidden="true">
-                  <Glyph name="mic" size={14} />
-                </span>
-              ) : (
-                <img src={item.thumbnailUrl || item.url} alt="" />
-              )}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      {/* This workspace is a gallery, never a second hidden player.
+          Only MediaOverlay may mount an iframe or audio/video element. */}
+      <MediaGrid
+        items={mediaItems}
+        onOpenBrowserUrl={(url) => onOpenInBrowser(url, url)}
+      />
     </div>
   )
 }
@@ -823,11 +719,9 @@ function FilesView({ drafts }: { readonly drafts: readonly AttachmentDraft[] }) 
   )
 }
 
-/**
- * Permanent, narrow rail anchored to the far-right of Chat, independent of
- * whether the content panel is currently open. Only icons are drawn; labels
- * remain accessible to assistive tech and on hover.
- */
+/* ------------------------------------------------------------------ *
+ * Main Universal Right Workspace Component
+ * ------------------------------------------------------------------ */
 export function RightWorkspaceRail({
   open,
   activeTab,
@@ -908,9 +802,7 @@ export function RightWorkspaceRail({
   )
 }
 
-/* ------------------------------------------------------------------ *
- * Main Universal Right Workspace Component
- * ------------------------------------------------------------------ */
+
 export function UniversalRightWorkspace({
   open,
   activeTab: propActiveTab,
@@ -1041,12 +933,121 @@ export function UniversalRightWorkspace({
   return (
     <aside
       className="chats-right-workspace"
-      id="chats-right-panel"
       data-active-tab={activeTab}
       role="region"
       aria-label="Universal Right Workspace"
     >
       <header className="chats-rw-head">
+        <div className="chats-rw-tabs" role="tablist" aria-label="Workspace content types">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'browser'}
+            className="chats-rw-tab"
+            onClick={() => handleTabClick('browser')}
+          >
+            <Glyph name="world" size={14} />
+            <span>Browser</span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'sources'}
+            className="chats-rw-tab"
+            onClick={() => handleTabClick('sources')}
+          >
+            <Glyph name="search" size={14} />
+            <span>Sources</span>
+            {allSources.length > 0 ? (
+              <small className="chats-rw-count">{allSources.length}</small>
+            ) : null}
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'canvas'}
+            className="chats-rw-tab"
+            onClick={() => handleTabClick('canvas')}
+          >
+            <Glyph name="create" size={14} />
+            <span>Canvas</span>
+            {allCanvases.length > 0 ? (
+              <small className="chats-rw-count">{allCanvases.length}</small>
+            ) : null}
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'documents'}
+            className="chats-rw-tab"
+            onClick={() => handleTabClick('documents')}
+          >
+            <Glyph name="relay" size={14} />
+            <span>Docs</span>
+            {allDocs.length > 0 ? (
+              <small className="chats-rw-count">{allDocs.length}</small>
+            ) : null}
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'media'}
+            className="chats-rw-tab"
+            onClick={() => handleTabClick('media')}
+          >
+            <Glyph name="dress" size={14} />
+            <span>Media</span>
+            {allMedia.length > 0 ? (
+              <small className="chats-rw-count">{allMedia.length}</small>
+            ) : null}
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'charts'}
+            className="chats-rw-tab"
+            onClick={() => handleTabClick('charts')}
+          >
+            <Glyph name="focus" size={14} />
+            <span>Charts</span>
+            {allCharts.length > 0 ? (
+              <small className="chats-rw-count">{allCharts.length}</small>
+            ) : null}
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'execution'}
+            className="chats-rw-tab"
+            onClick={() => handleTabClick('execution')}
+          >
+            <Glyph name="mind" size={14} />
+            <span>Execution</span>
+            {allSteps.length > 0 ? (
+              <small className="chats-rw-count">{allSteps.length}</small>
+            ) : null}
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'files'}
+            className="chats-rw-tab"
+            onClick={() => handleTabClick('files')}
+          >
+            <Glyph name="attach" size={14} />
+            <span>Files</span>
+            {drafts.length > 0 ? (
+              <small className="chats-rw-count">{drafts.length}</small>
+            ) : null}
+          </button>
+        </div>
 
         <button
           type="button"
@@ -1067,6 +1068,7 @@ export function UniversalRightWorkspace({
             onClose={onClose}
             expanded={browserExpanded}
             onToggleExpanded={onBrowserExpandedToggle}
+            onViewChange={handleTabClick}
           />
         ) : activeTab === 'sources' ? (
           <SourcesView sources={allSources} onOpenInBrowser={handleOpenInBrowser} />

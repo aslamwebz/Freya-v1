@@ -702,7 +702,8 @@ describe('I — the context compiler', () => {
     await submit(c, conversationId, 'who are you?')
 
     // The provider was told, and the Identity Kernel is the source.
-    expect(seen).toBe(renderIdentity(FREYA_IDENTITY, []))
+    expect(seen?.startsWith(renderIdentity(FREYA_IDENTITY, []))).toBe(true)
+    // The production Mind also includes Core-authored runtime facts after identity.
     expect(seen).toContain('one persistent intelligence')
   })
 })

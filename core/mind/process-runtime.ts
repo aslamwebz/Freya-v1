@@ -28,7 +28,7 @@ interface TurnPacket {
     mode: ConversationStore['mode']; faultReason: string | null
     identity?: MindServiceOptions['identity']; budget?: MindServiceOptions['budget']
     runtimeFacts: string[]; selectedModel: string | null; selectedProviderId: string | null; matrixSpaceIds: string[]
-    reference: ReferenceKnowledge | null; sharedContext: TurnContextBlock | null
+    reference: ReferenceKnowledge | null; sharedContext: TurnContextBlock | null; learningAdvice?: string
     ledger: CueUsageLedger | null; facts: InteractionFact[]; relationships: RelationshipItem[]; preferenceTokens: string[]
     tools: Omit<MindTool, 'run'>[]
   }
@@ -71,6 +71,7 @@ async function runTurn(connection: RpcPeer, packet: TurnPacket) {
     identity: c.identity, budget: c.budget,
     runtimeFacts: () => c.runtimeFacts, selectedModel: () => c.selectedModel, selectedProviderId: () => c.selectedProviderId,
     matrixSpaceIds: () => c.matrixSpaceIds, recall: query => memory.reference(query), turnContext: () => c.sharedContext,
+    learnedAdvice: () => c.learningAdvice ?? '',
     expressionMemory: c.ledger ? { readLedger: () => c.ledger, recordCueUse: (...args) => effect('turn.cue', ...args) } : undefined,
     interactionFacts: () => c.facts, relationshipItems: () => c.relationships, preferenceTokens: () => c.preferenceTokens,
     onTurnStateChange: () => effect('turn.changed'), onTurnExperience: value => operation('turn.experience', value),

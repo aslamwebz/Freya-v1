@@ -156,18 +156,6 @@ describe('UniversalRightWorkspace', () => {
     const store = createRightWorkspaceStore('browser')
     render(
       <>
-        <RightWorkspaceRail
-          open={true}
-          activeTab="browser"
-          browserEnabled={true}
-          store={store}
-          onClose={vi.fn()}
-          sources={sampleSources}
-          canvas={sampleCanvas}
-          charts={sampleCharts}
-          mediaItems={[...sampleMedia, ...sampleDocs]}
-          executionSteps={sampleSteps}
-        />
       <UniversalRightWorkspace
         open={true}
         onClose={vi.fn()}
@@ -195,18 +183,6 @@ describe('UniversalRightWorkspace', () => {
     const store = createRightWorkspaceStore('browser')
     render(
       <>
-        <RightWorkspaceRail
-          open={true}
-          activeTab="browser"
-          browserEnabled={true}
-          store={store}
-          onClose={vi.fn()}
-          sources={sampleSources}
-          canvas={sampleCanvas}
-          charts={sampleCharts}
-          mediaItems={[...sampleMedia, ...sampleDocs]}
-          executionSteps={sampleSteps}
-        />
       <UniversalRightWorkspace
         open={true}
         onClose={vi.fn()}
@@ -233,18 +209,6 @@ describe('UniversalRightWorkspace', () => {
     const store = createRightWorkspaceStore('browser')
     render(
       <>
-        <RightWorkspaceRail
-          open={true}
-          activeTab="browser"
-          browserEnabled={true}
-          store={store}
-          onClose={vi.fn()}
-          sources={sampleSources}
-          canvas={sampleCanvas}
-          charts={sampleCharts}
-          mediaItems={[...sampleMedia, ...sampleDocs]}
-          executionSteps={sampleSteps}
-        />
       <UniversalRightWorkspace
         open={true}
         onClose={vi.fn()}

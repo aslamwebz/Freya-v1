@@ -19,6 +19,7 @@ export interface TurnExperienceMeasurement {
   referenceUsed: boolean
   referenceItemCount: number
   requestLength: number
+  toolSteps?: TurnExperience['toolSteps']
 }
 
 export interface MindTurnSettlementDetail {
@@ -221,6 +222,7 @@ export class MindTurnSettlement {
       referenceUsed: experience?.referenceUsed ?? false,
       referenceItemCount: experience?.referenceItemCount ?? 0,
       answerPersisted: assistantMessage !== null,
+      toolSteps: experience?.toolSteps ?? [],
     })
 
     // The relationship lane hears about the owner's message last, after the

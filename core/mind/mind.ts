@@ -151,6 +151,8 @@ export interface MindServiceOptions {
    *    is not a precondition of being answered.
    */
   turnContext?: TurnContextReader
+  /** Bounded, non-authoritative lessons from independently verified prior work. */
+  learnedAdvice?: (query: string) => string
   /**
    * Record what this turn attempted, as metadata.
    *
@@ -318,6 +320,7 @@ export class MindService {
     this.contextEnrichment = new MindContextEnrichment({
       recall: options.recall ?? null,
       turnContext: options.turnContext ?? null,
+      learnedAdvice: options.learnedAdvice ?? null,
       now: this.now,
       expressionMemory: options.expressionMemory ?? null,
       interactionFacts: options.interactionFacts ?? (() => []),

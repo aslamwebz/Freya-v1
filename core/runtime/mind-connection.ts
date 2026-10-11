@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 export class MindConnection implements MindRuntime {
   private peer: RpcPeer | null = null
   private options: MindServiceOptions | null = null
-  private readonly active = new Map<string, { input: MindSubmitInput; startedAt: string; controller: AbortController; providerContacted: boolean; turn?: ConversationTurn }>()
+  private readonly active = new Map<string, { input: MindSubmitInput; startedAt: string; controller: AbortController; providerContacted: boolean; turn?: ConversationTurn; toolSteps: { name: string; capability: string; outcome: string; executed: boolean }[] }>()
 
   bind(options: MindServiceOptions): MindRuntime { this.options = options; return this }
   connect(peer: RpcPeer): void {
@@ -55,7 +55,8 @@ export class MindConnection implements MindRuntime {
     if (!options || !peer?.connected) throw new Error('Freya intelligence process is unavailable; the request was not executed')
     if (this.activeTurn(input.conversationId)) throw new Error('a response is already in progress for this conversation')
     const now = options.now?.() ?? new Date()
-    const lease = { input, startedAt: now.toISOString(), controller: new AbortController(), providerContacted: false, turn: undefined as ConversationTurn | undefined }
+    const lease = { input, startedAt: now.toISOString(), controller: new AbortController(), providerContacted: false, turn: undefined as ConversationTurn | undefined,
+      toolSteps: [] as { name: string; capability: string; outcome: string; executed: boolean }[] }
     this.active.set(input.turnId, lease)
     options.onTurnStateChange?.()
     const optional = <T>(read: () => T, fallback: T): T => { try { return read() } catch { return fallback } }
@@ -69,6 +70,7 @@ export class MindConnection implements MindRuntime {
           selectedModel: options.selectedModel?.() ?? null, selectedProviderId: options.selectedProviderId?.() ?? null,
           matrixSpaceIds: options.matrixSpaceIds?.(input.conversationId) ?? [],
           reference: optional(() => options.recall?.(input.text) ?? null, null),
+          learningAdvice: optional(() => options.learnedAdvice?.(input.text) ?? '', ''),
           sharedContext: optional(() => options.turnContext?.({ text: input.text, conversationId: input.conversationId, now }) ?? null, null),
           ledger: optional(() => options.expressionMemory?.readLedger() ?? null, null),
           facts: optional(() => options.interactionFacts?.() ?? [], []),
@@ -155,15 +157,22 @@ export class MindConnection implements MindRuntime {
       }
       case 'turn.tool': {
         const request = a as Parameters<NonNullable<typeof options.tools>['invoke']>[0]
-        return options.tools?.invoke({ ...request, signal: lease.controller.signal,
+        const invocation = await options.tools?.invoke({ ...request, signal: lease.controller.signal,
           context: { ...request.context, conversationId, matrixSpaceIds: options.matrixSpaceIds?.(conversationId) ?? [] } })
+        if (invocation && lease.toolSteps.length < 32) lease.toolSteps.push({
+          name: invocation.observation.tool, capability: invocation.observation.capability,
+          outcome: invocation.observation.kind, executed: invocation.executed,
+        })
+        return invocation
       }
       case 'turn.changed': options.onTurnStateChange?.(); return null
       case 'turn.cancel': return options.gateway.cancelRequest(p.turnId, 'the owner stopped this response')
       case 'turn.experience': {
         const experience = a as Parameters<NonNullable<typeof options.onTurnExperience>>[0]
         if (experience.turnId !== p.turnId || experience.conversationId !== conversationId) throw new Error('experience scope mismatch')
-        await options.onTurnExperience?.(experience); return null
+        // The unprivileged intelligence process may describe tools, but Core
+        // records only tool observations from calls actually admitted by Core.
+        await options.onTurnExperience?.({ ...experience, toolSteps: lease.toolSteps }); return null
       }
       case 'turn.ownerMessage': {
         const message = a as Parameters<NonNullable<typeof options.onOwnerMessage>>[0]

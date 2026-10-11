@@ -100,6 +100,12 @@ async function launch(
       // enable flags are set to 0, so the only providers reachable in this run are
       // the ones a test injects.
       ...process.env,
+      // FREYA_LOCAL_UNRESTRICTED=0 documents the strict path at the call site.
+      // Unpackaged builds default to strict as of C1-A; the explicit assignment
+      // is a record of the assumption, not a workaround. The E2E exercises the
+      // research seam and the chat surface, not the docked browser, and does not
+      // need any unrestricted authority.
+      FREYA_LOCAL_UNRESTRICTED: '0',
       MINIMAX_API_KEY: '',
       OPENAI_API_KEY: '',
       LOCAL_MODEL_BASE_URL: '',

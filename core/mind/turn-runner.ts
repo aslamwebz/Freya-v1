@@ -236,7 +236,11 @@ export class MindTurnRunner {
       // personality layer enters through that seam and nowhere else. See
       // `expressionForTurn`.
       const expression = this.contextEnrichment.expressionForTurn(startedAt)
-      const messages = withExpressionBlock(withContext, expression?.block ?? null)
+      const priorLearning = this.contextEnrichment.learnedFor(text)
+      const withLearning = priorLearning === null ? withContext : [
+        ...withContext.slice(0, -1), priorLearning, withContext[withContext.length - 1]!,
+      ]
+      const messages = withExpressionBlock(withLearning, expression?.block ?? null)
 
       // Record what context was actually assembled before the provider is asked.
       // This remains true for failure/cancellation outcomes too; a turn does not
@@ -260,6 +264,18 @@ export class MindTurnRunner {
         researchFollowUp: compiled.researchReference === true,
         perTurnAllowance: maxOutputTokens,
       })
+
+      // Preserve the loop's actual tool outcomes, even if the final answer failed.
+      // No arguments, content or user data are copied into the experience record.
+      if ('steps' in cognition && cognition.steps) {
+        const measurement = this.turnSettlement.experience(turnId)
+        if (measurement) this.turnSettlement.setExperience(turnId, {
+          ...measurement,
+          toolSteps: cognition.steps.map(({ step }) => ({
+            name: step.tool, capability: step.capability, outcome: step.outcome, executed: step.executed,
+          })),
+        })
+      }
 
       // Record cue use only when a provider was actually reached. A Governor
       // denial never dispatches, and a cancellation that arrived before contact

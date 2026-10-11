@@ -148,6 +148,7 @@ export function harness(options: HarnessOptions = {}): Harness {
       return (
         options.verification?.(request.reference, request.kind) ?? {
           holds: true,
+          outcome: 'settled',
           code: 'reference-settled',
         }
       )

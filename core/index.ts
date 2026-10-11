@@ -2,6 +2,7 @@ import type { MissionRuntime } from './missions/process-contract'
 import type { ProcessGoals } from './longhorizon/process-store'
 import type { ProcessWorkforce } from './workforce/process-store'
 import { ProcessBrain } from './brain/process-store'
+import { turnExperienceRecord } from './brain/turn-experience'
 import { validateModelAttachments } from './model/provider'
 import { randomUUID } from 'node:crypto'
 import { EphemeralEventStore } from './events/ephemeral-store'
@@ -759,11 +760,30 @@ export interface CoreOptions {
    *
    * The seam Phase 5 (Searcher, managed browser) and Phase 7 (Missions) attach
    * through. A capability is registered and nothing else changes: no engine edit,
-   * no new execution path, no new event family. Phase 6 registers only its own
-   * inert test set, so a Core built today can execute no external operation at all
-   * — which is the correct starting posture rather than a gap.
+   * no new execution path, no new event family.
    */
   workCapabilities?: readonly WorkCapability[]
+  /**
+   * Whether to register the Phase 6 fixture capabilities (`test.record`,
+   * `test.failing`, `test.unverifiable`, `test.slow`, `test.consequential`,
+   * and their verifiers).
+   *
+   * The capability surface a shipped Core exposes is a product question, not an
+   * implementation one, and the answer is **no**: the only way to demonstrate
+   * a Work run end to end through the product itself is to give it something to
+   * drive, and these capabilities are the inert test set that does that. They
+   * are kept for the e2e and the test suite, and not because a real run is ever
+   * supposed to invoke `test.failing` against a user.
+   *
+   * The decision is therefore explicit and never inferred:
+   *   - `undefined` and `false` (the default): no Phase 6 capabilities.
+   *   - `true`: Phase 6 capabilities registered alongside whatever `workCapabilities` adds.
+   *
+   * Production code sets neither; the e2e and the `createCore` test fixtures
+   * set it to `true`. The opt-in is the single gate, and it is named for what
+   * it is so a reader can find the call sites with `git grep testCapabilities`.
+   */
+  testCapabilities?: boolean
   /** Trusted host authorization for read-only mission file metadata; empty by default. */
   missionReadRoots?: readonly string[]
   /**
@@ -1903,6 +1923,55 @@ class FreyaCore implements Core {
     return this.requireLife().ownerScope()
   }
 
+  /**
+   * TEST SEAM: classify a reference through the verify port.
+   *
+   * The verify port is `private` and is exposed to the loop only through
+   * `lifeLoopPorts`. C2-A's discrimination lives in `classifyReference` and
+   * is reachable from the loop's runtime, but a runtime test would assert
+   * the journal's `verification.passed` / `verification.failed` line and
+   * never the closed-vocabulary outcome. This seam lets a test call the
+   * underlying classification directly and check the outcome + code
+   * combination, which is the property the brief is fixing.
+   *
+   * The seam is a one-line wrapper around the same private method the loop
+   * uses, so its behaviour cannot drift from the loop's. It is reachable
+   * from `core/testing.ts` and from this module only — a renderer has no
+   * way to obtain a `FreyaCore` reference and there is no public accessor
+   * to mint one. See `core/index.ts:1625-1643` for the existing test-seam
+   * pattern.
+   */
+  verifyReferenceForTest(reference: string): {
+    readonly holds: boolean
+    readonly outcome: 'settled' | 'still-open' | 'unknown'
+    readonly code: string
+  } {
+    return this.classifyReference(reference)
+  }
+
+  /**
+   * TEST SEAM: drive the verify port with a fabricated request.
+   *
+   * The reference-only seam is sufficient for the closed-vocabulary
+   * tests, but the `escalation-delivered` branch of the verify port is
+   * a separate code path with its own two-value shape, and a test
+   * needs to reach it. This seam accepts the same `request` shape the
+   * loop hands to `lifeLoopPorts().verify` and returns the same
+   * outcome the loop records in its journal — the test asserts the
+   * verdict directly, without having to drive Attention through a
+   * full wake to reach the same state.
+   */
+  verifyForTest(request: {
+    readonly kind: 'reference-terminal' | 'escalation-delivered'
+    readonly reference: string
+  }): Promise<{
+    readonly holds: boolean
+    readonly outcome: 'settled' | 'still-open' | 'unknown'
+    readonly code: string
+  }> {
+    return this.lifeLoopVerify(request as unknown as Parameters<LifeLoopPorts['verify']>[0])
+  }
+
   async start(): Promise<CoreStatus> {
     if (this.lifecycle !== 'booting') return this.status()
 
@@ -2381,6 +2450,9 @@ class FreyaCore implements Core {
       // cannot widen what Freya remembers — and a turn never writes memory at all,
       // which is what keeps a prompt injection from becoming a durable fact.
       recall: (query) => this.recallReference(query),
+      learnedAdvice: (query) => this.learningEngine
+        ? recallRelevantLearning(this.learningEngine, { goal: query, maxRecords: 3 }).promptSection.slice(0, 1200)
+        : '',
       // Metadata only. The question and the answer are referenced by id and stay in
       // the encrypted conversation store.
       onTurnExperience: (experience) => this.recordTurnExperience(experience),
@@ -2597,7 +2669,19 @@ class FreyaCore implements Core {
       },
     })
     registerFoundryWorkCapabilities(this.workRegistry, this.requireFoundry())
-    registerPhaseSixCapabilities(this.workRegistry)
+    // Phase 6's fixture capabilities are the only executable capabilities the
+    // shipped Core would otherwise have, and they exist to prove the Work engine
+    // can be driven end to end. They are inert — no fs, no child_process, no
+    // socket, no model access — but `test.failing` is a deliberate failure
+    // generator and `test.record` is the only one a Skills workflow or a renderer
+    // `work.run.create` could reach by name in a shipped build, which makes
+    // shipping them a product decision that has to be made on purpose.
+    //
+    // The decision is `options.testCapabilities === true`, and the default is
+    // false. Production builds and the renderer never set it; the e2e and the
+    // `createCore` test fixtures do. The intent is that "test.record" failing
+    // to resolve in a default Core is a feature, not a regression.
+    if (this.options.testCapabilities === true) registerPhaseSixCapabilities(this.workRegistry)
     this.workEngine = new WorkEngine({
       fabric: this.fabric,
       // The one place Work asks Guard anything. The owner principal is baked in
@@ -5438,26 +5522,109 @@ private async buildForge(): Promise<void> {
    * A read of Core's own projections, never a second thought: "is the thing that
    * just finished still open?" is a question about state the loop's host already
    * holds, and answering it with inference would make the loop's honesty depend on
-   * its provider being honest. A reference Core does not recognise is reported as
-   * satisfied, because "nothing is known to still be running" is the true statement
-   * and a fabricated doubt would burn a retry for no reason.
+   * its provider being honest.
+   *
+   * ## Three states, not two
+   *
+   * The closed vocabulary is `settled` / `still-open` / `unknown`, not a boolean
+   * derived from `attentionGoalOpen`. A `still-open` reference is one Core
+   * recognises that has not yet reached a terminal state. A `settled` reference
+   * is one that has — and is true whether the underlying mission or work run
+   * succeeded, failed, or was cancelled. An `unknown` reference is one Core
+   * has no projection of at all.
+   *
+   * The old shape returned `holds: !stillOpen` for everything, which is
+   * `settled` + `unknown` collapsed into one bucket. `unknown` had to mean
+   * `settled` because the old doc argued "nothing is known to still be running
+   * is the true statement", but that argument is about *the absence of a known
+   * open thing*, not about a *settled* thing — a missing reference is
+   * unverifiable, not verified, and treating it as settled burns a retry for no
+   * reason and hides the real bug. The new shape separates the two.
+   *
+   * ## `holds` is about the claim, not the outcome
+   *
+   * `holds: true` means the wake's claim ("the reference has reached a
+   * terminal state") is verified by an authoritative source. It is **not** a
+   * statement that the mission succeeded. The verify port answers a question
+   * about the loop's wake, not about a user's task, and a reader who wants to
+   * know whether the mission succeeded reads Core's own mission projection,
+   * not this port's return.
    */
   private async lifeLoopVerify(
     request: Parameters<LifeLoopPorts['verify']>[0],
-  ): Promise<{ readonly holds: boolean; readonly code: string }> {
+  ): Promise<{ readonly holds: boolean; readonly outcome: 'settled' | 'still-open' | 'unknown'; readonly code: string }> {
     if (request.kind === 'escalation-delivered') {
       // Attention records every decision it makes, including the ones that say
       // nothing should reach the owner. The claim being verified is "Attention
       // considered it", and that is answered by a decision existing — not by the
       // decision being loud, because being loud was never the loop's to decide.
+      // This branch keeps the old two-value shape: Attention's answer is
+      // binary (it decided or it didn't), and "unknown" is not a third state
+      // for an in-process recorder that simply says "no decision has been
+      // recorded yet". A reader who needs the binary can read `holds`; a
+      // reader who needs "we did not even try" can read `outcome`.
       const decisions = this.state.attention.decisions
+      const hasDecision = decisions.length > 0
       return {
-        holds: decisions.length > 0,
-        code: decisions.length > 0 ? 'attention-decided' : 'attention-decided-nothing',
+        holds: hasDecision,
+        outcome: hasDecision ? 'settled' : 'still-open',
+        code: hasDecision ? 'attention-decided' : 'attention-decided-nothing',
       }
     }
-    const stillOpen = this.attentionGoalOpen(request.reference)
-    return { holds: !stillOpen, code: stillOpen ? 'reference-still-open' : 'reference-settled' }
+    return this.classifyReference(request.reference)
+  }
+
+  /**
+   * Map a reference to its three-state verification verdict.
+   *
+   * The lookup is direct against Core's own projections — `missionEngine.record`
+   * for missions, `workEngine.snapshot().runs` for runs — and the verdict is
+   * derived from the projection's status, not from a flag we maintain. The
+   * only way a future code path can return a wrong verdict is by writing the
+   * wrong status into one of those two projections, and that is a single
+   * change to read.
+   */
+  private classifyReference(reference: string): {
+    readonly holds: boolean
+    readonly outcome: 'settled' | 'still-open' | 'unknown'
+    readonly code: string
+  } {
+    // A Mission is "open" against this port when it exists in the engine's
+    // projections and is not yet in a terminal state. The engine exposes
+    // `record(id)` which returns the projection or `undefined` if the mission
+    // is not in the engine's view.
+    const mission = this.missionEngine?.record(reference)
+    if (mission !== undefined) {
+      if (isTerminalMissionStatus(mission.status)) {
+        // The terminal status is in the code, so a journal reader can tell
+        // success from failure from the verify port's record alone. The port
+        // itself still reports `outcome: 'settled'` because the verify port
+        // does not adjudicate success.
+        return { holds: true, outcome: 'settled', code: `mission-${mission.status}` }
+      }
+      return { holds: false, outcome: 'still-open', code: 'mission-still-open' }
+    }
+    // A Work Run is "open" the same way. `snapshot().runs` is the authoritative
+    // map for the run, indexed by run id; the goal ref *is* the run id for
+    // runs that originated as a wake's reference.
+    const snapshot = this.workEngine?.snapshot()
+    if (snapshot !== undefined) {
+      const run = snapshot.runs.get(reference)
+      if (run !== undefined) {
+        if (isTerminalRunStatus(run.status)) {
+          return { holds: true, outcome: 'settled', code: `run-${run.status}` }
+        }
+        return { holds: false, outcome: 'still-open', code: 'run-still-open' }
+      }
+    }
+    // A reference Core has no projection of at all. The old code reported
+    // `holds: true` for this case ("nothing is known to still be running"),
+    // which is the source of the conflation the brief is fixing: a missing
+    // reference is *unverifiable*, and retrying is futile until the
+    // reference is registered with one of the engines. Burning a retry for
+    // no reason and writing `reference-settled` to the journal is exactly
+    // the false-success the C2-A inventory entry warned about.
+    return { holds: false, outcome: 'unknown', code: 'reference-unknown' }
   }
 
   /**
@@ -6683,8 +6850,36 @@ state: {
    * Mission's delegation look finished, which is the same class of lie as a completed step
    * that never ran.
    *
-   * Every failure is swallowed: a Mission's outcome does not depend on its paperwork being
-   * tidied, and a refusal here must not turn a completed Mission into a failed one.
+   * ## Authoritative store, not a retention slice
+   *
+   * The Mission's own projection does not list every assignment; the workforce
+   * projection does, but `WorkerView.assignments` is a *retention slice* and
+   * the projection also exposes `assignmentsTotal` / `assignmentsHidden` to
+   * say so. A Mission with more steps than the slice holds would have left
+   * the missing ones open in the old code — a "leak" the board knew about
+   * (the hidden count) but the closer did not. The C2-B fix reads the
+   * authoritative store through `listAssignmentsForMission`, which the
+   * engine exposes from its own `state.assignments` map; nothing in the
+   * projection's slice can hide a row from the closer.
+   *
+   * ## Diagnostics, not silent swallow
+   *
+   * The old code did `await scope.cancelAssignment(...).catch(() => undefined)`.
+   * That was the right shape to avoid turning a completed Mission into a
+   * failed one — a refusal here is not a reason to invalidate the
+   * Mission's outcome — but a refusal with **no log, no event, no count**
+   * is not the same as "not failing", it is *unobservable* failing. The
+   * new code logs a single warning per refused cancellation with the
+   * assignment id, the mission id, the reason returned, and the running
+   * counters of opened / closed / refused. The Mission's outcome stays
+   * untouched, but a person reading the log can tell that cleanup is
+   * incomplete and act on it.
+   *
+   * Cancellation is idempotent: `settleAssignment(id, 'cancelled', ...)`
+   * already refuses a transition from a terminal status, and a re-issued
+   * call is a no-op rather than a chain of follow-on errors. The caller
+   * can invoke `releaseMissionAssignments` more than once and the second
+   * call walks the same authoritative list and finds nothing left to do.
    */
   private async releaseMissionAssignments(missionId: string): Promise<void> {
     const workforce = this.workforceEngine
@@ -6694,18 +6889,42 @@ state: {
     if (!isTerminalMissionStatus(projection.status)) return
 
     const scope = workforce.ownerScope()
-    // Read through the **workers**, which is the only place a retained assignment list
-    // appears on this projection. `WorkerView.assignments` is a retention slice, so a Mission
-    // with more steps than the slice holds could leave some open; that is preferable to a
-    // second enumeration that could disagree with the one the board shows.
-    for (const worker of scope.projection().workers) {
-      for (const assignment of worker.assignments) {
-        if (assignment.missionId !== missionId) continue
-        // `open` is the nonterminal status. `isTerminalAssignmentStatus` is used rather than
-        // a string compare so a new terminal status cannot slip past and be "closed" twice.
-        if (isTerminalAssignmentStatus(assignment.status)) continue
-        await scope.cancelAssignment(assignment.assignmentId).catch(() => undefined)
+    // The authoritative list, not the projection's retention slice. The
+    // engine reads its own `state.assignments` map and returns every row
+    // tagged with this mission id, terminal or not, so a closed-form
+    // filter is enough to drive the closer.
+    const linked = scope.listAssignmentsForMission(missionId)
+    let closed = 0
+    let alreadyTerminal = 0
+    let refused = 0
+    for (const entry of linked) {
+      if (isTerminalAssignmentStatus(entry.status)) {
+        // Idempotency: a re-issue finds the assignment already closed and
+        // skips it. A re-issue happens whenever the closer runs twice for
+        // the same mission, which is fine.
+        alreadyTerminal += 1
+        continue
       }
+      const outcome = await scope.cancelAssignment(entry.assignmentId)
+      if (outcome.ok) {
+        closed += 1
+        continue
+      }
+      // Refused cancellation is not a Mission failure. The Mission is
+      // already terminal — its outcome is settled. The refusal is a
+      // housekeeping problem (the workforce could not find the assignment
+      // by id, the worker is no longer in scope, the deadline was set to
+      // the past and the transition was refused) and the right thing to
+      // do is make it visible, not let it propagate.
+      refused += 1
+      console.warn(
+        `[freya.core] releaseMissionAssignments could not cancel ${entry.assignmentId} for mission ${missionId}: ${outcome.reason ?? 'no reason'}`,
+      )
+    }
+    if (refused > 0) {
+      console.warn(
+        `[freya.core] releaseMissionAssignments for ${missionId}: closed=${closed} already-terminal=${alreadyTerminal} refused=${refused} total=${linked.length}`,
+      )
     }
   }
 
@@ -11618,47 +11837,7 @@ case 'forge.run': {
    * second and less-protected home for the most private data in the system.
    */
   private async recordTurnExperience(experience: TurnExperience): Promise<void> {
-    const result = experience.outcome === 'denied' ? 'denied' : experience.outcome
-    await this.brainService.recordExperience({
-      goalSummary: `answered a conversation turn`,
-      startedAt: experience.startedAt,
-      endedAt: experience.endedAt,
-      modelsUsed: experience.model === null ? [] : [experience.model],
-      toolsUsed: [],
-      actions: [
-        {
-          at: experience.startedAt,
-          summary: 'compiled context and requested one bounded cognition',
-          outcome: experience.providerContacted ? 'succeeded' : 'skipped',
-        },
-      ],
-      observations: [
-        experience.referenceUsed
-          ? `used ${experience.referenceItemCount} recalled item(s) as reference`
-          : 'no reference memory was used',
-      ],
-      // Ids of the records that back the outcome. Not their content.
-      evidenceRefs: experience.answerPersisted ? [experience.turnId] : [],
-      result,
-      humanCorrection: null,
-      relatedEntities: [],
-      relatedMemories: [],
-      resourceUsage: {
-        providerId: experience.providerId,
-        model: experience.model,
-        providerContacted: experience.providerContacted,
-        // Phase 4 does not read per-call usage off the gateway for this record. Null
-        // means "nothing reported here", which is not the same as zero — the
-        // accounting that does track provider-reported usage is separate and
-        // authoritative.
-        inputTokens: null,
-        outputTokens: null,
-        usageUnknown: true,
-      },
-      answerPersisted: experience.answerPersisted,
-      conversationId: experience.conversationId,
-      turnId: experience.turnId,
-    })
+    await this.brainService.recordExperience(turnExperienceRecord(experience))
   }
 
   private async buildConversationStore(): Promise<ConversationStore> {

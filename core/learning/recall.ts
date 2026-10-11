@@ -83,7 +83,7 @@ export function recallRelevantLearning(
   // 2. Score knowledge records (Stage 3 claims)
   const scoredKnowledge = admittedKnowledge
     .map((k) => ({ record: k, score: scoreRecord(k.claim, k.tags) }))
-    .filter((entry) => entry.score > 0 || capabilities.length === 0)
+    .filter((entry) => entry.score > 0 || (capabilities.length === 0 && goalTokens.length === 0))
     .sort((a, b) => b.score - a.score)
 
   for (const { record } of scoredKnowledge) {

@@ -74,6 +74,10 @@ Module._load = function(specifier, ...args) {
 };
 require(${JSON.stringify(join(root, 'dist-electron', 'main.cjs'))});
 `)
+// FREYA_LOCAL_UNRESTRICTED=0 is set explicitly to document the strict-path assumption at
+// the call site, not as a workaround. Unpackaged builds also default to strict as of C1-A
+// (electron/localUnrestricted.ts). FREYA_DEVICE_HANDS=0 and FREYA_PUBLIC_BROWSER=0 keep the
+// browser seams off; this is a shell smoke, not a browser smoke.
 const env = { ...process.env, FREYA_E2E: '1', FREYA_E2E_ALLOW_MULTI_INSTANCE: '0',
   FREYA_LOCAL_UNRESTRICTED: '0', FREYA_DEVICE_HANDS: '0', FREYA_PUBLIC_BROWSER: '0',
   FREYA_DEV_SERVER: '', FREYA_CONTEXT_WINDOW_OBSERVATION: '', FREYA_ALLOW_LIVE_MODEL: '0',

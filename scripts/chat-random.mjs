@@ -27,6 +27,11 @@ const app = await electron.launch({
     FREYA_ALLOW_LIVE_MODEL: '1',
     FREYA_ALLOW_WEB_SEARCH: '1',
     FREYA_SEARXNG_URL: 'http://127.0.0.1:8899',
+    // FREYA_LOCAL_UNRESTRICTED=0 documents the strict path at the call site.
+    // Unpackaged builds default to strict as of C1-A. This run is a chat prompt
+    // smoke and does not exercise the docked browser; the explicit assignment is
+    // a record, not a workaround.
+    FREYA_LOCAL_UNRESTRICTED: '0',
     FREYA_E2E: '1',
     FREYA_E2E_ALLOW_MULTI_INSTANCE: '1',
     FREYA_E2E_CONVERSATION_KEY: Buffer.alloc(32, 0x5a).toString('base64'),

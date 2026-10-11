@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { Chats } from '../../../src/app/chat/Chats'
 import { GlobalComposer } from '../../../src/app/screens/GlobalComposer'
-import { RightWorkspaceRail, UniversalRightWorkspace } from '../../../src/app/chat/RightWorkspace'
+import { UniversalRightWorkspace } from '../../../src/app/chat/RightWorkspace'
 import { sharedRightWorkspaceStore } from '../../../src/app/chat/rightWorkspaceStore'
 import { sharedComposerDraftStore } from '../../../src/app/chat/composerDraftStore'
 import { attachmentTray } from '../../../src/app/chat/attachments'
@@ -257,7 +257,6 @@ describe('Phase 8: Full Integration & Live Acceptance Scenarios', () => {
 
     render(
       <>
-        <RightWorkspaceRail open={true} activeTab="browser" browserEnabled={true} onClose={vi.fn()} />
       <UniversalRightWorkspace
         open={true}
         activeTab="browser"
@@ -351,7 +350,6 @@ describe('Phase 8: Full Integration & Live Acceptance Scenarios', () => {
 
     const { rerender } = render(
       <>
-        <RightWorkspaceRail open={true} activeTab="browser" browserEnabled={true} onClose={vi.fn()} />
       <UniversalRightWorkspace
         open={true}
         activeTab="browser"
@@ -369,7 +367,6 @@ describe('Phase 8: Full Integration & Live Acceptance Scenarios', () => {
     rwStore.setTab('canvas')
     rerender(
       <>
-        <RightWorkspaceRail open={true} activeTab="canvas" browserEnabled={true} onClose={vi.fn()} />
       <UniversalRightWorkspace
         open={true}
         activeTab="canvas"
@@ -386,7 +383,6 @@ describe('Phase 8: Full Integration & Live Acceptance Scenarios', () => {
     rwStore.setTab('media')
     rerender(
       <>
-        <RightWorkspaceRail open={true} activeTab="media" browserEnabled={true} onClose={vi.fn()} />
       <UniversalRightWorkspace
         open={true}
         activeTab="media"

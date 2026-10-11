@@ -317,6 +317,11 @@ async function launchApp(profileDir) {
       NODE_ENV: 'production',
       FREYA_E2E: '1',
       FREYA_E2E_ALLOW_MULTI_INSTANCE: '1',
+      // FREYA_LOCAL_UNRESTRICTED=0 documents the strict path at the call site.
+      // Unpackaged builds default to strict as of C1-A. This run is on-screen chat
+      // capture only and does not need any unrestricted authority; the explicit
+      // assignment is a record of that, not a workaround.
+      FREYA_LOCAL_UNRESTRICTED: '0',
       ...E2E_KEYS,
     },
   })

@@ -1,5 +1,21 @@
 # Freya — Live Testing Procedure
 
+> **Archival notice (2026-10-10).** This document was written for a specific
+> run on a different path (`C:\Users\you\Desktop\AI\Freya-main`) and a
+> specific branch (`experiment/deepseek-v41-freya-20261009`) that no
+> longer exists in the current tree. The procedure is preserved here
+> because it records what was decided at the time, and the owner has
+> asked that historical docs be marked archival rather than rewritten.
+>
+> The current live-testing surface is described in
+> `docs/ARCHITECTURE.md`, `docs/CORE-EVENTS.md` and the phase docs
+> referenced from there. The original `C:\Users\you\Desktop\AI\Freya`
+> worktree is at `34bd80f` on `feat/mind-missions-integration`; this
+> worktree is at `4453563` on `freya-cleanup`. The session guidance in
+> the original "Scope and safety" section — "no new branches, merges,
+> pushes, resets, stashes" — is still binding for any work on this
+> worktree.
+
 ## Scope and safety
 
 Work in `C:\Users\you\Desktop\AI\Freya-main` on existing branch `experiment/deepseek-v41-freya-20261009`. No new branches, merges, pushes, resets, stashes, or additional agents. Preserve the owner's running OpenCode and normal Freya profile.

@@ -108,8 +108,19 @@ export class MindTurnCognition {
    * so that each is separately accounted and separately cancellable.
    */
   async think(input: MindThinkInput): Promise<MindCognitionOutcome> {
-    const inferredRequest = this.options.tools?.has('propose_mission') && input.intents.webSearch !== true && input.intents.browserUse !== true
-      ? null : initialToolRequestForOwnerText(input.ownerText, input.intents)
+    // The owner's own words are routed to a first lookup deterministically, on every
+    // turn and regardless of what else is registered.
+    //
+    // It used to be suppressed whenever `propose_mission` was in the registry, so that
+    // a Mind carrying the Mission tool left `initialToolRequest` null for any turn
+    // where no composer button was held. That made the loop unreachable through
+    // anything but a spontaneous envelope from the model, and it also silently killed
+    // the explicit-browser branch below, because `initialToolRequestForOwnerText` was
+    // never called at all. Registering a tool must not decide whether another tool is
+    // offered: that is a routing decision, and it belongs to the router.
+    const inferredRequest = initialToolRequestForOwnerText(input.ownerText, input.intents)
+    // A follow-up about an already-carried source still refuses a fresh lookup, which
+    // is unchanged: a new search cannot stand in for the reference that was asked for.
     const initialToolRequest = input.researchFollowUp && input.intents.webSearch !== true && input.intents.browserUse !== true
       && inferredRequest?.name === 'web_search' && !requestsNewLookup(input.ownerText)
       ? null : inferredRequest

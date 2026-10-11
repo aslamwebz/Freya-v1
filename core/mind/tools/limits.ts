@@ -73,7 +73,7 @@ export const MIND_TOOL_LIMITS = Object.freeze({
    * return `stop`, and 1280 is enough for the model's inline reasoning plus its
    * envelope to arrive intact.
    */
-  maxProviderCalls: 6,
+  maxProviderCalls: 10,
 
   /**
    * How many tool bodies one turn may actually execute.
@@ -85,7 +85,7 @@ export const MIND_TOOL_LIMITS = Object.freeze({
    * refused or malformed — those cost a call and execute nothing — and a turn should
    * not be able to run out of room merely by asking badly.
    */
-  maxToolCalls: 6,
+  maxToolCalls: 10,
 
   /** Results kept from one search. Enough to answer from; not a crawl. */
   maxResultsPerTool: 5,

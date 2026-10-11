@@ -54,17 +54,31 @@ export const MAX_DEFERRED_CORRECTIONS = 2
 const MAX_PROMISE_CHARS = 600
 
 /**
- * A first-person statement of intent, immediately followed by the action.
+ * A statement of intent, immediately followed by the action.
  *
- * Each alternative names the actor first and the act second, so a sentence about
- * somebody else's intentions does not match.
+ * The first alternatives name the actor first and the act second. The later ones
+ * are the forms the browser loop actually produced, where the model narrates in
+ * the third person about itself and no first-person pattern fires:
+ *
+ *   "I need to actually drive tab 1 … Let me start by snapshotting."
+ *   "Switching to tab 2 (SriLankan). Same workflow — snapshot, scroll, click."
+ *   "Tab 3 (Dilmah). Snapshotting first, then scrolling to the bottom."
+ *
+ * All three were promises to act. All three ended the turn with nothing clicked,
+ * which is the failure this file exists to stop — and a detector that only
+ * understood "I'll …" let every one through.
  */
 const PROMISE = [
-  /\bi(?:'ll|’ll| will| am going to| can| could| would)\s+(?:now\s+|first\s+|go\s+and\s+)?(?:please\s+)?(?:open|launch|check|look|search|browse|browse\s+to|navigate|read|fetch|find|click|scroll|retrieve|verify|compare|research|pull\s+up|dig\s+up|look\s+into)\b/i,
-  /\blet\s+me\s+(?:now\s+|first\s+)?(?:open|launch|check|look|search|browse|browse\s+to|navigate|read|fetch|find|click|scroll|retrieve|verify|compare|research|pull\s+up|dig\s+up|look\s+into)\b/i,
-  /\bi(?:'m| am)\s+(?:going\s+to\s+|about\s+to\s+)?(?:open|launch|check|look|search|browse|navigate|read|fetch|retrieve|verify|compare|research)\b/i,
+  /\bi(?:'ll|’ll| will| am going to| can| could| would)\s+(?:now\s+|first\s+|actually\s+|go\s+and\s+)?(?:please\s+)?(?:open|launch|check|look|search|browse|navigate|read|fetch|find|click|scroll|retrieve|verify|compare|research|snapshot|driv\w+|switch\w*|start|go|begin|attempt|work\s+through)\b/i,
+  /\blet\s+me\s+(?:now\s+|first\s+|actually\s+)?(?:open|launch|check|look|search|browse|navigate|read|fetch|find|click|scroll|retrieve|verify|compare|research|snapshot|driv\w+|switch\w*|start|go|begin|attempt)\b/i,
+  /\bi(?:'m| am)\s+(?:going\s+to\s+|about\s+to\s+)?(?:open|launch|check|look|search|browse|navigate|read|fetch|retrieve|verify|compare|research|snapshot|driv\w+|switch\w*)\b/i,
   /^(?:one\s+moment|give\s+me\s+a\s+(?:moment|second|sec)|bear\s+with\s+me|hold\s+on)\b/i,
-  /\bi(?:'ll| will)\s+(?:take\s+a\s+look|see\s+if\s+i\s+can\s+find|do\s+a\s+quick\s+search)\b/i,
+  /\bi(?:'ll| will)\s+(?:take\s+a\s+look|see\s+if\s+i\s+can\s+find|do\s+a\s+quick\s+search|go\s+through\s+them)\b/i,
+  /\bi\s+need\s+to\s+(?:actually\s+|really\s+|first\s+)?(?:open|launch|check|look|search|browse|navigate|read|fetch|find|click|scroll|retrieve|verify|compare|research|snapshot|driv\w+|switch\w*|start|go|begin|attempt|work\s+through|run)\b/i,
+  /\b(?:snapshotting|switching|scrolling|clicking|opening|loading|navigating|driving|reading|verifying|checking)\s+(?:first|it|the|to|now|next|over|back|through)\b/i,
+  /^(?:snapshotting|switching|scrolling|clicking|opening|loading|navigating|driving|reading|verifying|checking)\b/i,
+  /\b(?:same\s+workflow|same\s+(?:steps|process|approach)|workflow:\s*(?:snapshot|scroll))/i,
+  /\bi(?:'ll| will)\s+start\s+by\b/i,
 ]
 
 /** An evidence citation. A reply carrying one was given evidence and used it. */

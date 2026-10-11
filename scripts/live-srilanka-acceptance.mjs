@@ -171,16 +171,22 @@ if (wanted(2)) {
 
 if (wanted(3)) {
   if (!(await focusPinnedConversation())) console.log('   !! phase 3 is in the WRONG conversation')
-  console.log(`## phase 3 — per tab: scroll to the bottom, find Contact, click it`)
-  for (let i = 1; i <= SITES; i++) {
-    console.log(`   [${i}/${SITES}]`)
-    try {
-      await ask(`In tab number ${i}, scroll to the bottom of the page, find the Contact or Contact Us link, click it, and tell me the page title and URL you land on.`)
-      await shot(`phase3-${String(i).padStart(2, '0')}`)
-      console.log((await tail(1200)).split('\n').filter(Boolean).map(l => '      ' + l).join('\n'))
-    } catch (error) {
-      console.log(`      FAILED: ${error.message}`)
-    }
+  console.log(`## phase 3 — all ${SITES} tabs in ONE turn: scroll to the bottom, find Contact, click it`)
+  // One turn for all ten, not one turn per tab.
+  //
+  // Ten separate turns is not how an agentic browser works, and it is not how
+  // Comet works: a single request becomes a single planned multi-step job across
+  // every tab, with results collected and one answer at the end. Ten turns means
+  // ten separate re-plannings, ten chances to narrate instead of act, and ten
+  // owner round-trips for work that was one instruction.
+  await setSwitch(browserSwitch, true)
+  console.log(`   wire: browser=${await browserSwitch.getAttribute('data-sent')}`)
+  try {
+    await ask(`All ${SITES} sites are open in browser tabs. For every one of them: scroll to the bottom of the page, find the Contact or Contact Us link, click it, and note the page title and URL you land on. Work through all ${SITES} tabs, then give me one list of all ${SITES} results.`)
+    await shot('phase3')
+    console.log((await tail(3000)).split('\n').map(l => '   ' + l).join('\n'))
+  } catch (error) {
+    console.log(`   FAILED: ${error.message}`)
   }
 }
 

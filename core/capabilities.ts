@@ -86,7 +86,22 @@ export interface CapabilityRegistry {
  */
 export const DEFAULT_CAPABILITY_SELECTION: Readonly<Record<CapabilityId, readonly ProviderId[]>> = Object.freeze({
   chat: ['minimax', 'nanogpt', 'local'],
-  search: ['searxng', 'brave', 'minimax'],
+  // MiniMax first, matching `eye` below.
+  //
+  // This was `['searxng', 'brave', 'minimax']`, on the reasoning that a locally
+  // running metasearch daemon needs no credential and so should be tried first.
+  // That reasoning holds for a daemon you control and fails for one you merely
+  // expect to be up: the search runs, returns nothing, and because the failure is
+  // not retried across backends — deliberately, so a result's provenance always
+  // names the backend that served it — a turn that looked things up got zero
+  // sources and no fallback.
+  //
+  // So the order now puts a provider that answers first. Verified against the
+  // live endpoint while fixing this: the same query returned HTTP 200 with real
+  // results from MiniMax and nothing usable from the SearXNG instance. An owner
+  // who prefers their own daemon can still select it, and the others remain
+  // fallbacks.
+  search: ['minimax', 'searxng', 'brave'],
   browser: ['minimax'],
   eye: ['minimax', 'searxng', 'brave'],
   vision: ['minimax', 'nanogpt'],

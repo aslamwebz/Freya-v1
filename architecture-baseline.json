@@ -559,7 +559,7 @@
       "reason": "Existing engine: strict retention requires this exact unchanged source hash; explicitly ratchet shrinking ceilings."
     },
     "core/mind/mind.ts": {
-      "ceiling": 976,
+      "ceiling": 885,
       "limit": 600,
       "hash": "fafcf6b2244171b7aaa20d406baf8bcf5d4f040cbb1c4f7a4618df9c61234174",
       "retainInStrict": false,

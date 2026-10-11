@@ -103,6 +103,14 @@ try {
     console.log(`PASS real configured LLM response from ${answer.conversation.turn.providerId}; OS-protected keyring and encrypted storage`)
   }
   console.log(`PASS real renderer → Freya Mind/provider → Core encryption/admission; PIDs ${core.pid}/${freya.pid}/${initialUiPid}`)
+  const memoryText = `SPLIT_MEMORY_${randomUUID()}`
+  const memory = await submit('brain.memory.write', { kind: 'semantic', subject: 'Split memory', content: memoryText, confidence: 'high', sensitivity: 'personal' })
+  assert.equal(memory.brain?.memory?.status, 'admitted', JSON.stringify(memory))
+  const recalled = await submit('brain.recall', { query: memoryText })
+  assert.ok(recalled.brain.recall.items.some(item => item.content === memoryText), JSON.stringify(recalled))
+  assert.ok(freyaOutput.includes(`memory writeMemory completed; pid=${freya.pid}`))
+  assert.ok(freyaOutput.includes(`memory recall completed; pid=${freya.pid}`))
+  console.log(`PASS existing memory admission and recall execute in Freya pid=${freya.pid}; encrypted persistence belongs to Core`)
 
   const opened = await browser({ op: 'open', url: browserUrl })
   assert.equal(opened.ok, true, JSON.stringify(opened))
@@ -165,6 +173,11 @@ try {
   assert.equal(restoredMission.ok, true, JSON.stringify(restoredMission))
   const journal = await readFile(join(profile, 'core-events.jsonl'), 'utf8')
   assert.ok(!journal.includes(marker), 'private chat content must not be journaled')
+  assert.ok(!journal.includes(memoryText), 'private memory content must not be journaled')
+  const restoredMemory = await submit('brain.recall', { query: memoryText })
+  assert.ok(restoredMemory.brain.recall.items.some(item => item.content === memoryText), JSON.stringify(restoredMemory))
+  assert.ok(freyaOutput.includes(`memory recall completed; pid=${freya.pid}`))
+  console.log('PASS encrypted memory survives both Core and Freya restarts and is recalled by the restarted Freya engine')
   assert.equal(journal.split('\n').filter(line => line.includes('"type":"model.request.started"')).length, 1, 'restarts must not replay inference')
   if (tools) {
     const chart = await submit('conversation.turn.submit', { conversationId, text: 'MAKE_SPLIT_CHART: chart A=1 and B=2', intent: { webSearch: true } })

@@ -1,3 +1,4 @@
+import { seedBrain } from './seed'
 import type { EventFabric } from '../events/fabric'
 import {
   admit,
@@ -906,18 +907,7 @@ export class Brain {
    * rather than every time the application launches.
    */
   async seed(definition: { identity: IdentityRoot; self: SelfDefinition }): Promise<boolean> {
-    // A corrupt log stays read-only; seeding must not stop the rest of Core.
-    if (this.store.health().health !== 'healthy') return false
-    let wrote = false
-    if (this.store.state().identity === null) {
-      await this.write({ kind: 'identity-root', identity: definition.identity })
-      wrote = true
-    }
-    if (this.store.state().self === null) {
-      await this.write({ kind: 'self-definition', definition: definition.self })
-      wrote = true
-    }
-    return wrote
+    return seedBrain(this.store, definition, record => this.write(record))
   }
 
   private timestamp(): string {

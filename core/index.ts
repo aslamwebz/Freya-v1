@@ -1,3 +1,4 @@
+import { ProcessBrain } from './brain/process-store'
 import { validateModelAttachments } from './model/provider'
 import { randomUUID } from 'node:crypto'
 import { EphemeralEventStore } from './events/ephemeral-store'
@@ -1650,7 +1651,7 @@ class FreyaCore implements Core {
   private disposeState: () => void = () => {}
   private stopped = false
   private conversationStore!: ConversationStore
-  private brainService!: Brain
+  private brainService!: Brain | ProcessBrain
   /** Null when the host configured no research stack. Every command then refuses. */
   private researchIntegration: ResearchIntegration | null = null
   /**
@@ -2248,7 +2249,7 @@ class FreyaCore implements Core {
     // cannot be opened still produces a Brain: it is ephemeral, it reports itself
     // as such, and every other subsystem carries on.
     const brainStore = await this.buildBrainStore()
-    this.brainService = new Brain({
+    this.brainService = this.processRuntime ? this.processRuntime.memory(brainStore, this.fabric) : new Brain({
       store: brainStore,
       fabric: this.fabric,
       now: this.options.now,
@@ -9291,7 +9292,7 @@ state: {
         }
 
         case 'brain.recall': {
-          const pack = this.brainService.recall(
+          const pack = await this.brainService.recall(
             {
               text: readString(envelope.payload, 'query') ?? '',
               kinds: readMemoryKindArray(envelope.payload),
@@ -11586,6 +11587,7 @@ case 'forge.run': {
    * keeps a stored claim looking like a claim.
    */
   private recallReference(query: string): ReferenceKnowledge | null {
+    if (this.brainService instanceof ProcessBrain) return null
     const pack = this.brainService.recall({ text: query }, { maxEstimatedTokens: 600, maxItems: 8 })
     if (pack.empty) return null
     return {

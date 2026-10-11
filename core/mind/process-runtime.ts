@@ -13,6 +13,8 @@ import type { CueUsageLedger, InteractionFact, RelationshipItem } from '../perso
 import type { ReferenceKnowledge } from './context-compiler'
 import type { TurnContextBlock } from './turn-context'
 import { processToolBodies } from './process-tools'
+import { ProcessMemory } from '../brain/process-runtime'
+import type { BrainPacket } from '../brain/process-packet'
 
 interface TurnPacket {
   input: MindSubmitInput
@@ -34,6 +36,7 @@ const minds = new Map<string, MindService>()
 const calls = new Map<string, AbortController>()
 let toolBodies: readonly MindTool[] = []
 const toolCalls = new Map<string, AbortController>()
+const memory = new ProcessMemory()
 
 async function runTurn(connection: RpcPeer, packet: TurnPacket) {
   const { input, context: c } = packet
@@ -58,7 +61,7 @@ async function runTurn(connection: RpcPeer, packet: TurnPacket) {
     gateway: { cancelRequest: () => { effect('turn.cancel'); return 1 } },
     identity: c.identity, budget: c.budget,
     runtimeFacts: () => c.runtimeFacts, selectedModel: () => c.selectedModel, selectedProviderId: () => c.selectedProviderId,
-    matrixSpaceIds: () => c.matrixSpaceIds, recall: () => c.reference, turnContext: () => c.sharedContext,
+    matrixSpaceIds: () => c.matrixSpaceIds, recall: query => memory.reference(query), turnContext: () => c.sharedContext,
     expressionMemory: c.ledger ? { readLedger: () => c.ledger, recordCueUse: (...args) => effect('turn.cue', ...args) } : undefined,
     interactionFacts: () => c.facts, relationshipItems: () => c.relationships, preferenceTokens: () => c.preferenceTokens,
     onTurnStateChange: () => effect('turn.changed'), onTurnExperience: value => operation('turn.experience', value),
@@ -82,6 +85,7 @@ async function connect(): Promise<void> {
     connection.onClose(() => {
       if (peer !== connection) return
       registered = false; peer = null
+      memory.disconnect()
       for (const controller of calls.values()) controller.abort()
       for (const controller of toolCalls.values()) controller.abort()
       for (const [id, mind] of minds) mind.cancelTurn(id, 'Core disconnected; the turn will not be retried')
@@ -89,6 +93,8 @@ async function connect(): Promise<void> {
     })
     connection.handle(async (method, value) => {
       switch (method) {
+        case 'brain.configure': return memory.configure(connection, value as BrainPacket)
+        case 'brain.run': return memory.run(value as Parameters<ProcessMemory['run']>[0])
         case 'provider.configure': {
           const config = value as { env: CapabilityEnv & { FREYA_E2E?: string; FREYA_E2E_RESEARCH?: string }; developer?: 'echo' | 'slow-echo'; workspaceRoot: string }
           toolBodies = processToolBodies(config.workspaceRoot)

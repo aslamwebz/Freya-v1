@@ -418,13 +418,6 @@
       "retainInStrict": false,
       "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode."
     },
-    "core/consciousness/projection.ts": {
-      "ceiling": 1338,
-      "limit": 600,
-      "hash": "045587e8d6f0118346802e98525329565e6866c7c59d5a47d052ca4904d7371d",
-      "retainInStrict": false,
-      "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode."
-    },
     "core/devicehands/gates.ts": {
       "ceiling": 616,
       "limit": 600,

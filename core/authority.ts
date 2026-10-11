@@ -1,6 +1,6 @@
 import type { CognitionCause, CognitionOrigin } from '../shared/contracts/security'
 import type { CognitionGrant, CognitionGrantSpec } from './cognition/grants'
-import type { CognitionOutcome } from './cognition/service'
+import type { CognitionOutcome } from './cognition/outcome'
 import type { ModelMessage } from './model/provider'
 
 /**

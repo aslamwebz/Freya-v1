@@ -372,8 +372,6 @@
     "src/voice/runtime.ts -> core/voice/types.ts"
   ],
   "cyclicEdges": [
-    "core/authority.ts -> core/cognition/service.ts",
-    "core/cognition/service.ts -> core/authority.ts",
     "core/mind/mission-planning.ts -> core/missions/autonomy/planner.ts",
     "core/mind/mission-planning.ts -> core/missions/autonomy/types.ts",
     "core/missions/autonomy/planner.ts -> core/missions/autonomy/types.ts",

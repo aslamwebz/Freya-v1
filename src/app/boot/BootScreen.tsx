@@ -95,7 +95,6 @@ export function BootScreen({ core, attached, onDone }: BootScreenProps) {
     return () => window.clearTimeout(timer)
   }, [finished, elapsed, onDone])
 
-  const fill = Math.min(100, (elapsed / BOOT_TIMEOUT_MS) * 100)
 
   return (
     <div className="freya-boot" data-phase={phase} role="status" aria-live="polite">
@@ -110,7 +109,7 @@ export function BootScreen({ core, attached, onDone }: BootScreenProps) {
       <h1 className="freya-boot-wordmark">FREYA</h1>
       <p className="freya-boot-line">{line}</p>
       <div className="freya-boot-track" aria-hidden="true">
-        <span className="freya-boot-fill" style={{ width: `${fill}%` }} data-stalled={timedOut || undefined} />
+        <span className="freya-boot-fill" style={{ width: '28%' }} data-stalled={timedOut || undefined} />
       </div>
       <small className="freya-boot-foot">Persistent · Evolving · Aligned</small>
     </div>

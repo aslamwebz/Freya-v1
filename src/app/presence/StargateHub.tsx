@@ -22,7 +22,7 @@ const COMPONENTS: readonly ComponentCard[] = [
   { id: 'mind', nav: 'mind/overview', label: 'Mind', description: 'Mind overview and decisions', icon: 'mind', angle: 0 },
   { id: 'focus', nav: 'mind/focus', label: 'Focus & Attention', description: 'Mind focus and attention', icon: 'focus', angle: 36 },
   { id: 'library', nav: 'library/knowledge', label: 'Library', description: 'Knowledge and evidence', icon: 'memory', angle: 72 },
-  { id: 'office', nav: 'office/scene', label: 'Office', description: 'Live agent workstations', icon: 'workforce', angle: 108 },
+  { id: 'office', nav: 'office/agents', label: 'War Room', description: 'Agents, skills and tools', icon: 'workforce', angle: 108 },
   { id: 'world', nav: 'world/digest', label: 'World', description: 'World and news digest', icon: 'world', angle: 144 },
   { id: 'memory', nav: 'mind/memory', label: 'Memory', description: 'Mind memory continuity', icon: 'memory', angle: 180 },
   { id: 'workflows', nav: 'workflows/tasks', label: 'Workflows', description: 'Tasks and execution', icon: 'widgets', angle: 216 },

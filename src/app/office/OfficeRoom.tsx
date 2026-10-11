@@ -16,7 +16,7 @@ export function OfficeRoom({ projection }: { projection: OfficeProjection | null
   const [selected, select] = useState<string | null>(null)
 
   if (!projection || projection.health !== 'ready') return <div className="uw-empty">
-    <h2>Office scene not connected</h2><p>{projection?.reason ?? 'Waiting for Freya to report the Office.'}</p>
+    <h2>War Room scene not connected</h2><p>{projection?.reason ?? 'Waiting for Freya to report the War Room.'}</p>
   </div>
 
   const stations = projection.freya ? [projection.freya, ...projection.stations] : projection.stations
@@ -24,18 +24,18 @@ export function OfficeRoom({ projection }: { projection: OfficeProjection | null
   const current = stations.find(station => station.stationId === selected) ?? projection.freya ?? stations[0] ?? null
   const hidden = projection.counts.floorStationsHidden + projection.counts.workforceStationsHidden + projection.counts.approvalStationsHidden
   return <div className="or-office">
-    <div className="or-toolbar" role="group" aria-label="Office view controls">
-      <button type="button" aria-label="Rotate office left" disabled={flat} onClick={() => setAngle(value => Math.max(-60, value - 12))}>↶</button>
-      <button type="button" aria-label="Rotate office right" disabled={flat} onClick={() => setAngle(value => Math.min(60, value + 12))}>↷</button>
-      <label>Zoom <input aria-label="Office zoom" type="range" min="0.7" max="1.3" step="0.1" value={zoom} onChange={event => setZoom(Number(event.target.value))} /></label>
-      <button type="button" onClick={() => { setAngle(-24); setZoom(1); setFlat(false) }}>Reset office view</button>
+    <div className="or-toolbar" role="group" aria-label="War Room view controls">
+      <button type="button" aria-label="Rotate War Room left" disabled={flat} onClick={() => setAngle(value => Math.max(-60, value - 12))}>↶</button>
+      <button type="button" aria-label="Rotate War Room right" disabled={flat} onClick={() => setAngle(value => Math.min(60, value + 12))}>↷</button>
+      <label>Zoom <input aria-label="War Room zoom" type="range" min="0.7" max="1.3" step="0.1" value={zoom} onChange={event => setZoom(Number(event.target.value))} /></label>
+      <button type="button" onClick={() => { setAngle(-24); setZoom(1); setFlat(false) }}>Reset War Room view</button>
       <button type="button" aria-pressed={flat} onClick={() => setFlat(value => !value)}>Flat view</button>
       <span>{projection.counts.workersWorking} agents working · {projection.counts.approvalsPending} awaiting approval</span>
     </div>
     <div className="or-viewport" data-flat={flat || undefined}>
-      <div className="or-room" role="group" aria-label="Office floor"
+      <div className="or-room" role="group" aria-label="War Room floor"
         style={{ '--office-turn': `${angle}deg`, '--office-zoom': zoom } as CSSProperties}>
-        <div className="or-wall or-wall-back" aria-hidden="true"><span>FREYA / OFFICE</span><i /><i /><i /></div>
+        <div className="or-wall or-wall-back" aria-hidden="true"><span>FREYA / WAR ROOM</span><i /><i /><i /></div>
         <div className="or-wall or-wall-side" aria-hidden="true" />
         <div className="or-zone or-zone-agents" aria-hidden="true">Agents</div>
         <div className="or-zone or-zone-runs" aria-hidden="true">Work in progress</div>
@@ -45,7 +45,7 @@ export function OfficeRoom({ projection }: { projection: OfficeProjection | null
     </div>
     {!projection.stations.length && <p className="uw-summary">No agent workstations reported. Freya’s reported presence is shown.</p>}
     {hidden > 0 && <p className="uw-summary">{hidden} additional stations are not shown in this bounded view.</p>}
-    <div className="or-directory" role="group" aria-label="Office station list">
+    <div className="or-directory" role="group" aria-label="War Room station list">
       {stations.map(station => <button type="button" key={station.stationId} aria-label={`Select ${station.label} · ${station.state}`}
         aria-pressed={current?.stationId === station.stationId} onClick={() => select(station.stationId)}>
         <b>{station.label}</b><span>{station.state}</span>
@@ -59,7 +59,7 @@ export function OfficeRoom({ projection }: { projection: OfficeProjection | null
         {current.kind === 'worker' && <p>{current.openAssignments} open assignments</p>}
       </> : <p>No stations reported.</p>}
     </section>
-    <p className="or-caption">Workstations reflect Freya’s Office. Changing the view does not change the work.</p>
+    <p className="or-caption">Workstations reflect Freya’s War Room. Changing the view does not change the work.</p>
   </div>
 }
 

@@ -319,7 +319,8 @@ export function createLiveAdapter(): LiveAdapter {
       source: 'live',
       data: {
         rows: projection.workers.map((worker) => ({
-          id: worker.workerId, state: worker.state, specialization: worker.specialization,
+          id: worker.workerId, name: worker.name, state: worker.state, specialization: worker.specialization,
+          assignment: worker.assignment, capabilities: worker.capabilities,
         })),
         total: projection.counts.workers,
         working: projection.counts.working,

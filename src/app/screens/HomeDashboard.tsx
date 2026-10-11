@@ -374,7 +374,7 @@ export function HomeDashboard({ screen: requestedScreen, snapshot, generating, n
         <Panel name="people" title="People" icon="workforce" onOpen={open('people')}>
           <div className="hd-people-content"><div><p>Key People</p><>{preview ? <Faces more={home?.morePeople ?? 0} /> : <p>{home?.people?.map(person => person.name).join(' · ') || 'People not connected'}</p>}</></div><div className="hd-people-stats">{preview ? <><span><Glyph name="search" size={13} />{home?.messages ?? 0} new messages</span><span><i />{home?.followUps ?? 0} follow up today</span><span><i />{home?.meetingPrep ?? 0} meeting prep items</span></> : <span>Updates not available</span>}</div></div>
         </Panel>
-        <Panel name="workforce" title="Office" icon="workforce" onOpen={open('office')} meta={<span className="hd-meta"><i />{workers ? `${workers.total} reported` : 'Not connected'}</span>}>
+        <Panel name="workforce" title="War Room" icon="workforce" onOpen={open('office')} meta={<span className="hd-meta"><i />{workers ? `${workers.total} reported` : 'Not connected'}</span>}>
           <div className="hd-workers">{(preview ? [
             { id: 'content', specialization: 'Content Studio', state: 'Creating campaign assets...' },
             { id: 'research', specialization: 'Research Agent', state: 'Monitoring AI & market updates...' },

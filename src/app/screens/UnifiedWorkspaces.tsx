@@ -1,10 +1,10 @@
 import type { UiSnapshot } from '../../ui-v2/state/contract'
-import { MISSION_SECTIONS, LIBRARY_SECTIONS, OFFICE_SECTIONS, resolveRoute } from '../state/routes'
+import { MISSION_SECTIONS, LIBRARY_SECTIONS, resolveRoute } from '../state/routes'
 import { MindWorkspace } from './MindWorkspace'
 import { WorkflowsWorkspace } from '../workflows/WorkflowsWorkspace'
 import { WorldWorkspace } from '../world/WorldWorkspace'
 import { ContextTabs, WorkspaceFrame } from './WorkspaceFrame'
-import { OfficeScene } from '../office/OfficeRoom'
+import { WarRoomWorkspace } from '../office/WarRoomWorkspace'
 import { NotConnected, ResourceGate } from './WorkspaceResource'
 export { NotConnected } from './WorkspaceResource'
 
@@ -41,17 +41,6 @@ export function UnifiedWorkspace({ path, snapshot, onNavigate }: { path: string;
       </ContextTabs>
     </WorkspaceFrame>
   }
-  if (route.destination === 'office') return <WorkspaceFrame title="Office" description="Your agents and the work they are doing." icon="workforce">
-    <ContextTabs label="Office sections" tabs={OFFICE_SECTIONS.map(id => ({ id, label: id === 'scene' ? 'Office scene' : 'Agents' }))}
-      selected={route.section} onSelect={id => onNavigate(`office/${id}`)}>
-      {route.section === 'scene' ? <OfficeScene />
-        : <ResourceGate resource={snapshot.workforce} title="Agents">{data => <>
-          <p className="uw-summary">{data.total} agents reported · {data.working} working</p>
-          {data.rows.length ? <div className="uw-records">{data.rows.map(worker => <article className="uw-record" key={worker.id}>
-            <h2>{worker.specialization ?? worker.id}</h2><span className="uw-status">{worker.state}</span><p className="uw-id">{worker.id}</p>
-          </article>)}</div> : <p className="uw-empty">No agents reported.</p>}
-        </>}</ResourceGate>}
-    </ContextTabs>
-  </WorkspaceFrame>
+  if (route.destination === 'office') return <WarRoomWorkspace section={route.section} snapshot={snapshot} onNavigate={onNavigate} />
   return null
 }

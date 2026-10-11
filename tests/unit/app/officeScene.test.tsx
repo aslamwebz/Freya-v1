@@ -22,7 +22,7 @@ function office(stations: readonly OfficeStation[] = []): OfficeProjection {
 describe('the live Office scene', () => {
   it('distinguishes unavailable Office from an empty live room', () => {
     const view = render(<OfficeRoom projection={ABSENT_OFFICE_PROJECTION} />)
-    expect(screen.getByText(/Office scene not connected/i)).toBeInTheDocument()
+    expect(screen.getByText(/War Room scene not connected/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Inspect Freya/ })).toBeNull()
     view.rerender(<OfficeRoom projection={office()} />)
     expect(screen.getByText(/No agent workstations reported/i)).toBeInTheDocument()
@@ -42,12 +42,12 @@ describe('the live Office scene', () => {
 
   it('changes the view without changing reported agent state', () => {
     render(<OfficeRoom projection={office([station('worker-7', 'worker', 'blocked')])} />)
-    const room = screen.getByRole('group', { name: 'Office floor' })
+    const room = screen.getByRole('group', { name: 'War Room floor' })
     const initial = room.getAttribute('style')
-    fireEvent.click(screen.getByRole('button', { name: 'Rotate office right' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate War Room right' }))
     expect(room.getAttribute('style')).not.toBe(initial)
     expect(screen.getByRole('button', { name: /Inspect Research agent/ })).toHaveTextContent('blocked')
-    fireEvent.click(screen.getByRole('button', { name: 'Reset office view' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset War Room view' }))
     expect(room.getAttribute('style')).toBe(initial)
   })
 

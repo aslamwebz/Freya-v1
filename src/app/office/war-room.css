@@ -1,0 +1,30 @@
+.wr-inventory { display: grid; gap: 20px; min-width: 0; }
+.wr-agent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; }
+.wr-agent { min-width: 0; overflow-wrap: anywhere; }
+.wr-agent-heading { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.wr-agent-heading h2 { margin: 0 0 6px; }
+.wr-agent-monogram { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border: 1px solid #7cdfff35; border-radius: 12px; background: #7cdfff0b; color: #b5eaff; font-size: 20px; }
+.wr-agent[data-unreported] { border-style: dashed; }
+.wr-agent[data-unreported] .uw-status, .wr-agent small { color: #8fa9bc; }
+.wr-agent-capabilities { font-size: 12px; }
+.wr-inventory .skills-surface { padding: 0; min-width: 0; }
+.wr-inventory .skills-section { min-width: 0; }
+.wr-inventory input, .wr-inventory textarea, .wr-inventory select { max-width: 100%; box-sizing: border-box; }
+.hd-dashboard .wr-inventory button { padding: 8px 12px; border: 1px solid #7cdfff35; border-radius: 8px; color: #b5eaff; background: #7cdfff0b; font: inherit; font-size: 12px; cursor: pointer; }
+.hd-dashboard .wr-inventory button:disabled { opacity: .4; cursor: not-allowed; }
+.hd-dashboard .wr-inventory button:focus-visible { outline: 2px solid #91ecff; outline-offset: 3px; }
+.wr-inventory .skills-surface { display: grid; gap: 24px; height: auto; user-select: text; }
+.wr-inventory .skills-posture, .wr-inventory .skills-detail { display: grid; gap: 8px; padding: 18px; border: 1px solid #7cdfff30; border-radius: 12px; background: #101a24; }
+.wr-inventory .skills-posture b { font-size: 14px; color: #b5eaff; }
+.wr-inventory .skills-posture span { display: block; font-size: 13px; line-height: 1.6; color: #9eb6c8; }
+.wr-inventory .skills-section h2 { margin: 0 0 14px; font-size: 18px; font-weight: 400; }
+.wr-inventory .skills-section label { display: grid; gap: 7px; max-width: 680px; margin-bottom: 14px; color: #9eb6c8; font-size: 13px; }
+.wr-inventory :is(input, select, textarea) { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid #7cdfff30; border-radius: 8px; color: #d8f1ff; background: #0b131c; font: inherit; }
+.wr-inventory :is(input, select, textarea):focus-visible { outline: 2px solid #91ecff; outline-offset: 2px; }
+.wr-inventory .skills-section button { margin: 0 8px 8px 0; }
+.wr-inventory :is(.skills-list, .skills-proposals, .skills-selection, .skills-detail-contract) { display: grid; gap: 12px; padding: 0; margin: 0; list-style: none; }
+.wr-inventory :is(.skills-list, .skills-proposals, .skills-selection, .skills-detail-contract) li { min-width: 0; padding: 18px; border: 1px solid #7cdfff25; border-radius: 12px; background: #101a24; overflow-wrap: anywhere; }
+.wr-inventory .skills-name { display: block; color: #d8f1ff; font-size: 16px; margin-bottom: 10px; }
+.wr-inventory :is(.skills-state, .skills-tags, .skills-evidence, .skills-retired, .skills-detail-provenance) { display: block; margin-top: 6px; color: #9eb6c8; font-size: 12px; line-height: 1.6; }
+.wr-inventory .skills-actions { display: block; margin-top: 14px; }
+.wr-inventory :is(.skills-note, .skills-limits, .skills-detail-note, .skills-none, .skills-absent) { max-width: 80ch; color: #9eb6c8; font-size: 13px; line-height: 1.6; }

@@ -57,8 +57,8 @@ describe('the shipping primary destinations', () => {
     render(<Harness />)
     const nav = screen.getByRole('navigation', { name: 'Primary' })
     expect(Array.from(nav.querySelectorAll('.hd-place, .chats-history-title'), node => node.textContent?.trim()))
-      .toEqual(['Home', 'Chats', 'Mind', 'Missions', 'Workflows', 'World', 'Library', 'Office', 'Settings'])
-    for (const name of ['Mind', 'Missions', 'Workflows', 'World', 'Library', 'Office', 'Settings', 'Chats', 'Home']) {
+      .toEqual(['Home', 'Chats', 'Mind', 'Missions', 'Workflows', 'World', 'Library', 'War Room', 'Settings'])
+    for (const name of ['Mind', 'Missions', 'Workflows', 'World', 'Library', 'War Room', 'Settings', 'Chats', 'Home']) {
       fireEvent.click(primary(name))
       expect(primary(name)).toHaveAttribute('aria-current', 'page')
     }
@@ -104,7 +104,7 @@ describe('the shipping primary destinations', () => {
   it('shows the chat bar only on Home and Chats while retaining the draft across every page', () => {
     render(<Harness />)
     fireEvent.change(screen.getByRole('textbox', { name: 'Ask Freya' }), { target: { value: 'Keep this draft while navigating' } })
-    for (const name of ['Mind', 'Missions', 'Workflows', 'World', 'Library', 'Office', 'Settings']) {
+    for (const name of ['Mind', 'Missions', 'Workflows', 'World', 'Library', 'War Room', 'Settings']) {
       fireEvent.click(primary(name))
       expect(screen.queryByRole('form', { name: 'Freya composer' })).toBeNull()
       expect(screen.queryByRole('textbox', { name: 'Ask Freya' })).toBeNull()
@@ -168,9 +168,9 @@ describe('the shipping primary destinations', () => {
     ['focus', 'Mind', 'Focus & Attention'], ['memory', 'Mind', 'Memory'],
     ['library/mind/focus', 'Mind', 'Focus & Attention'], ['library/mind/memory', 'Mind', 'Memory'], ['library/mind', 'Mind', 'Overview'],
     ['people', 'Library', 'People'], ['world', 'World', 'Daily digest'], ['library/world', 'World', 'Daily digest'],
-    ['life', 'Mind', 'Memory'], ['workforce', 'Office', 'Agents'],
+    ['life', 'Mind', 'Memory'], ['workforce', 'War Room', 'Agents'],
     ['work', 'Missions', 'Runs'], ['files', 'Library', 'Files'],
-    ['library/search', 'Library', 'Search'], ['office/scene', 'Office', 'Office scene'],
+    ['library/search', 'Library', 'Search'], ['office/scene', 'War Room', 'Scene'],
   ])('resolves legacy or nested %s into %s / %s', (route, destination, section) => {
     render(<Harness initial={route} />)
     expect(primary(destination)).toHaveAttribute('aria-current', 'page')
@@ -183,7 +183,7 @@ describe('the shipping primary destinations', () => {
     expect(primary('Missions')).toHaveAttribute('aria-current', 'page')
     fireEvent.click(primary('Home'))
     fireEvent.click(screen.getByRole('button', { name: /View your team/ }))
-    expect(primary('Office')).toHaveAttribute('aria-current', 'page')
+    expect(primary('War Room')).toHaveAttribute('aria-current', 'page')
   })
 
   it('shows real Mission and worker projections, preserving stale and unavailable states', () => {
@@ -201,7 +201,7 @@ describe('the shipping primary destinations', () => {
     expect(screen.getByRole('tabpanel', { name: 'Missions' })).toHaveTextContent(/2.*not shown/i)
     fireEvent.click(screen.getByRole('tab', { name: 'Runs' }))
     expect(screen.getByRole('tabpanel', { name: 'Runs' })).toHaveTextContent('run-live-1')
-    fireEvent.click(primary('Office'))
+    fireEvent.click(primary('War Room'))
     fireEvent.click(screen.getByRole('tab', { name: 'Agents' }))
     expect(screen.getByRole('tabpanel', { name: 'Agents' })).toHaveTextContent('Research')
     expect(screen.getByRole('tabpanel', { name: 'Agents' })).toHaveTextContent('blocked')
@@ -272,9 +272,9 @@ describe('the shipping primary destinations', () => {
     expect(screen.queryByRole('searchbox', { name: 'Search conversations' })).toBeNull()
   })
 
-  it('opens Office to the room and presents available Mind pages independently', () => {
+  it('opens War Room to Agents and presents available Mind pages independently', () => {
     render(<Harness initial="office" snapshot={{ ...NO_CORE_SNAPSHOT, mind: { status: 'ready', source: 'live', data: liveMind() } }} />)
-    expect(screen.getByRole('tabpanel', { name: 'Office scene' })).toBeInTheDocument()
+    expect(screen.getByRole('tabpanel', { name: 'Agents' })).toBeInTheDocument()
     fireEvent.click(primary('Mind'))
     expect(screen.getByRole('tabpanel', { name: 'Overview' })).toHaveTextContent('Active threads')
     expect(screen.queryByRole('heading', { name: 'Self model' })).toBeNull()
@@ -296,8 +296,8 @@ describe('the shipping primary destinations', () => {
       workforce: { status: 'ready', source: 'live', data: { rows: [{ id: 'worker-1', state: 'working', specialization: 'Research' }], total: 1, working: 1 } },
     }} />)
     expect(screen.getByRole('region', { name: 'Recent activity' })).toHaveTextContent('A step was verified')
-    expect(screen.getByRole('region', { name: 'Office' })).toHaveTextContent('1 reported')
-    expect(screen.getByRole('region', { name: 'Office' })).toHaveTextContent('Research')
+    expect(screen.getByRole('region', { name: 'War Room' })).toHaveTextContent('1 reported')
+    expect(screen.getByRole('region', { name: 'War Room' })).toHaveTextContent('Research')
   })
 
   it('reports unavailable Home activity instead of showing an empty feed', () => {

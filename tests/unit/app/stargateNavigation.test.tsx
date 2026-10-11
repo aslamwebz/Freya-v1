@@ -6,7 +6,7 @@ vi.mock('../../../src/app/presence/LiveOrb', () => ({ LiveOrb: () => <div aria-l
 afterEach(cleanup)
 const targets = [
   ['Mind', 'mind/overview'], ['Focus & Attention', 'mind/focus'], ['Library', 'library/knowledge'],
-  ['Office', 'office/scene'], ['World', 'world/digest'], ['Memory', 'mind/memory'],
+  ['War Room', 'office/agents'], ['World', 'world/digest'], ['Memory', 'mind/memory'],
   ['Workflows', 'workflows/tasks'], ['Settings', 'settings/appearance'], ['Chats', 'chat'], ['Missions', 'missions/missions'],
 ] as const
 
@@ -36,7 +36,7 @@ it('maps legacy component-fire signals to the renamed gate targets without navig
   const navigate = vi.fn()
   render(<StargateHub state="calm" energy={0} onNavigate={navigate} />)
   act(() => fireFreyaComponents(['mission', 'workforce', 'life', 'foundry', 'relay', 'people']))
-  for (const label of ['Missions', 'Office', 'Workflows', 'Settings', 'Chats', 'Library']) {
+  for (const label of ['Missions', 'War Room', 'Workflows', 'Settings', 'Chats', 'Library']) {
     expect(screen.getByRole('button', { name: `Open ${label}` })).toHaveAttribute('data-hot', 'true')
   }
   expect(navigate).not.toHaveBeenCalled()
@@ -44,5 +44,5 @@ it('maps legacy component-fire signals to the renamed gate targets without navig
 
 it('highlights current execution pages for the delegating state', () => {
   render(<StargateHub state="delegating" energy={1} onNavigate={vi.fn()} />)
-  for (const label of ['Office', 'Workflows', 'Missions']) expect(screen.getByRole('button', { name: `Open ${label}` })).toHaveAttribute('data-hot', 'true')
+  for (const label of ['War Room', 'Workflows', 'Missions']) expect(screen.getByRole('button', { name: `Open ${label}` })).toHaveAttribute('data-hot', 'true')
 })

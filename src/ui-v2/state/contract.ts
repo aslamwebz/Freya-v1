@@ -45,7 +45,11 @@ export interface MissionRow {
 export interface MissionView {
   readonly rows: readonly MissionRow[]; readonly total: number; readonly hidden: number; readonly durable: boolean
 }
-export interface WorkerRow { readonly id: string; readonly state: string; readonly specialization: string | null }
+export interface WorkerRow {
+  readonly id: string; readonly name?: string; readonly state: string; readonly specialization: string | null
+  readonly assignment?: { readonly kind: string; readonly id: string; readonly label: string } | null
+  readonly capabilities?: readonly string[]
+}
 export interface WorkforceView { readonly rows: readonly WorkerRow[]; readonly total: number; readonly working: number }
 export interface ActivityRow { readonly id: string; readonly text: string; readonly at: number; readonly sequence: number; readonly tone: string }
 

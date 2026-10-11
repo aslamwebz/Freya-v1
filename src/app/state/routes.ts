@@ -2,7 +2,7 @@ export type Destination = 'home' | 'chat' | 'mind' | 'missions' | 'workflows' | 
 
 export const PRIMARY_DESTINATIONS = [
   ['home', 'Home', 'home'], ['chat', 'Chats', 'chat'], ['mind', 'Mind', 'mind'], ['missions', 'Missions', 'mission'],
-  ['workflows', 'Workflows', 'widgets'], ['world', 'World', 'world'], ['library', 'Library', 'memory'], ['office', 'Office', 'workforce'], ['settings', 'Settings', 'settings'],
+  ['workflows', 'Workflows', 'widgets'], ['world', 'World', 'world'], ['library', 'Library', 'memory'], ['office', 'War Room', 'workforce'], ['settings', 'Settings', 'settings'],
 ] as const
 
 export const MIND_SECTIONS = ['overview', 'focus', 'memory', 'self'] as const
@@ -10,7 +10,7 @@ export const MISSION_SECTIONS = ['missions', 'goals', 'runs', 'activity'] as con
 export const WORKFLOW_SECTIONS = ['tasks', 'running', 'scheduling', 'workflows'] as const
 export const WORLD_SECTIONS = ['digest', 'events', 'tech', 'research', 'sources'] as const
 export const LIBRARY_SECTIONS = ['knowledge', 'people', 'files', 'search'] as const
-export const OFFICE_SECTIONS = ['scene', 'agents'] as const
+export const OFFICE_SECTIONS = ['agents', 'skills', 'tools', 'scene'] as const
 export const SETTINGS_SECTIONS = ['appearance', 'provider', 'voice', 'privacy', 'security', 'spending', 'about'] as const
 export const ADVANCED_SECTIONS = ['foundry', 'relay', 'harness', 'context', 'diagnostics'] as const
 
@@ -21,7 +21,9 @@ const aliases: Readonly<Record<string, string>> = {
   'library/mind': 'mind/overview', 'library/mind/focus': 'mind/focus', 'library/mind/memory': 'mind/memory',
   library: 'library/knowledge', people: 'library/people', world: 'world/digest', 'library/world': 'world/digest', files: 'library/files', search: 'library/search',
   activity: 'missions/activity', 'missions/chats': 'missions/missions', 'missions/files': 'missions/missions', 'missions/heartbeat': 'missions/missions',
-  office: 'office/scene', workforce: 'office/agents', settings: 'settings/appearance',
+  office: 'office/agents', 'war-room': 'office/agents', workforce: 'office/agents', settings: 'settings/appearance',
+  skills: 'office/skills', tools: 'office/tools', 'settings/advanced/skills': 'office/skills',
+  'war-room/agents': 'office/agents', 'war-room/skills': 'office/skills', 'war-room/tools': 'office/tools', 'war-room/scene': 'office/scene',
   create: 'settings/advanced/foundry', foundry: 'settings/advanced/foundry', relay: 'settings/advanced/relay',
   harness: 'settings/advanced/harness', context: 'settings/advanced/context', security: 'settings/security', 'settings/advanced/security': 'settings/security', diagnostics: 'settings/advanced/diagnostics',
 }

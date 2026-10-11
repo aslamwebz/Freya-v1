@@ -3,17 +3,20 @@ import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
+import { acquireAcceptanceProcesses } from './acceptance-processes.mjs'
 
 const root = resolve('.'), require = createRequire(import.meta.url)
 const { connectRpc } = require('../dist-electron/runtime-rpc.cjs')
 await mkdir(join(root, '.kilo'), { recursive: true })
+const processes = await acquireAcceptanceProcesses(join(root, '.kilo'))
 const profile = await mkdtemp(join(root, '.kilo', 'supervisor-acceptance-'))
 const env = { ...process.env, FREYA_E2E: '1', FREYA_RUNTIME_TEST_PROFILE: '1', FREYA_DEV_PROVIDER: 'echo', FREYA_CDP_PORT: '0' }
 const child = spawn(process.platform === 'win32' ? process.env.ComSpec : process.execPath,
   process.platform === 'win32' ? ['/d', '/c', 'FreyaDebug.cmd', '--no-build', `--profile=${profile}`] : ['scripts/debug-stack.mjs', '--no-build', `--profile=${profile}`],
   { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+processes.track(child)
 let output = ''
-for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { output += data; process.stdout.write(data) })
+for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { output = (output + data).slice(-1_000_000); process.stdout.write(data) })
 const wait = async (read, accepts, label, timeout = 30_000) => {
   const deadline = Date.now() + timeout
   let value
@@ -48,10 +51,10 @@ try {
   assert.equal(restarted.components.core, original.components.core); assert.equal(restarted.components.superapp, reopened.components.superapp)
   console.log('PASS FreyaDebug.cmd launches and supervises real independent processes; automatic health and degraded status are truthful')
 } finally {
-  if (client?.connected) { await client.call('supervisor.shutdown').catch(() => {}); client.close() }
+  if (client?.connected) { await client.call('supervisor.shutdown', null, 8_000).catch(() => {}); client.close() }
   const deadline = Date.now() + 15_000
-  while (child.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100))
-  if (child.exitCode === null) child.kill()
+  while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100))
+  await processes.close()
 }
 assert.equal(child.exitCode, 0, 'explicit full-stack shutdown should exit cleanly')
 console.log(`PASS explicit full-stack shutdown; isolated profile=${profile}`)

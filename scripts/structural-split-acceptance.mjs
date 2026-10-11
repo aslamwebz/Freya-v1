@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { _electron } from 'playwright-core'
 import { createServer } from 'node:http'
+import { acquireAcceptanceProcesses } from './acceptance-processes.mjs'
 /* global window -- evaluated inside the actual renderer by Playwright */
 
 const require = createRequire(import.meta.url)
@@ -14,6 +15,7 @@ const tools = process.argv.includes('--tools')
 const { connectRpc } = require('../dist-electron/runtime-rpc.cjs')
 const root = resolve('.'), id = randomUUID(), token = () => randomBytes(32).toString('hex')
 await mkdir(join(root, '.kilo'), { recursive: true })
+const processes = await acquireAcceptanceProcesses(join(root, '.kilo'), live ? 300_000 : 180_000)
 const profile = await mkdtemp(join(root, '.kilo', 'split-acceptance-'))
 const address = name => process.platform === 'win32' ? `\\\\.\\pipe\\freya-${name}-${id}` : join(profile, `${name}.sock`)
 const ownerToken = token(), intelligenceToken = token(), supervisorToken = token()
@@ -24,7 +26,6 @@ const coreEnv = { ...common, FREYA_OWNER_TOKEN: ownerToken, FREYA_INTELLIGENCE_T
 const freyaEnv = { ...common, FREYA_INTELLIGENCE_TOKEN: intelligenceToken }
 const uiEnv = { ...common, FREYA_OWNER_TOKEN: ownerToken, FREYA_INTELLIGENCE_HEALTH_TOKEN: intelligenceToken, FREYA_DEV_USER_DATA: profile }
 let core, freya, ui, page
-const children = []
 let freyaOutput = '', toolExecutions = 0
 const web = createServer(async (request, response) => {
   if (tools && request.url === '/v1/chat/completions') {
@@ -48,9 +49,9 @@ const browserUrl = `http://127.0.0.1:${web.address().port}/`
 if (tools) for (const env of [coreEnv, uiEnv]) Object.assign(env, { FREYA_ALLOW_LIVE_MODEL: '1', MINIMAX_API_KEY: '', NANOGPT_API_KEY: '', OPENAI_API_KEY: '', LOCAL_MODEL_BASE_URL: `${browserUrl}v1`, LOCAL_MODEL_MODEL: 'split-tools-fixture' })
 const launch = (name, file, env, electron = false) => {
   const child = spawn(electron ? require('electron') : process.execPath, [file], { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-  child.stdout.on('data', data => { if (name === 'Freya') freyaOutput += data; process.stdout.write(`[${name}] ${data}`) })
+  child.stdout.on('data', data => { if (name === 'Freya') freyaOutput = (freyaOutput + data).slice(-1_000_000); process.stdout.write(`[${name}] ${data}`) })
   child.stderr.on('data', data => process.stderr.write(`[${name}] ${data}`))
-  children.push(child); return child
+  return processes.track(child)
 }
 const waitUntil = async (read, predicate, label, timeout = 30_000) => {
   const deadline = Date.now() + timeout
@@ -67,17 +68,14 @@ const health = async (endpoint, auth) => {
 }
 const openUi = async () => {
   ui = await _electron.launch({ executablePath: require('electron'), args: ['.', '--dev'], env: uiEnv, cwd: root, timeout: 30_000 })
+  processes.track(ui.process())
   page = await ui.firstWindow()
   await page.waitForFunction(() => typeof window.freyaHost?.coreSubmit === 'function', { timeout: 30_000 })
   await waitUntil(() => health(address('ui-health'), ownerToken), value => value.lifecycle === 'ready', 'Superapp readiness')
 }
 const submit = (command, payload) => page.evaluate(({ command, payload }) => window.freyaHost.coreSubmit(command, payload), { command, payload })
 const browser = request => page.evaluate(request => window.freyaHost.browserCommand(request), request)
-const kill = async child => {
-  if (child.exitCode !== null || child.signalCode !== null) return
-  const exit = new Promise(resolve => child.once('exit', resolve))
-  child.kill(); await exit
-}
+const kill = processes.stop
 
 try {
   core = launch('Core', join(root, 'dist-electron/core.cjs'), coreEnv, true)
@@ -196,8 +194,10 @@ try {
   console.log('PASS Core restart recovers encrypted chat without repeating inference; STOP ALL prevents a new provider call')
   console.log(`EVIDENCE profile=${profile}; Core=${core.pid}; Freya=${freya.pid}; Superapp=${ui.process().pid}`)
 } finally {
-  if (ui) await ui.close().catch(() => {})
-  for (const child of children) await kill(child)
-  web.closeAllConnections()
-  await new Promise(resolve => web.close(resolve))
+  try {
+    if (ui) await Promise.race([ui.close(), new Promise(resolve => setTimeout(resolve, 3_000))]).catch(() => {})
+  } finally {
+    try { await processes.close() }
+    finally { web.closeAllConnections(); await new Promise(resolve => web.close(resolve)) }
+  }
 }

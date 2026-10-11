@@ -5,12 +5,8 @@ import type { Capability, PrincipalId } from '../../shared/contracts/security'
 import {
   sanitiseCapabilityInput,
   type WorkCapability,
-  type WorkCapabilityContext,
   type WorkCapabilityRequest,
-  type WorkCapabilityResult,
-  type WorkObservationContent,
   type WorkRegistry,
-  type WorkVerificationOutcome,
 } from './capability'
 import { initialWorkState, reduceWorkState, type WorkState } from './state'
 import {
@@ -21,6 +17,8 @@ import {
 } from './projection'
 import { validateWorkPlan, resolveWorkLimits } from './plan-validation'
 import { ApprovalDeadlineScheduler } from './approval-deadlines'
+import { WorkStepExecutor, type LiveCapabilityCall, type LiveWorkPlan } from './step-executor'
+export { normaliseObservation } from './step-executor'
 import {
   canTransitionRun,
   canTransitionStep,
@@ -140,87 +138,6 @@ export interface WorkEngineOptions {
   stopAllReason?: () => string
 }
 
-/** One planned Step as this process holds it: the request plus what was allowed. */
-interface LivePlan {
-  readonly stepId: string
-  readonly key: string
-  readonly index: number
-  readonly capabilityName: string
-  readonly verifierName: string
-  readonly requiresApproval: boolean
-  /** Sanitised at `createRun`. Never journalled, never projected. */
-  readonly input: Record<string, unknown>
-}
-
-interface LiveCapabilityCall {
-  readonly controller: AbortController
-  /**
-   * Resolves when this Run's deadline expires.
-   *
-   * Raced against the capability *and* the verifier rather than merely aborting
-   * them, because aborting only *asks*. A capability or a verifier that ignores its
-   * signal would otherwise hold this Run open indefinitely, and a ceiling that code
-   * can overrule by ignoring an argument is not a ceiling.
-   */
-  readonly expired: Promise<'duration'>
-  /**
-   * Resolves when the owner cancels.
-   *
-   * Kept separate from `expired` for two reasons. Cancellation must stay
-   * distinguishable from a deadline, which is the whole point of writing two
-   * different records; and, more practically, a cancel that had to wait out the
-   * remaining budget would feel broken — a hanging verifier would keep a Run alive
-   * for up to fifteen minutes after somebody pressed stop.
-   */
-  readonly cancelled: Promise<'cancelled'>
-  /** Called by `cancelRun` in the same synchronous turn as the abort. */
-  signalCancel(): void
-  /** True once the deadline has fired, even if nothing has noticed yet. */
-  fired(): boolean
-  /** Clears the timer. Called exactly once, from a `finally`. */
-  clear(): void
-}
-
-/**
- * How one capability call ended, as the engine sees it.
- *
- * A discriminated union rather than a value-or-throw, because the four outcomes
- * have four genuinely different settlements: `resolved` continues into observation
- * and verification, `rejected` is a failure the Step may retry, `expired` is the
- * duration ceiling, and `cancelled` is a person. Collapsing `resolved` and `expired`
- * — which is what a bare `await` does — is precisely how a slow capability used to
- * be able to finish a Run after its budget was gone.
- */
-type CapabilityOutcome =
-  | { kind: 'resolved'; value: WorkCapabilityResult }
-  | { kind: 'rejected'; error: unknown }
-  | { kind: 'expired' }
-  | { kind: 'cancelled' }
-
-/**
- * How one verification ended.
- *
- * The same four-way shape, for the same reason: a verifier is code, and `answered`
- * and `expired` must not be collapsed, or a late `passed` completes a Run whose
- * budget was already gone.
- */
-type VerificationOutcome =
-  | { kind: 'answered'; verdict: WorkVerificationOutcome }
-  | { kind: 'rejected'; error: unknown }
-  | { kind: 'expired' }
-  | { kind: 'cancelled' }
-
-/**
- * Which half of a Step's active path a deadline landed in.
- *
- * It changes only one thing — whether the Action is recorded as failed — and that
- * difference is the whole point. A capability that overran never completed, so its
- * action fails. A verifier that overran comes *after* an action that completed
- * cleanly, and rewriting that action as failed would be a false record: the
- * capability did return.
- */
-type DeadlinePhase = 'capability' | 'verification'
-
 /**
  * How long shutdown waits for running Run loops to settle.
  *
@@ -242,7 +159,7 @@ export class WorkEngine {
   /** taskId → its title. In memory only; never journalled. */
   private readonly taskTitles = new Map<string, string>()
   /** runId → its plan. In memory only; this is exactly what a restart loses. */
-  private readonly plans = new Map<string, readonly LivePlan[]>()
+  private readonly plans = new Map<string, readonly LiveWorkPlan[]>()
   /** The capability call executing right now. A process fact, like the gateway's. */
   private readonly calling = new Map<string, LiveCapabilityCall>()
   /** The Run loop currently driving steps. Also a process fact. */
@@ -260,6 +177,7 @@ export class WorkEngine {
   private readonly deadlineHit = new Map<string, number>()
   /** Pending approval expiry timers. At most maxPendingApprovals exist. */
   private readonly approvalDeadlines: ApprovalDeadlineScheduler
+  private readonly stepExecutor: WorkStepExecutor
   /** Per-Run/Step/Approval write queue, so two writers cannot read the same source status. */
   private readonly queues = new Map<string, Promise<void>>()
 
@@ -268,6 +186,30 @@ export class WorkEngine {
   private closed = false
 
   constructor(private readonly options: WorkEngineOptions) {
+    this.stepExecutor = new WorkStepExecutor({
+      state: () => this.work,
+      plans: this.plans,
+      calling: this.calling,
+      cancelRequested: this.cancelRequested,
+      deadlineHit: this.deadlineHit,
+      observationSummaries: this.observationSummaries,
+      registry: options.registry,
+      authorizer: options.authorizer,
+      principalId: options.principalId,
+      now: () => this.now(),
+      newId: () => this.newId(),
+      settlement: {
+        emit: (type, payload) => this.emit(type, payload),
+        writeStep: (stepId, to, payload) => this.writeStep(stepId, to, payload),
+        grantedApproval: (step) => this.grantedApproval(step),
+        requestApproval: (runId, stepId, live, capability, justification) => this.requestApproval(runId, stepId, live, capability, justification),
+        recordGuardDenial: (reason, capability) => this.recordGuardDenial(reason, capability),
+        finishCancelled: (runId, reason) => this.finishCancelled(runId, reason),
+        exhaustedLimit: (runId) => this.exhaustedLimit(runId),
+        recordLimit: (runId, limit) => this.recordLimit(runId, limit),
+        failStep: (runId, stepId, reason) => this.failStep(runId, stepId, reason),
+      },
+    })
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => randomUUID())
     this.approvalDeadlines = new ApprovalDeadlineScheduler({
@@ -570,7 +512,7 @@ export class WorkEngine {
     if (problem !== null) return { operation: 'run-created', ok: false, reason: problem }
 
     const limits = this.resolveLimits(plan.limits)
-    const live: LivePlan[] = []
+    const live: LiveWorkPlan[] = []
     const seeds: { stepId: string; key: string; capability: string; verifier: string }[] = []
     for (const [index, step] of plan.steps.entries()) {
       const stepId = this.newId()
@@ -956,7 +898,7 @@ export class WorkEngine {
         await this.finishRun(runId)
         return
       }
-      if (!(await this.runStep(runId, selection))) return
+      if (!(await this.stepExecutor.execute(runId, selection))) return
     }
   }
 
@@ -1035,441 +977,6 @@ export class WorkEngine {
    * `passed` after the budget was gone would complete the Run — so a late verdict is
    * discarded, and no `work.verification.completed` is written at all.
    */
-  private async runStep(runId: string, stepId: string): Promise<boolean> {
-    const run = this.work.runs.get(runId)
-    const step = this.work.steps.get(stepId)
-    const live = this.plans.get(runId)?.find((candidate) => candidate.stepId === stepId)
-    if (!run || !step || !live) return false
-
-    const capability = this.options.registry.capability(live.capabilityName)
-    if (!capability) return this.failStep(runId, stepId, WORK_REASONS.capabilityMissing)
-    const verifier = this.options.registry.verifier(live.verifierName)
-    if (!verifier) return this.failStep(runId, stepId, WORK_REASONS.verifierMissing)
-
-    // A step parked in `awaiting_approval` has already cleared its gate, and so has
-    // one whose recorded approval was granted — otherwise approving a consequential
-    // request would simply park the step in front of the same gate again.
-    const granted = this.grantedApproval(step)
-    if (step.status !== 'awaiting_approval' && !granted) {
-      const guard = this.options.authorizer.evaluate(capability.capability)
-      if (!guard.allowed) {
-        if (guard.outcome === 'approval_required') {
-          return this.requestApproval(runId, stepId, live, capability, guard.reason)
-        }
-        await this.recordGuardDenial(guard.reason, capability.capability)
-        return this.failStep(runId, stepId, guard.reason)
-      }
-
-      if (capability.risk === 'consequential' || live.requiresApproval) {
-        return this.requestApproval(
-          runId,
-          stepId,
-          live,
-          capability,
-          capability.risk === 'consequential'
-            ? 'this capability is consequential and will not run without your approval'
-            : 'this step asked to be approved before it runs',
-        )
-      }
-    }
-
-    if (this.cancelRequested.has(runId)) {
-      await this.finishCancelled(runId, this.cancelRequested.get(runId) ?? WORK_REASONS.cancelled)
-      return false
-    }
-
-    const ceiling = this.exhaustedLimit(runId)
-    if (ceiling !== null) {
-      await this.recordLimit(runId, ceiling)
-      return this.failStep(runId, stepId, limitReason(ceiling))
-    }
-
-    const attempt = step.attempts + 1
-    const actionId = this.newId()
-    const request: WorkCapabilityRequest = {
-      runId,
-      stepId,
-      stepKey: step.key,
-      actionId,
-      attempt,
-      input: live.input,
-      correlationId: runId,
-    }
-
-    const controller = new AbortController()
-    /**
-     * The remaining wall clock for this Run, computed *before* the capability is
-     * called rather than before the next one. Checking it between Actions was not a
-     * ceiling at all: a capability could start a second before the deadline and run
-     * for an hour afterwards, and the Run would still be allowed to continue.
-     */
-    const deadlineAt = Date.parse(run.startedAt ?? this.now().toISOString()) + run.limits.maxDurationMs
-    const remainingMs = deadlineAt - this.now().getTime()
-    if (remainingMs <= 0) {
-      await this.recordLimit(runId, 'duration')
-      return this.failStep(runId, stepId, limitReason('duration'))
-    }
-
-    const armed = this.armDeadline(runId, controller, remainingMs)
-    this.calling.set(runId, armed)
-    const began = this.now().getTime()
-
-    try {
-      await this.emit('work.step.started', {
-        runId,
-        stepId,
-        stepKey: step.key,
-        index: step.index,
-        capability: capability.name,
-        attempt,
-      })
-      await this.emit('work.action.started', {
-        runId,
-        stepId,
-        actionId,
-        attempt,
-        capability: capability.name,
-        principal: this.options.principalId,
-      })
-
-      /**
-       * Raced, not awaited.
-       *
-       * Aborting asks a capability to stop; it does not make it stop. A capability
-       * that ignores its signal would hold this Run open indefinitely, so the
-       * engine stops *waiting* at the deadline and settles the Run itself. The
-       * capability's promise is still given both handlers, so if it eventually
-       * settles — or rejects — nothing escapes as an unhandled rejection and its
-       * result is simply ignored. That is the honest boundary: JavaScript cannot
-       * forcibly terminate arbitrary code, so the engine stops *believing* it
-       * instead of pretending it stopped.
-       */
-      const context: WorkCapabilityContext = { signal: controller.signal, now: this.now }
-      const outcome = await Promise.race([
-        capability.execute(request, context).then(
-          (value): CapabilityOutcome => ({ kind: 'resolved', value }),
-          (error: unknown): CapabilityOutcome => ({ kind: 'rejected', error }),
-        ),
-        armed.expired.then((): CapabilityOutcome => ({ kind: 'expired' })),
-        armed.cancelled.then((): CapabilityOutcome => ({ kind: 'cancelled' })),
-      ])
-
-      const elapsed = Math.max(0, this.now().getTime() - began)
-
-      // Cancellation is checked first, and always. It wins a race with the
-      // deadline because a person pressing stop is a more specific fact than a
-      // budget running out, and because `cancelRun` set its flag in the same
-      // synchronous turn as the abort.
-      if (this.cancelRequested.has(runId)) {
-        const reason = this.cancelRequested.get(runId) ?? WORK_REASONS.cancelled
-        await this.emit('work.action.cancelled', { runId, stepId, actionId, attempt, reason })
-        await this.writeStep(stepId, 'cancelled', { runId, reason })
-        await this.finishCancelled(runId, reason)
-        return false
-      }
-
-      /**
-       * A capability that resolved *after* the deadline is not a success.
-       *
-       * `armed.fired()` rather than only the race outcome, because a capability can
-       * win the race microseconds before the timer fires. Without this check a slow
-       * capability could complete an Action after its budget expired and the Run
-       * would go on to `completed` — which is the exact failure this ceiling exists
-       * to prevent.
-       */
-      if (outcome.kind === 'cancelled') {
-        // The race was released by the owner rather than by the clock. `cancelRun`
-        // sets its flag and releases the race in the same synchronous turn, so the
-        // branch above normally gets there first; this covers the ordering where the
-        // release lands first. The reason comes from the same place either way, so a
-        // cancellation can never be recorded with the ceiling's wording.
-        const reason = this.cancelRequested.get(runId) ?? WORK_REASONS.cancelled
-        await this.emit('work.action.cancelled', { runId, stepId, actionId, attempt, reason })
-        await this.writeStep(stepId, 'cancelled', { runId, reason })
-        await this.finishCancelled(runId, reason)
-        return false
-      }
-
-      if (outcome.kind === 'expired' || armed.fired() || this.now().getTime() >= deadlineAt) {
-        return this.finishDeadline(runId, stepId, 'capability', { actionId, attempt, elapsedMs: elapsed })
-      }
-
-      if (outcome.kind === 'rejected') {
-        // Aborted without a cancel or a deadline: Core is shutting down. That is a
-        // cancellation, and it says so rather than calling it a failure.
-        if (controller.signal.aborted) {
-          const reason = 'the capability was aborted'
-          await this.emit('work.action.cancelled', { runId, stepId, actionId, attempt, reason })
-          await this.writeStep(stepId, 'cancelled', { runId, reason })
-          await this.finishCancelled(runId, reason)
-          return false
-        }
-        const reason = WORK_REASONS.capabilityFailed
-        await this.emit('work.action.failed', { runId, stepId, actionId, attempt, reason, durationMs: elapsed })
-        // Thrown diagnostics are deliberately not journalled: a capability may
-        // wrap a provider, filesystem or process error whose message contains
-        // secrets or local paths. The fixed reason is the durable fact.
-        await this.writeStep(stepId, 'failed', { runId, reason })
-        return true
-      }
-
-      const observation = normaliseObservation(outcome.value.observation, step.key)
-
-      await this.emit('work.action.completed', { runId, stepId, actionId, attempt, durationMs: elapsed })
-
-      const observationId = this.newId()
-      this.observationSummaries.set(observationId, observation.summary)
-      await this.emit('work.observation.recorded', {
-        runId,
-        stepId,
-        actionId,
-        observationId,
-        kind: observation.kind,
-        summaryLength: observation.summary.length,
-        detailLength: measure(observation.data),
-      })
-
-      /**
-       * The deadline still holds, and it is the *same* one.
-       *
-       * `maxDurationMs` bounds the whole active path of a Step — capability, then
-       * observation, then verification — not the capability and then whatever is
-       * left over. There is no fresh budget here: `deadlineAt` was computed once,
-       * before the capability was called, and verification gets the remainder of
-       * *that* window. Re-arming per phase would let a Step take the ceiling three
-       * times over and turn a bounded Run into an unbounded one.
-       *
-       * Checked before requesting a verification that cannot now finish, so a
-       * verification is not even asked for when the budget to ask is already gone.
-       */
-      if (armed.fired() || this.now().getTime() >= deadlineAt) {
-        return this.finishDeadline(runId, stepId, 'verification')
-      }
-
-      const verificationId = this.newId()
-      await this.emit('work.verification.requested', {
-        runId,
-        stepId,
-        verificationId,
-        verifier: verifier.name,
-      })
-
-      /**
-       * Raced against the same deadline, for the same reason as the capability.
-       *
-       * A verifier is code, so it can be as slow or as stubborn as a capability,
-       * and `await`-ing it unbounded would leave the ceiling bounding the first
-       * half of a Step and not the second half — which is the hole this closes.
-       * On the final Step that hole is the whole Run: a verifier returning `passed`
-       * after the budget was gone would complete it.
-       *
-       * Both handlers are attached, so a verifier that eventually settles after the
-       * deadline has its result discarded rather than becoming an unhandled
-       * rejection or a resurrected Run.
-       */
-      const verification = await Promise.race([
-        /**
-         * The call is wrapped rather than merely promise-chained, because
-         * `WorkVerifier.verify` is allowed to return an outcome *or* a promise of
-         * one — so it may also throw synchronously, before any promise exists to
-         * attach a rejection handler to. Chaining the result would let that throw
-         * escape the `race` entirely and tear down the Run driver, which is a
-         * verifier's own failure being escalated into an engine failure.
-         */
-        (async (): Promise<VerificationOutcome> => {
-          try {
-            return { kind: 'answered', verdict: await verifier.verify({
-              runId,
-              stepId,
-              stepKey: step.key,
-              attempt,
-              input: live.input,
-              observation,
-            }) }
-          } catch (error: unknown) {
-            return { kind: 'rejected', error }
-          }
-        })(),
-        armed.expired.then((): VerificationOutcome => ({ kind: 'expired' })),
-        armed.cancelled.then((): VerificationOutcome => ({ kind: 'cancelled' })),
-      ])
-
-      // Cancellation first, on this path too, for the same reason as everywhere.
-      if (this.cancelRequested.has(runId)) {
-        const reason = this.cancelRequested.get(runId) ?? WORK_REASONS.cancelled
-        await this.writeStep(stepId, 'cancelled', { runId, reason })
-        await this.finishCancelled(runId, reason)
-        return false
-      }
-
-      /**
-       * A verdict that arrived after the deadline is not a verdict.
-       *
-       * The clock is re-checked as well as the race, because a verifier can win the
-       * race microseconds before the timer fires — and because `now` is injected, so
-       * it can be past the deadline while the timer has not been scheduled yet.
-       *
-       * Note what is *not* written: no `work.verification.completed` at all, and
-       * certainly not a `passed` one. The verification is recorded as requested and
-       * unanswered, which is what actually happened. Writing `failed` would be just
-       * as much a fabrication — it would put a verdict in the audit trail that the
-       * verifier never gave.
-       */
-      if (verification.kind === 'expired' || armed.fired() || this.now().getTime() >= deadlineAt) {
-        return this.finishDeadline(runId, stepId, 'verification')
-      }
-
-      if (verification.kind === 'cancelled') {
-        // Released by the owner rather than by the clock. The `cancelRequested`
-        // branch above normally gets here first; this covers the reverse ordering.
-        // No verdict is written, because none was ever given.
-        const reason = this.cancelRequested.get(runId) ?? WORK_REASONS.cancelled
-        await this.writeStep(stepId, 'cancelled', { runId, reason })
-        await this.finishCancelled(runId, reason)
-        return false
-      }
-
-      if (verification.kind === 'rejected') {
-        // A verifier is trusted code, but its thrown diagnostic may still contain
-        // provider text, local paths or secrets. Keep that diagnostic out of the
-        // durable Work stream and record only the code-owned failure.
-        await this.emit('work.verification.completed', {
-          runId,
-          stepId,
-          verificationId,
-          verdict: 'failed',
-          reason: WORK_REASONS.verifierFailed,
-        })
-        await this.writeStep(stepId, 'failed', {
-          runId,
-          reason: WORK_REASONS.verifierFailed,
-        })
-        return true
-      }
-
-      const verdict = verification.verdict
-      const durableReason =
-        verdict.verdict === 'passed'
-          ? WORK_REASONS.verificationPassed
-          : WORK_REASONS.verificationFailed
-      await this.emit('work.verification.completed', {
-        runId,
-        stepId,
-        verificationId,
-        verdict: verdict.verdict,
-        reason: durableReason,
-      })
-
-      if (verdict.verdict === 'passed') {
-        await this.writeStep(stepId, 'verified', { runId, attempt })
-        return true
-      }
-      // Verifier reasons may be derived from the Step input or Observation. Those
-      // values are intentionally non-durable, so the journal keeps only a fixed
-      // conclusion instead of echoing the underlying content.
-      await this.writeStep(stepId, 'failed', { runId, reason: durableReason })
-      return true
-    } finally {
-      // Exactly once, on every path: success, failure, cancellation, the deadline,
-      // or a throw from the verifier. A deadline timer that outlived its capability
-      // would fire into a Run that had already settled.
-      armed.clear()
-      if (this.calling.get(runId) === armed) this.calling.delete(runId)
-    }
-  }
-
-  /**
-   * Arm this Run's duration ceiling for one capability call.
-   *
-   * Two things happen when it expires, in this order and both synchronously: the
-   * reason is recorded, *then* the signal is aborted. Recording first means
-   * anything that reacts to the abort — including the capability's own handler —
-   * already finds why it was stopped, rather than having to infer it.
-   */
-  private armDeadline(
-    runId: string,
-    controller: AbortController,
-    remainingMs: number,
-  ): LiveCapabilityCall {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let fired = false
-    let signalCancel!: () => void
-
-    const expired = new Promise<'duration'>((resolve) => {
-      timer = setTimeout(() => {
-        fired = true
-        this.deadlineHit.set(runId, this.now().getTime())
-        controller.abort()
-        resolve('duration')
-      }, remainingMs)
-      // A deadline is not a reason to keep a process alive. Without this an
-      // application quitting inside a Run's window would be held open by a timer
-      // whose only job is to stop work that is about to be abandoned anyway.
-      ;(timer as { unref?: () => void }).unref?.()
-    })
-
-    /**
-     * Resolved by `cancelRun`, so a capability or verifier that ignores its abort
-     * cannot also swallow a cancellation. Never rejects, and never needs clearing:
-     * an unresolved promise holds nothing.
-     */
-    const cancelled = new Promise<'cancelled'>((resolve) => {
-      signalCancel = () => {
-        resolve('cancelled')
-      }
-    })
-
-    return {
-      controller,
-      expired,
-      cancelled,
-      signalCancel: () => {
-        signalCancel()
-      },
-      fired: () => fired,
-      clear: () => {
-        if (timer === undefined) return
-        clearTimeout(timer)
-        timer = undefined
-      },
-    }
-  }
-
-  /**
-   * Settle a Run whose duration ceiling expired mid-action.
-   *
-   * The Action settles as **failed**, not cancelled: the budget ran out, which is
-   * not something anybody asked for, and writing `work.action.cancelled` here
-   * would put a cancellation in the audit trail that never happened. The step
-   * fails, every later step is skipped, and the Run fails with the ceiling as its
-   * reason.
-   *
-   * `work.limits.exceeded` is written first so the ceiling is recorded even if a
-   * later write is refused, and so a reader meets the cause before the effect.
-   */
-  private async finishDeadline(
-    runId: string,
-    stepId: string,
-    phase: DeadlinePhase,
-    action?: { actionId: string; attempt: number; elapsedMs: number },
-  ): Promise<boolean> {
-    const reason = limitReason('duration')
-    await this.recordLimit(runId, 'duration')
-    // Only a capability that overran has an action to settle. A verification that
-    // overran comes after an action that completed, and that fact stays true.
-    if (phase === 'capability' && action !== undefined) {
-      await this.emit('work.action.failed', {
-        runId,
-        stepId,
-        actionId: action.actionId,
-        attempt: action.attempt,
-        reason,
-        durationMs: action.elapsedMs,
-      })
-    }
-    return this.failStep(runId, stepId, reason)
-  }
-
   /**
    * Park a Run behind an approval and stop.
    *
@@ -1485,7 +992,7 @@ export class WorkEngine {
   private async requestApproval(
     runId: string,
     stepId: string,
-    live: LivePlan,
+    live: LiveWorkPlan,
     capability: WorkCapability,
     justification: string,
   ): Promise<boolean> {
@@ -1593,7 +1100,7 @@ export class WorkEngine {
     return this.work.approvals.get(step.approvalId)?.status === 'approved'
   }
 
-  private capabilityRequest(runId: string, live: LivePlan, stepId: string): WorkCapabilityRequest {
+  private capabilityRequest(runId: string, live: LiveWorkPlan, stepId: string): WorkCapabilityRequest {
     const step = this.work.steps.get(stepId)
     return {
       runId,
@@ -1918,15 +1425,6 @@ export class WorkEngine {
 
 /* ---------------------------------------------------------------- helpers */
 
-/** Characters, not bytes: the only measurement of a body that leaves memory. */
-function measure(data: Record<string, unknown>): number {
-  try {
-    return JSON.stringify(data)?.length ?? 0
-  } catch {
-    return 0
-  }
-}
-
 function stepEventFor(
   to: 'ready' | 'running' | 'verified' | 'failed' | 'cancelled' | 'skipped',
 ): CoreEventType {
@@ -1944,32 +1442,6 @@ function stepEventFor(
     case 'skipped':
       return 'work.step.skipped'
   }
-}
-
-/**
- * Coerce whatever a capability returned into a well-formed observation.
- *
- * A capability is code inside Core, so it is trusted to be *code* and not trusted
- * to be *well behaved*. This is the boundary that stops a missing summary or a
- * fabricated kind from becoming a journal event claiming something no capability
- * did.
- */
-export function normaliseObservation(
-  raw: WorkObservationContent | undefined,
-  stepKey: string,
-): WorkObservationContent {
-  const kinds = ['result', 'exit', 'change', 'failure', 'input']
-  const kind =
-    raw && typeof raw.kind === 'string' && kinds.includes(raw.kind)
-      ? (raw.kind as WorkObservationContent['kind'])
-      : 'result'
-  const summary =
-    typeof raw?.summary === 'string' && raw.summary.trim().length > 0
-      ? raw.summary.trim().slice(0, WORK_LIMITS.maxSummaryChars)
-      : `the capability returned no summary for step "${stepKey}"`
-  const data =
-    raw && typeof raw.data === 'object' && raw.data !== null && !Array.isArray(raw.data) ? raw.data : {}
-  return { kind, summary, data }
 }
 
 function limitReason(limit: LimitName): string {

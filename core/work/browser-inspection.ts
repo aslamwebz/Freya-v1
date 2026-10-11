@@ -231,6 +231,17 @@ function isNoisePhone(value: string): boolean {
 }
 
 /**
+ * How many contact details of a recognisable shape a page's text contains.
+ *
+ * The same extractor the capability uses, without retaining the values — a count is enough
+ * to answer "does this page publish anything now?", which is the question the "nothing was
+ * found" verification asks.
+ */
+function countContacts(text: string): number {
+  return extractContacts(text, BROWSER_MISSION_LIMITS.maxContactFindings).length
+}
+
+/**
  * Collect contact findings from a page's text, bounded and de-duplicated.
  *
  * Order is stable (first appearance) so two runs over the same text produce the same list,
@@ -300,7 +311,22 @@ function resolveHref(href: string, pageUrl: string): string | null {
 
 /* ------------------------------------------------------------- the capability */
 
-/** One bounded, ordered run of browser commands, with admission before each. */
+/**
+ * One bounded, ordered run of browser commands, with admission before each.
+ *
+ * ## The session id is threaded, not assumed
+ *
+ * `session.open` is what creates a session and returns its id; every later command in the
+ * same run needs that id, and the runtime refuses one that names no session rather than
+ * guessing. So the id is captured from the open and attached to every command that follows.
+ * This is why the sequence is built and issued here rather than by each capability writing
+ * its own list: two call sites each remembering to thread it is one call site forgetting.
+ *
+ * A run that did not open a session has no id to thread, and that is the honest answer —
+ * `readCommands` always opens first, and `reread` always opens a **fresh** session rather
+ * than reusing an execution's, because a verification read that shared a session with the
+ * step it is verifying would be verifying against the state the step left behind.
+ */
 async function runBounded(
   ports: BrowserMissionPorts,
   runId: string,
@@ -312,6 +338,7 @@ async function runBounded(
     return { ok: false, reason: `This step asked for ${String(commands.length)} browser commands, which is more than the ${String(BROWSER_MISSION_LIMITS.maxCommands)} it is allowed.` }
   }
   let last: Extract<BrowserResult, { ok: true }> | null = null
+  let sessionId: string | null = null
   for (const [index, command] of commands.entries()) {
     // Cancellation is checked *before* each command rather than during one, because
     // `BrowserRequest` carries no signal: the runtime's own STOP ALL latch and its
@@ -322,12 +349,29 @@ async function runBounded(
     // then issued three more commands would be able to spend the Mission's external-request
     // budget without the budget being charged for it.
     await ports.admit(runId, stepKey, signal)
-    const result = await ports.browser.execute(command)
+    const result = await ports.browser.execute(sessionId === null ? command : { ...command, sessionId })
     if (!result.ok) return { ok: false, reason: `The browser refused ${command.command}: ${refusalOf(result)}` }
+    if (command.command === 'session.open') {
+      const opened = asString(result.data['sessionId'])
+      // No id means no session to work in, and a later command would be refused anyway with a
+      // reason that does not say why. Saying it here names the cause.
+      if (opened === null) return { ok: false, reason: 'The browser opened a window but reported no session, so this step has nowhere to read.' }
+      sessionId = opened
+    }
     last = result
     if (index < commands.length - 1) signal.throwIfAborted()
   }
   if (last === null) return { ok: false, reason: 'This step issued no browser command, so it observed nothing.' }
+  // **Close the session before returning.** The browser runtime's own session ceiling is
+  // small on purpose, and a Mission that opens one window per step and never closes it
+  // exhausts the pool partway through — the tenth site would fail with "session budget
+  // exceeded" for a reason that has nothing to do with the tenth site.
+  //
+  // Closing is best-effort and its failure is not this step's failure: the page has been
+  // read and verified, and the runtime reclaims any unreconciled session at its own restart.
+  // A refusal to close is therefore recorded nowhere and breaks nothing, which is why it is
+  // `.catch(() => undefined)` rather than an awaited check.
+  await ports.browser.execute({ command: 'session.close', ...(sessionId === null ? {} : { sessionId }) }).catch(() => undefined)
   return { ok: true, last, issued: commands.length }
 }
 
@@ -530,7 +574,12 @@ export function registerBrowserInspection(registry: WorkRegistry, ports: Browser
         links: [],
         contacts: contacts.map((contact) => ({ kind: contact.kind, value: contact.value })),
         verified: false,
-        failure: contacts.length === 0 ? 'no_contact_details_found' : null,
+        // **Not a failure.** The page was read successfully and it publishes nothing of a
+        // recognisable contact shape, which is a finding. Recording it as a failure would
+        // make the step unverifiable, so a site with no contact page could never be
+        // *established* and a report naming the gap could never be written. The report
+        // shows the absence as a row, which is where it belongs.
+        failure: null,
         readAt: context.now().toISOString(),
       }
       await ports.save(request.runId, request.stepKey, evidence)
@@ -629,27 +678,25 @@ export function registerBrowserInspection(registry: WorkRegistry, ports: Browser
   registry.registerVerifier({
     name: 'browser.contact.verified',
     /**
-     * Re-read the page and confirm every reported detail is still on it.
-     *
-     * This is the verifier that makes the mission's "verify the information" step mean
-     * something concrete. Each reported finding is checked against a **fresh** read of the
-     * same page; a detail that is no longer there is not silently dropped, it fails the
-     * verification, because a partially-true contact list reported as verified is worse than
-     * one reported as unverified.
-     *
-     * It establishes that the strings were on the page. It does **not** establish that the
-     * phone number works or the mailbox is monitored, and the reason says exactly that.
-     */
+* Re-read the page and confirm every reported detail is still on it.
+      *
+      * This is the verifier that makes the mission's "verify the information" step mean
+      * something concrete. Each reported finding is checked against a **fresh** read of the
+      * same page; a detail that is no longer there is not silently dropped, it fails the
+      * verification, because a partially-true contact list reported as verified is worse than
+      * one reported as unverified.
+      *
+      * A page that publishes **nothing** is the other case, and it passes: "this page
+      * publishes no contact details" is a fact a re-read can confirm, and a mission about
+      * contact details must be able to *report* the absence. See the branch below.
+      *
+      * It establishes that the strings were on the page. It does **not** establish that the
+      * phone number works or the mailbox is monitored, and the reason says exactly that.
+      */
     async verify(request) {
       const evidence = await ports.read(request.runId, request.stepKey)
       if (evidence === null) {
         return { verdict: 'failed', reason: 'No page was recorded for this step, so its contact details cannot be verified.' }
-      }
-      if (evidence.failure === 'no_contact_details_found') {
-        return {
-          verdict: 'failed',
-          reason: `No contact details of a recognisable shape were found on ${(evidence.finalUrl ?? evidence.requestedUrl).slice(0, 120)}, so nothing could be verified.`,
-        }
       }
       if (evidence.finalUrl === null) {
         return { verdict: 'failed', reason: 'No page was read, so there are no contact details to verify.' }
@@ -658,6 +705,34 @@ export function registerBrowserInspection(registry: WorkRegistry, ports: Browser
       if (!again.ok) {
         return { verdict: 'failed', reason: `An independent re-read of the page could not be established: ${again.reason}` }
       }
+
+      // **A page that publishes nothing is a verified finding, not a failed step.**
+      //
+      // The question this verifier answers is "does the page still say what the step said
+      // it said?" — and for a step that said "there is nothing here", a re-read that again
+      // shows nothing confirms it exactly. Failing it would mean a site with no contact page
+      // could never be *established*, so every mission containing one would exhaust its
+      // revision allowance and block, and the report that names the gap could never be
+      // written. That is the wrong answer to a real and common situation.
+      //
+      // What is still refused: a step whose read never happened, and a step whose findings
+      // have moved. Both of those remain failures below.
+      if (evidence.contacts.length === 0) {
+        const stillNone = countContacts(again.text) === 0
+        if (!stillNone) {
+          await ports.save(request.runId, request.stepKey, { ...evidence, verified: false, failure: 'contact_details_changed' })
+          return {
+            verdict: 'failed',
+            reason: 'The page now publishes contact details that this step did not report, so the "nothing found" reading is out of date.',
+          }
+        }
+        await ports.save(request.runId, request.stepKey, { ...evidence, verified: true, failure: null })
+        return {
+          verdict: 'passed',
+          reason: `An independent re-read of ${evidence.finalUrl.slice(0, 120)} still published no contact details of a recognisable shape. That this page publishes none is established; it says nothing about whether the organisation can be reached another way.`,
+        }
+      }
+
       const normalised = again.text.replace(/\s+/gu, ' ')
       const missing = evidence.contacts.filter(
         (contact) => !normalised.includes(contact.value.replace(/\s+/gu, ' ')),

@@ -268,8 +268,25 @@ export const BROWSER_LIMITS = Object.freeze({
   maxUrlChars: 2048,
   /** Media offers retained for one session. */
   maxMediaOffers: 8,
-  /** Wall-clock a single routed command may occupy. */
-  maxCommandMs: 15_000,
+  /**
+   * Wall-clock a single routed command may occupy, raised from 15s to 45s.
+   *
+   * Fifteen seconds was sized for an interactive browse of a fast page. It is not enough for
+   * the class of site a Mission actually visits: a government or university site on a
+   * regional link resolves DNS, completes TLS, and then pulls in a stylesheet, a font, an
+   * icon set and a script before it reports a finished load — and `loadURL` waits for that
+   * load, so the ceiling was being reached by pages that were working perfectly well.
+   *
+   * What this does not weaken. It is still **a ceiling, not a timeout that permits waiting**:
+   * `Math.min` means a host may still only narrow it, every command remains cancellable, and
+   * STOP ALL still interrupts one already in flight. Nothing here lets a command run
+   * unbounded — it moves the point at which a slow page is *reported* as slow rather than
+   * raising the number of things Freya may do.
+   *
+   * A host that wants fifteen seconds back sets `limits.maxCommandMs: 15_000`, which is the
+   * whole reason the option exists.
+   */
+  maxCommandMs: 45_000,
   /**
    * Bytes one screenshot may carry, capped so a tab that paints a 4K surface
    * does not return a 60 MB PNG and exhaust the journal. The cap is generous

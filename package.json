@@ -71,7 +71,10 @@
     "build:browser-service-acceptance": "node scripts/build-browser-service-acceptance.mjs",
     "test:browser-service": "node scripts/build-browser-service-acceptance.mjs && electron dist-electron/acceptance-browser-service.cjs",
     "build:chat-missions-acceptance": "node scripts/build-chat-missions-acceptance.mjs",
-    "test:chat-missions": "npm run build:chat-missions-acceptance && electron dist-electron/acceptance-chat-missions.cjs"
+    "test:chat-missions": "npm run build:chat-missions-acceptance && electron dist-electron/acceptance-chat-missions.cjs",
+    "build:mission-live-acceptance": "node scripts/build-mission-live-acceptance.mjs",
+    "test:mission-live": "npm run build:mission-live-acceptance && electron dist-electron/acceptance-mission-live.cjs",
+    "test:mission-live:ten": "npm run build:mission-live-acceptance && electron dist-electron/acceptance-mission-live.cjs --sites=10"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1",

@@ -7,6 +7,18 @@ import type { CognitionIntent } from '../authority'
 import type { CognitionOutcome } from '../cognition/service'
 import { chatMissionContinuation } from '../lifeloop/decide'
 
+/**
+ * How many continuation decisions **one trigger** may cause.
+ *
+ * A bound on the driver, not on the work: the Mission's own `maxActions`, `maxRetries` and
+ * deadline stop how much a mission may *do*, and this stops how many decisions a single
+ * step-transition may cause while doing it. Sixty is far above any plan the code-owned
+ * `maxStepsPerPlan` of 24 can need, so in practice the loop exits because the next decision
+ * did not move the Mission — not because this ceiling was reached. It exists so that a bug
+ * which makes every decision look like progress is still bounded.
+ */
+const MAX_CHAT_CONTINUATION_DECISIONS = 60
+
 export interface ChatMissionPorts {
   readonly engine: MissionEngine
   readonly store: ConversationStore
@@ -93,7 +105,11 @@ export class ChatMissionIntegration {
     if (decision !== 'approve' || !this.ports.available()) return refused('Durable research execution and owner permissions are required.')
     const approvedAt = this.ports.now().toISOString(), grantId = randomUUID()
     const created = await this.ports.engine.create({ title: message.missionProposal.goal.slice(0, 120), intent: `${message.missionProposal.goal}\nApproved scope: ${message.missionProposal.scope}`, successCriteria: message.missionProposal.successCriteria }, undefined, {
-      budget: { ...CHAT_MISSION_POLICY, maxDelegations: 3, maxRetries: 1 },
+      // `maxDelegations` comes from the policy rather than a literal, because a delegation is
+      // what executing one step costs — a literal beside the policy silently caps every chat
+      // Mission at three steps while the rest of the budget says otherwise. `maxRetries`
+      // stays at 1: a step that keeps failing should reach a person, not retry itself.
+      budget: { ...CHAT_MISSION_POLICY, maxRetries: 1 },
       chatBinding: { conversationId, proposalMessageId, ownerId: this.ports.ownerId, grantId, approvedAt, scope: message.missionProposal.scope, paused: false },
     })
     if (!created.ok || !created.missionId) return refused('The Mission could not be durably created.')
@@ -114,11 +130,62 @@ export class ChatMissionIntegration {
         if (!planned.ok) { await this.pause(id, `Planning stopped: ${planned.reason}. No research was started.`); return }
         await this.note(id, 'Research plan committed. Step progress is shown below the proposal.')
       }
-      await this.ports.advance(id)
+      // Driven, not nudged: the plan's steps are already approved, so the first trigger
+      // carries the Mission as far as it will go rather than one step and a wait for an
+      // event that may never come.
+      await this.driveUntilQuiet(id, grantId)
     })().catch(() => this.pause(id, 'Execution paused because a required operation could not be established.')).catch(() => undefined)
   }
 
-  async settled(id: string): Promise<void> {
+  /**
+ * * Continue an approved chat Mission from whatever it has reached.
+ *
+ * Called on every step transition and once at launch. The autonomy runtime makes **one**
+ * decision per `advance`, so a single call advances at most one step; this drives it through
+ * as many as the approved budget and the Mission's own state allow, and stops as soon as a
+ * decision does not move the Mission forward.
+ *
+ * ## Why the bounded loop rather than one call
+ *
+ * A Mission with a dozen steps must not depend on an unrelated event arriving to be told
+ * "carry on". It advances while it can and stops when it cannot, which is the same rule the
+ * autonomy runtime itself applies — `advanceMissionDecision` refuses to run while a step is
+ * already in flight, so after each one settles the next is free to start.
+ *
+ * **Bounded on all three axes** that matter, so this can never become an unbounded inference
+ * loop: the Mission's own `maxActions` and `maxRetries` (which stop the work), this
+ * iteration ceiling (which stops the *driving*), and the elapsed-time check below (which
+ * stops a stalled mission being nudged forever). The ceiling is deliberately lower than the
+ * action budget: it is a bound on how many decisions one trigger may cause, not on how much
+ * work a mission may do.
+ */
+private async driveUntilQuiet(id: string, grantId: string): Promise<void> {
+  for (let iteration = 0; iteration < MAX_CHAT_CONTINUATION_DECISIONS; iteration += 1) {
+    const before = this.stepProgress(id)
+    const outcome = await this.ports.advance(id)
+    if (outcome === null || outcome === undefined) return
+    // A decision that did not move the Mission forward — a wait, a blocker, an approval
+    // request, completion — is the loop's exit. The Mission is either finished or waiting
+    // for something this trigger cannot supply.
+    if (this.stepProgress(id) === before) return
+    void grantId
+  }
+}
+
+/**
+ * A comparable snapshot of how far the Mission's plan has got.
+ *
+ * Used only to decide whether an `advance` made progress; it deliberately counts status
+ * transitions (running, verified, failed) rather than reads any content, because the answer
+ * "did anything change" must not itself read the Mission's private findings.
+ */
+private stepProgress(id: string): string {
+  const mission = this.ports.engine.record(id)
+  if (mission === undefined) return 'none'
+  return (mission.activePlan?.steps ?? []).map(step => `${step.stepId}:${step.status}`).join('|')
+}
+
+async settled(id: string): Promise<void> {
     if (this.progressing.has(id)) { this.queued.add(id); return }
     this.progressing.add(id)
     try {
@@ -136,7 +203,7 @@ export class ChatMissionIntegration {
         if (!revised.ok) { await this.pause(id, `The bounded revision stopped: ${revised.reason}. Owner review is required.`); return }
       }
       await this.note(id, failed ? 'Revised plan committed. Continuing within the approved limits.' : 'Verified retrieval updated. Continuing the authorized plan; factual accuracy remains unverified.')
-      await this.ports.advance(id)
+      await this.driveUntilQuiet(id, binding.grantId)
     } finally {
       this.progressing.delete(id)
       if (this.queued.delete(id)) void this.settled(id).catch(() => this.pause(id, 'Research paused after a continuation failure.')).catch(() => undefined)

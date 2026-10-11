@@ -63,7 +63,8 @@ function harness(pages: readonly Page[], options: { refuse?: boolean } = {}) {
         return { ok: false, command: request.command, target: null, code: 'authority-refused', reason: 'refused by the harness.', escalation: null }
       }
       commands.push(request.command)
-      if (request.command === 'session.open') return { ok: true, command: request.command, target: 'public', escalation: null, data: {} }
+      if (request.command === 'session.open') return { ok: true, command: request.command, target: 'public', escalation: null, data: { sessionId: 'freya-0001' } }
+      if (request.command === 'session.close') return { ok: true, command: request.command, target: 'public', escalation: null, data: { sessionId: request.sessionId ?? null, alreadyClosed: false } }
       if (request.command === 'page.navigate') {
         at = request.url ?? ''
         if (pages.find(page => page.url === at) === undefined) {

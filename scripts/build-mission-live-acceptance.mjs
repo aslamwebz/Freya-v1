@@ -1,0 +1,2 @@
+import { build } from 'esbuild'
+await build({ entryPoints: ['electron/acceptance-mission-live.ts'], outfile: 'dist-electron/acceptance-mission-live.cjs', bundle: true, platform: 'node', target: 'node22', format: 'cjs', external: ['electron', 'better-sqlite3', 'pdfjs-dist'], logLevel: 'info' })

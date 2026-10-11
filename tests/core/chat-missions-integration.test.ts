@@ -134,8 +134,8 @@ it('replans once from actual insufficient evidence and preserves an already veri
     const system = request.messages[0]?.content ?? ''
     if (system.startsWith('Propose a bounded mission plan')) return ++plans === 1 ? plan() : plan(['recovery limitations'])
     if (system.startsWith('Return only JSON {"findings"')) {
-      const data = JSON.parse(request.messages[1]!.content)
-      return JSON.stringify({ findings: [{ sourceId: data.sources[0].sourceId, category: 'pricing', quote: 'Example model costs €15 monthly.' }] })
+      const data = JSON.parse(request.messages[1]!.content) as { rows: { rowId: string; excerpt: string }[] }
+      return JSON.stringify({ findings: [{ rowId: data.rows[0]!.rowId, quote: 'Example model costs €15 monthly.' }] })
     }
     return proposalEnvelope()
   })

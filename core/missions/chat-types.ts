@@ -54,6 +54,15 @@ export const CHAT_MISSION_POLICY = Object.freeze({
    * plan may still be revised twice. Below the 24 code-owned ceiling.
    */
   maxStepsPerPlan: 24,
+  /**
+   * Delegations. **One per step**, so this must be at least `maxStepsPerPlan` or a plan
+   * larger than the delegation budget cannot execute its own steps.
+   *
+   * It was hardcoded to 3 beside the policy rather than stated in it, which quietly capped
+   * every chat Mission at three steps no matter what the rest of the budget allowed — the
+   * plan below is now bounded by this number rather than by a literal in another file.
+   */
+  maxDelegations: 32,
   maxPlanRevisions: 2,
   maxDurationMs: 30 * 60 * 1000,
 })
@@ -96,12 +105,14 @@ export interface MissionResearchEvidence {
  *
  *   - `page_not_read` — the browser refused; nothing was observed.
  *   - `page_reading_not_permitted` — this build's command ceiling was too low to read a body.
- *   - `no_contact_details_found` — the page was read and nothing of a recognisable shape was
- *     on it. **A real, reportable outcome**, not an error: "this site publishes no contact
- *     details" is one of the answers the mission asked for.
- *   - `contact_details_changed` — a re-read no longer contained everything reported, so the
- *     list was not verified. The findings are kept so the report can show what moved.
+ *   - `contact_details_changed` — a re-read no longer contained everything reported, or
+ *   *started* publishing something a step had reported as absent. The findings are kept so
+ *   the report can show what moved.
  *   - `null` — read, and (once `verified`) re-read successfully.
+ *
+ * **A page that publishes no contact details is not a failure.** It is a row in the report
+ * with an empty list, because "this site publishes no contact details" is one of the answers
+ * the mission asked for — and it is a claim a second read can confirm.
  */
 export interface MissionBrowserEvidence {
   /** The address the plan asked for, which is not necessarily where the page ended up. */

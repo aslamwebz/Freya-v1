@@ -6884,29 +6884,54 @@ state: {
   }
 
   /**
-   * Close the workforce assignments a Mission opened, once it has settled.
+   * Close the workforce assignments a Mission opened.
    *
-   * ## Why this exists, and why it is only called here
+   * ## When it runs, and why not only at the end
    *
-   * Delegation opens a `workforce.claim`/assignment per step and **nothing else closes them**.
-   * `WorkforceEngine` settles an assignment when it expires, when the owner cancels it, or
-   * when the workforce stops — and a Mission's steps complete long before any of those. So
+   * Delegation opens one assignment per step and **nothing else closes them** until this
+   * runs. `WorkforceEngine` settles an assignment when it expires, when the owner cancels it,
+   * or when the workforce stops — and a Mission's steps complete long before any of those. So
    * without this, a worker holds three open assignments after three steps and the fourth
-   * delegation is refused with "that worker already has its 3 assignments open", which then
-   * blocks the Mission on `no_capable_worker`.
+   * delegation is refused, which then blocks the Mission on `no_capable_worker`.
    *
    * That failure is invisible from outside: it looks exactly like "the roster has nobody
    * free", which is a legitimate answer to a different question. Which is why the closing is
    * done here, next to the thing that opened it, rather than left to a subsystem that has no
    * idea a Mission existed.
    *
-   * ## Why it is safe
+   * It used to run only when the **Mission** was terminal, which is right for the last step
+   * and wrong for every step before it: a six-step Mission blocked on its fourth delegation
+   * with three verified steps already on the record, and reported `no_capable_worker` — a
+   * claim about the roster that was simply false.
    *
-   * Only assignments carrying this `missionId` are touched, and only when the Mission is
-   * terminal. A Mission still running leaves its assignments open, so a person reading the
-   * workforce can see that work is in flight — closing them early would make a running
-   * Mission's delegation look finished, which is the same class of lie as a completed step
-   * that never ran.
+   * Relaxing it to "any settled step" was tried and **reverted**, because closing an
+   * assignment while its Mission is still running disturbs the step that is being executed
+   * and the run stops completing (`tests/core/mind-missions-integration.test.ts` and
+   * `tests/core/learning-integration.test.ts` both regressed to `active`/`blocked`). The
+   * correct fix belongs in delegation — a settled step should *settle its own* assignment
+   * rather than have a bulk closer cancel them all — and is not done here.
+   *
+   * The symptom to watch for, when that is done: a Mission with more steps than
+   * `maxOpenAssignments` on its worker, blocking with `no_capable_worker` after exactly
+   * `maxOpenAssignments` verified steps.
+   *
+   * ## Why it is safe to run early
+   *
+   * A step in `verified`, `failed`, `cancelled` or `skipped` is finished work whose
+   * delegation is genuinely closed, whatever the Mission as a whole is still doing. A step
+   * that is `pending`, `delegated` or `running` is in flight — and a Mission that has not yet
+   * settled any step returns early, so those assignments are never touched. A person reading
+   * the workforce therefore still sees exactly the work under way, and never sees a running
+   * Mission's delegation look finished.
+   *
+   * ## Why cancelling the whole list is correct at that moment
+   *
+   * Assignments carry a `missionId` but not a `stepId`, so this closes every one of them.
+   * That is sound because `advanceMissionDecision` is **serialised per Mission** and opens
+   * the next step's assignment only after this has run — so at this instant the only open
+   * assignments are ones whose step has already settled, and the next delegation creates a
+   * fresh one. Per-step linkage would make this precise if the workforce stored it; until
+   * then the serialisation is what makes the list mean what it looks like it means.
    *
    * ## Authoritative store, not a retention slice
    *

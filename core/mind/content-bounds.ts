@@ -38,6 +38,29 @@ export function renderTruncatedAnswer(text: string, footer = ''): string {
 
 
 /**
+ * The stored text for a turn that was attempted and failed.
+ *
+ * There is no model's prose to show — that is the whole of what went wrong — so
+ * the message says what went wrong and what was still done. The footer goes on
+ * first, so the record of the turn's work is above the sentence about its
+ * failure, and a reader sees the evidence before the verdict.
+ *
+ * The reason is written in code, from the loop's own words, and the footer is
+ * appended by the same renderer a finished answer uses. Neither can be edited by
+ * anything the model emitted.
+ *
+ * This exists because the alternative was silence: a failed turn used to store
+ * nothing at all, so every lookup it had completed vanished from the transcript
+ * the moment the turn settled, leaving the owner with a verdict and no evidence
+ * for work they had just watched happen.
+ */
+export function renderFailedAnswer(reason: string, footer = ''): string {
+  const lead = footer.trim() === '' ? '' : `${footer.trim()}\n\n—\n`
+  return `${lead}This turn did not finish. ${reason.trim()} ` +
+    `Nothing above was Freya's answer to the question, and no answer has been guessed at.`
+}
+
+/**
  * The `media` field for a stored answer, or nothing at all.
  *
  * Spread rather than assigned, so a turn that looked nothing up stores no `media` key

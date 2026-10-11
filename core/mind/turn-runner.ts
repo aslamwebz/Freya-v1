@@ -1,4 +1,4 @@
-import { boundAssistantMessageContent, canvasField, chartsField, mediaField, renderTruncatedAnswer, sourcesField } from './content-bounds'
+import { boundAssistantMessageContent, canvasField, chartsField, mediaField, renderFailedAnswer, renderTruncatedAnswer, sourcesField } from './content-bounds'
 import type { MindContextEnrichment } from './context-enrichment'
 import { TRUNCATION_REASON, type MindSubmitInput, type MindTurnOutcome, type MindTurnResult } from './turn-types'
 import type { MindTurnCognition, MindCognitionOutcome } from './turn-cognition'
@@ -300,11 +300,7 @@ export class MindTurnRunner {
         })
       }
       if (cognition.kind === 'failed') {
-        return await this.finishTurn(input, turn, 'failed', {
-          reason: cognition.reason,
-          providerContacted: cognition.providerContacted,
-          ownerText: text,
-        })
+        return await this.finishFailedTurn(input, turn, cognition, text)
       }
 
       if (cognition.kind === 'truncated') {
@@ -420,6 +416,90 @@ export class MindTurnRunner {
    * There is no retry here and no larger budget asked for. What a turn costs is
    * not a decision this method gets to take.
    */
+  /**
+ * A turn that was attempted and failed.
+ *
+ * ### Why it stores anything at all
+ *
+ * The failed path used to persist nothing. The turn reported a reason and the
+ * transcript showed "That did not finish" — and nothing else. Every lookup the
+ * loop had already performed, every source it had already retrieved and every
+ * step it had actually taken simply stopped existing, a second after the owner
+ * watched them happen on screen.
+ *
+ * That is worse than an ugly failure. While the turn is live the surface shows
+ * a reasoning block and a live step trace; when it settles, all of it vanishes
+ * and what remains is a verdict with no evidence attached. The owner is left
+ * reasoning about what happened from a one-line summary of a failure they did
+ * not cause and cannot see inside.
+ *
+ * So the steps are kept, in the same shape a finished answer's are: the same
+ * `sourcesField`, the same `stepRecords`, the same footer. The *answer* is not
+ * invented — there was none — but the work is real and is shown as work.
+ *
+ * A failure with no steps (the provider was never reached, the tool was
+ * unavailable, the loop never started) stores nothing, exactly as before. There
+ * is nothing to show.
+ */
+  private async finishFailedTurn(
+    input: MindSubmitInput,
+    turn: ConversationTurn,
+    cognition: Extract<MindCognitionOutcome, { kind: 'failed' }>,
+    ownerText: string,
+  ): Promise<MindTurnResult> {
+    const steps = cognition.steps ?? []
+    if (steps.length === 0) {
+      return await this.finishTurn(input, turn, 'failed', {
+        reason: cognition.reason,
+        providerContacted: cognition.providerContacted,
+        ownerText,
+      })
+    }
+
+    const endedAt = this.now().toISOString()
+    const footer = renderToolFooter(
+      steps.map((iteration) => iteration.step),
+      steps.map((iteration) => iteration.observation),
+    )
+    const stepRecords = iterationsAsStepRecords(steps)
+    const assistantMessage: ConversationMessage = {
+      messageId: this.newId(),
+      conversationId: input.conversationId,
+      role: 'assistant',
+      content: boundAssistantMessageContent(renderFailedAnswer(cognition.reason, footer)),
+      createdAt: endedAt,
+      turnId: turn.turnId,
+      // The lookups this failed turn did complete are still real results, and
+      // hiding them would make the failure look like "nothing happened" when in
+      // fact a great deal did.
+      ...mediaField(steps.map((iteration) => iteration.observation)),
+      ...sourcesField(steps.map((iteration) => iteration.observation), 100),
+      ...chartsField(steps.map((iteration) => iteration.observation)),
+      ...canvasField(steps.map((iteration) => iteration.observation)),
+      ...(stepRecords === undefined ? {} : { steps: stepRecords }),
+    }
+
+    try {
+      await this.store.appendMessage(assistantMessage)
+    } catch {
+      // The record could not be kept. Report the failure as it was, with no message
+      // id — the honest state, and no worse than the one this replaces.
+      return await this.finishTurn(input, turn, 'failed', {
+        reason: `${cognition.reason} (what the turn had already done could not be stored)`,
+        providerContacted: cognition.providerContacted,
+        ownerText,
+      })
+    }
+
+    return await this.finishTurn(input, turn, 'failed', {
+      endedAt,
+      assistantMessageId: assistantMessage.messageId,
+      reason: cognition.reason,
+      providerContacted: cognition.providerContacted,
+      ownerText,
+    })
+  }
+
   private async finishTruncatedTurn(
     input: MindSubmitInput,
     turn: ConversationTurn,
@@ -588,7 +668,26 @@ export class MindTurnRunner {
  * A Mind with no registry keeps `maxCalls: 1` exactly, because a Mind with no
  * registry makes one call.
  */
-const TURN_GRANT_TTL_MS = 120_000
+/**
+ * How long a turn's grant stays live.
+ *
+ * It used to be 120 seconds, which was sized for a turn that made two or three
+ * quick provider calls. A turn now makes up to six calls at a couple of thousand
+ * output tokens each, and on a reasoning model each of those takes real time — a
+ * full research turn runs for minutes, not seconds.
+ *
+ * The grant expiring underneath a running turn is not a soft failure: the next
+ * cognition request is refused on scope, and the turn reports "the turn could not
+ * be authorised: foreground grant scope mismatch" — a message that names neither
+ * the expiry nor the cause, and reads like an authority fault rather than a clock.
+ *
+ * Ten minutes is deliberately not "however long the turn takes". The point of a
+ * grant expiring at all is that an *unanswered* turn cannot leave a live
+ * allowance lying around to be spent much later. Ten minutes is long enough for a
+ * genuine turn at this depth and short enough that a grant abandoned by a closed
+ * window is dead long before anyone could spend it.
+ */
+export const TURN_GRANT_TTL_MS = 600_000
 
 function foregroundGrantSpec(
   turnId: string,

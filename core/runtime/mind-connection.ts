@@ -5,6 +5,7 @@ import type { CognitionGrantSpec } from '../cognition/grants'
 import type { ConversationMessage, ConversationTurn } from '../conversation/types'
 import { CONVERSATION_LIMITS } from '../conversation/types'
 import { MIND_TOOL_LIMITS } from '../mind/tools'
+import { TURN_GRANT_TTL_MS } from '../mind/turn-runner'
 import type { MindTool } from '../mind/tools'
 import { PROCESS_TOOL_NAMES } from '../mind/process-tools'
 import { randomUUID } from 'node:crypto'
@@ -141,7 +142,7 @@ export class MindConnection implements MindRuntime {
           || spec.allowedOrigins.length !== 1 || spec.allowedOrigins[0] !== 'user'
           || spec.allowedCauses.length !== 1 || spec.allowedCauses[0] !== 'user_message'
           || spec.goalId !== null || spec.runId !== null || spec.parentGrantId !== null
-          || Date.parse(spec.expiresAt) > Date.now() + 120_000 || Date.parse(spec.expiresAt) <= Date.now()) throw new Error('foreground grant scope mismatch')
+          || Date.parse(spec.expiresAt) > Date.now() + TURN_GRANT_TTL_MS || Date.parse(spec.expiresAt) <= Date.now()) throw new Error('foreground grant scope mismatch')
         return options.authority.createGrant(spec)
       }
       case 'turn.cognition': {

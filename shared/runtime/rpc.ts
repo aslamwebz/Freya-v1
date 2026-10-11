@@ -1,3 +1,4 @@
+export { observeHealth } from './observation'
 import { createConnection, createServer, type Socket } from 'node:net'
 import { timingSafeEqual, randomUUID } from 'node:crypto'
 import { unlink } from 'node:fs/promises'

@@ -17,7 +17,7 @@ if (!args.includes('--no-build') && !command.length) {
   const code = await new Promise(resolve => { build.once('error', () => resolve(1)); build.once('exit', resolve) })
   if (code !== 0) process.exit(code ?? 1)
 }
-const { connectRpc, listenRpc } = require('../dist-electron/runtime-rpc.cjs')
+const { connectRpc, listenRpc, observeHealth } = require('../dist-electron/runtime-rpc.cjs')
 const addresses = runtimeAddresses(profile)
 let existing
 try { existing = JSON.parse(await readFile(stateFile, 'utf8')) } catch { /* First launch or stale descriptor. */ }
@@ -107,12 +107,12 @@ async function status() {
       if (health.component !== name || health.pid !== children.get(name)?.pid) throw new Error('readiness reply belongs to a different process instance')
       if (Math.abs(Date.now() - Date.parse(health.checkedAt)) > 10_000) throw new Error('readiness reply is stale')
       if (name === 'core' && (!health.lastProgressAt || Date.now() - Date.parse(health.lastProgressAt) > 40_000)) throw new Error('Core 30-second heartbeat is stale')
-      return health
-    } catch (error) { return { component: name, lifecycle: 'unavailable', issues: [{ code: 'readiness-failed', message: error.message }] } }
+      return observeHealth(name, children.get(name)?.pid ?? null, health)
+    } catch (error) { return observeHealth(name, children.get(name)?.pid ?? null, null) }
     finally { peer?.close() }
   }))
-  if (checks.every(check => check.lifecycle === 'ready')) console.log('HEARTBEAT HEALTH OK')
-  else for (const check of checks) if (check.lifecycle !== 'ready') console.error(`[health] ${check.component} ${check.lifecycle}: ${check.issues.map(issue => issue.message).join('; ')}`)
+  if (checks.every(check => check.state === 'healthy')) console.log('HEARTBEAT HEALTH OK')
+  else for (const check of checks) if (check.state !== 'healthy') console.error(`[health] ${check.component} ${check.state}: ${check.detail}`)
   return checks
 }
 async function shutdown() {

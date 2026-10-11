@@ -112,6 +112,7 @@ export interface AttachmentResult {
 }
 
 export interface FreyaHostBridge {
+  onNavigate?(handler: (route: string) => void): () => void
   getDesktopView?(): Promise<'dashboard' | 'mini-chat'>
   onDesktopView?(handler: (view: 'dashboard' | 'mini-chat') => void): () => void
   voiceWakeStatus?(): Promise<{ ready: boolean; frames: number; detections: number; peak: number }>

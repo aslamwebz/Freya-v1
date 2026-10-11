@@ -80,6 +80,11 @@ export interface RuntimeInfo {
  */
 const api = {
   isDesktop: true as const,
+  onNavigate: (handler: (route: string) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, route: string) => handler(route)
+    ipcRenderer.on('freya:desktop:navigate', listener)
+    return () => ipcRenderer.removeListener('freya:desktop:navigate', listener)
+  },
   getDesktopView: (): Promise<'dashboard' | 'mini-chat'> => ipcRenderer.invoke('freya:desktop:view:get'),
   onDesktopView: (handler: (view: 'dashboard' | 'mini-chat') => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, view: unknown): void => {

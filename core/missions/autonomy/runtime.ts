@@ -20,7 +20,6 @@ import {
 } from './authority'
 import {
   decide,
-  defaultWaitMs,
   later,
   mayWake,
   wakeIsOverdue,
@@ -41,6 +40,12 @@ import {
 import { isSafeToContinue, planRecovery, type RecoveryAction } from './recovery'
 import { plan as buildPlan, type PlanRequest } from './planner'
 import { proposeSteps } from './planning-selection'
+import {
+  countOpenDelegations,
+  countSiblingMissions,
+  missionWakeDelay,
+  remainingMissionBudget,
+} from './wake-budget'
 import {
   assertWakeBounded,
   type MissionBlockerCode,
@@ -497,9 +502,9 @@ export class MissionAutonomyRuntime {
       now,
       trigger,
       stopped: this.options.stopAll?.() === true,
-      remaining: this.remaining(mission),
-      openDelegations: this.openDelegations(mission),
-      siblingMissions: this.siblings(missionId),
+      remaining: remainingMissionBudget(mission),
+      openDelegations: countOpenDelegations(mission),
+      siblingMissions: countSiblingMissions(this.options.liveMissionCount?.() ?? 0),
     })
 
     // Journal the decision **before** acting on it. If the process dies between the two,
@@ -545,7 +550,7 @@ export class MissionAutonomyRuntime {
       // `decide` supplied one for a genuine `wait`; a correction applied during `continue`
       // did not, so it is derived here rather than left null — an unbounded wait is the one
       // shape this subsystem must not be able to record.
-      parkedAt = reported.nextWakeAt ?? later(this.clock(), this.waitMs(record))
+      parkedAt = reported.nextWakeAt ?? later(this.clock(), missionWakeDelay(record, this.clock()))
       await this.scheduleWake(missionId, record, kind, wakeSourceFor(trigger), parkedAt, null)
     }
 
@@ -675,7 +680,7 @@ export class MissionAutonomyRuntime {
           step,
           mission.status as 'ready' | 'planning' | 'active' | 'waiting' | 'blocked' | 'approval-required' | 'stopped',
           mission.budget,
-          this.remaining(mission),
+          remainingMissionBudget(mission),
           this.options.authority,
         )
         if (!gate.ok) {
@@ -791,7 +796,7 @@ export class MissionAutonomyRuntime {
       step,
       mission.status as 'ready' | 'planning' | 'active' | 'waiting' | 'blocked' | 'approval-required' | 'stopped',
       mission.budget,
-      this.remaining(mission),
+      remainingMissionBudget(mission),
       this.options.authority,
     )
     if (!gate.ok) {
@@ -1525,54 +1530,6 @@ export class MissionAutonomyRuntime {
   private stepById(mission: MissionRecord, stepId: string | null): MissionStepRecord | null {
     if (stepId === null) return null
     return (mission.activePlan?.steps ?? []).find((step) => step.stepId === stepId) ?? null
-  }
-
-  private remaining(mission: MissionRecord): {
-    actions: number
-    retries: number
-    delegations: number
-    planRevisions: number
-  } {
-    return {
-      actions: Math.max(0, mission.budget.maxActions - mission.spend.actions),
-      retries: Math.max(0, mission.budget.maxRetries - mission.spend.retries),
-      delegations: Math.max(0, mission.budget.maxDelegations - mission.spend.delegations),
-      planRevisions: Math.max(0, mission.budget.maxPlanRevisions - mission.planRevisions),
-    }
-  }
-
-  private openDelegations(mission: MissionRecord): number {
-    let open = 0
-    for (const step of mission.activePlan?.steps ?? []) {
-      if (step.status === 'delegated' || step.status === 'running') open += 1
-    }
-    return open
-  }
-
-  /**
-   * How many *other* Missions are live.
-   *
-   * The swarm guard in `decide` holds back the last concurrency slot when this is
-   * non-zero, so two Missions cannot each fill their roster and jointly hold eight open
-   * delegations. Read live, and only ever used to make things *more* cautious.
-   */
-  /**
-   * How long a Mission waits before it re-decides, bounded by its own deadline.
-   *
-   * Delegated to `decide`'s `defaultWaitMs` so there is **one** definition of how long a
-   * wait lasts. Two would mean a Mission could be told to wait sixty seconds by one path
-   * and thirty by another, and the shorter one would silently win.
-   */
-  private waitMs(mission: MissionRecord): number {
-    return defaultWaitMs(mission, this.clock())
-  }
-
-  private siblings(_missionId: string): number {
-    const total = this.options.liveMissionCount?.() ?? 0
-    // `total - 1` rather than `total`: the caller is asking how many *other* Missions are
-    // live, and counting itself would make a lone Mission look like it had a sibling and
-    // hold back its last concurrency slot for no reason.
-    return Math.max(0, total - 1)
   }
 
   private idle(missionId: string, reason: string): StepOutcome {

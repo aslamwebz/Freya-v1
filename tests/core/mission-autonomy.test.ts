@@ -631,6 +631,8 @@ describe('approvals', () => {
     expect(runtimeMethods).not.toContain('grantApproval')
     expect(runtimeMethods).not.toContain('requestApproval')
     expect(runtimeMethods).not.toContain('openApproval')
+    expect(runtimeMethods).not.toContain('applyRecovery')
+    expect(runtimeMethods).not.toContain('scheduleWake')
     expect(runtimeMethods).not.toContain('executeStep')
     expect(runtimeMethods).not.toContain('remaining')
     expect(runtimeMethods).not.toContain('openDelegations')

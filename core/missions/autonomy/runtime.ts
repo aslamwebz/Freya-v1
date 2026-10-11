@@ -36,10 +36,11 @@ import {
   type AppliedDecision,
   type CorrectionResult,
 } from './results'
-import { isSafeToContinue, planRecovery, type RecoveryAction } from './recovery'
+import { isSafeToContinue, planRecovery } from './recovery'
 import { plan as buildPlan, type PlanRequest } from './planner'
 import { proposeSteps } from './planning-selection'
 import { MissionStepExecutor } from './step-execution'
+import { MissionRecoveryDispatch } from './recovery-dispatch'
 import {
   countOpenDelegations,
   countSiblingMissions,
@@ -399,6 +400,7 @@ export class MissionAutonomyRuntime {
   /** Missions with a step in flight. Guards against two concurrent steps. */
   private readonly stepping = new Set<string>()
   private readonly stepExecutor: MissionStepExecutor
+  private readonly recoveryDispatch: MissionRecoveryDispatch
 
   constructor(private readonly options: MissionRuntimeOptions) {
     this.stepExecutor = new MissionStepExecutor({
@@ -411,6 +413,15 @@ export class MissionAutonomyRuntime {
       execute: (input) => options.execute(input),
       observeApproval: (missionId, step, runId, source, refusals) => this.observeApproval(missionId, step, runId, source, refusals),
       transitionTo: (missionId, status, reason, refusals) => this.to(missionId, status, reason, refusals),
+      newId: () => this.newId(),
+    })
+    this.recoveryDispatch = new MissionRecoveryDispatch({
+      missions: {
+        transition: (input) => options.missions.transition(input),
+        interruptStep: (input) => options.missions.interruptStep(input),
+        setBlocker: (input) => options.missions.setBlocker(input),
+        scheduleWake: (input) => options.missions.scheduleWake(input),
+      },
       newId: () => this.newId(),
     })
   }
@@ -443,7 +454,7 @@ export class MissionAutonomyRuntime {
       if (mission === undefined) continue
       const report = planRecovery(mission, this.clock())
       if (!report.quiescent) {
-        await this.applyRecovery(mission, report.actions)
+        await this.recoveryDispatch.applyRecovery(mission, report.actions)
       }
       // Recovery always re-decides afterwards, even when quiescent: a Mission whose wake
       // fired before the crash needs its next decision made from current facts.
@@ -565,7 +576,7 @@ export class MissionAutonomyRuntime {
       // did not, so it is derived here rather than left null — an unbounded wait is the one
       // shape this subsystem must not be able to record.
       parkedAt = reported.nextWakeAt ?? later(this.clock(), missionWakeDelay(record, this.clock()))
-      await this.scheduleWake(missionId, record, kind, wakeSourceFor(trigger), parkedAt, null)
+      await this.recoveryDispatch.scheduleWake(missionId, record, kind, wakeSourceFor(trigger), parkedAt, null)
     }
 
     this.options.onChange?.()
@@ -1281,71 +1292,6 @@ export class MissionAutonomyRuntime {
    * step is recorded but **not acted on** — the distinction being that recording the
    * uncertainty is safe while deciding what to do about it is a person's job.
    */
-  private async applyRecovery(mission: MissionRecord, actions: readonly RecoveryAction[]): Promise<void> {
-    for (const action of actions) {
-      switch (action.code) {
-        // **No approval case, and that is the point.** `planRecovery` emits nothing about
-        // gates, because a Mission does not own one. Work's TTL expires a gate and writes
-        // `work.approval.expired`; the next decision reads that outcome through
-        // `approvalState` and acts on it. Recovery used to expire gates itself, and with
-        // no durable per-gate instant that meant expiring *every* pending gate on *every*
-        // reconciliation — which made a restart into a refusal, quietly withdrawing a
-        // question before any person had answered it. That failure is not reachable from
-        // here any more.
-        case 'settle_expired':
-          await this.options.missions.transition({ missionId: mission.missionId, to: 'failed', reason: 'deadline_expired' })
-          break
-        case 'mark_interrupted':
-          // Recorded even when not acted on. The uncertainty becomes durable, which is
-          // what stops a later restart from treating the step as merely unfinished.
-          await this.options.missions.interruptStep({
-            missionId: mission.missionId,
-            planId: mission.activePlan?.planId ?? '',
-            stepId: action.stepId ?? '',
-            consequential: !action.automatic,
-          })
-          break
-        case 'release_undelegated':
-          await this.options.missions.setBlocker({ missionId: mission.missionId, code: 'step_failed', stepId: action.stepId, raised: false })
-          break
-        case 'retry_safe_running':
-          await this.options.missions.setBlocker({ missionId: mission.missionId, code: 'step_failed', stepId: action.stepId, raised: false })
-          break
-        case 'record_missed_wake':
-        case 'clear_fired_wake':
-        case 'verify_expired_evidence':
-        case 'reset_never_started':
-        case 'reopen_stopped':
-          // Nothing to write. These are *observations* about the restored state, and
-          // the next `step()` re-decides from facts that already include them — writing
-          // an event for each would put noise in a journal somebody reads as history.
-          break
-      }
-    }
-  }
-
-  private async scheduleWake(
-    missionId: string,
-    mission: MissionRecord,
-    kind: 'event' | 'time' | 'manual',
-    source: 'fabric' | 'time' | 'owner',
-    dueAt: string,
-    eventType: string | null,
-  ): Promise<void> {
-    // Never later than the Mission's own deadline. A wake after the deadline is a wake
-    // for a Mission that will already have been settled, and it is the kind of dangling
-    // promise that makes a parked Mission look like it is still going to do something.
-    const bound = Math.min(Date.parse(dueAt), Date.parse(mission.deadlineAt))
-    await this.options.missions.scheduleWake({
-      missionId,
-      wakeId: this.newId(),
-      kind,
-      source,
-      dueAt: new Date(bound).toISOString(),
-      eventType: kind === 'event' ? eventType : null,
-    })
-  }
-
   /**
    * Move a Mission, and report the status it actually reached.
    *

@@ -1,10 +1,6 @@
 import type { ResearchSource } from '../research/evidence'
 
-export interface ChatMissionProposal {
-  readonly goal: string
-  readonly scope: string
-  readonly successCriteria: readonly string[]
-}
+export type { ChatMissionProposal } from '../../shared/contracts/projections/chat-mission'
 
 export const CHAT_MISSION_POLICY = Object.freeze({ maxModelCalls: 3, maxActions: 3, maxExternalRequests: 32, maxPlanRevisions: 2, maxDurationMs: 30 * 60 * 1000, maxStepsPerPlan: 2 })
 

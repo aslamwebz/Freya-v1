@@ -573,7 +573,7 @@
       "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode."
     },
     "core/missions/autonomy/runtime.ts": {
-      "ceiling": 1059,
+      "ceiling": 1030,
       "limit": 600,
       "hash": "7933b8b2862c99de025100038758f52645571773f10881a0768289a9738bae77",
       "retainInStrict": false,

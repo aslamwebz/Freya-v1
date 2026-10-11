@@ -111,7 +111,7 @@ function OverviewCard({ resource }: { resource: Resource<MindView> }) {
   const overview = view?.overview ?? null
   return (
     <Card
-      title="Core & Mind"
+      title="Core & Freya"
       icon="mind"
       subtitle="What Freya is, right now"
       meta={overview ? <Status word={overview.mode} tone={overview.mode === 'stopped' || overview.mode === 'uncertain' ? 'attention' : overview.mode === 'working' ? 'positive' : undefined} /> : undefined}

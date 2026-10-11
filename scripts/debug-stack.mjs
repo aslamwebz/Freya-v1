@@ -1,6 +1,9 @@
+import { existsSync } from 'node:fs'
+import { requireSelectedProfile, formatHeartbeat, redactRuntimeOutput } from './launcher-policy.mjs'
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
+import { writeRuntimeDescriptor } from './runtime-descriptor.mjs'
 import { resolve, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { createInterface } from 'node:readline'
@@ -9,15 +12,18 @@ import { runtimeAddresses } from './runtime-addresses.mjs'
 const root = resolve(import.meta.dirname, '..'), require = createRequire(import.meta.url)
 const args = process.argv.slice(2)
 const profileFlag = args.find(arg => arg.startsWith('--profile='))
-const profile = resolve(profileFlag?.slice('--profile='.length) ?? join(root, '.kilo', 'freya-debug-profile'))
+const profile = resolve(profileFlag?.slice('--profile='.length) ?? process.env.FREYA_PROFILE ?? join(root, '.kilo', 'freya-debug-profile'))
 const command = args.filter(arg => !arg.startsWith('--'))
 const stateFile = join(profile, '.runtime', 'debug-stack.json')
+console.log(`[supervisor] selected profile: ${profile}`)
+try { requireSelectedProfile(existsSync(join(profile, 'core-events.jsonl')) || existsSync(join(profile, 'vault', 'freya.db')), args.includes('--initialize-profile') || process.env.FREYA_RUNTIME_TEST_PROFILE === '1' && process.env.FREYA_E2E === '1') }
+catch (error) { console.error(`[supervisor] ${error.message}`); process.exit(1) }
 if (!args.includes('--no-build') && !command.length) {
   const build = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], { cwd: root, stdio: 'inherit', windowsHide: true, shell: process.platform === 'win32' })
   const code = await new Promise(resolve => { build.once('error', () => resolve(1)); build.once('exit', resolve) })
   if (code !== 0) process.exit(code ?? 1)
 }
-const { connectRpc, listenRpc } = require('../dist-electron/runtime-rpc.cjs')
+const { connectRpc, listenRpc, observeHealth } = require('../dist-electron/runtime-rpc.cjs')
 const addresses = runtimeAddresses(profile)
 let existing
 try { existing = JSON.parse(await readFile(stateFile, 'utf8')) } catch { /* First launch or stale descriptor. */ }
@@ -50,9 +56,8 @@ const children = new Map(), intentionallyStopped = new Set()
 let shuttingDown = false
 let saving = Promise.resolve()
 const saveState = () => saving = saving.catch(() => {}).then(async () => {
-  await writeFile(`${stateFile}.pending`, JSON.stringify({ supervisorPid: process.pid, supervisorToken, ownerToken,
-    intelligenceToken, addresses, components: Object.fromEntries([...children].map(([name, child]) => [name, child.pid])) }, null, 2), { mode: 0o600 })
-  await rename(`${stateFile}.pending`, stateFile)
+  await writeRuntimeDescriptor(stateFile, JSON.stringify({ supervisorPid: process.pid, supervisorToken, ownerToken,
+    intelligenceToken, addresses, components: Object.fromEntries([...children].map(([name, child]) => [name, child.pid])) }, null, 2))
 })
 
 function output(stream, name) {
@@ -60,7 +65,7 @@ function output(stream, name) {
   stream.on('data', chunk => {
     buffer += chunk.toString()
     let newline
-    while ((newline = buffer.indexOf('\n')) !== -1) { const line = buffer.slice(0, newline).trimEnd(); buffer = buffer.slice(newline + 1); if (line) console.log(`[${name}] ${line}`) }
+    while ((newline = buffer.indexOf('\n')) !== -1) { const line = buffer.slice(0, newline).trimEnd(); buffer = buffer.slice(newline + 1); if (line) console.log(`[${new Date().toISOString()}] [${name}] ${redactRuntimeOutput(line, [ownerToken, intelligenceToken, supervisorToken, ...Object.entries(base).filter(([key]) => /KEY|TOKEN|SECRET|PASSWORD/i.test(key)).map(([, value]) => value)])}`) }
   })
 }
 function start(name) {
@@ -68,19 +73,20 @@ function start(name) {
   if (children.has(name)) return `${name} is already running`
   intentionallyStopped.delete(name)
   const binary = name === 'freya' ? process.execPath : require('electron')
+  const acceptance = name === 'superapp' && base.FREYA_RUNTIME_TEST_PROFILE === '1' && base.FREYA_E2E === '1' && base.FREYA_DESKTOP_ACCEPTANCE === '1'
   const argv = name === 'core' ? [join(root, 'dist-electron/core.cjs')] : name === 'freya' ? [join(root, 'dist-electron/freya.cjs')]
-    : [root, '--dev', `--remote-debugging-port=${process.env.FREYA_CDP_PORT ?? '9234'}`, '--remote-debugging-address=127.0.0.1']
+    : [...(acceptance ? [`--inspect=127.0.0.1:${Number(base.FREYA_ACCEPTANCE_INSPECT_PORT)}`, join(root, 'dist-electron/acceptance-control-center.cjs')] : [root]), '--dev', ...(acceptance ? ['--freya-no-focus'] : []), `--remote-debugging-port=${process.env.FREYA_CDP_PORT ?? '9234'}`, '--remote-debugging-address=127.0.0.1']
   const child = spawn(binary, argv, { cwd: root, env: envs[name], stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   children.set(name, child); output(child.stdout, name); output(child.stderr, name)
   child.on('error', error => console.error(`[${name}] launch failed: ${error.message}`))
   child.on('exit', (code, signal) => {
     if (children.get(name) === child) children.delete(name)
     console.log(`[${name}] exited (${signal ?? code}); other components remain running`)
-    void saveState()
+    void saveState().catch(error => console.error(`[supervisor] descriptor update failed: ${error.message}`))
     if (!shuttingDown && !intentionallyStopped.has(name) && name !== 'superapp') setTimeout(() => { start(name) }, 1_000)
   })
-  void saveState()
-  console.log(`[supervisor] ${name} pid=${child.pid}`)
+  void saveState().catch(error => console.error(`[supervisor] descriptor update failed: ${error.message}`))
+  console.log(`[${new Date().toISOString()}] [supervisor] ${name} starting pid=${child.pid}`)
   return `${name} started`
 }
 async function stop(name) {
@@ -107,12 +113,10 @@ async function status() {
       if (health.component !== name || health.pid !== children.get(name)?.pid) throw new Error('readiness reply belongs to a different process instance')
       if (Math.abs(Date.now() - Date.parse(health.checkedAt)) > 10_000) throw new Error('readiness reply is stale')
       if (name === 'core' && (!health.lastProgressAt || Date.now() - Date.parse(health.lastProgressAt) > 40_000)) throw new Error('Core 30-second heartbeat is stale')
-      return health
-    } catch (error) { return { component: name, lifecycle: 'unavailable', issues: [{ code: 'readiness-failed', message: error.message }] } }
+      return observeHealth(name, children.get(name)?.pid ?? null, health)
+    } catch { return observeHealth(name, children.get(name)?.pid ?? null, null) }
     finally { peer?.close() }
   }))
-  if (checks.every(check => check.lifecycle === 'ready')) console.log('HEARTBEAT HEALTH OK')
-  else for (const check of checks) if (check.lifecycle !== 'ready') console.error(`[health] ${check.component} ${check.lifecycle}: ${check.issues.map(issue => issue.message).join('; ')}`)
   return checks
 }
 async function shutdown() {
@@ -136,7 +140,10 @@ const supervisor = await listenRpc(addresses.supervisor, supervisorToken, peer =
 }))
 await saveState()
 start('core'); start('freya'); start('superapp')
-const healthTimer = setInterval(() => { void status() }, 60_000)
+let reporting = false
+const report = async () => { if (reporting) return; reporting = true; try { console.log(formatHeartbeat(await status(), new Date().toISOString())) } finally { reporting = false } }
+const healthTimer = setInterval(() => { void report() }, 30_000)
+void report()
 console.log(`[supervisor] isolated profile: ${profile}`)
 console.log('[supervisor] Commands: status; restart core|freya|superapp; start superapp; stop all')
 const input = createInterface({ input: process.stdin, output: process.stdout })

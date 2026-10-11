@@ -18,6 +18,7 @@ export default defineConfig({
     assetsInlineLimit: 0,
     rollupOptions: {
       input: {
+        controlCenter: fileURLToPath(new URL('./control-center.html', import.meta.url)),
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
         presence: fileURLToPath(new URL('./presence.html', import.meta.url)),
         adult: fileURLToPath(new URL('./adult.html', import.meta.url)),

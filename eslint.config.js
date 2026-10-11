@@ -5,7 +5,7 @@ import tseslint from 'typescript-eslint'
 export default tseslint.config(
   {
     // `.scratch` is gitignored working space, not part of the build.
-    ignores: ['dist/**', 'dist-electron/**', 'extension/dist/**', 'node_modules/**', 'References/**', '.scratch/**'],
+    ignores: ['dist/**', 'dist-electron/**', 'extension/dist/**', 'node_modules/**', 'References/**', '.scratch/**', '.kilo/**', 'artifacts/control-center-*/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -13,6 +13,7 @@ export default tseslint.config(
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
       ecmaVersion: 2023,
+      parserOptions: { tsconfigRootDir: import.meta.dirname },
       globals: { ...globals.browser, ...globals.node },
     },
     rules: {
@@ -57,7 +58,7 @@ export default tseslint.config(
     // code actually is; without this the driver cannot be linted at all, and the
     // alternative — silencing `no-undef` file-wide — would hide genuine typos in
     // the Node half.
-    files: ['scripts/chat-acceptance-visible.mjs', 'scripts/chat-onscreen-acceptance.mjs', 'scripts/chat-random.mjs'],
+    files: ['scripts/chat-acceptance-visible.mjs', 'scripts/chat-onscreen-acceptance.mjs', 'scripts/chat-random.mjs', 'tests/e2e/**/*.mjs'],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser },
     },

@@ -57,8 +57,8 @@ describe('the shipping primary destinations', () => {
     render(<Harness />)
     const nav = screen.getByRole('navigation', { name: 'Primary' })
     expect(Array.from(nav.querySelectorAll('.hd-place, .chats-history-title'), node => node.textContent?.trim()))
-      .toEqual(['Home', 'Chats', 'Mind', 'Missions', 'Workflows', 'World', 'Library', 'War Room', 'Settings'])
-    for (const name of ['Mind', 'Missions', 'Workflows', 'World', 'Library', 'War Room', 'Settings', 'Chats', 'Home']) {
+      .toEqual(['Home', 'Chats', 'Freya', 'Missions', 'Workflows', 'World', 'Vault', 'Library', 'War Room', 'Settings'])
+    for (const name of ['Freya', 'Missions', 'Workflows', 'World', 'Library', 'War Room', 'Settings', 'Chats', 'Home']) {
       fireEvent.click(primary(name))
       expect(primary(name)).toHaveAttribute('aria-current', 'page')
     }
@@ -104,7 +104,7 @@ describe('the shipping primary destinations', () => {
   it('shows the chat bar only on Home and Chats while retaining the draft across every page', () => {
     render(<Harness />)
     fireEvent.change(screen.getByRole('textbox', { name: 'Ask Freya' }), { target: { value: 'Keep this draft while navigating' } })
-    for (const name of ['Mind', 'Missions', 'Workflows', 'World', 'Library', 'War Room', 'Settings']) {
+    for (const name of ['Freya', 'Missions', 'Workflows', 'World', 'Library', 'War Room', 'Settings']) {
       fireEvent.click(primary(name))
       expect(screen.queryByRole('form', { name: 'Freya composer' })).toBeNull()
       expect(screen.queryByRole('textbox', { name: 'Ask Freya' })).toBeNull()
@@ -119,9 +119,9 @@ describe('the shipping primary destinations', () => {
   it('returns to the last Mind page when switching primary destinations', () => {
     render(<Harness initial="memory" />)
     fireEvent.click(primary('Chats'))
-    fireEvent.click(primary('Mind'))
-    expect(screen.getByRole('tabpanel', { name: 'Memory' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Memory' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(primary('Freya'))
+    expect(screen.getByRole('tabpanel', { name: 'Memory and Learning' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Memory and Learning' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('navigates all Mission contexts without showing invented records', () => {
@@ -131,7 +131,7 @@ describe('the shipping primary destinations', () => {
     for (const name of ['Goals', 'Missions', 'Runs', 'Activity']) {
       fireEvent.click(within(tabs).getByRole('tab', { name }))
       const panel = screen.getByRole('tabpanel', { name })
-      expect(panel).toHaveTextContent(/not connected/i)
+      expect(panel).toHaveTextContent(name === 'Goals' ? /Waiting for Goal metadata/i : /not connected/i)
       expect(within(tabs).getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true')
     }
     expect(screen.queryByRole('button', { name: /Enable heartbeat/i })).toBeNull()
@@ -139,21 +139,21 @@ describe('the shipping primary destinations', () => {
 
   it('gives Mind full subpages with horizontal keyboard navigation and no nested Library bar', () => {
     render(<Harness initial="mind" />)
-    expect(primary('Mind')).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('heading', { name: 'Mind', level: 1 })).toBeInTheDocument()
+    expect(primary('Freya')).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('heading', { name: 'Freya', level: 1 })).toBeInTheDocument()
     expect(screen.queryByRole('tablist', { name: 'Library sections' })).toBeNull()
-    const mindTabs = screen.getByRole('tablist', { name: 'Mind sections' })
+    const mindTabs = screen.getByRole('tablist', { name: 'Freya sections' })
     expect(mindTabs).toHaveAttribute('aria-orientation', 'horizontal')
-    expect(within(mindTabs).getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Overview', 'Focus & Attention', 'Memory', 'Self & Continuity'])
+    expect(within(mindTabs).getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Overview', 'System', 'Map', 'Memory and Learning', 'Self and Continuity', 'Focus & Attention'])
     const overview = within(mindTabs).getByRole('tab', { name: 'Overview' })
     overview.focus()
     fireEvent.keyDown(overview, { key: 'ArrowRight' })
+    expect(screen.getByRole('tabpanel', { name: 'System' })).toHaveTextContent(/authenticated Core inventory/i)
+    expect(within(mindTabs).getByRole('tab', { name: 'System' })).toHaveFocus()
+    fireEvent.keyDown(within(mindTabs).getByRole('tab', { name: 'System' }), { key: 'End' })
     expect(screen.getByRole('tabpanel', { name: 'Focus & Attention' })).toHaveTextContent(/not connected/i)
-    expect(within(mindTabs).getByRole('tab', { name: 'Focus & Attention' })).toHaveFocus()
-    fireEvent.keyDown(within(mindTabs).getByRole('tab', { name: 'Focus & Attention' }), { key: 'End' })
-    expect(screen.getByRole('tabpanel', { name: 'Self & Continuity' })).toHaveTextContent(/not connected/i)
-    fireEvent.keyDown(within(mindTabs).getByRole('tab', { name: 'Self & Continuity' }), { key: 'ArrowLeft' })
-    expect(screen.getByRole('tabpanel', { name: 'Memory' })).toBeInTheDocument()
+    fireEvent.keyDown(within(mindTabs).getByRole('tab', { name: 'Focus & Attention' }), { key: 'ArrowLeft' }); fireEvent.keyDown(within(mindTabs).getByRole('tab', { name: 'Self and Continuity' }), { key: 'ArrowLeft' })
+    expect(screen.getByRole('tabpanel', { name: 'Memory and Learning' })).toBeInTheDocument()
     fireEvent.click(primary('Library'))
     const tabs = screen.getByRole('tablist', { name: 'Library sections' })
     expect(within(tabs).getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Knowledge', 'People', 'Files', 'Search'])
@@ -165,10 +165,10 @@ describe('the shipping primary destinations', () => {
   })
 
   it.each([
-    ['focus', 'Mind', 'Focus & Attention'], ['memory', 'Mind', 'Memory'],
-    ['library/mind/focus', 'Mind', 'Focus & Attention'], ['library/mind/memory', 'Mind', 'Memory'], ['library/mind', 'Mind', 'Overview'],
+    ['focus', 'Freya', 'Focus & Attention'], ['memory', 'Freya', 'Memory and Learning'],
+    ['library/mind/focus', 'Freya', 'Focus & Attention'], ['library/mind/memory', 'Freya', 'Memory and Learning'], ['library/mind', 'Freya', 'Overview'],
     ['people', 'Library', 'People'], ['world', 'World', 'Daily digest'], ['library/world', 'World', 'Daily digest'],
-    ['life', 'Mind', 'Memory'], ['workforce', 'War Room', 'Agents'],
+    ['life', 'Freya', 'Memory and Learning'], ['workforce', 'War Room', 'Agents'],
     ['work', 'Missions', 'Runs'], ['files', 'Library', 'Files'],
     ['library/search', 'Library', 'Search'], ['office/scene', 'War Room', 'Scene'],
   ])('resolves legacy or nested %s into %s / %s', (route, destination, section) => {
@@ -238,7 +238,7 @@ describe('the shipping primary destinations', () => {
         personalityHealth: 'unavailable', personalityReason: 'Relationship storage cannot be read', relationshipItems: 0 },
     } } }
     render(<Harness initial="memory" snapshot={snapshot} />)
-    const panel = screen.getByRole('tabpanel', { name: 'Memory' })
+    const panel = screen.getByRole('tabpanel', { name: 'Memory and Learning' })
     expect(panel).toHaveTextContent('Context storage cannot be read')
     expect(panel).toHaveTextContent('Relationship storage cannot be read')
     expect(panel).not.toHaveTextContent('0 context items')
@@ -264,10 +264,10 @@ describe('the shipping primary destinations', () => {
     fireEvent.click(primary('Chats'))
     expect(screen.getByRole('searchbox', { name: 'Search conversations' })).toBeInTheDocument()
     const nav = screen.getByRole('navigation', { name: 'Primary' })
-    expect(within(nav).getAllByRole('button')).toHaveLength(9)
+    expect(within(nav).getAllByRole('button')).toHaveLength(10)
     expect(within(nav).queryByRole('searchbox')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
-    fireEvent.click(primary('Mind'))
+    fireEvent.click(primary('Freya'))
     fireEvent.click(primary('Chats'))
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
     expect(screen.queryByRole('searchbox', { name: 'Search conversations' })).toBeNull()
@@ -276,11 +276,11 @@ describe('the shipping primary destinations', () => {
   it('opens War Room to Agents and presents available Mind pages independently', () => {
     render(<Harness initial="office" snapshot={{ ...NO_CORE_SNAPSHOT, mind: { status: 'ready', source: 'live', data: liveMind() } }} />)
     expect(screen.getByRole('tabpanel', { name: 'Agents' })).toBeInTheDocument()
-    fireEvent.click(primary('Mind'))
+    fireEvent.click(primary('Freya'))
     expect(screen.getByRole('tabpanel', { name: 'Overview' })).toHaveTextContent('Active threads')
     expect(screen.queryByRole('heading', { name: 'Self model' })).toBeNull()
-    fireEvent.click(screen.getByRole('tab', { name: 'Self & Continuity' }))
-    expect(screen.getByRole('tabpanel', { name: 'Self & Continuity' })).toHaveTextContent('Self model')
+    fireEvent.click(screen.getByRole('tab', { name: 'Self and Continuity' }))
+    expect(screen.getByRole('tabpanel', { name: 'Self and Continuity' })).toHaveTextContent('Self model')
   })
 
   it('does not report sample weather or a made-up build on the live Home', () => {

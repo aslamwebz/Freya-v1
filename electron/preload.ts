@@ -1,3 +1,5 @@
+import { readBoundedNumber } from './payloadNumbers'
+import { explorerPayload } from './explorerPayload'
 import { validateModelAttachments } from '../core/model/provider'
 import { OWNER_COMMANDS, ownerPayload, rendererTurnIntents } from './ownerPayload'
 import { contextBridge, ipcRenderer } from 'electron'
@@ -80,6 +82,11 @@ export interface RuntimeInfo {
  */
 const api = {
   isDesktop: true as const,
+  onNavigate: (handler: (route: string) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, route: string) => handler(route)
+    ipcRenderer.on('freya:desktop:navigate', listener)
+    return () => ipcRenderer.removeListener('freya:desktop:navigate', listener)
+  },
   getDesktopView: (): Promise<'dashboard' | 'mini-chat'> => ipcRenderer.invoke('freya:desktop:view:get'),
   onDesktopView: (handler: (view: 'dashboard' | 'mini-chat') => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, view: unknown): void => {
@@ -827,6 +834,9 @@ const api = {
  */
 const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
   ...OWNER_COMMANDS,
+  'development.source',
+  'vault.explorer',
+  'system.explorer.read',
   'core.status.read',
   'core.command.submit',
   'cognition.status.read',
@@ -1119,18 +1129,6 @@ type RendererPayloadResult =
  * invent a default for a missing tuning parameter, and inventing a default here
  * is how a window ends up believing it set a rate it never set.
  */
-function readBoundedNumber(
-  record: Record<string, unknown> | null,
-  key: string,
-  min: number,
-  max: number,
-): number | null | undefined {
-  const value = record?.[key]
-  if (value === undefined) return undefined
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null
-  if (value < min || value > max) return null
-  return value
-}
 
 /**
  * Whether a payload is empty: `undefined`, `null`, or an object with no keys.
@@ -1487,6 +1485,8 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
     required = true,
   ): string | null | undefined => readString(source, key, max, required)
 
+  const explorer = explorerPayload(command, payload)
+  if (explorer) return explorer
   switch (command) {
     case 'core.status.read':
     case 'cognition.status.read':

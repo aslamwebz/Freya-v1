@@ -1,3 +1,4 @@
+import { ControlCenterWindow } from './control-center/window'
 import { CapabilitySettingsStore } from './capabilitySettings'
 import { readRuntimeCapabilityRegistry } from '../core/model/capability-runtime'
 import type { CapabilityPreferences } from '../core/capabilities'
@@ -64,6 +65,7 @@ const EXPLICIT_ENV: NodeJS.ProcessEnv = { ...process.env }
 // commands and bounded payloads only, never environment content.
 loadLocalEnv(join(ROOT, '.env'))
 
+let controlCenter: ControlCenterWindow | null = null
 let mainWindow: BrowserWindow | null = null
 let adultWindow: BrowserWindow | null = null
 // Keep a process-lifetime reference so the native tray cannot be collected.
@@ -1121,6 +1123,12 @@ function createWindow(): BrowserWindow {
   return window
 }
 
+function openWorkspace(route: string): void {
+  if (route === 'chat') { showMiniChat(); return }
+  showDashboard()
+  mainWindow?.webContents.send('freya:desktop:navigate', route)
+}
+
 function showDashboard(): void {
   if (quitRequested) return
   desktopMode = 'dashboard'
@@ -1232,7 +1240,7 @@ function createTray(): void {
   freyaTray = new Tray(join(ROOT, DEV_SERVER ? 'public' : 'dist', 'freya-tray.png'))
   freyaTray.setToolTip('Freya')
   // Character visibility is controlled by right-click, independently of chat.
-  freyaTray.on('double-click', showMiniChat)
+  freyaTray.on('double-click', () => { void controlCenter?.show() })
   updateTrayMenu()
 }
 
@@ -1247,6 +1255,11 @@ function updateTrayMenu(): void {
   if (!freyaTray || freyaTray.isDestroyed()) return
   const adultVisible = adultWindow !== null && !adultWindow.isDestroyed() && adultWindow.isVisible()
   freyaTray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Control Center', click: () => { void controlCenter?.show() } },
+    { label: 'Mini Chat', click: showMiniChat },
+    { label: 'Freya', click: () => openWorkspace('mind/system') },
+    { label: 'Vault', click: () => openWorkspace('vault') },
+    { label: 'Runtime status', click: () => { void controlCenter?.show() } },
     adultVisible
       ? { label: 'Hide Adult Freya', click: hideAdultFreya }
       : { label: 'Show Adult Freya', click: showAdultFreya },
@@ -1821,8 +1834,12 @@ app.whenReady().then(async () => {
         })
     }
 
+    controlCenter = new ControlCenterWindow(ROOT, app.getPath('userData'), openWorkspace, () => requireCore().submit({ command: 'security.stopAll', requestId: 'center-stop-all', payload: { reason: 'Control Center emergency STOP ALL' } }), async () => (await requireCore().submit({ command: 'system.explorer.read', requestId: 'center-inventory' })).explorer)
+    controlCenter.register()
+    desktopMode = 'hidden'
     mainWindow = createWindow()
     createTray()
+    void controlCenter.show()
 
     // The external control plane. Started after the window so any first peer
     // that connects can immediately focus the existing instance; stopped
@@ -1896,6 +1913,7 @@ app.on('before-quit', (event) => {
 })
 
 app.on('will-quit', () => {
+  controlCenter?.destroy()
   freyaTray?.destroy()
   freyaTray = null
 })

@@ -335,8 +335,10 @@ describe('the renderer bridge refuses what a window should not name', () => {
     expect(defaultBranch.slice(0, 200)).not.toContain('payload: record')
 
     const listed = [...allowlistedCommands(source)]
+    const explorerSource = await readFile(new URL('../../electron/explorerPayload.ts', import.meta.url), 'utf8')
+    expect(source).toContain('explorerPayload(command, payload)')
     const contracts = new Set(
-      [...source.matchAll(/case '([a-z][A-Za-z0-9.]+)':/g)].map((match) => match[1]!),
+      [...`${source}\n${explorerSource}`.matchAll(/case '([a-z][A-Za-z0-9.]+)':/g)].map((match) => match[1]!),
     )
     const withoutContract = listed.filter((command) => !contracts.has(command))
 

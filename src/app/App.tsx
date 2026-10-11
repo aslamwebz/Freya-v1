@@ -44,6 +44,7 @@ export function App({
   // conversation/window state for when the owner deliberately opens those surfaces,
   // but it must not turn yesterday's Chat route into today's launch screen.
   const [screen, setScreen] = useState(() => startupAppLayout(initialLayout).nav)
+  useEffect(() => hostBridge()?.onNavigate?.(route => setScreen(resolveRoute(route).path)), [])
   const [dressingOpen, setDressingOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [noticeConversationId, setNoticeConversationId] = useState<string | null>(null)

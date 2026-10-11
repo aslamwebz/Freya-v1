@@ -20,8 +20,9 @@ import type { DockedTabOrigin } from './BrowserWorkspace'
 import { EyeSessionControls } from './EyeSessionControls'
 import { openResearchCitationInDockedBrowser } from './eyeHandoff'
 import { ActiveTurnTracker } from './ActiveTurnTracker'
-import { UniversalRightWorkspace } from './RightWorkspace'
+import { RightWorkspaceRail, UniversalRightWorkspace } from './RightWorkspace'
 import { sharedRightWorkspaceStore } from './rightWorkspaceStore'
+import { sharedComposerDraftStore } from './composerDraftStore'
 import './chat.css'
 
 /**
@@ -399,6 +400,10 @@ export function Chats({
   })()
   const rwStore = sharedRightWorkspaceStore()
   const rwSnapshot = useSyncExternalStore(rwStore.subscribe, rwStore.getSnapshot, rwStore.getSnapshot)
+  const drafts = sharedComposerDraftStore()
+  const browserEnabled = useSyncExternalStore(drafts.subscribe,
+    () => drafts.getDraft(projection?.activeConversationId ?? null).wantBrowser,
+    () => false)
   // Chat stays visible by default; fullscreen browser is an explicit owner action.
   const [browserExpanded, setBrowserExpanded] = useState(false)
 
@@ -676,7 +681,7 @@ export function Chats({
               const container = divider.parentElement!
               const move = (next: PointerEvent) => {
                 const rect = container.getBoundingClientRect()
-                handlePercentChange(100 * (rect.right - next.clientX) / rect.width)
+                handlePercentChange(100 * (rect.right - 52 - next.clientX) / (rect.width - 58))
               }
               const finish = () => {
                 divider.removeEventListener('pointermove', move)
@@ -690,6 +695,7 @@ export function Chats({
           />
           <UniversalRightWorkspace
             open={workspaceOpen}
+            showTabs={false}
             activeTab={rwSnapshot.activeTab}
             onTabChange={(tab) => rwStore.setTab(tab)}
             onClose={handleWorkspaceClose}
@@ -705,6 +711,8 @@ export function Chats({
           />
         </>
       ) : null}
+      <RightWorkspaceRail open={workspaceOpen} activeTab={rwSnapshot.activeTab} browserEnabled={browserEnabled || browserOpen}
+        messages={messages} canvas={latestCanvas} store={rwStore} onClose={handleWorkspaceClose} />
     </div>
   )
 }

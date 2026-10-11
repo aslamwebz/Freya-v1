@@ -974,8 +974,14 @@
 
 .chats[data-workspace-open] {
   gap: 0;
-  grid-template-columns: calc((100% - 6px) * var(--chats-thread, 48) / 100) 6px minmax(320px, 1fr);
+  grid-template-columns: calc((100% - 58px) * var(--chats-thread, 48) / 100) 6px minmax(0, 1fr) 52px;
 }
+.chats:not([data-workspace-open]) { grid-template-columns: minmax(0, 1fr) 52px; }
+.chats-workspace-rail { display:flex; flex-direction:column; gap:7px; align-items:center; padding:12px 5px; overflow-y:auto; border-left:1px solid #739cb32b; background:#0a1420d9; }
+.hd-dashboard .chats-workspace-rail-button { position:relative; display:grid; place-items:center; width:40px; min-height:40px; border:1px solid transparent; border-radius:10px; background:transparent; color:#9fb4c7; cursor:pointer; }
+.hd-dashboard .chats-workspace-rail-button:hover,.hd-dashboard .chats-workspace-rail-button[aria-selected='true'] { color:#b9eeff; background:#16314b; border-color:#5fb3d480; }
+.hd-dashboard .chats-workspace-rail-button:focus-visible { outline:2px solid #a9ecff; outline-offset:1px; }
+.chats-workspace-rail-count { position:absolute; top:0; right:0; border-radius:6px; padding:1px 3px; background:#1d4a65; color:#def6ff; font-size:9px; }
 
 .chats-workspace-toggle {
   display: inline-flex;
@@ -2149,7 +2155,7 @@
    The old fixed right split gave the browser ~52% of the desktop and the
    inherited flex sizing let its native page collapse to 160px high. */
 .chats[data-browser-expanded][data-workspace-open] {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 52px;
 }
 .chats[data-browser-expanded] > .chats-thread,
 .chats[data-browser-expanded] > .chats-dock-divider {

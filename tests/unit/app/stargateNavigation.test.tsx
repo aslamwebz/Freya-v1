@@ -5,7 +5,7 @@ import { fireFreyaComponents, StargateHub } from '../../../src/app/presence/Star
 vi.mock('../../../src/app/presence/LiveOrb', () => ({ LiveOrb: () => <div aria-label="Orb graphics" /> }))
 afterEach(cleanup)
 const targets = [
-  ['Mind', 'mind/overview'], ['Focus & Attention', 'mind/focus'], ['Library', 'library/knowledge'],
+  ['Freya', 'mind/overview'], ['Focus & Attention', 'mind/focus'], ['Library', 'library/knowledge'],
   ['War Room', 'office/agents'], ['World', 'world/digest'], ['Memory', 'mind/memory'],
   ['Workflows', 'workflows/tasks'], ['Settings', 'settings/appearance'], ['Chats', 'chat'], ['Missions', 'missions/missions'],
 ] as const

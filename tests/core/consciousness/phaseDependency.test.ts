@@ -373,6 +373,7 @@ describe('Self, World and Continuity, and the one producer each port has', () =>
   it('are read through ports, not straight off a domain projection', async () => {
     const projection = await codeOf('../../../core/consciousness/projection.ts')
     const selfFocus = await codeOf('../../../core/consciousness/projection/self-focus.ts')
+    const worldLife = await codeOf('../../../core/consciousness/projection/world-life.ts')
     // The single strongest structural claim in this lane: the derivation file does
     // not import BrainProjection to build those three sections. It still imports it
     // for one thing only - whether the Brain itself is readable - so the Brain *type*
@@ -381,7 +382,7 @@ describe('Self, World and Continuity, and the one producer each port has', () =>
     // Matched on the *declaration* rather than every call, so the assertion is about
     // how each builder is typed rather than about how often it is invoked.
     const builderSignatures = [
-      ...`${selfFocus}\n${projection}`.matchAll(/(?:export )?function build(Self|World|Continuity)\(([^)]*)\)/g),
+      ...`${selfFocus}\n${worldLife}\n${projection}`.matchAll(/(?:export )?function build(Self|World|Continuity)\(([^)]*)\)/g),
     ].map((match) => match[2]?.trim() ?? '')
     expect(builderSignatures).toEqual([
       'self: ConsciousSelfReading | null',

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
 import type { PrincipalId } from '../../shared/contracts/identity'
-import type { RunRecord, RunStatus, StepRecord } from '../work/types'
+import type { RunStatus } from '../work/types'
 import { isMissionPriority, missionBudget } from './autonomy/types'
 import { chargeBudget } from './autonomy/authority'
 import type {
@@ -11,8 +11,8 @@ import type {
   MissionPriority,
   MissionStepRecord,
 } from './autonomy/types'
-import { countPlanSteps, evidenceCounts } from './metrics'
 import { countChildren, liveChildCount, missionProjection, summarise, type WorkTruthPort } from './projection'
+import { buildMissionVerificationContext } from './verification-context'
 import { reduceMissionState, initialMissionState } from './state'
 import type { MissionStore } from './store'
 import type { MissionExecutionPlan } from '../mind/mission-planning'
@@ -99,9 +99,6 @@ export interface MissionEngineOptions {
 
 /** How long shutdown waits for an in-flight verification to settle. */
 const CLOSE_DRAIN_MS = 1_000
-
-/** The shape a Work Run status takes in a verification context. */
-type VerificationRunStatus = 'completed' | 'failed' | 'cancelled' | 'verified_steps' | 'non_terminal'
 
 export class MissionEngine {
   private state: MissionState = initialMissionState()
@@ -1703,59 +1700,14 @@ export class MissionEngine {
     mission: MissionRecord,
     requiredRunIds: readonly string[],
   ): MissionVerificationContext {
-    const runStatuses: Record<string, VerificationRunStatus> = {}
-    const runStepStatuses: Record<string, { verified: number; total: number; failed: number; other: number }> = {}
-
-    for (const runId of requiredRunIds) {
-      const run: RunRecord | undefined = this.options.work.run(runId)
-      const steps: readonly StepRecord[] = this.options.work.stepsOf(runId)
-      const verified = steps.filter((step) => step.status === 'verified').length
-      const failed = steps.filter((step) => step.status === 'failed').length
-      runStepStatuses[runId] = {
-        verified,
-        total: steps.length,
-        failed,
-        other: steps.length - verified - failed,
-      }
-
-      if (run === undefined) {
-        runStatuses[runId] = 'cancelled'
-        continue
-      }
-      if (this.options.work.isSettled(run.status)) {
-        runStatuses[runId] = run.status === 'failed' ? 'failed' : run.status === 'cancelled' ? 'cancelled' : 'completed'
-        continue
-      }
-      runStatuses[runId] = 'non_terminal'
-    }
-
-    const evidence = evidenceCounts(mission.evidence, this.options.now?.() ?? new Date())
-    const plan = mission.activePlan
-    const stepCounts = countPlanSteps(plan?.steps ?? [])
-
-    return {
+    return buildMissionVerificationContext({
       missionId,
-      status: mission.status,
-      requiredRunIds: [...requiredRunIds],
-      runStatuses,
-      runStepStatuses,
-      stepCounts,
-      observedResults: evidence.observed,
-      // **Excluded from** `observedResults`, not added to it. A verifier reading
-      // `observedResults` and seeing 40 when 10 of those expired would conclude the
-      // outcome is established on 40 fresh observations, which it is not.
-      expiredObservedResults: evidence.expired,
-      reportedResults: evidence.reported,
-      requestedQuantity: mission.requestedQuantity,
-      blocked: mission.blockers.length > 0,
-      // Reads the Mission's *pointer*, not a gate lifecycle. `outcome === null` means Work has
-      // not reported how the gate went, so it is still open — the Mission is waiting, and
-      // saying so is the whole claim being made here.
-      approvalPending: mission.approval !== null && mission.approval.outcome === null,
-      uncertainEffects: mission.blockers.filter((blocker) => blocker.code === 'step_failed').length,
-    }
+      mission,
+      requiredRunIds,
+      work: this.options.work,
+      now: this.options.now ?? (() => new Date()),
+    })
   }
-
   /**
    * Push a lifecycle change to live children.
    *

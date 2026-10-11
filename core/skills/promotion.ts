@@ -6,7 +6,7 @@ import {
   type SkillVerificationState,
 } from './types'
 import type { SkillEvaluation } from './types'
-import type { SkillFoldRecord } from './state'
+import type { SkillFoldRecord } from './records'
 
 /**
  * PROMOTION — the code-owned thresholds between two statuses.

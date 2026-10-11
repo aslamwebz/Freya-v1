@@ -1,9 +1,6 @@
-import type {
-  CognitionCause,
-  CognitionOrigin,
-  PrincipalId,
-  Capability,
-} from '../protocol/core-protocol'
+import type { CognitionCause, CognitionOrigin } from '../../shared/contracts/security'
+import type { PrincipalId } from '../../shared/contracts/identity'
+import type { Capability } from '../../shared/contracts/capabilities'
 import type {
   ForgeAccessLevel,
   ForgeOrigin,

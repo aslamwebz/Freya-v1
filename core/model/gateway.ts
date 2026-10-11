@@ -12,7 +12,7 @@ import {
   type ModelResult,
 } from './provider'
 import { accumulateAttempt, accumulateReported, accumulateUsage, emptyUsage } from './usage'
-import type { ModelUsage, ProviderStatus } from '../protocol/core-protocol'
+import type { ModelUsage, ProviderStatus } from '../../shared/contracts/model'
 
 /**
  * The Model Gateway: the one and only path to a provider.

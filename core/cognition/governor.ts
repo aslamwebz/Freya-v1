@@ -1,9 +1,5 @@
-import type {
-  CognitionCause,
-  CognitionOrigin,
-  GovernorOutcome,
-  PrincipalId,
-} from '../protocol/core-protocol'
+import type { CognitionCause, CognitionOrigin, GovernorOutcome } from '../../shared/contracts/security'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import { checkGrant, isGrantActive, type CognitionGrant, type GrantContext } from './grants'
 
 /**

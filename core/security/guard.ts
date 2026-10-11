@@ -1,4 +1,5 @@
-import { CAPABILITIES, type Capability, type PrincipalId } from '../protocol/core-protocol'
+import { CAPABILITIES, type Capability } from '../../shared/contracts/capabilities'
+import type { PrincipalId } from '../../shared/contracts/identity'
 
 /**
  * FREYA GUARD — the security root.

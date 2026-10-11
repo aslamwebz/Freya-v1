@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { CORE_EVENT_SCHEMA_VERSION, type AnyCoreEvent, type CoreEventType } from './envelope'
 import type { EventStore } from './store'
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 
 /**
  * The event fabric.

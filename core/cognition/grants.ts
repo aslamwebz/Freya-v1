@@ -1,8 +1,5 @@
-import type {
-  CognitionCause,
-  CognitionOrigin,
-  PrincipalId,
-} from '../protocol/core-protocol'
+import type { CognitionCause, CognitionOrigin } from '../../shared/contracts/security'
+import type { PrincipalId } from '../../shared/contracts/identity'
 
 /**
  * A finite, durable authorisation to think.

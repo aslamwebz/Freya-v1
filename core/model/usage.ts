@@ -1,4 +1,4 @@
-import type { ModelUsage } from '../protocol/core-protocol'
+import type { ModelUsage } from '../../shared/contracts/model'
 
 /**
  * Accumulating reported provider usage.

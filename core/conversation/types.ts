@@ -233,7 +233,7 @@ export const CONVERSATION_LIMITS = Object.freeze({
    * An ordinary turn still reserves 3072, so the everyday cost of a conversation has
    * not changed: only a turn that genuinely takes nine lookups can reach the rest.
    */
-  maxOutputTokensPerTurn: 7_680,
+  maxOutputTokensPerTurn: 16_384,
 
   /**
    * The most one answer may ask for, however it was reached.

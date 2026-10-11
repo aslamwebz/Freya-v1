@@ -4,6 +4,7 @@ import type { InitialToolRequest } from './tool-intent'
 import { isTruncationSignal, type ModelFinishReason, type ModelMessage } from '../model/provider'
 import {
   MIND_TOOL_LIMITS,
+  TOOL_CALL_CLOSE,
   TOOL_CALL_OPEN,
   parseToolResponse,
   renderObservation,
@@ -71,57 +72,73 @@ import {
  * provider went on to do. So every call's ask must sum to at most
  * `maxOutputTokensPerTurn`, and `budgetFor` makes that arithmetic explicit.
  *
- * ## The measured constraint
+ * ## The measured constraint, and the three schedules that failed
  *
- * Against the live endpoint, for `qwen/qwen3.8-27b-uncensored`:
+ * The original measurements were taken against `qwen/qwen3.8-27b-uncensored`: a
+ * tool call ~35 output tokens, a plain answer ~550, an answer grounded in a tool
+ * report ~414. Every schedule derived from those numbers has since failed against
+ * `MiniMax-M3`, in three different directions:
  *
- * | what | output tokens |
- * |---|---|
- * | a tool call | ~35 |
- * | a plain answer | ~550 |
- * | an answer from supplied evidence | ~414 |
+ *  - **Even, with a slice withheld for a final synthesis call.** Left every
+ *    answer-bearing call at 384. `MiniMax-M3` returns `length` at every budget
+ *    below 2048, so the turn died holding its own evidence.
+ *  - **Flat 512 for every continuation.** The same failure, less politely.
+ *  - **Weighted 2:1, answer calls double.** That fixed the answer and starved the
+ *    envelope calls instead. `MiniMax-M3` writes its reasoning *inline*, into the
+ *    same content field as the envelope, so an envelope call budgeted at 1638
+ *    spent the lot on reasoning, never reached the JSON, and ended truncated —
+ *    which reaches the rest of the system as a malformed request. A turn lost three
+ *    of its eight calls that way.
  *
- * Those three numbers do not fit in 1024 alongside a three-call turn. A first
- * call has to be able to answer *without* a tool, so it must be capped near 550;
- * that leaves ~474 for continuations, and a continuation answering from evidence
- * needs ~414, which fits — but only once. A second continuation has nothing left
- * and is refused by the Governor, which the loop reports as an exhausted
- * allowance rather than as an answer.
+ * Turning reasoning down was tried alongside the weighting, as
+ * `reasoning_effort: 'minimal'` on envelope calls. Measured on the endpoint it moves
+ * the output by a few hundred characters and changes nothing that matters: the model
+ * still spends the budget thinking. The lever that works is not a parameter. It is
+ * the size of the slice.
  *
- * Raising `maxOutputTokensPerTurn` is the only way to buy more room, and that is
- * a spend decision rather than an arithmetic one. It is deliberately not taken
- * here: the ceiling is code-owned and the reservation model is a security
- * boundary, and neither should move as a side effect of adding a feature.
+ * So the schedule is uniform: one share, large enough that *every* call can finish.
+ * A turn's calls are not all the same kind — one may have to write prose, another
+ * may have to think first and then emit JSON — and the only budget that serves both
+ * is one both can use. The ceiling is still the Governor's, and the calls still sum
+ * to it. What changed is that the ceiling now bounds the *turn* rather than any
+ * single call.
+ */
+/**
+ * How many times one turn may spend a call re-asking for a tool request that was
+ * cut off by the output ceiling.
+ *
+ * One is enough for a request that was merely long. Two covers a model that needs
+ * the size constraint restated. Beyond that the arguments are not the problem and
+ * continuing would burn the turn's allowance on a request that cannot fit.
+ */
+const MAX_TRUNCATION_RECOVERIES = 2
+
+/**
+ * How many times one turn may spend a call re-asking for a tool request that could
+ * not be parsed, before the loop stops asking and tells the model to answer
+ * directly.
+ *
+ * The point is not to punish a slip. It is that a model which cannot produce a
+ * readable envelope should not be able to spend a whole turn failing to: after
+ * this many attempts the next correction asks for an answer instead, so the turn
+ * ends with whatever Freya genuinely knows rather than with an exhausted
+ * allowance.
+ */
+const MAX_MALFORMED_RECOVERIES = 2
+
+/**
+ * The output budget for one provider call in a turn.
+ *
+ * Uniform on purpose — the schedule history is in the file header. Every call gets
+ * the same share, sized so a call can finish whether it is writing prose or
+ * thinking and then emitting an envelope. The calls sum to the Governor's
+ * allowance; the ceiling now bounds the *turn* rather than any single call.
  */
 export function budgetFor(iteration: number, perTurnAllowance: number): number {
   const maxCalls = MIND_TOOL_LIMITS.maxProviderCalls
   if (maxCalls <= 1) return perTurnAllowance
-  const finalIteration = maxCalls - 1
-  const intermediateCount = maxCalls - 2
-
-  // For the standard perTurnAllowance (7680):
-  // - First call gets CONVERSATION_LIMITS.maxOutputTokensPerAnswer (3072).
-  // - Intermediate tool continuation calls (1..8) get 384 each (8 * 384 = 3072).
-  // - Final synthesis call (iteration 9) gets 1536.
-  // Their sum exactly equals 7680: 3072 + 3072 + 1536 = 7680.
-  const targetFirst = Math.min(3_072, perTurnAllowance)
-  const targetFinal = 1_536
-
-  if (perTurnAllowance >= 7_680) {
-    if (iteration === 0) return targetFirst
-    if (iteration === finalIteration) return targetFinal
-    const remainingForIntermediate = perTurnAllowance - targetFirst - targetFinal
-    return Math.floor(remainingForIntermediate / intermediateCount)
-  }
-
-  // Graceful fallback for smaller allowances:
-  const finalShare = Math.max(1, Math.floor(perTurnAllowance * 0.2))
-  const intermediateShare = Math.max(1, Math.floor((perTurnAllowance * 0.4) / intermediateCount))
-  const firstShare = Math.max(1, perTurnAllowance - intermediateShare * intermediateCount - finalShare)
-
-  if (iteration === 0) return firstShare
-  if (iteration === finalIteration) return finalShare
-  return intermediateShare
+  void iteration
+  return Math.max(1, Math.floor(perTurnAllowance / maxCalls))
 }
 
 /** One step of the loop, for the Mind's own record. Never content. */
@@ -133,6 +150,7 @@ export interface ToolIteration {
 }
 
 import { renderMissionProposal } from './mission-proposal'
+import { deferredActionCorrection } from './deferred-action'
 export type LoopOutcome =
   /** The model produced an answer. `text` is what it said, plus the tool footer. */
   | { readonly kind: 'answer'; readonly text: string; readonly providerId: string; readonly model: string; readonly iterations: readonly ToolIteration[] }
@@ -207,6 +225,9 @@ export async function runToolLoop(
   let messages = baseMessages
   let providerContacted = false
   let toolCallsUsed = 0
+  let deferredCorrections = 0
+  let truncationRecoveries = 0
+  let malformedRecoveries = 0
   let lastToolCallRequest: { tool: string; argsJson: string } | null = null
   const ledger = new SourceLedger(deps.carriedSources)
   const invoke: MindToolRegistry['invoke'] = async request => {
@@ -334,6 +355,52 @@ export async function runToolLoop(
      * the observation it always produced.
      */
     if (isTruncationSignal(outcome)) {
+      // Two different things arrive here wearing the same shape.
+      //
+      // A reply that was cut off while *opening a tool request* is recoverable: the
+      // arguments are truncated rather than wrong, and the model can be asked for a
+      // shorter one. Nothing is executed from the partial text — that ordering is
+      // the whole correctness of this branch, and it is kept. What happens instead is
+      // that the model is told its request was cut off, which is the truth, and
+      // spends one more call producing one that fits.
+      //
+      // "Unterminated" is the test, and it is deliberately narrow: the envelope
+      // opened and never closed. A reply carrying a *complete* envelope is not
+      // truncated in the part that matters — the request is whole — so it is left
+      // alone and reported as truncation, exactly as before. Recovery is for a
+      // request that cannot be read because it ran out mid-write, not for one whose
+      // finish reason is merely `length`.
+      const unterminatedEnvelope =
+        outcome.text.includes(TOOL_CALL_OPEN) && !outcome.text.includes(TOOL_CALL_CLOSE)
+      const recoveringEnvelope =
+        iteration < MIND_TOOL_LIMITS.maxProviderCalls - 1 &&
+        truncationRecoveries < MAX_TRUNCATION_RECOVERIES &&
+        unterminatedEnvelope
+      if (recoveringEnvelope) {
+        truncationRecoveries += 1
+        const observation: ToolObservation = {
+          kind: 'failed',
+          tool: 'unknown',
+          capability: 'search.web',
+          reason:
+            `the tool request was cut off before it finished, so nothing was run. ` +
+            `Reply again with exactly one ${TOOL_CALL_OPEN} envelope and nothing else, ` +
+            `keeping the arguments short enough to fit.`,
+        }
+        const report = renderObservation(observation)
+        iterations.push({
+          step: { index: iterations.length + 1, tool: 'unknown', capability: 'search.web', outcome: 'failed', executed: false, sourceCount: 0 },
+          observation,
+          report,
+        })
+        messages = [...messages, { role: 'assistant', content: outcome.text }, report]
+        continue
+      }
+      // Everything else that arrives here is not recoverable. A reply cut off while
+      // answering is simply incomplete, and a reply carrying a complete envelope
+      // with a `length` finish reason is a request the loop was told not to trust.
+      // The turn ends as `truncated` so the transcript presents it as unfinished
+      // rather than as Freya's reply.
       return {
         kind: 'truncated',
         text: outcome.text,
@@ -346,6 +413,37 @@ export async function runToolLoop(
 
     const parsed = parseToolResponse(outcome.text, (name) => deps.tools.has(name))
     if (parsed.kind === 'answer') {
+      // A reply that describes an action rather than taking it is not an answer.
+      // The tool instructions forbid it, but a model that ignores them would
+      // otherwise end the turn with a promise the transcript would then record as
+      // a reply — so the loop spends one more call making it act.
+      //
+      // Bounded twice over: `deferredActionCorrection` caps how many corrections a
+      // turn may spend, and the call check below means the correction is never
+      // attempted on the last available call. A model that keeps promising simply
+      // gets its promise stored as an answer, which is the pre-existing
+      // behaviour and is at least not a fabricated result.
+      const correction = deferredActionCorrection(outcome.text, deferredCorrections)
+      if (correction !== null && iteration < MIND_TOOL_LIMITS.maxProviderCalls - 1) {
+        deferredCorrections += 1
+        const observation: ToolObservation = {
+          kind: 'failed',
+          tool: 'none',
+          capability: 'search.web',
+          reason: correction,
+        }
+        const report = renderObservation(observation)
+        iterations.push({
+          step: { index: iterations.length + 1, tool: 'none', capability: 'search.web', outcome: 'failed', executed: false, sourceCount: 0 },
+          observation,
+          report,
+        })
+        // The model's own sentence goes back to it as the last thing it said, so
+        // the correction is answering what it actually wrote rather than a turn
+        // that never happened.
+        messages = [...messages, { role: 'assistant', content: outcome.text }, report]
+        continue
+      }
       return {
         kind: 'answer',
         text: outcome.text,
@@ -374,13 +472,23 @@ export async function runToolLoop(
       // A model that meant to ask and wrote something unreadable gets told so, and
       // gets one more chance. It is a bounded failure like any other, and it does
       // not execute a tool.
+      //
+      // The instruction changes once the model has proved it cannot produce a
+      // readable envelope: past {@link MAX_MALFORMED_RECOVERIES} attempts it is told
+      // to stop asking and answer. A turn that ends with Freya's actual knowledge is
+      // worth more than one that ends by exhausting its allowance on formatting.
+      const giveUpAsking = malformedRecoveries >= MAX_MALFORMED_RECOVERIES
+      malformedRecoveries += 1
       observation = {
         kind: 'failed',
         tool: 'unknown',
         capability: 'search.web',
-        reason:
-          `the tool request could not be read: ${parsed.reason}. ` +
-          `Reply again with exactly one ${TOOL_CALL_OPEN} envelope and nothing else, and it will run.`,
+        reason: giveUpAsking
+          ? `the tool request could not be read: ${parsed.reason}. No lookup was made. ` +
+            `Do not try to call a tool again for this turn — answer the owner now with what ` +
+            `you have, and say plainly that you could not check it.`
+          : `the tool request could not be read: ${parsed.reason}. ` +
+            `Reply again with exactly one ${TOOL_CALL_OPEN} envelope and nothing else, and it will run.`,
       }
       iterations.push({
         step: { index: iterations.length + 1, tool: 'unknown', capability: 'search.web', outcome: 'failed', executed: false, sourceCount: 0 },

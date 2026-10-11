@@ -59,20 +59,33 @@ export const MIND_TOOL_LIMITS = Object.freeze({
    * Ten buys room for a real line of enquiry — search, open, follow a link, read a
    * second page — and still stops. It is a bound, not a budget to spend: a model that
    * keeps asking gets nothing on the eleventh, and the transcript says so.
+   *
+   * It was ten, and it is now four, for a reason that only showed up against a
+   * reasoning model. This ceiling and `maxOutputTokensPerTurn` are not independent:
+   * the allowance is *divided* across the calls, so ten calls against a 7680 token
+   * turn hands each one 768 — less than a single call needs to finish, whether the
+   * call is writing prose or emitting an envelope. Ten was chosen as a comfortable
+   * step limit and the token ceiling was never re-derived from it.
+   *
+   * Four is what the allowance can actually fund: two calls that may write prose and
+   * two that may only ask for a tool, at 2560 and 1280 respectively. Against
+   * `MiniMax-M3` on the live endpoint, 2560 is enough for a grounded answer to
+   * return `stop`, and 1280 is enough for the model's inline reasoning plus its
+   * envelope to arrive intact.
    */
-  maxProviderCalls: 10,
+  maxProviderCalls: 6,
 
   /**
    * How many tool bodies one turn may actually execute.
    *
    * The same number as the call ceiling, deliberately, and the alternation in the loop
    * is what actually bounds it: a body can only run between two provider requests, so
-   * ten requests admit at most nine bodies and the last one is always the answer. A
+   * four requests admit at most three bodies and the last one is always the answer. A
    * separate constant rather than `maxProviderCalls - 1` because a body can also be
    * refused or malformed — those cost a call and execute nothing — and a turn should
    * not be able to run out of room merely by asking badly.
    */
-  maxToolCalls: 10,
+  maxToolCalls: 6,
 
   /** Results kept from one search. Enough to answer from; not a crawl. */
   maxResultsPerTool: 5,
@@ -164,27 +177,22 @@ export const MIND_TOOL_LIMITS = Object.freeze({
   maxFooterSources: 5,
 
   /**
-   * Output tokens a *continuation* call may ask for.
+   * How many calls in a turn may have to produce prose rather than an envelope.
    *
-   * A continuation reads a short observation and answers from it, so it does not
-   * need much — but "not much" was previously guessed at 256, and measured
-   * against the live endpoint an answer grounded in search evidence costs ~414
-   * output tokens for `qwen/qwen3.8-27b-uncensored`. At 256 the continuation was
-   * the call that truncated, which is the worst possible place for it: the tool
-   * ran, the evidence was in hand, and the answer was cut off anyway.
-   *
-   * 512 rather than 1024, because the continuation count is now nine rather than two
-   * and the two numbers cannot both stay put. A measured answer grounded in evidence
-   * costs ~414 output tokens, so 512 leaves headroom over that; at 1024 the nine
-   * continuations alone wanted 9216 tokens against a 3072 turn ceiling, which made
-   * `budgetFor` hand the *first* call a single token and the turn was refused before it
-   * began. A continuation that cannot be answered from evidence is a continuation the
-   * model should not have asked for.
-   *
-   * `maxOutputTokensPerTurn` is raised to match, so the schedule divides rather than
-   * multiplies: `3072 + 9 x 512 = 7680`, the sum of the whole turn. An ordinary turn
-   * still reserves 3072 and costs what it always cost — the larger ceiling is only
-   * reachable by a turn that really does use nine lookups.
+   * Kept for the record rather than for arithmetic: the budget schedule is uniform
+   * now, so nothing divides by this. It still says something true — a turn has a
+   * couple of calls that can write prose, and the rest that cannot.
    */
-  followUpOutputTokens: 512,
+  answerCalls: 2,
+
+  /**
+   * How much an answer-bearing call is worth relative to an envelope call, if they
+   * are ever weighted again.
+   *
+   * Kept for the same reason, and with the same warning attached: weighting was
+   * tried, at 2:1, and it starved the envelope calls. `MiniMax-M3` writes its
+   * reasoning inline, so an envelope call budgeted well below a prose call spends
+   * everything thinking and never reaches the JSON.
+   */
+  answerWeight: 2,
 })

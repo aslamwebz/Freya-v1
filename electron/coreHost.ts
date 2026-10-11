@@ -12,6 +12,8 @@ import type { WorkforceProjection, WorkforceSource } from '../core/protocol/work
 import type { PersonalityProjection, PersonalitySource } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
 import type { SkillProjection } from '../core/protocol/skills'
+import type { ToolCatalogueView } from '../core/protocol/tool-catalogue'
+import type { GoalProjectionView } from '../core/protocol/longhorizon'
 import type { ForgeProjection } from '../core/protocol/forge'
 import type { LifeProjection } from '../core/protocol/life'
 import type { WorldSummaryView } from '../core/protocol/world'
@@ -407,6 +409,8 @@ onConversation(send: (projection: ConversationProjection) => void): () => void
    */
   onSkills(send: (projection: SkillProjection) => void): () => void
   skills(): SkillProjection | null
+  toolCatalogue(): ToolCatalogueView | null
+  goals(): GoalProjectionView | null
   /**
    * Attach to the Forge projection. Returns a disposer.
    *
@@ -1789,6 +1793,14 @@ export class ElectronCoreHost implements CoreHost {
 
   skills(): SkillProjection | null {
     return this.core?.skills() ?? null
+  }
+
+  toolCatalogue(): ToolCatalogueView | null {
+    return this.core?.toolCatalogue() ?? null
+  }
+
+  goals(): GoalProjectionView | null {
+    return this.core?.goals() ?? null
   }
 
   /**

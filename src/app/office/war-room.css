@@ -28,3 +28,20 @@
 .wr-inventory :is(.skills-state, .skills-tags, .skills-evidence, .skills-retired, .skills-detail-provenance) { display: block; margin-top: 6px; color: #9eb6c8; font-size: 12px; line-height: 1.6; }
 .wr-inventory .skills-actions { display: block; margin-top: 14px; }
 .wr-inventory :is(.skills-note, .skills-limits, .skills-detail-note, .skills-none, .skills-absent) { max-width: 80ch; color: #9eb6c8; font-size: 13px; line-height: 1.6; }
+.wr-catalogue-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
+.wr-inventory h2 { font-size: 19px; font-weight: 400; margin: 0 0 10px; }
+.wr-tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; margin-top: 18px; }
+.wr-tool { min-width: 0; overflow-wrap: anywhere; }
+.wr-tool h3 { margin: 0 0 12px; font-size: 16px; font-weight: 400; color: #d8f1ff; }
+.wr-tool p { font-size: 13px; line-height: 1.6; }
+.wr-tool small { font-size: 12px; color: #9eb6c8; }
+.wr-tool details { margin-top: 18px; }
+.wr-inventory summary { cursor: pointer; color: #b5eaff; padding: 8px 0; }
+.wr-tool dl { display: grid; gap: 12px; font-size: 12px; line-height: 1.6; }
+.wr-tool dt { color: #d8f1ff; }
+.wr-tool dd { margin: 4px 0 0; color: #9eb6c8; }
+.wr-manager { border-top: 1px solid #7cdfff25; padding-top: 12px; }
+.wr-manager .st-forge-manager { display: grid; gap: 20px; padding-top: 18px; }
+.wr-manager .st-forge-manager section { min-width: 0; display: grid; gap: 12px; }
+.wr-manager input[type='checkbox'] { width: auto; }
+.wr-manager ul { padding: 0; list-style: none; display: grid; gap: 12px; }

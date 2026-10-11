@@ -43,6 +43,7 @@ import { ABSENT_LEARNING_PROJECTION } from './protocol/learning'
 import { admitWorkStepOutcome } from './learning/work-admission'
 import { recallRelevantLearning } from './learning/recall'
 import { createWebSearchTool, createChartTool, createCanvasTool, MindToolRegistry } from './mind/tools'
+import type { ToolCatalogueView } from './protocol/tool-catalogue'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
 import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
 import type { ReferenceKnowledge } from './mind/context-compiler'
@@ -1125,6 +1126,8 @@ export interface Core {
    * about workers, so no authority is reachable through this accessor in any direction.
    */
   workforce(): WorkforceMirror
+  /** Actual conversation tool metadata. Reading this invokes no tools. */
+  toolCatalogue(): ToolCatalogueView
   /** Subscribe to the Workforce mirror. Same mirror semantics as the others. */
   onWorkforce(listener: (projection: WorkforceMirror) => void): () => void
   /**
@@ -1728,6 +1731,7 @@ class FreyaCore implements Core {
    * not up yet" without special-casing the failure.
    */
   private workforceEngine: WorkforceEngine | undefined
+  private mindToolRegistry: MindToolRegistry | null = null
   private workRegistry: WorkRegistry | undefined
 
   /**
@@ -2434,7 +2438,7 @@ class FreyaCore implements Core {
             : []),
         ]
         if (tools.length === 0) return null
-        return new MindToolRegistry({
+        this.mindToolRegistry = new MindToolRegistry({
           tools,
           guard: this.guard,
           // The owner principal. `browser.read` is the owner's alone, as
@@ -2443,6 +2447,7 @@ class FreyaCore implements Core {
           principal: this.owner,
           stopped: () => this.state.stopAll.active || !this.gateway.gateStatus().open,
         })
+        return this.mindToolRegistry
       })(),
     })
     this.conversations = new ConversationService({
@@ -3691,6 +3696,14 @@ class FreyaCore implements Core {
    *   - a source that threw, so an `unavailable` reading that says the read
    *     failed, rather than a stale one that says everything is fine.
    */
+  toolCatalogue(): ToolCatalogueView {
+    if (!this.operational || !this.mindToolRegistry) return { health: 'unavailable', reason: 'Core has not reported its tool registry.', tools: [] }
+    return { health: 'ready', reason: null, tools: this.mindToolRegistry.list().map(tool => ({
+      name: tool.name, description: tool.description, capability: tool.capability,
+      parameters: tool.parameters.map(parameter => ({ name: parameter.name, description: parameter.description, required: parameter.required === true })),
+    })) }
+  }
+
   workforce(): WorkforceMirror {
     if (this.workforceSource !== null) {
       try {

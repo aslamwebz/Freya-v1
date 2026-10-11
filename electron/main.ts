@@ -1841,6 +1841,7 @@ function registerIpc(): void {
   ipcMain.handle('freya:core:connectors', () => requireCore().connectors())
   // The Skills projection is read-only; mutation remains Core-command-only.
   ipcMain.handle('freya:core:skills', () => requireCore().skills())
+  ipcMain.handle('freya:core:tools', () => requireCore().toolCatalogue())
   // The Forge projection is read-only; every mutation is a Guard-evaluated Core command.
   ipcMain.handle('freya:core:forge', () => requireCore().forge())
   // The World & self summary is read-only, and it is counts only. The graph, the

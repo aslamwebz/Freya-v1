@@ -12,7 +12,7 @@ export const WORLD_SECTIONS = ['digest', 'events', 'tech', 'research', 'sources'
 export const LIBRARY_SECTIONS = ['knowledge', 'people', 'files', 'search'] as const
 export const OFFICE_SECTIONS = ['agents', 'skills', 'tools', 'scene'] as const
 export const SETTINGS_SECTIONS = ['appearance', 'provider', 'voice', 'privacy', 'security', 'spending', 'about'] as const
-export const ADVANCED_SECTIONS = ['foundry', 'relay', 'harness', 'context', 'diagnostics'] as const
+export const ADVANCED_SECTIONS = ['relay', 'harness', 'context', 'diagnostics'] as const
 
 const aliases: Readonly<Record<string, string>> = {
   chats: 'chat', missions: 'missions/missions', goals: 'missions/goals', work: 'missions/runs', runs: 'missions/runs',
@@ -24,7 +24,7 @@ const aliases: Readonly<Record<string, string>> = {
   office: 'office/agents', 'war-room': 'office/agents', workforce: 'office/agents', settings: 'settings/appearance',
   skills: 'office/skills', tools: 'office/tools', 'settings/advanced/skills': 'office/skills',
   'war-room/agents': 'office/agents', 'war-room/skills': 'office/skills', 'war-room/tools': 'office/tools', 'war-room/scene': 'office/scene',
-  create: 'settings/advanced/foundry', foundry: 'settings/advanced/foundry', relay: 'settings/advanced/relay',
+  create: 'office/tools', foundry: 'office/tools', 'settings/advanced/foundry': 'office/tools', relay: 'settings/advanced/relay',
   harness: 'settings/advanced/harness', context: 'settings/advanced/context', security: 'settings/security', 'settings/advanced/security': 'settings/security', diagnostics: 'settings/advanced/diagnostics',
 }
 const valid = new Set<string>([

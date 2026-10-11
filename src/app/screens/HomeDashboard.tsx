@@ -424,7 +424,7 @@ export function HomeDashboard({ screen: requestedScreen, snapshot, generating, n
             preferences={preferences}
             voiceControls={voiceControls}
             category={resolveRoute(screen === 'settings' ? route.path : paths.current.settings ?? 'settings').section.replace('advanced/', '') as SettingsCategory}
-            onCategory={category => { onSettingsCategory(category); navigate(`settings/${['foundry', 'relay', 'harness', 'context', 'diagnostics'].includes(category) ? 'advanced/' : ''}${category}`) }}
+            onCategory={category => { onSettingsCategory(category); navigate(`settings/${['relay', 'harness', 'context', 'diagnostics'].includes(category) ? 'advanced/' : ''}${category}`) }}
             onDone={open('home')}
           />
         ) : <UnifiedWorkspace path={workspaceId === screen ? route.path : paths.current[workspaceId] ?? workspaceId} snapshot={snapshot} onNavigate={navigate} />}

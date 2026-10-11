@@ -216,7 +216,7 @@ describe('the shipping primary destinations', () => {
     expect(screen.queryByText('sample-mission')).toBeNull()
   })
 
-  it('keeps Advanced collapsed in Settings and relocates old tools there', () => {
+  it('keeps Advanced collapsed in Settings and moves Skills and Foundry to War Room', () => {
     render(<Harness initial="settings" />)
     const disclosure = screen.getByText('Advanced').closest('details')
     expect(disclosure).not.toHaveAttribute('open')
@@ -224,10 +224,11 @@ describe('the shipping primary destinations', () => {
     fireEvent.click(screen.getByText('Advanced'))
     // jsdom does not perform the native summary toggle.
     if (disclosure) { disclosure.open = true; fireEvent(disclosure, new Event('toggle')) }
-    fireEvent.click(screen.getByRole('button', { name: 'Foundry' }))
-    expect(primary('Settings')).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('heading', { name: 'Foundry' })).toBeInTheDocument()
-    expect(screen.getByText(/Foundry.*not connected/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Foundry' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Skills' })).toBeNull()
+    fireEvent.click(primary('War Room'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Tools' }))
+    expect(screen.getByRole('tabpanel', { name: 'Tools' })).toHaveTextContent('Create or add a package')
   })
 
   it('shows unavailable memory sources without reporting them as empty', () => {
@@ -244,7 +245,7 @@ describe('the shipping primary destinations', () => {
     expect(panel).not.toHaveTextContent('0 relationship items')
   })
 
-  it.each(['create', 'relay', 'settings/advanced/context', 'settings/advanced/harness', 'settings/advanced/diagnostics'])('opens %s under Settings Advanced', (route) => {
+  it.each(['relay', 'settings/advanced/context', 'settings/advanced/harness', 'settings/advanced/diagnostics'])('opens %s under Settings Advanced', (route) => {
     render(<Harness initial={route} />)
     expect(primary('Settings')).toHaveAttribute('aria-current', 'page')
     expect(screen.getByText('Advanced').closest('details')).toHaveAttribute('open')

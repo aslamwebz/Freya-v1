@@ -21,6 +21,7 @@ import { DEFAULT_MISSION_LIMITS as MISSION_LIMITS } from '../core/missions/types
 import type { MissionProjection } from '../core/missions/types'
 import { WORKFORCE_NO_PAYLOAD } from '../core/protocol/workforce'
 import type { WorkforceProjection } from '../core/protocol/workforce'
+import type { ToolCatalogueView } from '../core/protocol/tool-catalogue'
 import type { ContextProjection } from '../core/protocol/context'
 import type { PersonalityProjection } from '../core/protocol/personality'
 import type { AttentionProjection } from '../core/protocol/attention'
@@ -721,6 +722,9 @@ const api = {
 
   coreSkills: (): Promise<SkillProjection | null> =>
     ipcRenderer.invoke('freya:core:skills'),
+  coreTools: (): Promise<ToolCatalogueView | null> =>
+    ipcRenderer.invoke('freya:core:tools'),
+
 
   /**
    * The Forge projection, read-only.

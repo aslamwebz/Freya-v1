@@ -25,6 +25,8 @@ import type { RelayProjection } from '../../core/protocol/relay'
 import type { FoundryProjection } from '../../core/protocol/foundry'
 import type { OfficeProjection } from '../../core/office/projection'
 import type { SkillProjection } from '../../core/protocol/skills'
+import type { ToolCatalogueView } from '../../core/protocol/tool-catalogue'
+import type { ForgeProjection } from '../../core/protocol/forge'
 import type { LifeProjection } from '../../core/protocol/life'
 import type { ConsciousContextProjection } from '../../core/protocol/consciousness'
 import type { LifeLoopProjection } from '../../core/protocol/lifeloop'
@@ -375,6 +377,11 @@ export interface FreyaHostBridge {
    * verification record or moves a promotion threshold.
    */
   coreSkills(): Promise<SkillProjection | null>
+  /** Registered conversation tool metadata; never executes a tool. */
+  coreTools?(): Promise<ToolCatalogueView | null>
+  /** Forge package metadata and updates, never package bodies or execution rights. */
+  coreForge?(): Promise<ForgeProjection | null>
+  onCoreForge?(handler: (projection: ForgeProjection) => void): () => void
   onCoreSkills(handler: (projection: SkillProjection) => void): () => void
 
   /**

@@ -1,15 +1,17 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { Chats } from '../../../src/app/chat/Chats'
 import { describeActivity } from '../../../core/protocol/activity'
 import { resetConversationMirror, ensureConversationAttached } from '../../../src/platform/conversationClient'
 import { resetCoreMirror } from '../../../src/platform/coreClient'
 import type { ConversationProjection } from '../../../core/protocol/conversation'
+import { sharedRightWorkspaceStore } from '../../../src/app/chat/rightWorkspaceStore'
 
 const reason = 'no configured provider can serve this request'
 let current: ConversationProjection
 beforeEach(async () => {
   resetConversationMirror(); resetCoreMirror()
+  sharedRightWorkspaceStore().reset()
   current = { persistence: { mode: 'encrypted', reason: null }, conversations: [], activeConversationId: 'c1', messages: [], activeTurn: null, cognition: { available: true, reason: null }, stopAll: { active: false, activatedAt: null }, maxMessageCharacters: 4000, faults: [] }
   const failure = describeActivity({ type: 'conversation.turn.failed', sequence: 1, at: Date.now(), payload: { conversationId: 'c1', turnId: 't1', reason } })!
   window.freyaHost = {
@@ -40,4 +42,21 @@ it('maps only conversation and turn identifiers for failure association, never t
   expect(row).toMatchObject({ conversationId: 'c1', turnId: 't1' })
   expect(JSON.stringify(row)).not.toContain('private prompt')
   expect(row).not.toHaveProperty('payload')
+})
+it('connects all eight rail icons to the existing collapsible workspace and preserves selection and width', async () => {
+  mount()
+  const rail = screen.getByRole('tablist', { name: 'Workspace content types' })
+  expect(within(rail).getAllByRole('tab').map(tab => tab.getAttribute('aria-label'))).toEqual(['Browser', 'Sources', 'Canvas', 'Docs', 'Media', 'Charts', 'Execution', 'Files'])
+  expect(document.querySelector('#chats-right-panel')).toBeNull()
+  fireEvent.click(within(rail).getByRole('tab', { name: 'Sources' }))
+  expect(document.querySelector('#chats-right-panel')).toBeInTheDocument()
+  act(() => sharedRightWorkspaceStore().setPercent(64))
+  fireEvent.click(within(rail).getByRole('tab', { name: 'Sources' }))
+  expect(document.querySelector('#chats-right-panel')).toBeNull()
+  expect(rail).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Expand right workspace' }))
+  expect(within(rail).getByRole('tab', { name: 'Sources' })).toHaveAttribute('aria-selected', 'true')
+  expect(sharedRightWorkspaceStore().getSnapshot().percent).toBe(64)
+  fireEvent.click(within(rail).getByRole('tab', { name: 'Files' }))
+  expect(document.querySelector('#chats-right-panel')).toHaveAttribute('data-active-tab', 'files')
 })

@@ -24,7 +24,7 @@ import {
 export type { RightWorkspaceTab }
 
 export interface RightWorkspaceProps {
-  readonly open: boolean
+  readonly open: boolean; readonly showTabs?: boolean
   readonly activeTab?: RightWorkspaceTab
   readonly onTabChange?: (tab: RightWorkspaceTab) => void
   readonly onClose: () => void
@@ -804,7 +804,7 @@ export function RightWorkspaceRail({
 
 
 export function UniversalRightWorkspace({
-  open,
+  open, showTabs = true,
   activeTab: propActiveTab,
   onTabChange,
   onClose,
@@ -932,13 +932,13 @@ export function UniversalRightWorkspace({
 
   return (
     <aside
-      className="chats-right-workspace"
+      id="chats-right-panel" className="chats-right-workspace"
       data-active-tab={activeTab}
       role="region"
       aria-label="Universal Right Workspace"
     >
       <header className="chats-rw-head">
-        <div className="chats-rw-tabs" role="tablist" aria-label="Workspace content types">
+        {showTabs ? <div className="chats-rw-tabs" role="tablist" aria-label="Workspace panel tabs">
           <button
             type="button"
             role="tab"
@@ -1047,7 +1047,7 @@ export function UniversalRightWorkspace({
               <small className="chats-rw-count">{drafts.length}</small>
             ) : null}
           </button>
-        </div>
+        </div> : <b>{activeTab === 'documents' ? 'Docs' : activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}</b>}
 
         <button
           type="button"

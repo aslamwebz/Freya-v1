@@ -428,6 +428,9 @@
 .hd-dock-form { display: grid; grid-template-rows: auto auto; gap: 6px; min-height: 54px; padding: 6px 12px 6px 8px; border: 1px solid #2b3a48; border-radius: 22px; background: #101418; box-shadow: 0 10px 30px #0007; }
 .hd-dock-controls { display: flex; align-items: center; gap: 10px; min-height: 32px; }
 .hd-dock-controls .hd-tools { flex: 1; min-width: 0; }
+.hd-dashboard[data-screen='chat'] .hd-dock-controls { align-items: flex-end; }
+.hd-dashboard[data-screen='chat'] .hd-dock-controls .hd-tools { flex-wrap: wrap; gap: 6px; }
+.hd-dashboard[data-screen='chat'] .hd-dock-controls > button, .hd-dashboard[data-screen='chat'] .hd-mic-wrapper { flex-shrink: 0; }
 @media (max-width: 900px) {
   .hd-viewport:not([data-desktop-view='mini-chat']) .hd-dashboard:not([data-browser]):not([data-screen='chat']) .hd-dock {
     left: calc(var(--hd-rail-w) + var(--hd-rail-gutter)); right: var(--hd-main-gutter); width: auto; transform: none;
@@ -791,17 +794,17 @@
 }
 
 
-/* The always-visible Chat content rail uses 48px on the far right.
+/* The always-visible Chat content rail uses 52px on the far right.
    Keep the composer directly below the conversation, never under the rail. */
 .hd-dashboard[data-screen='chat']:not([data-browser]) .hd-dock {
-  width: calc(100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter) - 48px);
+  width: calc(100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter) - 52px);
 }
 .hd-dashboard[data-screen='chat'][data-browser] .hd-dock {
-  width: calc((100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter) - 54px) * var(--chats-thread, 48) / 100);
+  width: calc((100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter) - 58px) * var(--chats-thread, 48) / 100);
 }
 
 /* Sources, Canvas, Docs and other content panels also narrow the conversation:
    align the fixed composer to the actual thread, not across the content panel. */
 .hd-dashboard[data-screen='chat']:has(.chats[data-workspace-open]) .hd-dock {
-  width: calc((100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter) - 54px) * var(--chats-thread, 48) / 100);
+  width: calc((100% - var(--hd-rail-w) - var(--hd-rail-gutter) - var(--hd-main-gutter) - 58px) * var(--chats-thread, 48) / 100);
 }

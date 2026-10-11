@@ -373,8 +373,6 @@
   ],
   "cyclicEdges": [
     "core/authority.ts -> core/cognition/service.ts",
-    "core/browser/gate.ts -> core/browser/runtime.ts",
-    "core/browser/runtime.ts -> core/browser/gate.ts",
     "core/cognition/service.ts -> core/authority.ts",
     "core/mind/mission-planning.ts -> core/missions/autonomy/planner.ts",
     "core/mind/mission-planning.ts -> core/missions/autonomy/types.ts",
@@ -410,7 +408,7 @@
       "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode."
     },
     "core/browser/runtime.ts": {
-      "ceiling": 863,
+      "ceiling": 818,
       "limit": 600,
       "hash": "c8a396786a703e112d26841ffc6409a7f1c984228115b7bc1f978628b75882f8",
       "retainInStrict": false,

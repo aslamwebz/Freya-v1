@@ -5,10 +5,10 @@ import type {
   BrowserAuthorityPort,
   BrowserObservation,
   BrowserPayload,
-} from './runtime'
+} from './ports'
 import type { BrowserCommand, BrowserEventType, BrowserTarget } from './types'
 
-/** Type-only imports of the port shapes, which live with the runtime that first declared them. */
+/** The runtime and gate share these leaf port shapes. */
 export type { AuthorityVerdict, BrowserAdapterPort, BrowserAuthorityPort, BrowserObservation, BrowserPayload }
 
 /**

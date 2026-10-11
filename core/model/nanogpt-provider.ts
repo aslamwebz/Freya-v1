@@ -15,7 +15,7 @@ import {
   type ModelRequest,
   type ModelResult,
 } from './provider'
-import type { ProviderStatus } from '../protocol/core-protocol'
+import type { ProviderStatus } from '../../shared/contracts/model'
 import { assertProviderBaseUrl, assertProviderRedirectTarget, checkProviderBaseUrl } from './provider-endpoint'
 
 /**

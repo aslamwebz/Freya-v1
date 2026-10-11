@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import { reduceGoalState, initialGoalState } from './state'
 import type { GoalStore } from './store'
 import {

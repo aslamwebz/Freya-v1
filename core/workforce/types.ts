@@ -1,4 +1,5 @@
-import { WORKER_CAPABILITIES, type Capability, type PrincipalId } from '../protocol/core-protocol'
+import { WORKER_CAPABILITIES, type Capability } from '../../shared/contracts/capabilities'
+import type { PrincipalId } from '../../shared/contracts/identity'
 
 /**
  * THE WORKFORCE DOMAIN.

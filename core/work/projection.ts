@@ -1,4 +1,4 @@
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import type { WorkState } from './state'
 import {
   isTerminalRunStatus,

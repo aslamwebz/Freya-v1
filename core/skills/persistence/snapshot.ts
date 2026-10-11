@@ -22,7 +22,7 @@ import {
 } from '../types'
 import { SkillPersistenceError } from './errors'
 import { SKILL_SNAPSHOT_VERSION, type SkillSnapshot } from './port'
-import type { Capability } from '../../protocol/core-protocol'
+import type { Capability } from '../../../shared/contracts/capabilities'
 
 /**
  * SKILL SNAPSHOT CODEC — validate on the way in *and* on the way out.

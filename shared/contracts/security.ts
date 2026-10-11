@@ -1,6 +1,10 @@
 import type { PrincipalId } from './identity'
 import type { Capability } from './capabilities'
 
+// Cohesive security vocabulary for ports that name a principal and a capability.
+export type { PrincipalId } from './identity'
+export type { Capability } from './capabilities'
+
 /* --------------------------------------------------------------- Guard */
 
 export type GuardOutcome = 'allow' | 'deny' | 'approval_required'

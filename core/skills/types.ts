@@ -1,4 +1,4 @@
-import { CAPABILITIES, WORKER_CAPABILITIES, type Capability } from '../protocol/core-protocol'
+import { CAPABILITIES, WORKER_CAPABILITIES, type Capability } from '../../shared/contracts/capabilities'
 
 /**
  * THE SKILL DOMAIN — Phase 17's vocabulary.

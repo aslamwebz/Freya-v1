@@ -27,7 +27,7 @@
  * doing — which is the one thing a presence renderer must never do.
  */
 
-import type { CoreStatus } from '../protocol/core-protocol'
+import type { CoreStatus } from '../../shared/contracts/projections/core'
 import type { AttentionProjection, AttentionDirectiveView } from '../protocol/attention'
 import type { WorkProjection } from '../work/projection'
 import type { PersonalityProjection, PersonalityCueView } from '../protocol/personality'

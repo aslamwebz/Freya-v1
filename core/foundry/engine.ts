@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import type { AnyCoreEvent } from '../events/envelope'
-import type { Capability, PrincipalId } from '../protocol/core-protocol'
+import type { Capability, PrincipalId } from '../../shared/contracts/security'
 import type { FoundryProjection } from '../protocol/foundry'
 import { isCapability } from '../security/guard'
 import {

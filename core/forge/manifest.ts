@@ -26,7 +26,7 @@ import {
   type ForgeSchema,
   type ForgeStep,
 } from './types'
-import { CAPABILITIES, type Capability } from '../protocol/core-protocol'
+import { CAPABILITIES, type Capability } from '../../shared/contracts/capabilities'
 
 /**
  * MANIFEST — the door a candidate's text comes through.

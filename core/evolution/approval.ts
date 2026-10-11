@@ -12,7 +12,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import type { StrategyCandidate } from './strategy'
 
 export type PromotionApprovalStatus =

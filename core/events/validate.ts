@@ -83,7 +83,7 @@ import {
   FORGE_STAGE_VERDICTS,
   FORGE_VALIDATION_STAGES,
 } from '../forge/types'
-import { CAPABILITIES } from '../protocol/core-protocol'
+import { CAPABILITIES } from '../../shared/contracts/capabilities'
 import {
   DEFAULT_WORKER_BUDGET,
   WORKFORCE_LIMITS,

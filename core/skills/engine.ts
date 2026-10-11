@@ -1,5 +1,5 @@
 import type { EventFabric } from '../events/fabric'
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import type { WorkRegistry } from '../work/capability'
 import type {
   SkillCommandOutcome,

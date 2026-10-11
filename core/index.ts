@@ -99,7 +99,7 @@ import { ABSENT_MISSION_PROJECTION } from './missions/projection'
 import type { MissionCommandOutcome, MissionDetail, MissionProjection } from './missions/types'
 import { isTerminalMissionStatus } from './missions/types'
 import type { CoreCommandName, MissionCommandOutcomeView } from './protocol/core-protocol'
-import { ALL_CAPABILITIES } from './protocol/core-protocol'
+import { ALL_CAPABILITIES } from '../shared/contracts/capabilities'
 import type { MissionStore } from './missions/store'
 import { EncryptedMissionStore } from './missions/encrypted-store'
 import { MemoryMissionStore } from './missions/memory-store'
@@ -350,18 +350,13 @@ import { validateActionRequest } from './connectors/validation'
 import type { ConnectorKind } from './connectors/types'
 import type { ConnectorCommandOutcome, ConnectorProjection } from './protocol/connectors'
 import { ABSENT_CONNECTOR_PROJECTION, CONNECTOR_NO_PAYLOAD } from './protocol/connectors'
-import type { Capability, CognitionCause, CognitionOrigin } from './protocol/core-protocol'
+import type { Capability } from '../shared/contracts/capabilities'
+import type { CognitionCause, CognitionOrigin } from '../shared/contracts/security'
 import type { CognitionGrantSpec } from './cognition/grants'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
-import type {
-  CoreCommandEnvelope,
-  CoreCommandResult,
-  ResearchCommandOutcome,
-  CoreLifecycle,
-  CoreStatus,
-  JournalFault,
-  PrincipalId,
-} from './protocol/core-protocol'
+import type { CoreLifecycle, CoreStatus, JournalFault } from '../shared/contracts/projections/core'
+import type { PrincipalId } from '../shared/contracts/identity'
+import type { CoreCommandEnvelope, CoreCommandResult, ResearchCommandOutcome } from './protocol/core-protocol'
 import {
   EMPTY_COUNTS,
   RUNTIME_REGISTRY,

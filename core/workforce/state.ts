@@ -1,6 +1,6 @@
 import type { AnyCoreEvent, CoreEventType } from '../events/envelope'
 import { isCapability } from '../security/guard'
-import type { Capability } from '../protocol/core-protocol'
+import type { Capability } from '../../shared/contracts/capabilities'
 import {
   canTransitionAssignment,
   canTransitionWorker,

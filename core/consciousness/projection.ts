@@ -105,7 +105,7 @@ import type {
   ConsciousWorldView,
 } from '../protocol/consciousness'
 import type { ContextProjectionView } from '../protocol/context'
-import type { CoreStatus } from '../protocol/core-protocol'
+import type { CoreStatus } from '../../shared/contracts/projections/core'
 import type { MissionProjection } from '../missions/types'
 import type { OfficePresenceRequest, OfficeProjection } from '../office/types'
 import type { PersonalityProjection } from '../protocol/personality'

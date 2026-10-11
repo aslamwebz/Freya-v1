@@ -11,7 +11,7 @@ import type {
 import { forgeIntegrityHash } from './manifest'
 import { scanForgeCandidate } from './security'
 import { interpretForgeProgram, validateForgeProgram } from './program'
-import type { Capability } from '../protocol/core-protocol'
+import type { Capability } from '../../shared/contracts/capabilities'
 
 /**
  * THE VALIDATION PIPELINE — the stages a candidate must pass, in order, every

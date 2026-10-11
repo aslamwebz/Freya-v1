@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-import { CAPABILITIES, type Capability } from '../protocol/core-protocol'
+import { CAPABILITIES, type Capability } from '../../shared/contracts/capabilities'
 import {
   WORLD_LIMITS,
   WORLD_OWNER_ENTITY_ID,

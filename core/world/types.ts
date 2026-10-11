@@ -1,5 +1,5 @@
 import type { Confidence, EpistemicStatus, Sensitivity, SourceTrust } from '../brain/types'
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 
 /**
  * THE SELF & WORLD MODEL — Phase 22's vocabulary.

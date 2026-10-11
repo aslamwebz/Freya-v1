@@ -1,5 +1,5 @@
 import type { AnyCoreEvent, CoreEventType } from '../events/envelope'
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import {
   canTransitionRun,
   canTransitionStep,

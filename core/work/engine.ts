@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
 import type { CoreEventType } from '../events/envelope'
-import type { Capability, PrincipalId } from '../protocol/core-protocol'
+import type { Capability, PrincipalId } from '../../shared/contracts/security'
 import {
   sanitiseCapabilityInput,
   type WorkCapability,

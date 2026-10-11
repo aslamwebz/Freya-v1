@@ -1,5 +1,5 @@
 import type { EventFabric } from '../events/fabric'
-import type { Capability, PrincipalId } from '../protocol/core-protocol'
+import type { Capability, PrincipalId } from '../../shared/contracts/security'
 import type {
   ForgeCommandOutcome,
   ForgeDetailView,

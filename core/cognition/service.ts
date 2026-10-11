@@ -7,7 +7,8 @@ import type { ModelGateway, GatewayPermit, GatewayRecorder } from '../model/gate
 import { isModelRequestCancelled, isTruncationSignal, type ModelFinishReason } from '../model/provider'
 import type { CoreState } from '../state'
 import { findGrant, reduceCoreState } from '../state'
-import type { ModelUsage, PrincipalId } from '../protocol/core-protocol'
+import type { ModelUsage } from '../../shared/contracts/model'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import {
   INTENT_SHAPES,
   type CognitionIntent,
@@ -16,7 +17,8 @@ import {
   type WorkerIntent,
 } from '../authority'
 import type { Guard, Principal } from '../security/guard'
-import { ALL_CAPABILITIES, type Capability, type CognitionOrigin, type CognitionCause } from '../protocol/core-protocol'
+import { ALL_CAPABILITIES, type Capability } from '../../shared/contracts/capabilities'
+import type { CognitionOrigin, CognitionCause } from '../../shared/contracts/security'
 
 /**
  * The Cognition Service: the only door from the rest of Freya to a provider.

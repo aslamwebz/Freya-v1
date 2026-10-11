@@ -20,7 +20,7 @@ import type {
   PerformanceTelemetry,
 } from '../metacognition/types'
 import type { MetacognitionStore } from '../metacognition/store'
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import {
   type PromotionRecord,
   type RollbackRecord,

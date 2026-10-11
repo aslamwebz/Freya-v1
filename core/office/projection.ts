@@ -1,4 +1,4 @@
-import type { CoreStatus } from '../protocol/core-protocol'
+import type { CoreStatus } from '../../shared/contracts/projections/core'
 import type { WorkProjection } from '../work/projection'
 import type { WorkforceProjection } from '../workforce/types'
 import { freyaPosition, gridPosition, historyPosition } from './layout'

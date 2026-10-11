@@ -6,7 +6,7 @@ import {
   type ModelRequest,
   type ModelResult,
 } from './provider'
-import type { ProviderStatus } from '../protocol/core-protocol'
+import type { ProviderStatus } from '../../shared/contracts/model'
 
 /**
  * Deterministic providers for tests, and the one deliberate "ask Freya

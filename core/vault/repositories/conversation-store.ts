@@ -1,7 +1,7 @@
 import { MEDIA_LIMITS, type MediaItem } from '../../media/types'
 import { safeVideoEmbed } from '../../media/collect'
 import type { ToolStepRecord } from '../../mind/tools'
-import { CAPABILITIES } from '../../protocol/core-protocol'
+import { CAPABILITIES } from '../../../shared/contracts/capabilities'
 import { decodeMessageArtifacts, encodeMessageArtifacts } from '../../conversation/artifacts'
 import {
   ConversationStoreError,

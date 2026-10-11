@@ -1,5 +1,5 @@
 import type { Confidence, Sensitivity } from '../brain/types'
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import {
   WORLD_CHANNEL_PROFILE,
   WORLD_CONFIDENCE_RANK,

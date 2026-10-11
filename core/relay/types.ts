@@ -36,7 +36,7 @@
  * an exfiltration channel.
  */
 
-import type { Capability } from '../protocol/core-protocol'
+import type { Capability } from '../../shared/contracts/capabilities'
 
 /* ------------------------------------------------------------- connectors */
 

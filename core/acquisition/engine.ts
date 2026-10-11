@@ -44,7 +44,7 @@ import type {
   AcquisitionRequestsOutcome,
   AcquisitionWriteOutcome,
 } from '../protocol/acquisition'
-import type { Capability, PrincipalId } from '../protocol/core-protocol'
+import type { Capability, PrincipalId } from '../../shared/contracts/security'
 
 /**
  * THE ACQUISITION ENGINE — every way a generated capability may come to exist, and the only way

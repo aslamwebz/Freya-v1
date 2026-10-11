@@ -1,7 +1,7 @@
 import type { Core } from './index'
 import type { StrategyLifecycleManager, EvolutionStore } from './evolution'
 import type { OwnerAuthority, WorkerAuthority } from './authority'
-import type { PrincipalId } from './protocol/core-protocol'
+import type { PrincipalId } from '../shared/contracts/identity'
 import type { SubordinateWorkerScope, WorkforceOwnerScope } from './workforce/authority'
 import type { AttentionSourceScope } from './attention/engine'
 import type { AttentionSource } from './attention/types'

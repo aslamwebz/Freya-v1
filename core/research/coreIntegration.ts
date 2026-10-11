@@ -1,5 +1,5 @@
 import type { SearchVertical } from './types'
-import type { Capability } from '../protocol/core-protocol'
+import type { Capability } from '../../shared/contracts/capabilities'
 import type { OwnerAuthority } from '../authority'
 import type { Guard } from '../security/guard'
 import type { Principal } from '../security/guard'

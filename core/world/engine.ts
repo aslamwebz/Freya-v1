@@ -1,5 +1,5 @@
 import { SENSITIVITY_RANK, type Sensitivity } from '../brain/types'
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import {
   ABSENT_WORLD_ENTITY_DETAIL,
   ABSENT_WORLD_ENTITY_LIST,

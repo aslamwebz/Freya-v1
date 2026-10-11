@@ -46,7 +46,7 @@
  * is what this file provides.
  */
 
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import type { WorkRisk } from '../work/types'
 import type { MissionExecutionPlan } from '../mind/mission-planning'
 import type { ChatMissionBinding, MissionResearchEvidence } from './chat-types'

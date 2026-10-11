@@ -45,7 +45,7 @@ import type {
   ImprovementProposalsOutcome,
   ImprovementWriteOutcome,
 } from '../protocol/improvement'
-import type { Capability, PrincipalId } from '../protocol/core-protocol'
+import type { Capability, PrincipalId } from '../../shared/contracts/security'
 
 /**
  * THE IMPROVEMENT ENGINE — every way a change to Freya's own architecture may come to exist, and

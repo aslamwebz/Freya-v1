@@ -1,5 +1,5 @@
 import { ModelRequestCancelled, readFinishReason, throwIfAborted, validateModelAttachments, type ModelProvider, type ModelRequest, type ModelCallOptions, type ModelResult, type ModelCatalogOptions, type ModelCatalogEntry } from './provider'
-import type { ProviderStatus } from '../protocol/core-protocol'
+import type { ProviderStatus } from '../../shared/contracts/model'
 
 export type CompatibleProviderId = 'minimax' | 'local' | 'openai'
 export interface CompatibleConfig { apiKey: string; baseUrl: string; model: string; liveEnabled: boolean; vision: boolean; timeoutMs?: number }

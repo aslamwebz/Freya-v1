@@ -1,4 +1,4 @@
-import type { CoreLifecycle, CoreStatus, JournalFault } from '../protocol/core-protocol'
+import type { CoreLifecycle, CoreStatus, JournalFault } from '../../shared/contracts/projections/core'
 import type { CoreState } from '../state'
 import { activeGrants } from '../state'
 import type { ModelGateway } from '../model/gateway'

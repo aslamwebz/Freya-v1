@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import {
   SCHEDULE_LIMITS,
   type GoalScheduleRecord,

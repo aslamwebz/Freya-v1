@@ -1,4 +1,5 @@
-import type { Capability, PrincipalId } from '../protocol/core-protocol'
+import type { Capability } from '../../shared/contracts/capabilities'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import { WORK_LIMITS, type ObservationKind, type WorkRisk } from './types'
 
 /**

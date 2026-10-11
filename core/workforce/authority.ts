@@ -1,5 +1,6 @@
 import type { WorkerIntent } from '../authority'
-import type { Capability, PrincipalId } from '../protocol/core-protocol'
+import type { Capability } from '../../shared/contracts/capabilities'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import type { CognitionOutcome } from '../cognition/service'
 import {
   isAssignableToWorker,

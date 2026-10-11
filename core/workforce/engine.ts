@@ -3,7 +3,7 @@ import type { WorkerIntent } from '../authority'
 import type { CognitionOutcome } from '../cognition/service'
 import type { EventFabric } from '../events/fabric'
 import type { CoreEventType } from '../events/envelope'
-import type { Capability, PrincipalId } from '../protocol/core-protocol'
+import type { Capability, PrincipalId } from '../../shared/contracts/security'
 import type { SubordinateWorkerScope, WorkforceOwnerScope } from './authority'
 import {
   ABSENT_WORKFORCE_PROJECTION,

@@ -1,4 +1,4 @@
-import type { Capability } from '../protocol/core-protocol'
+import type { Capability } from '../../shared/contracts/capabilities'
 import type { Confidence, EpistemicStatus, SourceTrust } from '../brain/types'
 import type { WorldEntityNode, WorldState } from './state'
 import type { WorldClaimKind, WorldFreshness, WorldLimits } from './types'

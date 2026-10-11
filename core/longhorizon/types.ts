@@ -1,4 +1,4 @@
-import type { PrincipalId } from '../protocol/core-protocol'
+import type { PrincipalId } from '../../shared/contracts/identity'
 import type { GoalRoadmap, GoalRoadmapInput } from './decomposition/types'
 import type { GoalBudgetPolicy, GoalSpend, GoalBudgetRemaining } from './budget'
 

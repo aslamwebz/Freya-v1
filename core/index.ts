@@ -4216,45 +4216,25 @@ class FreyaCore implements Core {
     }
   }
 
-  private safeBrain(): BrainProjection | null {
-    return this.safe('Brain', () => this.brain())
-  }
+  private safeBrain(): BrainProjection | null { return this.safe('Brain', () => this.brain()) }
 
-  private safeWork(): WorkProjection | null {
-    return this.safe('Work', () => this.work())
-  }
+  private safeWork(): WorkProjection | null { return this.safe('Work', () => this.work()) }
 
-  private safeMission(): MissionProjection | null {
-    return this.safe('Mission', () => this.mission())
-  }
+  private safeMission(): MissionProjection | null { return this.safe('Mission', () => this.mission()) }
 
-  private safeWorkforce(): WorkforceProjection | null {
-    return this.safe('Workforce', () => this.workforce())
-  }
+  private safeWorkforce(): WorkforceProjection | null { return this.safe('Workforce', () => this.workforce()) }
 
-  private safeSkills(): SkillProjection | null {
-    return this.safe('Skills', () => this.skills())
-  }
+  private safeSkills(): SkillProjection | null { return this.safe('Skills', () => this.skills()) }
 
-  private safePersonality(): PersonalityProjection | null {
-    return this.safe('Personality', () => this.personality())
-  }
+  private safePersonality(): PersonalityProjection | null { return this.safe('Personality', () => this.personality()) }
 
-  private safeAttention(): AttentionProjection | null {
-    return this.safe('Attention', () => this.attention())
-  }
+  private safeAttention(): AttentionProjection | null { return this.safe('Attention', () => this.attention()) }
 
-  private safeContext(): ContextProjectionView | null {
-    return this.safe('Context', () => this.context())
-  }
+  private safeContext(): ContextProjectionView | null { return this.safe('Context', () => this.context()) }
 
-  private safeOffice(): OfficeProjection | null {
-    return this.safe('Office', () => this.office())
-  }
+  private safeOffice(): OfficeProjection | null { return this.safe('Office', () => this.office()) }
 
-  private safeRelay(): RelayProjection | null {
-    return this.safe('Relay', () => this.relay())
-  }
+  private safeRelay(): RelayProjection | null { return this.safe('Relay', () => this.relay()) }
 
   onConsciousness(listener: (projection: ConsciousContextProjection) => void): () => void {
     this.consciousnessListeners.add(listener)

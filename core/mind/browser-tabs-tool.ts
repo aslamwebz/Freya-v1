@@ -61,6 +61,8 @@ export const BROWSER_TABS_LIMITS = Object.freeze({
   maxTabs: 12,
   /** Clicks, keystrokes and selections one execution may issue. */
   maxActs: 8,
+  /** Interactable elements `survey` reports per tab, before it says how many it left out. */
+  maxSurveyElementsPerTab: 14,
   /** Characters of a snapshot the model may read. */
   maxSnapshotChars: BROWSER_SERVICE_LIMITS.maxRenderedSnapshotChars,
   /** Addresses accepted in one "open these" list, before the tab ceiling is applied. */
@@ -68,7 +70,7 @@ export const BROWSER_TABS_LIMITS = Object.freeze({
 })
 
 /** The operations this tool can ask for, in its own names. Closed. */
-const OPERATIONS = ['tabs', 'open', 'close', 'activate', 'navigate', 'snapshot', 'screenshot', 'click', 'type', 'select', 'scroll', 'back', 'forward', 'reload', 'wait'] as const
+const OPERATIONS = ['tabs', 'open', 'close', 'activate', 'navigate', 'snapshot', 'survey', 'screenshot', 'click', 'type', 'select', 'scroll', 'back', 'forward', 'reload', 'wait'] as const
 type Operation = (typeof OPERATIONS)[number]
 
 function isOperation(value: unknown): value is Operation {
@@ -273,6 +275,70 @@ export function createBrowserTabsTool(options: BrowserTabsToolOptions): MindTool
           return { summary, sources: toSources(snapshot), provenance: provenance(issued) }
         }
 
+        /**
+         * A link inventory across every open tab, in one call.
+         *
+         * Reading ten tabs the obvious way costs ten snapshots of ten full pages,
+         * and the model pays for every one of them in context. That is why
+         * "go through these ten tabs" degraded into ten separate turns: each one
+         * was a full page, and a page is far more than the question needs.
+         *
+         * The observation a question like "find the Contact link on each" needs
+         * is a *list of links*, not the page behind them. So this returns, for
+         * every open tab at once: its id, title, url, revision, and its
+         * interactable elements — capped per tab, no prose, no headings, no
+         * body text. Ten tabs of link inventory is a fraction of one page of
+         * rendered snapshot repeated ten times.
+         *
+         * The revision travels with every ref for the same reason it does on a
+         * single-tab snapshot: a ref on its own names "the third thing", which is
+         * a different thing on every load, so a click has to quote both.
+         *
+         * Nothing here executes anything. It is an observation, and the acts that
+         * follow are ordinary clicks that still go through Guard.
+         */
+        case 'survey': {
+          const listed = await send({ op: 'tabs' })
+          if (!listed.ok) return refusal(listed, issued)
+          const open = (listed.data.tabs ?? []) as ReadonlyArray<{ tabId?: string; title?: string; url?: string }>
+          if (open.length === 0) {
+            return { summary: 'No tabs are open.', sources: [], provenance: provenance(issued) }
+          }
+          const lines: string[] = []
+          const seen = new Set<string>()
+          for (const entry of open.slice(0, BROWSER_TABS_LIMITS.maxTabs)) {
+            const tabId = String(entry.tabId ?? '')
+            if (tabId === '' || seen.has(tabId)) continue
+            seen.add(tabId)
+            let snapshot: SemanticSnapshot | null = null
+            try {
+              const result = await send({ op: 'snapshot', tabId })
+              if (result.ok) snapshot = result.data.snapshot as SemanticSnapshot
+            } catch {
+              // A tab that will not snapshot is reported as such rather than
+              // silently omitted, because a missing row reads as "no links".
+            }
+            if (snapshot === null) {
+              lines.push(`${tabId} — ${String(entry.title ?? 'untitled')} (${String(entry.url ?? '')}) — could not be read`)
+              continue
+            }
+            const actionable = snapshot.elements.filter(e => e.kind === 'link' || e.kind === 'button')
+            const shown = actionable.slice(0, BROWSER_TABS_LIMITS.maxSurveyElementsPerTab)
+            const elided = actionable.length - shown.length
+            lines.push(
+              `${tabId} — ${snapshot.title ?? 'untitled'} (${snapshot.url}) rev ${String(snapshot.revision)}` +
+              `\n  ${shown.length === 0 ? '(no links or buttons found)' : shown.map(e => `${e.ref}=${e.name}`).join('  ')}` +
+              (elided > 0 ? `\n  …and ${String(elided)} more` : ''),
+            )
+          }
+          const how = '\nQuote a tab id, a ref and its revision together to act: click {"tab":"<tab id>","ref":"r3","revision":7}'
+          return {
+            summary: `${String(lines.length)} tab(s), links only, no page text:\n${lines.join('\n')}${how}`,
+            sources: [],
+            provenance: provenance(issued),
+          }
+        }
+
         case 'screenshot': {
           const result = await send({ op: 'screenshot', tabId: tab })
           if (!result.ok) return refusal(result, issued)
@@ -431,6 +497,6 @@ export function auditBrowserTabsTool(): readonly string[] {
   }
   if (BROWSER_TABS_LIMITS.maxTabs < 10) findings.push('the tab ceiling is below the ten-tab acceptance number.')
   if (BROWSER_TABS_LIMITS.maxActs > BROWSER_TABS_LIMITS.maxCommands) findings.push('the act ceiling exceeds the command ceiling.')
-  if (OPERATIONS.length !== 15) findings.push('the operation vocabulary is not the fifteen operations this build performs.')
+  if (OPERATIONS.length !== 16) findings.push('the operation vocabulary is not the sixteen operations this build performs.')
   return findings
 }

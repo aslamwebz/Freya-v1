@@ -147,7 +147,7 @@ function canonicalVideoPoster(address: string): string | null {
 }
 
 /** A source is only worth a card if it names media that exists. */
-function toItem(source: ToolSource): MediaItem | null {
+export function mediaFromSource(source: ToolSource): MediaItem | null {
   const page = cardSafeUrl(source.url)
   if (page === null) return null
 
@@ -241,7 +241,7 @@ export function mediaFromObservations(observations: readonly ToolObservation[]):
     }
     for (const source of observation.sources) {
       if (items.length >= MEDIA_LIMITS.cardsPerAnswer) return items
-      const item = toItem(source)
+      const item = mediaFromSource(source)
       if (process.env.FREYA_MEDIA_TRACE === '1') {
         console.error(`[media.collect] item ${item === null ? 'DROPPED' : JSON.stringify({
           kind: item.kind,

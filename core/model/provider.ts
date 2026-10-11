@@ -173,6 +173,7 @@ export interface ModelMessage {
 }
 
 export interface ModelRequest {
+  reasoningEffort?: string
   /** Echoed back in the result so a caller can correlate without a closure. */
   requestId: string
   /**
@@ -564,9 +565,21 @@ export interface ModelCallOptions {
  * owner selected it.
  */
 export interface ModelCatalogEntry {
+  /** Exact selectable values reported by this provider for this model. */
+  reasoningEfforts?: readonly string[]
   providerId?: string
   id: string
   ownedBy: string | null
+}
+
+export function readReasoningEfforts(raw: unknown): readonly string[] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const record = raw as Record<string, unknown>
+  const capabilities = record.capabilities as { reasoning?: { efforts?: unknown } } | undefined
+  const value = record.reasoning_efforts ?? record.supported_reasoning_efforts ?? capabilities?.reasoning?.efforts
+  if (!Array.isArray(value)) return undefined
+  const efforts = value.filter((item): item is string => typeof item === 'string' && /^[a-z0-9_-]{1,32}$/i.test(item))
+  return [...new Set(efforts)].slice(0, 16)
 }
 
 /** What the gateway hands a catalogue read alongside its nothing-else. */

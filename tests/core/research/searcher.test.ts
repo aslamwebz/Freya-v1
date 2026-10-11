@@ -14,6 +14,14 @@ function result(url = 'https://example.com/a'): SearchResult {
 }
 afterEach(() => vi.useRealTimers())
 describe('provider neutral searcher', () => {
+  it('filters runtime metadata rather than assuming duration words in a query are enforced', async () => {
+    const searcher = new Searcher({ provider: provider(async () => [
+      { ...result('https://example.com/short'), metadata: { duration: '2:30:00' } },
+      { ...result('https://example.com/long'), metadata: { duration: '2:31:00' } },
+      result('https://example.com/unknown'),
+    ]) })
+    expect((await searcher.searchWeb('videos over 150 minutes', { vertical: 'videos' })).map(row => row.url)).toEqual(['https://example.com/long'])
+  })
   it.each(['', '   ', 'x'.repeat(513)])('rejects invalid query before contacting a provider', async (query) => {
     const search = vi.fn(async () => [])
     await expect(new Searcher({ provider: provider(search) }).searchWeb(query)).rejects.toMatchObject({ code: 'invalid_query' })

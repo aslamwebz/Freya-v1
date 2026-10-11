@@ -1,4 +1,5 @@
 import { validateModelAttachments } from '../core/model/provider'
+import { OWNER_COMMANDS, ownerPayload, rendererTurnIntents } from './ownerPayload'
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   CoreCommandEnvelope,
@@ -37,6 +38,7 @@ import { CONNECTOR_NO_PAYLOAD } from '../core/protocol/connectors'
 import { RELAY_LIMITS } from '../core/relay/types'
 import type { OfficeProjection } from '../core/office/projection'
 import type { SkillProjection } from '../core/protocol/skills'
+import type { GoalProjectionView } from '../core/protocol/longhorizon'
 import type { WorldSummaryView } from '../core/protocol/world'
 import type { ConsciousContextProjection } from '../core/protocol/consciousness'
 import type { LifeLoopProjection } from '../core/protocol/lifeloop'
@@ -725,6 +727,8 @@ const api = {
   coreTools: (): Promise<ToolCatalogueView | null> =>
     ipcRenderer.invoke('freya:core:tools'),
 
+  coreGoals: (): Promise<GoalProjectionView | null> =>
+    ipcRenderer.invoke('freya:core:goals'),
 
   /**
    * The Forge projection, read-only.
@@ -822,6 +826,7 @@ const api = {
  * which the Mind shapes and the Governor checks.
  */
 const CORE_COMMANDS: ReadonlySet<string> = new Set<CoreCommandName>([
+  ...OWNER_COMMANDS,
   'core.status.read',
   'core.command.submit',
   'cognition.status.read',
@@ -1457,6 +1462,8 @@ function boundedMetrics(raw: unknown): unknown[] | null {
 }
 
 function rendererPayload(command: CoreCommandName, payload: unknown): RendererPayloadResult {
+  const ownerRequest = ownerPayload(command, payload)
+  if (ownerRequest) return ownerRequest
   const record =
     typeof payload === 'object' && payload !== null
       ? (payload as Record<string, unknown>)
@@ -1753,7 +1760,8 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       }
       try {
         const attachments = validateModelAttachments(record?.attachments)
-        return { ok: true, payload: { conversationId, text, ...(attachments.length ? { attachments } : {}) } }
+        const intents = rendererTurnIntents(record?.intents)
+        return { ok: true, payload: { conversationId, text, ...(intents ? { intents } : {}), ...(attachments.length ? { attachments } : {}) } }
       } catch { return { ok: false, reason: 'Conversation attachments are invalid or too large.' } }
     }
 
@@ -1843,10 +1851,10 @@ function rendererPayload(command: CoreCommandName, payload: unknown): RendererPa
       if (condition === null) return { ok: false, reason: 'schedule condition is invalid' }
       const intervalMs = record?.intervalMs
       const maxRepeats = record?.maxRepeats
-      if (intervalMs !== undefined && (typeof intervalMs !== 'number' || !Number.isInteger(intervalMs))) {
+      if (intervalMs !== undefined && intervalMs !== null && (typeof intervalMs !== 'number' || !Number.isInteger(intervalMs))) {
         return { ok: false, reason: 'schedule interval is invalid' }
       }
-      if (maxRepeats !== undefined && (typeof maxRepeats !== 'number' || !Number.isInteger(maxRepeats))) {
+      if (maxRepeats !== undefined && maxRepeats !== null && (typeof maxRepeats !== 'number' || !Number.isInteger(maxRepeats))) {
         return { ok: false, reason: 'schedule repeat count is invalid' }
       }
       return {

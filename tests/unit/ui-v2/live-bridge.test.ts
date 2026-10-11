@@ -252,6 +252,7 @@ function installFakeBridge() {
     coreRelay: async () => null,
     onCoreRelay: () => () => {},
     coreSkills: async () => null,
+    coreGoals: async () => null,
     onCoreSkills: () => () => {},
     coreLife: async () => null,
     onCoreLife: () => () => {},

@@ -91,6 +91,7 @@ export class CompatibleModelProvider implements ModelProvider {
       // provider's maximum output beyond the authorised request, even for
       // reasoning models whose internal tokens consume some of the budget.
       max_tokens: request.maxOutputTokens,
+      ...(request.reasoningEffort ? { reasoning_effort: request.reasoningEffort } : {}),
       messages: request.messages.map((message) => {
         const parts = validateModelAttachments(message.attachments)
         return {

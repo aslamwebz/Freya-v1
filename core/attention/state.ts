@@ -211,7 +211,11 @@ export function reduceAttention(state: AttentionState, event: AnyCoreEvent): Att
         status: 'pending',
       }
       const without = state.schedules.filter((schedule) => schedule.scheduleId !== record.scheduleId)
-      return { ...state, schedules: pushBounded(without, record, ATTENTION_LIMITS.maxSchedules) }
+      const pending = without.filter(schedule => schedule.status === 'pending')
+      if (pending.length >= ATTENTION_LIMITS.maxSchedules) return state
+      const terminal = without.filter(schedule => schedule.status !== 'pending')
+      const remaining = ATTENTION_LIMITS.maxSchedules - pending.length - 1
+      return { ...state, schedules: [...(remaining > 0 ? terminal.slice(-remaining) : []), ...pending, record] }
     }
 
     case 'attention.schedule.fired': {
@@ -221,11 +225,16 @@ export function reduceAttention(state: AttentionState, event: AnyCoreEvent): Att
           if (schedule.scheduleId !== event.payload.scheduleId) return schedule
           const repeats = schedule.repeats + 1
           const due = Date.parse(schedule.dueAt)
+          const exhausted = schedule.intervalMs === null || (schedule.maxRepeats !== null && repeats >= schedule.maxRepeats)
+          const interval = schedule.intervalMs ?? 0
+          const observed = Date.parse(event.occurredAt)
+          const advance = schedule.maxRepeats === null && interval > 0
+            ? Math.max(1, Math.floor((observed - due) / interval) + 1) * interval
+            : interval
           const nextDue =
-            schedule.intervalMs === null || repeats >= schedule.maxRepeats
+            exhausted
               ? schedule.dueAt
-              : new Date((Number.isFinite(due) ? due : Date.parse(event.occurredAt)) + schedule.intervalMs).toISOString()
-          const exhausted = schedule.intervalMs === null || repeats >= schedule.maxRepeats
+              : new Date((Number.isFinite(due) ? due : observed) + advance).toISOString()
           return { ...schedule, repeats, dueAt: nextDue, status: exhausted ? 'fired' : 'pending' }
         }),
       }

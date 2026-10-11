@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { initialToolRequestForOwnerText } from '../../../core/mind/tool-intent'
 
 describe('Core-owned initial Chat tool requests', () => {
+  it('does not seed tools explicitly disabled by composer metadata', () => {
+    expect(initialToolRequestForOwnerText('find videos about galaxies', { webSearch: false })).toBeNull()
+    expect(initialToolRequestForOwnerText('use your own browser to open https://example.com', { webSearch: false, browserUse: false })).toBeNull()
+  })
   it('does not seed explicitly declined search or browser requests', () => {
     expect(initialToolRequestForOwnerText('Do not use web search. Format A=2.')).toBeNull()
     expect(initialToolRequestForOwnerText('Do not use your browser to open https://example.com. Explain my notes.')).toBeNull()

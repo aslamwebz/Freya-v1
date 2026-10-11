@@ -27,6 +27,7 @@ import type { OfficeProjection } from '../../core/office/projection'
 import type { SkillProjection } from '../../core/protocol/skills'
 import type { ToolCatalogueView } from '../../core/protocol/tool-catalogue'
 import type { ForgeProjection } from '../../core/protocol/forge'
+import type { GoalProjectionView } from '../../core/protocol/longhorizon'
 import type { LifeProjection } from '../../core/protocol/life'
 import type { ConsciousContextProjection } from '../../core/protocol/consciousness'
 import type { LifeLoopProjection } from '../../core/protocol/lifeloop'
@@ -382,6 +383,8 @@ export interface FreyaHostBridge {
   /** Forge package metadata and updates, never package bodies or execution rights. */
   coreForge?(): Promise<ForgeProjection | null>
   onCoreForge?(handler: (projection: ForgeProjection) => void): () => void
+  /** Read-only Goal metadata. Goal titles/content remain encrypted in Core. */
+  coreGoals(): Promise<GoalProjectionView | null>
   onCoreSkills(handler: (projection: SkillProjection) => void): () => void
 
   /**

@@ -21,6 +21,8 @@ import type { ForgeCommandOutcome } from './forge'
 import type { LifeCommandOutcome } from './life'
 import type { WorldCommandOutcome } from './world'
 import type { GoalCommandOutcomeView } from './longhorizon'
+import type { MatrixCommandName, MatrixCommandOutcome } from './matrix'
+import type { MissionDetail } from '../missions/types'
 
 /* ------------------------------------------------------------ identity */
 
@@ -100,6 +102,8 @@ export const CAPABILITIES = [
   // Long-Horizon Goals (Phase 5).
   'goal.status.read',
   'goal.manage',
+  'attention.schedule.manage',
+  'matrix.manage',
 
   // Proactive Intelligence (Phase 6).
   'proactive.status.read',
@@ -715,6 +719,9 @@ export type CoreCommandName =
   | 'workforce.status.read'
   | 'mission.status.read'
   | 'mission.create'
+  | 'mission.read'
+  | 'mission.update'
+  | 'mission.delete'
   | 'mission.activate'
   | 'mission.pause'
   | 'mission.resume'
@@ -724,6 +731,9 @@ export type CoreCommandName =
   /* -------------------------------------------------------- longhorizon */
   | 'goal.status.read'
   | 'goal.create'
+  | 'goal.read'
+  | 'goal.update'
+  | 'goal.delete'
   | 'goal.activate'
   | 'goal.pause'
   | 'goal.resume'
@@ -979,6 +989,7 @@ export type CoreCommandName =
   | 'self.status.read'
   | 'world.statement.submit'
   | 'world.statement.withdraw'
+  | MatrixCommandName
 
 export interface CoreCommandEnvelope {
   command: CoreCommandName
@@ -988,6 +999,7 @@ export interface CoreCommandEnvelope {
 }
 
 export interface CoreCommandResult {
+  matrix?: MatrixCommandOutcome
   requestId: string
   ok: boolean
   /** Present when the command was understood; absent on rejection. */
@@ -1263,6 +1275,7 @@ export interface OfficeCommandOutcome {
  * of those and an invented figure would be a lie the size of a number.
  */
 export interface ModelView {
+  reasoningEfforts?: readonly string[]
   providerId?: string
   id: string
   ownedBy: string | null
@@ -1390,6 +1403,7 @@ export interface ResearchCommandOutcome {
       mediaUrl?: string | null
       thumbnailUrl?: string | null
       pageUrl?: string | null
+      metadata?: Readonly<Record<string, string>>
       mediaType: 'web' | 'image' | 'video' | 'audio' | 'document' | 'file'
       confidence: 'exact' | 'probable' | 'weak'
       collection: 'Videos Found' | 'Images Found' | 'Audio Found' | 'Files Found' | 'Sources'
@@ -1423,6 +1437,8 @@ export interface ResearchCommandOutcome {
  * that contract. Nothing here is writable: Core overwrites it on the next push.
  */
 export interface MissionCommandOutcomeView {
+  /** Private content is returned only for an explicit single-record read. */
+  detail?: MissionDetail
   /** Which Mission operation this was, in the vocabulary Core knows. */
   operation: string
   ok: boolean

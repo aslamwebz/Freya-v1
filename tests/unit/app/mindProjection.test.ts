@@ -394,6 +394,7 @@ function installFakeBridge(status: CoreStatus): void {
       ? { requestId: 'r-1', ok: true, world: { operation: 'self', ok: true, self: selfStatus } }
       : { requestId: 'r-1', ok: false, refusal: { reason: 'not allowed in this test' } },
     coreStatus: async () => status,
+    coreGoals: async () => null,
     onCoreStatus: () => () => {},
     coreActivity: async () => [],
     onCoreActivity: () => () => {},

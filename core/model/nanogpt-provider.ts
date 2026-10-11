@@ -1,5 +1,6 @@
 import {
   throwIfAborted,
+  readReasoningEfforts,
   ModelRequestCancelled,
   readFinishReason,
   resolveFinish,
@@ -469,9 +470,10 @@ export class NanoGptProvider implements ModelProvider {
       if (record.id === undefined || typeof record.id !== 'string') continue
       if (record.object !== undefined && record.object !== 'model') continue
       const id = record.id.trim()
-      if (!MODEL_ID_PATTERN.test(id) || id === this.config.model || seen.has(id)) continue
+      if (!MODEL_ID_PATTERN.test(id) || seen.has(id)) continue
       seen.add(id)
-      entries.push({ id, ownedBy: typeof record.owned_by === 'string' ? record.owned_by : null })
+      const reasoningEfforts = readReasoningEfforts(raw)
+      entries.push({ id, ownedBy: typeof record.owned_by === 'string' ? record.owned_by : null, ...(reasoningEfforts ? { reasoningEfforts } : {}) })
       if (entries.length >= MAX_CATALOG_ENTRIES) {
         throw new Error('nanogpt returned more model ids than Freya will list')
       }
@@ -573,6 +575,7 @@ export class NanoGptProvider implements ModelProvider {
         body: JSON.stringify({
           model: request.model ?? this.config.model,
           max_tokens: request.maxOutputTokens,
+          ...(request.reasoningEffort ? { reasoning_effort: request.reasoningEffort } : {}),
           // The compiled packet, sent as the structured turns it is. Identity
           // arrives as a system message, history as user/assistant turns, and
           // this provider has no idea any of it was assembled by Freya.

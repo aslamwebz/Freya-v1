@@ -1,4 +1,5 @@
 import { extractSiteConstraint } from './chat-intent'
+import { videoDurationConstraint, matchesVideoDuration } from './video-duration'
 import { randomUUID } from 'node:crypto'
 import { ResearchError, safeResearchError } from './errors'
 import type { Searcher } from './searcher'
@@ -98,9 +99,11 @@ export function parseSearchRequest(text: string): ParsedSearchRequest {
   if (typeof text !== 'string' || text.length > 16384) throw new ResearchError('invalid_query')
   const raw = normalizeText(text, 4096)
   let working = raw.replace(/^(?:please\s+)?(?:(?:start|begin)\s+(?:a\s+)?)?new\s+(?:search|eye)(?:\s*[:,-]\s*|\s+for\s+|\s+)/i, '')
+  const duration = videoDurationConstraint(working)
+  if (duration) working = working.replace(duration.text, ' ')
   const countMatch = working.match(/\b(\d{1,3})\b/)
   const targetCount = clampTarget(countMatch ? Number(countMatch[1]) : 10)
-  if (countMatch) working = working.replace(countMatch[0], ' ')
+  if (countMatch) working = working.replace(countMatch[1]!, ' ')
 
   const media = detectRequestedMedia(working)
   if (media.token) working = working.replace(media.token, ' ')
@@ -132,7 +135,7 @@ export function parseSearchRequest(text: string): ParsedSearchRequest {
       subject: subject.slice(0, 512),
       targetCount,
       mediaType: media.mediaType,
-      constraints: [],
+      constraints: duration ? [duration.text] : [],
       exclusions: uniqueStrings(exclusions),
       site,
     },
@@ -148,6 +151,8 @@ export interface FollowUpPatchResult {
 export function patchFromFollowUp(text: string, current: SearchIntent): FollowUpPatchResult {
   const raw = normalizeText(text, 1024)
   const lower = raw.toLowerCase()
+  const duration = videoDurationConstraint(raw)
+  if (duration) return { patch: { addConstraints: [duration.text] }, ambiguous: false }
 
   const count = lower.match(/^(?:make\s+it|change(?:\s+it)?\s+to|only)\s+(\d{1,3})(?:\s+results?)?$/)
   if (count) return { patch: { targetCount: clampTarget(Number(count[1])) }, ambiguous: false }
@@ -404,7 +409,7 @@ function mergeResults(session: SearchSession, found: readonly SearchResult[]): S
   return { ...session, page: session.page + 1, results: next }
 }
 
-function resultCompatible(result: Pick<SearchSessionResult, 'title' | 'snippet' | 'sourceDomain' | 'url' | 'mediaType' | 'confidence'>, intent: SearchIntent): boolean {
+function resultCompatible(result: Pick<SearchSessionResult, 'title' | 'snippet' | 'sourceDomain' | 'url' | 'mediaType' | 'confidence' | 'metadata'>, intent: SearchIntent): boolean {
   const text = `${result.title} ${result.snippet} ${result.sourceDomain} ${result.url}`.toLowerCase()
   if (intent.site && !(result.sourceDomain.toLowerCase() === intent.site.toLowerCase() || result.sourceDomain.toLowerCase().endsWith(`.${intent.site.toLowerCase()}`))) return false
   if (intent.mediaType !== 'auto' && intent.mediaType !== 'web' && result.mediaType !== intent.mediaType && result.confidence === 'weak') return false
@@ -413,6 +418,11 @@ function resultCompatible(result: Pick<SearchSessionResult, 'title' | 'snippet' 
     if (token.some((word) => text.includes(word))) return false
   }
   for (const constraint of intent.constraints) {
+    const duration = videoDurationConstraint(constraint)
+    if (duration) {
+      if (result.mediaType !== 'video' || !matchesVideoDuration(result.metadata?.duration, duration)) return false
+      continue
+    }
     const words = significantWords(constraint)
     if (words.length && !words.every((word) => text.includes(word))) return false
   }

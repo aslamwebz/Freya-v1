@@ -292,6 +292,45 @@ export class MissionEngine {
    * in the table, and an owner may reach `ready` too, but the default meaning of
    * "activate" stays "run it".
    */
+  async update(missionId: string, input: MissionContentInput): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('updated', 'missions are shutting down')
+    return this.serialise(missionId, async () => {
+      const record = this.state.missions.get(missionId)
+      if (!record) return refused('updated', 'no such mission', missionId)
+      if (record.status !== 'draft') return refused('updated', 'only a draft Mission can be edited', missionId)
+      const normalised = normaliseMissionContent(input)
+      if (!normalised.ok) return refused('updated', normalised.reason, missionId)
+      const old = await this.options.store.read(missionId)
+      if (!old.ok) return refused('updated', old.reason, missionId)
+      try {
+        await this.options.store.write({ ...old.value, ...normalised.value })
+        try { await this.emit('mission.content.updated', { missionId }) }
+        catch (error) { await this.options.store.write(old.value); throw error }
+      } catch (error) { return refused('updated', describe(error), missionId) }
+      this.options.onChange?.()
+      return { operation: 'updated', ok: true, missionId, status: 'draft' }
+    })
+  }
+
+  async delete(missionId: string): Promise<MissionCommandOutcome> {
+    if (this.closed) return refused('deleted', 'missions are shutting down')
+    return this.serialise(missionId, async () => {
+      const record = this.state.missions.get(missionId)
+      if (!record) return refused('deleted', 'no such mission', missionId)
+      if (record.status !== 'draft' && !isTerminalMissionStatus(record.status)) {
+        return refused('deleted', 'cancel or finish the Mission before deleting it', missionId)
+      }
+      const old = await this.options.store.read(missionId)
+      try {
+        await this.options.store.remove(missionId)
+        try { await this.emit('mission.deleted', { missionId }) }
+        catch (error) { if (old.ok) await this.options.store.write(old.value); throw error }
+      } catch (error) { return refused('deleted', describe(error), missionId) }
+      this.options.onChange?.()
+      return { operation: 'deleted', ok: true, missionId }
+    })
+  }
+
   async activate(missionId: string): Promise<MissionCommandOutcome> {
     return this.transition(missionId, 'draft', 'active', 'activated')
   }

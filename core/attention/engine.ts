@@ -22,16 +22,16 @@
  *     are already due, and only through a condition checked against
  *     already-authorized state. There is no timer in this file.
  *
- * ## Text is process-local
+ * ## Private text stays separate from metadata
  *
  * An event's text is held in `inbox` for the life of the process and is never
- * written to the journal or a projection. A schedule's text is held in
- * `scheduleText` for the same reason. On restart, a pending schedule whose text is
- * gone is cancelled with a stated reason rather than fired without its content —
- * the same honesty Work applies to an interrupted run.
+ * written to the journal or a projection. Schedule text can be saved in a dedicated
+ * encrypted store and restored during reconciliation. A schedule whose private text
+ * cannot be recovered is cancelled rather than fired with invented content.
  */
 
 import type { EventFabric } from '../events/fabric'
+import type { AttentionScheduleTextStore } from './schedule-store'
 import type { PrincipalId } from '../protocol/core-protocol'
 import {
   type AttentionDirectiveView,
@@ -67,6 +67,7 @@ import {
 } from './state'
 
 export interface AttentionEngineOptions {
+  scheduleStore?: AttentionScheduleTextStore
   fabric: EventFabric
   now?: () => Date
   newId?: () => string
@@ -110,6 +111,8 @@ export interface AttentionSourceScope {
 export type AttentionBudgetLimit = 'interrupts-per-window' | 'speaks-per-window-per-source'
 
 export class AttentionEngine {
+  private readonly scheduleStore?: AttentionScheduleTextStore
+  private scheduleFault: string | null = null
   private readonly fabric: EventFabric
   private readonly now: () => Date
   private readonly newId: () => string
@@ -123,9 +126,12 @@ export class AttentionEngine {
   private inbox: AttentionInboxEntry[] = []
   private directive: AttentionDirectiveView | null = null
   private readonly scheduleText = new Map<string, string>()
+  private scheduleTail: Promise<unknown> = Promise.resolve()
   private open = false
 
   constructor(options: AttentionEngineOptions) {
+    this.scheduleStore = options.scheduleStore
+    this.scheduleFault = options.scheduleStore?.faultReason ?? null
     this.fabric = options.fabric
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => crypto.randomUUID())
@@ -148,7 +154,17 @@ export class AttentionEngine {
   async reconcile(): Promise<void> {
     if (this.open) return
     this.open = true
+    const pendingIds = new Set(pendingSchedules(this.getState()).map(schedule => schedule.scheduleId))
+    try {
+      for (const id of await this.scheduleStore?.listIds() ?? []) {
+        if (!pendingIds.has(id)) await this.scheduleStore?.remove(id)
+      }
+    } catch { this.scheduleFault = 'Reminder persistence is unavailable; pending schedules have been preserved.' }
     for (const schedule of pendingSchedules(this.getState())) {
+      let stored: string | null | undefined
+      try { stored = await this.scheduleStore?.read(schedule.scheduleId) }
+      catch { this.scheduleFault = 'Reminder persistence is unavailable; pending schedules have been preserved.'; continue }
+      if (stored) this.scheduleText.set(schedule.scheduleId, stored)
       if (this.scheduleText.has(schedule.scheduleId)) continue
       await this.fabric.append(
         'attention.schedule.cancelled',
@@ -159,13 +175,13 @@ export class AttentionEngine {
   }
 
   projection(): AttentionProjection {
-    return projectAttention({
+    return { ...projectAttention({
       sequence: this.fabric.lastSequence,
       state: this.getState(),
       inbox: this.inbox,
       focus: this.focus(),
       directive: this.directive,
-    })
+    }), schedulePersistence: { durable: this.scheduleStore?.durable === true && this.scheduleFault === null, reason: this.scheduleFault } }
   }
 
   /** The owner's explicit read of one retained event's text, or null. */
@@ -391,6 +407,11 @@ export class AttentionEngine {
   /* ------------------------------------------------------------- schedules */
 
   async registerSchedule(payload: unknown): Promise<{ ok: true; scheduleId: string } | { ok: false; reason: string }> {
+    return this.serialiseSchedule(() => this.registerScheduleOnce(payload))
+  }
+
+  private async registerScheduleOnce(payload: unknown): Promise<{ ok: true; scheduleId: string } | { ok: false; reason: string }> {
+    if (this.stopAll()) return { ok: false, reason: 'STOP ALL is active' }
     const parsed = parseSchedulePayload(payload)
     if (!parsed.ok) return { ok: false, reason: parsed.reason }
     const state = this.getState()
@@ -405,8 +426,13 @@ export class AttentionEngine {
     }
 
     const scheduleId = this.newId()
+    if (parsed.value.maxRepeats === null && !this.scheduleStore?.durable) {
+      return { ok: false, reason: 'Recurring reminders need encrypted durable schedule storage.' }
+    }
+    try { await this.scheduleStore?.write(scheduleId, parsed.value.text) }
+    catch { this.scheduleFault = 'Reminder persistence is unavailable; reminder text could not be saved.'; return { ok: false, reason: this.scheduleFault } }
     this.scheduleText.set(scheduleId, parsed.value.text)
-    await this.fabric.append(
+    try { await this.fabric.append(
       'attention.schedule.registered',
       {
         scheduleId,
@@ -419,20 +445,29 @@ export class AttentionEngine {
         condition: parsed.value.condition,
       },
       { actor: 'owner', correlationId: scheduleId },
-    )
+    ) } catch (error) {
+      this.scheduleText.delete(scheduleId)
+      await this.scheduleStore?.remove(scheduleId)
+      throw error
+    }
     this.onChange()
     return { ok: true, scheduleId }
   }
 
   async cancelSchedule(scheduleId: string): Promise<boolean> {
+    return this.serialiseSchedule(() => this.cancelScheduleOnce(scheduleId))
+  }
+
+  private async cancelScheduleOnce(scheduleId: string): Promise<boolean> {
     const schedule = this.getState().schedules.find((item) => item.scheduleId === scheduleId)
     if (schedule === undefined || schedule.status !== 'pending') return false
-    this.scheduleText.delete(scheduleId)
     await this.fabric.append(
       'attention.schedule.cancelled',
       { scheduleId, reason: 'owner-cancelled' },
       { actor: 'owner', correlationId: scheduleId },
     )
+    this.scheduleText.delete(scheduleId)
+    await this.scheduleStore?.remove(scheduleId)
     this.onChange()
     return true
   }
@@ -445,13 +480,25 @@ export class AttentionEngine {
    * for a schedule that is not due or whose condition is unmet.
    */
   async tick(now: Date = this.now()): Promise<number> {
+    return this.serialiseSchedule(() => this.tickOnce(now))
+  }
+
+  private async tickOnce(now: Date): Promise<number> {
+    if (this.stopAll()) return 0
     let fired = 0
     for (const schedule of pendingSchedules(this.getState())) {
+      if (this.stopAll()) break
       const due = Date.parse(schedule.dueAt)
       if (!Number.isFinite(due) || due > now.getTime()) continue
       if (!this.conditionHolds(schedule)) continue
 
-      const text = this.scheduleText.get(schedule.scheduleId)
+      let text = this.scheduleText.get(schedule.scheduleId)
+      if (text === undefined && this.scheduleStore) {
+        try {
+          const recovered = await this.scheduleStore.read(schedule.scheduleId)
+          if (recovered !== null) { text = recovered; this.scheduleText.set(schedule.scheduleId, recovered) }
+        } catch { this.scheduleFault = 'Reminder persistence is unavailable; pending schedules have been preserved.'; continue }
+      }
       if (text === undefined) {
         // Recovered from a previous process: no content, so it cannot fire.
         await this.fabric.append(
@@ -514,6 +561,11 @@ export class AttentionEngine {
             }
           : null
       fired += 1
+      const current = this.getState().schedules.find(item => item.scheduleId === schedule.scheduleId)
+      if (current?.status !== 'pending') {
+        this.scheduleText.delete(schedule.scheduleId)
+        await this.scheduleStore?.remove(schedule.scheduleId)
+      }
     }
     if (fired > 0) this.onChange()
     return fired
@@ -528,5 +580,11 @@ export class AttentionEngine {
       case 'goal-open':
         return schedule.goalRef !== null && this.goalOpen(schedule.goalRef)
     }
+  }
+
+  private serialiseSchedule<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.scheduleTail.then(operation, operation)
+    this.scheduleTail = result.catch(() => {})
+    return result
   }
 }

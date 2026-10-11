@@ -278,6 +278,7 @@ export interface ToolProvenance {
  * type is built to make impossible.
  */
 import type { ChatMissionProposal } from '../missions/chat-types'
+import { videoDurationConstraint, matchesVideoDuration } from '../research/video-duration'
 export type ToolObservation =
   | {
       readonly kind: 'ok'
@@ -417,6 +418,11 @@ export interface ToolParameter {
  * It holds no grant, no gateway, no authority object and no event fabric, so it
  * cannot spend cognition, mint a grant, or reach a second provider.
  */
+export interface MindToolContext {
+  readonly conversationId: string
+  readonly matrixSpaceIds?: readonly string[]
+  readonly ownerText?: string
+}
 export interface MindTool {
   readonly name: string
   readonly description: string
@@ -430,7 +436,7 @@ export interface MindTool {
    * becomes a `failed` observation; it can never become an unhandled error that
    * takes a turn down.
    */
-  run(request: { readonly arguments: Readonly<Record<string, string>>; readonly signal?: AbortSignal }): Promise<{
+  run(request: { readonly arguments: Readonly<Record<string, string>>; readonly signal?: AbortSignal; readonly context?: MindToolContext }): Promise<{
     readonly missionProposal?: ChatMissionProposal
     readonly summary: string
     readonly sources: readonly ToolSource[]
@@ -541,6 +547,7 @@ export class MindToolRegistry {
     readonly name: string
     readonly arguments: Readonly<Record<string, string>>
     readonly signal?: AbortSignal
+    readonly context?: MindToolContext
     readonly skipExecution?: boolean
     readonly skipReason?: string
   }): Promise<ToolInvocation> {
@@ -592,6 +599,7 @@ export class MindToolRegistry {
     try {
       const raw = await tool.run({
         arguments: boundArguments(tool, request.arguments),
+        ...(request.context ? { context: request.context } : {}),
         ...(request.signal === undefined ? {} : { signal: request.signal }),
       })
       return {
@@ -1115,16 +1123,18 @@ export function createWebSearchTool(options: {
       if (query.trim().length === 0) throw new Error('the search query was empty')
       const vertical = readVertical(request.arguments['type'], options.verticals ?? DEFAULT_VERTICALS)
       const rows = await options.searchWeb(query, vertical, request.signal, request.arguments['site'])
+      const duration = videoDurationConstraint(request.context?.ownerText ?? query)
       const at = now().toISOString()
       const results: ToolSource[] = []
-      for (const row of rows.slice(0, maxResults)) {
+      for (const row of rows.slice(0, 100)) {
         const source = toSource(row, results.length + 1, at)
-        if (source !== null) results.push(source)
+        if (source !== null && (!duration || (vertical === 'videos' && matchesVideoDuration(source.duration, duration)))) results.push(source)
+        if (results.length >= maxResults) break
       }
       return {
         summary:
           results.length === 0
-            ? `The ${vertical} search for "${query}" returned nothing.`
+            ? `The ${vertical} search for "${query}" returned nothing.${duration ? ' No returned video had a reported duration matching the owner’s constraint; unknown runtimes were excluded.' : ''}`
             : `The ${vertical} search for "${query}" returned ${results.length} result${results.length === 1 ? '' : 's'}.`,
         sources: results,
       }

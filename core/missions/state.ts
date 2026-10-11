@@ -64,6 +64,8 @@ export function initialMissionState(): MissionState {
 
 const MISSION_EVENT_TYPES: ReadonlySet<CoreEventType> = new Set<CoreEventType>([
   'mission.created',
+  'mission.content.updated',
+  'mission.deleted',
   'mission.activated',
   'mission.paused',
   'mission.resumed',
@@ -116,6 +118,15 @@ export function reduceMissionState(state: MissionState, event: AnyCoreEvent): Mi
   if (autonomy !== null) return autonomy
 
   switch (event.type) {
+    case 'mission.content.updated':
+      return { ...state, sequence: event.sequence }
+    case 'mission.deleted': {
+      const record = state.missions.get(missionId)
+      if (!record || (record.status !== 'draft' && !['completed', 'failed', 'cancelled'].includes(record.status))) return state
+      const missions = new Map(state.missions)
+      missions.delete(missionId)
+      return { ...state, missions, sequence: event.sequence }
+    }
     case 'mission.created': {
       const limits = readLimits(payload.limits)
       if (limits === null) return state

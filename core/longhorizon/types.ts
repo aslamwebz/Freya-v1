@@ -544,6 +544,9 @@ export interface GoalDetail extends GoalSummaryView {
 /* -------------------------------------------------------------- outcomes */
 
 export type GoalOperation =
+  | 'read'
+  | 'updated'
+  | 'deleted'
   | 'status'
   | 'created'
   | 'activated'

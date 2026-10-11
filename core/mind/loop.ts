@@ -11,6 +11,7 @@ import {
   type ToolObservation,
   type ToolStepRecord,
   type ToolSource,
+  type MindToolContext,
 } from './tools'
 
 /**
@@ -161,6 +162,8 @@ export type LoopOutcome =
   | { readonly kind: 'failed'; readonly reason: string; readonly providerContacted: boolean; readonly iterations: readonly ToolIteration[] }
 
 export interface ToolLoopDeps {
+  readonly toolContext?: MindToolContext
+  readonly reasoningEffort?: string
   readonly authority: OwnerAuthority
   readonly tools: MindToolRegistry
   /** The turn's grant. Named explicitly, so this loop can only spend this turn's. */
@@ -212,7 +215,7 @@ export async function runToolLoop(
         capability: deps.tools.list().find(tool => tool.name === request.name)?.capability ?? 'search.web',
         reason: deps.blockedToolReason ?? 'The owner explicitly declined this tool for the current turn.' } }
     }
-    const invocation = await deps.tools.invoke(request)
+    const invocation = await deps.tools.invoke({ ...request, context: deps.toolContext })
     return { ...invocation, observation: ledger.observation(invocation.observation) }
   }
 
@@ -264,6 +267,7 @@ export async function runToolLoop(
     const ask = budgetFor(iteration, deps.perTurnAllowance)
     const outcome = await deps.authority.request({
       kind: 'user_turn',
+      reasoningEffort: deps.reasoningEffort,
       prompt: messages.map((message) => message.content).join('\n\n'),
       messages,
       maxOutputTokens: ask,

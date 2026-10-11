@@ -1191,6 +1191,9 @@ export interface MissionDetail extends MissionSummaryView {
 /* -------------------------------------------------------------- outcomes */
 
 export type MissionOperation =
+  | 'read'
+  | 'updated'
+  | 'deleted'
   | 'status'
   | 'created'
   | 'activated'

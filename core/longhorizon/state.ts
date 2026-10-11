@@ -55,6 +55,8 @@ export function initialGoalState(): GoalState {
 
 const GOAL_EVENT_TYPES: ReadonlySet<CoreEventType> = new Set<CoreEventType>([
   'longhorizon.goal.created',
+  'longhorizon.goal.content.updated',
+  'longhorizon.goal.deleted',
   'longhorizon.goal.state-changed',
   'longhorizon.goal.completed',
   'longhorizon.goal.failed',
@@ -83,6 +85,16 @@ export function reduceGoalState(state: GoalState, event: AnyCoreEvent): GoalStat
   if (goalId === null) return state
 
   switch (event.type) {
+    case 'longhorizon.goal.content.updated':
+      return { ...state, sequence: event.sequence }
+    case 'longhorizon.goal.deleted': {
+      const record = state.goals.get(goalId)
+      if (!record || (record.state !== 'draft' && !['completed', 'failed', 'cancelled'].includes(record.state))) return state
+      const goals = new Map(state.goals)
+      goals.delete(goalId)
+      const checkpoints = new Map([...state.checkpoints].filter(([, checkpoint]) => checkpoint.goalId !== goalId))
+      return { ...state, goals, checkpoints, sequence: event.sequence }
+    }
     case 'longhorizon.goal.created': {
       const limits = readLimits(payload.limits)
       if (limits === null) return state

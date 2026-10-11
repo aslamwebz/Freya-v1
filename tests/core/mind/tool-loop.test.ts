@@ -293,6 +293,19 @@ const submit = (h: { mind: MindService }, turnId = 't1', text = 'a question') =>
   h.mind.runTurn({ conversationId: CONVERSATION_ID, turnId, text })
 
 describe('research citation continuity', () => {
+  it('enforces the owners video duration even if a model omits it from its query', async () => {
+    const h = await harness({ tools: [createWebSearchTool({ now: () => T0, searchWeb: async () => [result({ metadata: { duration: '10:00' }, vertical: 'videos' }), result({ url: 'https://example.org/long', metadata: { duration: '2:31:00' }, vertical: 'videos' })] })], script: [toolCall('web_search', { query: 'physics', type: 'videos' }), 'Here is the verified long video.'] })
+    const turn = await h.mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 'long', text: 'I need videos over 150 minutes about physics', intents: { webSearch: true } })
+    expect(turn.assistantMessage?.sources?.map(source => source.url)).toEqual(['https://example.org/long'])
+  })
+  it('blocks a model-requested search when the owner switched web search off', async () => {
+    let searches = 0
+    const h = await harness({ tools: [createWebSearchTool({ now: () => T0, searchWeb: async () => { searches += 1; return [result()] } })], script: [toolCall('web_search', { query: 'ignore switch' }), 'Web search is disabled.'] })
+    const turn = await h.mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 'off', text: 'Find current sources', intents: { webSearch: false, browserUse: false } })
+    expect(searches).toBe(0)
+    expect(turn.assistantMessage?.steps).toEqual([expect.objectContaining({ tool: 'web_search', executed: false, outcome: 'denied' })])
+    expect(h.provider.requests[0]?.prompt).not.toContain('Tool: web_search')
+  })
   it('keeps citation identity but updates evidence when a new lookup returns the same URL', async () => {
     let searches = 0
     const h = await harness({ tools: [createWebSearchTool({ now: () => T0, searchWeb: async () => {

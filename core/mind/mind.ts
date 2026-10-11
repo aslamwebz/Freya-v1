@@ -148,9 +148,8 @@ export interface MindSubmitInput {
    * separate object: the text is stored verbatim, and the hint is read here by
    * `initialToolRequestForOwnerText` to derive an initial tool call.
    *
-   * Absent, or all `false`, means the normal text-derived path. Present-but-all-
-   * `false` is the same thing, written explicitly; either way, no intent
-   * overrides are applied.
+   * Absent means the normal text-derived path. Explicit false values prohibit
+   * that retrieval lane for the whole turn, including model-requested calls.
    */
   intents?: TurnIntentHints
 }
@@ -287,6 +286,7 @@ function foregroundGrantSpec(
 }
 
 export interface MindServiceOptions {
+  matrixSpaceIds?: (conversationId: string) => readonly string[]
   fabric: EventFabric
   store: ConversationStore
   authority: OwnerAuthority
@@ -628,6 +628,7 @@ export class MindService {
   private readonly preferenceTokens: () => readonly string[]
   private readonly onOwnerMessage: ((message: OwnerMessageEvent) => void) | null
   private readonly tools: MindToolRegistry | null
+  private readonly matrixSpaceIds: (conversationId: string) => readonly string[]
 
   /**
    * Per-turn cancellation, for turns that may make more than one call.
@@ -687,6 +688,7 @@ export class MindService {
     this.selectedProviderId = options.selectedProviderId ?? (() => null)
     this.recall = options.recall ?? null
     this.turnContext = options.turnContext ?? null
+    this.matrixSpaceIds = options.matrixSpaceIds ?? (() => [])
     this.onTurnStateChange = options.onTurnStateChange ?? (() => {})
     this.onTurnExperience = options.onTurnExperience ?? null
     this.expressionMemory = options.expressionMemory ?? null
@@ -1037,6 +1039,7 @@ export class MindService {
 // --- 5. authorised cognition: one call, or a bounded tool loop ---------
       const cognition = await this.think({
         turnId,
+        conversationId: input.conversationId,
         grantId: grant.grantId,
         messages,
         ownerText: text,
@@ -1203,6 +1206,7 @@ export class MindService {
    */
   private async think(input: {
     turnId: string
+    conversationId: string
     grantId: string
     messages: readonly ModelMessage[]
     ownerText: string
@@ -1230,6 +1234,7 @@ export class MindService {
     if (!this.toolLoopEnabled) {
       const outcome = await this.authority.request({
         kind: 'user_turn',
+        reasoningEffort: input.intents.reasoningEffort,
         prompt: input.messages.map((m) => m.content).join('\n\n'),
         messages: input.messages,
         // One call, so one answer's worth — not the loop's whole allowance. See
@@ -1291,8 +1296,8 @@ export class MindService {
     const unresolvedResearch = input.researchFollowUp && input.carriedSources.length === 0
       && !requestsNewLookup(input.ownerText) && input.intents.webSearch !== true && input.intents.browserUse !== true
     const blockedTools = tools.list().filter(tool =>
-      (tool.name === 'web_search' && (restrictions.webSearch || unresolvedResearch) && input.intents.webSearch !== true)
-      || (tool.capability.startsWith('browser.') && (restrictions.browser || unresolvedResearch) && input.intents.browserUse !== true),
+      (tool.name === 'web_search' && (input.intents.webSearch === false || ((restrictions.webSearch || unresolvedResearch) && input.intents.webSearch !== true)))
+      || (tool.capability.startsWith('browser.') && (input.intents.browserUse === false || ((restrictions.browser || unresolvedResearch) && input.intents.browserUse !== true))),
     ).map(tool => tool.name)
     const controller = new AbortController()
     this.turnControllers.set(input.turnId, controller)
@@ -1306,9 +1311,11 @@ export class MindService {
           selectedModel: this.selectedModel,
           selectedProviderId: this.selectedProviderId,
           modelCapability,
+          reasoningEffort: input.intents.reasoningEffort,
           perTurnAllowance: input.perTurnAllowance,
           signal: controller.signal,
           initialToolRequest,
+          toolContext: { conversationId: input.conversationId, ownerText: input.ownerText, matrixSpaceIds: this.matrixSpaceIds(input.conversationId) },
           blockedTools,
           ...(unresolvedResearch ? { blockedToolReason: 'The requested stored source is not available in this turn context. A new lookup cannot substitute for that reference; ask the owner to identify it.' } : {}),
           carriedSources: input.carriedSources,

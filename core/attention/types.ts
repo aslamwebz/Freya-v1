@@ -381,7 +381,8 @@ export interface AttentionSchedule {
   readonly severityHint: SeverityHint
   readonly dueAt: string
   readonly intervalMs: number | null
-  readonly maxRepeats: number
+  /** Null repeats until cancelled; numeric schedules keep the existing ceiling. */
+  readonly maxRepeats: number | null
   readonly condition: AttentionCondition
   readonly createdAt: string
 }

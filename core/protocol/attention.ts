@@ -111,7 +111,7 @@ export interface AttentionScheduleView {
   readonly goalRef: string | null
   readonly dueAt: string
   readonly intervalMs: number | null
-  readonly maxRepeats: number
+  readonly maxRepeats: number | null
   readonly repeats: number
   readonly condition: 'always' | 'focus-available' | 'goal-open'
   readonly status: 'pending' | 'fired' | 'cancelled' | 'expired'
@@ -146,6 +146,7 @@ export interface AttentionLimitsView {
  * `sequence` lets a window prove *which* Core state it is looking at.
  */
 export interface AttentionProjection {
+  readonly schedulePersistence?: { readonly durable: boolean; readonly reason: string | null }
   readonly health: 'ready' | 'unavailable'
   /** Why, in words a person can act on. Null when healthy. */
   readonly reason: string | null
@@ -195,6 +196,7 @@ export type AttentionOperation = 'status' | 'ingested' | 'scheduled' | 'cancelle
  * copy of the projection — the projection arrives on its own channel.
  */
 export interface AttentionCommandOutcome {
+  readonly scheduleId?: string
   readonly operation: AttentionOperation
   readonly ok: boolean
   /** Why the answer could not be had, in words. Never evidence, never a stack. */

@@ -1,4 +1,5 @@
 import type {
+  GoalDetail,
   GoalAction,
   GoalCheckpointCounts,
   GoalReason,
@@ -116,6 +117,9 @@ export interface GoalProjectionView {
 
 /** The outcome vocabulary of a goal command. */
 export type GoalCommandOperation =
+  | 'read'
+  | 'updated'
+  | 'deleted'
   | 'status'
   | 'created'
   | 'activated'
@@ -136,6 +140,8 @@ export type GoalCommandOperation =
 
 /** What a goal command produced, as a window may see it. */
 export interface GoalCommandOutcomeView {
+  /** Private content is returned only for an explicit single-record read. */
+  readonly detail?: GoalDetail
   readonly operation: GoalCommandOperation
   readonly ok: boolean
   readonly reason?: string

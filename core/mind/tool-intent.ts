@@ -40,6 +40,8 @@ import { retrievalRestrictions, routeChatIntent } from '../research/chat-intent'
  * pressing Send, and the value travels for one turn only — Send clears them.
  */
 export interface TurnIntentHints {
+  /** A provider-reported selection; Gateway validates it against its catalogue. */
+  readonly reasoningEffort?: string
   /** The owner pressed "Web search" for this turn. */
   readonly webSearch?: boolean
   /** The owner pressed "Browser use" for this turn. */
@@ -130,11 +132,13 @@ export function initialToolRequestForOwnerText(
     }
   }
 
+  if (hints?.webSearch === false && hints?.browserUse === false) return null
+
   // Explicit browser control is stronger than media retrieval. "Use your browser
   // to find images..." means browser, because that is the capability the owner named.
   if (!retrievalRestrictions(text).browser && EXPLICIT_BROWSER.test(lower)) {
     const match = HTTP_URL.exec(value)
-    if (match === null) return search()
+    if (match === null) return hints?.webSearch === false ? null : search()
     const candidate = cleanUrl(match[0])
     try {
       const parsed = new URL(candidate)
@@ -149,6 +153,7 @@ export function initialToolRequestForOwnerText(
   }
 
   if (EXPLANATION_FRAME.test(lower)) return null
+  if (hints?.webSearch === false) return null
   if (route.kind === 'direct_answer' || route.kind.startsWith('attachment_')) return null
   return search()
 }

@@ -2,6 +2,7 @@ import { withResearchAbort } from './async'
 import { ResearchError, safeResearchError } from './errors'
 import type { SearchProvider, SearchResult, SearchVertical } from './types'
 import { normalizeSourceUrl } from './url-policy'
+import { videoDurationConstraint, matchesVideoDuration } from './video-duration'
 
 export function validateSearchQuery(query: string): string {
   if (typeof query !== 'string' || query.length > 512 || !query.trim()) throw new ResearchError('invalid_query')
@@ -149,6 +150,7 @@ export class Searcher {
         const data = await this.provider.search(effectiveQuery, { signal, limit, offset, vertical })
         return normalizeSearchResults(data, limit, this.now().toISOString())
           .filter((row) => !site || row.sourceDomain === site || row.sourceDomain.endsWith(`.${site}`))
+          .filter((row) => { const duration = vertical === 'videos' ? videoDurationConstraint(validated) : null; return !duration || matchesVideoDuration(row.metadata?.duration, duration) })
       })
     } catch (error) { throw safeResearchError(error, 'provider_error') }
   }

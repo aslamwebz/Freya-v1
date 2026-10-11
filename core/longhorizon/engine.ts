@@ -257,17 +257,59 @@ export class GoalEngine {
     }
 
     const deadlineAt = new Date(this.now().getTime() + DEFAULT_GOAL_LIMITS.lifetimeMs).toISOString()
-    await this.emit('longhorizon.goal.created', {
-      goalId,
-      state: 'draft',
-      createdAt: now,
-      deadlineAt,
-      dependencies: [],
-      limits: DEFAULT_GOAL_LIMITS,
-    })
+    try {
+      await this.options.fabric.append('longhorizon.goal.created', {
+        goalId, state: 'draft', createdAt: now, deadlineAt,
+        dependencies: [], limits: DEFAULT_GOAL_LIMITS,
+      }, { actor: this.options.principalId })
+    } catch (error) {
+      this.contentCache.delete(goalId)
+      await this.options.store.remove(goalId).catch(() => false)
+      return this.refused('created', this.describe(error))
+    }
 
     this.onChange()
     return { operation: 'created', ok: true, goalId, state: 'draft' }
+  }
+
+  async updateGoal(goalId: string, input: GoalContentInput): Promise<GoalCommandOutcome> {
+    return this.lock(goalId, async () => {
+      const record = this.goalState.goals.get(goalId)
+      if (!record) return this.refused('updated', 'no such goal')
+      if (record.state !== 'draft') return this.refused('updated', 'only a draft Goal can be edited')
+      const normalised = normaliseGoalContent(input)
+      if (!normalised.ok) return this.refused('updated', normalised.reason)
+      const old = await this.options.store.read(goalId)
+      if (!old.ok) return this.refused('updated', old.reason)
+      const updated = { ...old.value, ...normalised.value }
+      try {
+        await this.options.store.write(updated)
+        try { await this.options.fabric.append('longhorizon.goal.content.updated', { goalId }, { actor: this.options.principalId }) }
+        catch (error) { await this.options.store.write(old.value); throw error }
+      } catch (error) { return this.refused('updated', this.describe(error)) }
+      this.contentCache.set(goalId, updated)
+      this.onChange()
+      return { operation: 'updated', ok: true, goalId, state: 'draft' }
+    })
+  }
+
+  async deleteGoal(goalId: string): Promise<GoalCommandOutcome> {
+    return this.lock(goalId, async () => {
+      const record = this.goalState.goals.get(goalId)
+      if (!record) return this.refused('deleted', 'no such goal')
+      if (record.state !== 'draft' && !isTerminalGoalStatus(record.state)) {
+        return this.refused('deleted', 'cancel or finish the Goal before deleting it')
+      }
+      const old = await this.options.store.read(goalId)
+      try {
+        await this.options.store.remove(goalId)
+        try { await this.options.fabric.append('longhorizon.goal.deleted', { goalId }, { actor: this.options.principalId }) }
+        catch (error) { if (old.ok) await this.options.store.write(old.value); throw error }
+      } catch (error) { return this.refused('deleted', this.describe(error)) }
+      this.contentCache.delete(goalId)
+      this.onChange()
+      return { operation: 'deleted', ok: true, goalId }
+    })
   }
 
   async activateGoal(goalId: string): Promise<GoalCommandOutcome> {

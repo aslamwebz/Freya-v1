@@ -439,6 +439,7 @@ export class CognitionService {
       maxOutputTokens,
       model: intent.requestedModel ?? null,
       requestedProviderId: intent.requestedProviderId,
+      reasoningEffort: intent.reasoningEffort,
       modelCapability: intent.modelCapability,
       // Present only when a Mind compiled a packet. Absent, the request keeps
       // the single-prompt shape it has always had.

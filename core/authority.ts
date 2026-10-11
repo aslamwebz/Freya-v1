@@ -58,6 +58,7 @@ export interface CognitionIntent {
   maxOutputTokens: number
   requestedModel?: string | null
   requestedProviderId?: string | null
+  reasoningEffort?: string
   /** Trusted Core routing hint; does not grant authority or alter spend limits. */
   modelCapability?: 'chat' | 'browser'
   goalId?: string | null

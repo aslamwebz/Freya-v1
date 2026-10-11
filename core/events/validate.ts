@@ -1517,6 +1517,8 @@ const PAYLOAD_RULES: {
   // before Phase 47 still validates. An absent optional is not "unvalidated": each
   // one is read through a closed table below, and an unrecognised value is refused
   // rather than ignored.
+  'mission.content.updated': workRule(['missionId'], (p) => isEventId(p.missionId)),
+  'mission.deleted': workRule(['missionId'], (p) => isEventId(p.missionId)),
   'mission.created': workRule(
     ['missionId', 'status', 'createdAt', 'deadlineAt', 'limits', ...MISSION_AUTONOMY_KEYS],
     (p) =>
@@ -1768,6 +1770,8 @@ const PAYLOAD_RULES: {
   // fields *and* checks the key set exactly, which means a hand-edited line cannot
   // attach a title, a description or a completion criterion — there is no spelling of
   // these payloads that carries content.
+  'longhorizon.goal.content.updated': workRule(['goalId'], (p) => isEventId(p.goalId)),
+  'longhorizon.goal.deleted': workRule(['goalId'], (p) => isEventId(p.goalId)),
   'longhorizon.goal.created': workRule(
     ['goalId', 'state', 'createdAt', 'deadlineAt', 'dependencies', 'limits'],
     (p) =>
@@ -2112,7 +2116,7 @@ const PAYLOAD_RULES: {
       isSeverityHint(p.severityHint) &&
       isInstant(p.dueAt) &&
       (p.intervalMs === null || isPositiveInt(p.intervalMs)) &&
-      isNonNegativeInt(p.maxRepeats) &&
+      (isNonNegativeInt(p.maxRepeats) || (p.maxRepeats === null && isPositiveInt(p.intervalMs) && (p.intervalMs as number) >= 60_000)) &&
       isAttentionCondition(p.condition),
   ),
 

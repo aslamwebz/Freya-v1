@@ -50,6 +50,7 @@ import type { ModelUsage, ProviderStatus } from '../protocol/core-protocol'
 
 /** A permit the Governor issued. There is no way to obtain one otherwise. */
 export interface GatewayPermit {
+  reasoningEffort?: string
   requestId: string
   correlationId: string
   /** The grant that authorised this, or null for a grantless user turn. */
@@ -164,6 +165,7 @@ export class ModelGateway {
    */
   private readonly active = new Map<number, ActiveCall>()
   private nextSlot = 0
+  private readonly reasoningCatalogue = new Map<string, readonly string[]>()
 
   /**
    * The cognition generation, and the contact gate.
@@ -398,6 +400,10 @@ export class ModelGateway {
       }
     }))
     const successful = catalogs.filter(catalog => catalog.models !== undefined)
+    this.reasoningCatalogue.clear()
+    for (const catalog of successful) for (const entry of catalog.models ?? []) {
+      if ('reasoningEfforts' in entry && Array.isArray(entry.reasoningEfforts)) this.reasoningCatalogue.set(`${catalog.provider.id}:${entry.id}`, entry.reasoningEfforts)
+    }
     if (!successful.length) return { ok: false, reason: catalogs.map(catalog => catalog.reason).join('; ') }
     const preference = this.providerPreference?.('chat')
     const preferred = this.resolve(null) ?? usable.find(provider => preference?.includes(provider.id)) ?? usable[0]!
@@ -460,6 +466,9 @@ export class ModelGateway {
       // default would make the selector a lie. Without a selection, the provider's
       // own configured model answers, as it always has.
       const model = permit.model ?? provider.status().model ?? 'unknown'
+      if (permit.reasoningEffort && !this.reasoningCatalogue.get(`${provider.id}:${model}`)?.includes(permit.reasoningEffort)) {
+        throw new Error('The selected model has not reported support for this reasoning effort. Refresh its catalogue or use the provider default.')
+      }
 
       // `started` is written here, immediately before the provider is asked. It
       // is the gateway saying "I am about to spend something", which is why the
@@ -495,6 +504,7 @@ export class ModelGateway {
         prompt: flattened,
         maxOutputTokens: permit.maxOutputTokens,
         model,
+        ...(permit.reasoningEffort ? { reasoningEffort: permit.reasoningEffort } : {}),
       }
       const options: ModelCallOptions = { signal: call.controller.signal }
 

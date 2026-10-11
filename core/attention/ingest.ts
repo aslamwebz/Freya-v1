@@ -162,7 +162,7 @@ export interface AttentionScheduleInput {
   readonly severityHint: SeverityHint
   readonly dueAt: string
   readonly intervalMs: number | null
-  readonly maxRepeats: number
+  readonly maxRepeats: number | null
   readonly condition: 'always' | 'focus-available' | 'goal-open'
 }
 
@@ -199,13 +199,13 @@ export function parseSchedulePayload(
     intervalMs = Math.max(ATTENTION_LIMITS.minScheduleIntervalMs, p.intervalMs)
   }
 
-  let maxRepeats = 0
+  let maxRepeats: number | null = 0
   if (intervalMs !== null) {
     const raw = p.maxRepeats === undefined ? 1 : p.maxRepeats
-    if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) {
+    if (raw !== null && (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1)) {
       return { ok: false, reason: 'the repeat count is not a positive whole number' }
     }
-    maxRepeats = Math.min(ATTENTION_LIMITS.maxScheduleRepeats, raw)
+    maxRepeats = raw === null ? null : Math.min(ATTENTION_LIMITS.maxScheduleRepeats, raw as number)
   }
 
   return {

@@ -44,6 +44,12 @@ import { admitWorkStepOutcome } from './learning/work-admission'
 import { recallRelevantLearning } from './learning/recall'
 import { createWebSearchTool, createChartTool, createCanvasTool, MindToolRegistry } from './mind/tools'
 import type { ToolCatalogueView } from './protocol/tool-catalogue'
+import { MatrixService } from './matrix/service'
+import { MATRIX_COMMANDS, type MatrixCommandName } from './protocol/matrix'
+import { createMatrixTools } from './matrix/tools'
+import { EncryptedAttentionScheduleStore, UnavailableAttentionScheduleStore, type AttentionScheduleTextStore } from './attention/schedule-store'
+import { createWorkManagementTools } from './mind/work-management-tools'
+import { createSystemInspectionTool } from './mind/system-inspection'
 import { createBrowserTaskTool, type BrowserTaskPort } from './mind/browser-tool'
 import { createBrowserTabsTool, type BrowserTabsPort } from './mind/browser-tabs-tool'
 import type { ReferenceKnowledge } from './mind/context-compiler'
@@ -551,6 +557,8 @@ export interface CoreOptions {
    * never silently presented as durable when they are not.
    */
   missionKey?: Uint8Array
+  matrixKey?: Uint8Array | null
+  attentionKey?: Uint8Array | null
   /** Context's independent secure key; absent means explicit process-only Context. */
   contextKey?: Uint8Array | null
   /**
@@ -1597,6 +1605,8 @@ class FreyaCore implements Core {
    * already-authorized state for the focus reading.
    */
   private attentionEngine: AttentionEngine | undefined
+  private attentionScheduleStore: AttentionScheduleTextStore | undefined
+  private matrixService: MatrixService | undefined
   /**
    * The Phase 17 Skill engine, built and owned by Core.
    * It has no model gateway and no provider authority.
@@ -2326,6 +2336,7 @@ class FreyaCore implements Core {
     // answers, and still says so.
     await this.buildPersonality()
 
+    this.matrixService = await MatrixService.open({ path: `${this.options.dataPath}.matrix.enc`, key: this.options.matrixKey ?? null })
     this.mind = new MindService({
       fabric: this.fabric,
       store: this.conversationStore,
@@ -2334,6 +2345,7 @@ class FreyaCore implements Core {
       now: this.options.now,
       newId: this.options.newId,
       budget: this.options.contextBudget,
+      matrixSpaceIds: conversationId => this.matrixService?.attachedSpaceIds(conversationId) ?? [],
       turnContext: (request) => {
         if (!request.conversationId || !this.contextIntegration) return null
         const source = this.contextIntegration.turnSource({
@@ -2347,7 +2359,12 @@ class FreyaCore implements Core {
       onTurnStateChange: () => this.conversations?.publish(),
       // The only fact about the outside world the Mind is told, and it is a fact
       // about Freya rather than about any provider.
-      runtimeFacts: () => (this.state.stopAll.active ? ['Cognition is currently stopped.'] : []),
+      runtimeFacts: () => [
+        `Freya Core is ${this.lifecycle}; ${this.state.stopAll.active ? 'cognition is stopped' : 'owner commands remain Guard checked'}.`,
+        `Persistent memory is ${this.brain().health}, durable=${this.brain().durable}. You have system_inspect for actual system state; use it before asserting memory or systems are absent.`,
+        'Manage missions and goals with mission_manage and goal_manage. Daily reminders use reminder_manage and need a time; delivery requires the app to be running.',
+        'Matrix spaces attached to this chat can be read and managed with matrix_spaces and matrix_entries; attachment IDs are supplied by Core, never by a model.',
+      ],
       // The owner's model selection, read per turn. The Mind cannot set it, the
       // renderer cannot put one in a turn payload, and the Gateway still asks the
       // Governor before anything is contacted — this only answers "which model,
@@ -2399,6 +2416,9 @@ class FreyaCore implements Core {
        */
       tools: (() => {
         const tools = [
+          createSystemInspectionTool({ read: () => this.systemInspection() }),
+          ...createWorkManagementTools({ dispatch: (command, payload) => this.handleCommand({ command, payload, requestId: this.newId() }) }),
+          ...createMatrixTools({ service: this.matrixService! }),
           ...(this.researchIntegration && this.conversationStore.mode === 'encrypted' ? [createMissionProposalTool()] : []),
           createMissionsListTool({
             getMissions: () => (this.missionEngine ? this.missionEngine.projection().missions.map((m) => ({
@@ -2947,7 +2967,15 @@ class FreyaCore implements Core {
      * from a previous process whose text did not survive, which is the same honesty
      * Work applies to an interrupted run.
      */
+    try {
+      this.attentionScheduleStore = this.options.attentionKey
+        ? await EncryptedAttentionScheduleStore.open({ path: `${this.options.dataPath}.attention.enc`, key: this.options.attentionKey })
+        : new UnavailableAttentionScheduleStore('The private reminder key is unavailable.')
+    } catch {
+      this.attentionScheduleStore = new UnavailableAttentionScheduleStore('The private reminder store could not be opened.')
+    }
     this.attentionEngine = new AttentionEngine({
+      scheduleStore: this.attentionScheduleStore,
       fabric: this.fabric,
       now: this.options.now,
       newId: this.options.newId,
@@ -3365,6 +3393,8 @@ class FreyaCore implements Core {
       await this.skillPersistence?.close()
     await this.forgePersistence?.close()
       await this.conversationStore?.close()
+      await this.matrixService?.close()
+      await this.attentionScheduleStore?.close()
       await this.fabric?.close()
       this.notify()
     }
@@ -3702,6 +3732,19 @@ class FreyaCore implements Core {
       name: tool.name, description: tool.description, capability: tool.capability,
       parameters: tool.parameters.map(parameter => ({ name: parameter.name, description: parameter.description, required: parameter.required === true })),
     })) }
+  }
+
+  private systemInspection(): Readonly<Record<string, unknown>> {
+    const brain = this.brain()
+    const matrix = this.matrixService?.projection()
+    return {
+      mind: { lifecycle: this.lifecycle, operational: this.operational, stopped: this.state.stopAll.active, model: this.selectedModel, provider: this.selectedProviderId, conscious: this.consciousness() },
+      memory: { health: brain.health, reason: brain.reason, durable: brain.durable, counts: brain.counts },
+      missions: this.mission(), goals: this.goals(), attention: this.attention(), agents: this.workforce(),
+      skills: this.skills(), tools: this.toolCatalogue(),
+      matrix: matrix ? { health: matrix.health, durable: matrix.durable, reason: matrix.reason } : null,
+      runtime: this.runtime(),
+    }
   }
 
   workforce(): WorkforceMirror {
@@ -7698,6 +7741,20 @@ state: {
     }
 
     try {
+      if (MATRIX_COMMANDS.includes(command as MatrixCommandName)) {
+        const decision = this.guard.evaluate(this.owner, 'matrix.manage')
+        if (!decision.allowed) {
+          await this.recordGuard(decision, this.owner.id, 'matrix.manage', requestId)
+          return { requestId, ok: false, refusal: { reason: decision.reason } }
+        }
+        const conversationId = readString(envelope.payload, 'conversationId')
+        if ((command === 'matrix.spaces.attach' || conversationId !== null) &&
+          (conversationId === null || !await this.conversationStore?.readConversation(conversationId))) {
+          return { requestId, ok: false, refusal: { reason: 'The chat does not exist.' } }
+        }
+        const matrix = await this.matrixService!.execute(command as MatrixCommandName, envelope.payload)
+        return { requestId, ok: matrix.ok, matrix, ...(!matrix.ok ? { refusal: { reason: matrix.reason ?? 'Matrix refused the request.' } } : {}) }
+      }
       switch (command) {
         case 'core.status.read':
           return { requestId, ok: true, status: this.status() }
@@ -8206,7 +8263,7 @@ state: {
             status: this.status(),
             model: {
               operation: 'catalog',
-              models: catalog.models.map((entry) => ({ id: entry.id, ownedBy: entry.ownedBy, providerId: entry.providerId })),
+              models: catalog.models.map((entry) => ({ id: entry.id, ownedBy: entry.ownedBy, providerId: entry.providerId, ...(entry.reasoningEfforts ? { reasoningEfforts: entry.reasoningEfforts } : {}) })),
               ...(catalog.reason ? { reason: catalog.reason } : {}),
               selectedProviderId: this.selectedProviderId,
               defaultModel: catalog.defaultModel,
@@ -8342,9 +8399,9 @@ state: {
         }
 
         case 'attention.schedule.register': {
-          const guardDecision = this.guard.evaluate(this.owner, 'core.command.submit')
+          const guardDecision = this.guard.evaluate(this.owner, 'attention.schedule.manage')
           if (!guardDecision.allowed) {
-            await this.recordGuard(guardDecision, this.owner.id, 'core.command.submit', requestId)
+            await this.recordGuard(guardDecision, this.owner.id, 'attention.schedule.manage', requestId)
             return { requestId, ok: false, refusal: { reason: guardDecision.reason } }
           }
           const result = await this.requireAttention().registerSchedule(envelope.payload)
@@ -8361,11 +8418,13 @@ state: {
             requestId,
             ok: true,
             status: this.status(),
-            attention: { operation: 'scheduled', ok: true },
+            attention: { operation: 'scheduled', ok: true, scheduleId: result.scheduleId },
           }
         }
 
         case 'attention.schedule.cancel': {
+          const decision = this.guard.evaluate(this.owner, 'attention.schedule.manage')
+          if (!decision.allowed) return { requestId, ok: false, refusal: { reason: decision.reason } }
           const scheduleId = readString(envelope.payload, 'scheduleId')
           if (scheduleId === null) {
             return { requestId, ok: false, refusal: { reason: 'scheduleId is missing' } }
@@ -9690,6 +9749,27 @@ state: {
 
         /* ----------------------------------------------------------- missions */
 
+        case 'mission.read':
+        case 'mission.update':
+        case 'mission.delete': {
+          const capability = command === 'mission.read' ? 'mission.status.read' : 'mission.manage'
+          const decision = this.guard.evaluate(this.owner, capability)
+          if (!decision.allowed) return this.missionRefusal(requestId, 'refused', decision.reason)
+          const missionId = readString(envelope.payload, 'missionId')
+          if (!missionId) return this.missionRefusal(requestId, 'refused', 'a Mission id is required')
+          if (command === 'mission.read') {
+            const detail = await this.requireMission().detail(missionId)
+            return detail ? { requestId, ok: true, mission: { operation: 'read', ok: true, missionId, detail } } : this.missionRefusal(requestId, 'refused', 'Mission not found')
+          }
+          const title = readString(envelope.payload, 'title')
+          const intent = readString(envelope.payload, 'intent')
+          if (command === 'mission.update' && (!title || !intent)) return this.missionRefusal(requestId, 'refused', 'title and intent are required')
+          const successCriteria = readStringArray(envelope.payload, 'successCriteria')
+          const outcome = command === 'mission.delete' ? await this.requireMission().delete(missionId) : await this.requireMission().update(missionId, { title: title!, intent: intent!, ...(successCriteria ? { successCriteria } : {}) })
+          this.publishMission()
+          return { requestId, ok: outcome.ok, mission: missionResult(outcome) }
+        }
+
         case 'mission.create': {
           const decision = this.guard.evaluate(this.owner, 'mission.manage')
           if (!decision.allowed) {
@@ -9840,6 +9920,27 @@ state: {
         }
 
         /* ----------------------------------------------------------- goals (longhorizon) */
+
+        case 'goal.read':
+        case 'goal.update':
+        case 'goal.delete': {
+          const capability = command === 'goal.read' ? 'goal.status.read' : 'goal.manage'
+          const decision = this.guard.evaluate(this.owner, capability)
+          if (!decision.allowed) return this.goalRefusal(requestId, 'refused', decision.reason)
+          const goalId = readString(envelope.payload, 'goalId')
+          if (!goalId) return this.goalRefusal(requestId, 'refused', 'a Goal id is required')
+          if (command === 'goal.read') {
+            const detail = await this.requireGoal().detail(goalId)
+            return detail ? { requestId, ok: true, goal: { operation: 'read', ok: true, goalId, detail } } : this.goalRefusal(requestId, 'refused', 'Goal not found')
+          }
+          const title = readString(envelope.payload, 'title')
+          const description = readString(envelope.payload, 'description')
+          if (command === 'goal.update' && (!title || !description)) return this.goalRefusal(requestId, 'refused', 'title and description are required')
+          const completionCriteria = readStringArray(envelope.payload, 'completionCriteria')
+          const outcome = command === 'goal.delete' ? await this.requireGoal().deleteGoal(goalId) : await this.requireGoal().updateGoal(goalId, { title: title!, description: description!, ...(completionCriteria ? { completionCriteria } : {}) })
+          this.publishGoals()
+          return { requestId, ok: outcome.ok, goal: goalResult(outcome) }
+        }
 
         case 'goal.create': {
           const decision = this.guard.evaluate(this.owner, 'goal.manage')
@@ -12634,10 +12735,12 @@ function readTurnIntentHints(
   let browserUse: boolean | undefined
   if (typeof record['webSearch'] === 'boolean') webSearch = record['webSearch']
   if (typeof record['browserUse'] === 'boolean') browserUse = record['browserUse']
-  if (webSearch === undefined && browserUse === undefined) return undefined
+  const reasoningEffort = typeof record['reasoningEffort'] === 'string' && /^[a-z0-9_-]{1,32}$/i.test(record['reasoningEffort']) ? record['reasoningEffort'] : undefined
+  if (webSearch === undefined && browserUse === undefined && reasoningEffort === undefined) return undefined
   return {
     ...(webSearch === undefined ? {} : { webSearch }),
     ...(browserUse === undefined ? {} : { browserUse }),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   }
 }
 
@@ -12886,6 +12989,7 @@ function projectSearchSession(
       thumbnailUrl: result.thumbnailUrl,
       pageUrl: result.pageUrl,
       mediaType: result.mediaType,
+      metadata: result.metadata,
       confidence: result.confidence,
       collection: result.collection,
     })),

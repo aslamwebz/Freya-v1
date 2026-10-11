@@ -380,6 +380,8 @@ export const CORE_EVENT_TYPES = [
   // Every payload is an id, a status, a count, an instant, a closed reason code, a
   // verifier id, or a list of ids.
   'mission.created',
+  'mission.content.updated',
+  'mission.deleted',
   'mission.activated',
   'mission.paused',
   'mission.resumed',
@@ -689,6 +691,8 @@ export const CORE_EVENT_TYPES = [
   // Every payload is an id, a status, a count, an instant, a closed reason code, a
   // verifier id, or a list of ids.
   'longhorizon.goal.created',
+  'longhorizon.goal.content.updated',
+  'longhorizon.goal.deleted',
   'longhorizon.goal.state-changed',
   'longhorizon.goal.completed',
   'longhorizon.goal.failed',
@@ -1483,6 +1487,8 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
    * resolved once, at creation, so every later reader agrees about when the Mission
    * expires without re-deriving it and without a timer watching it.
    */
+  'mission.content.updated': { missionId: string }
+  'mission.deleted': { missionId: string }
   'mission.created': {
     missionId: string
     status: 'draft'
@@ -1993,7 +1999,7 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
     severityHint: SeverityHint
     dueAt: string
     intervalMs: number | null
-    maxRepeats: number
+    maxRepeats: number | null
     condition: AttentionCondition
   }
 
@@ -3071,6 +3077,8 @@ export interface CoreEventPayloads {  'core.started': { version: string; storeKi
    * resolved once, at creation, so every later reader agrees about when the goal
    * expires without re-deriving it and without a timer watching it.
    */
+  'longhorizon.goal.content.updated': { goalId: string }
+  'longhorizon.goal.deleted': { goalId: string }
   'longhorizon.goal.created': {
     goalId: string
     state: 'draft'

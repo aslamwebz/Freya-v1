@@ -12,6 +12,7 @@ import type { ModelProvider, ModelRequest } from '../model/provider'
 import type { CueUsageLedger, InteractionFact, RelationshipItem } from '../personality/types'
 import type { ReferenceKnowledge } from './context-compiler'
 import type { TurnContextBlock } from './turn-context'
+import { processToolBodies } from './process-tools'
 
 interface TurnPacket {
   input: MindSubmitInput
@@ -31,6 +32,8 @@ let providers = new Map<string, ModelProvider>()
 let providerFailure: string | null = null
 const minds = new Map<string, MindService>()
 const calls = new Map<string, AbortController>()
+let toolBodies: readonly MindTool[] = []
+const toolCalls = new Map<string, AbortController>()
 
 async function runTurn(connection: RpcPeer, packet: TurnPacket) {
   const { input, context: c } = packet
@@ -80,13 +83,15 @@ async function connect(): Promise<void> {
       if (peer !== connection) return
       registered = false; peer = null
       for (const controller of calls.values()) controller.abort()
+      for (const controller of toolCalls.values()) controller.abort()
       for (const [id, mind] of minds) mind.cancelTurn(id, 'Core disconnected; the turn will not be retried')
       console.warn('[freya] Core disconnected; waiting to reconnect')
     })
     connection.handle(async (method, value) => {
       switch (method) {
         case 'provider.configure': {
-          const config = value as { env: CapabilityEnv & { FREYA_E2E?: string; FREYA_E2E_RESEARCH?: string }; developer?: 'echo' | 'slow-echo' }
+          const config = value as { env: CapabilityEnv & { FREYA_E2E?: string; FREYA_E2E_RESEARCH?: string }; developer?: 'echo' | 'slow-echo'; workspaceRoot: string }
+          toolBodies = processToolBodies(config.workspaceRoot)
           const fixture = e2eResearchFixtureProvider(config.env)
           const configured = fixture ? [fixture] : buildConfiguredModelProviders(config.env)
           if (!fixture && config.developer) configured.push(config.developer === 'slow-echo' ? new SlowFakeModelProvider() : new FakeModelProvider())
@@ -108,6 +113,18 @@ async function connect(): Promise<void> {
           return provider?.listModels?.({ signal: AbortSignal.timeout(15_000) }) ?? []
         }
         case 'provider.cancel': calls.get((value as { requestId: string }).requestId)?.abort(); return true
+        case 'tool.run': {
+          const { id, name, request } = value as { id: string; name: string; request: Parameters<MindTool['run']>[0] }
+          const tool = toolBodies.find(tool => tool.name === name)
+          if (!tool || toolCalls.has(id)) throw new Error('tool is unavailable or already executing')
+          const controller = new AbortController(); toolCalls.set(id, controller)
+          try {
+            const result = await tool.run({ ...request, signal: controller.signal })
+            process.stdout.write(`[freya] tool ${tool.name} completed; pid=${process.pid}\n`)
+            return result
+          } finally { toolCalls.delete(id) }
+        }
+        case 'tool.cancel': toolCalls.get((value as { id: string }).id)?.abort(); return true
         case 'mind.run': return runTurn(connection, value as TurnPacket)
         case 'mind.cancel': {
           const { turnId, reason } = value as { turnId: string; reason: string }
@@ -129,6 +146,7 @@ void listenRpc(required('FREYA_INTELLIGENCE_HEALTH_ENDPOINT'), required('FREYA_I
   healthPeer.handle(async method => {
     if (method === 'runtime.quit') {
       for (const controller of calls.values()) controller.abort()
+      for (const controller of toolCalls.values()) controller.abort()
       for (const [id, mind] of minds) mind.cancelTurn(id, 'explicit supervisor shutdown')
       setTimeout(() => process.exit(0), 100); return true
     }

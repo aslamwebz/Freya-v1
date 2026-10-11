@@ -9,13 +9,15 @@ import { createServer } from 'node:http'
 /* global window -- evaluated inside the actual renderer by Playwright */
 
 const require = createRequire(import.meta.url)
+const live = process.argv.includes('--live')
+const tools = process.argv.includes('--tools')
 const { connectRpc } = require('../dist-electron/runtime-rpc.cjs')
 const root = resolve('.'), id = randomUUID(), token = () => randomBytes(32).toString('hex')
 await mkdir(join(root, '.kilo'), { recursive: true })
 const profile = await mkdtemp(join(root, '.kilo', 'split-acceptance-'))
 const address = name => process.platform === 'win32' ? `\\\\.\\pipe\\freya-${name}-${id}` : join(profile, `${name}.sock`)
 const ownerToken = token(), intelligenceToken = token(), supervisorToken = token()
-const common = { ...process.env, FREYA_RUNTIME_PROFILE: profile, FREYA_E2E: '1', FREYA_RUNTIME_TEST_PROFILE: '1', FREYA_DEV_PROVIDER: 'echo',
+const common = { ...process.env, FREYA_RUNTIME_PROFILE: profile, FREYA_E2E: '1', FREYA_RUNTIME_TEST_PROFILE: live || tools ? '0' : '1', FREYA_DEV_PROVIDER: live || tools ? '' : 'echo',
   FREYA_CORE_OWNER_ENDPOINT: address('owner'), FREYA_CORE_INTELLIGENCE_ENDPOINT: address('intelligence'),
   FREYA_INTELLIGENCE_HEALTH_ENDPOINT: address('freya-health'), FREYA_SUPERAPP_HEALTH_ENDPOINT: address('ui-health') }
 const coreEnv = { ...common, FREYA_OWNER_TOKEN: ownerToken, FREYA_INTELLIGENCE_TOKEN: intelligenceToken, FREYA_SUPERVISOR_TOKEN: supervisorToken }
@@ -23,12 +25,30 @@ const freyaEnv = { ...common, FREYA_INTELLIGENCE_TOKEN: intelligenceToken }
 const uiEnv = { ...common, FREYA_OWNER_TOKEN: ownerToken, FREYA_INTELLIGENCE_HEALTH_TOKEN: intelligenceToken, FREYA_DEV_USER_DATA: profile }
 let core, freya, ui, page
 const children = []
-const web = createServer((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end('<!doctype html><title>Split browser acceptance</title><main><h1>Actual embedded browser</h1><p>BROWSER_SPLIT_EVIDENCE</p></main>') })
+let freyaOutput = '', toolExecutions = 0
+const web = createServer(async (request, response) => {
+  if (tools && request.url === '/v1/chat/completions') {
+    let body = ''; for await (const chunk of request) body += chunk
+    const { messages } = JSON.parse(body)
+    const texts = messages.map(message => message.content).filter(content => typeof content === 'string')
+    const marker = texts.join('\n').match(/PRIVATE_SPLIT_MARKER_[a-z0-9-]+/i)?.[0]
+    const requested = texts.some(text => text.includes('MAKE_SPLIT_CHART'))
+    let content = marker ?? 'Ready.'
+    if (requested) {
+      content = toolExecutions++ === 0 ? 'FREYA_TOOL_CALL\n' + JSON.stringify({ tool: 'make_chart', title: 'Split chart', kind: 'bar', unit: 'count', points: JSON.stringify([{ label: 'A', value: 1 }, { label: 'B', value: 2 }]) }) + '\nFREYA_TOOL_CALL_END' : 'Chart ready.'
+    }
+    response.setHeader('Content-Type', 'application/json')
+    response.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 20 } }))
+    return
+  }
+  response.setHeader('Content-Type', 'text/html'); response.end('<!doctype html><title>Split browser acceptance</title><main><h1>Actual embedded browser</h1><p>BROWSER_SPLIT_EVIDENCE</p></main>')
+})
 await new Promise(resolve => web.listen(0, '127.0.0.1', resolve))
 const browserUrl = `http://127.0.0.1:${web.address().port}/`
+if (tools) for (const env of [coreEnv, uiEnv]) Object.assign(env, { FREYA_ALLOW_LIVE_MODEL: '1', MINIMAX_API_KEY: '', NANOGPT_API_KEY: '', OPENAI_API_KEY: '', LOCAL_MODEL_BASE_URL: `${browserUrl}v1`, LOCAL_MODEL_MODEL: 'split-tools-fixture' })
 const launch = (name, file, env, electron = false) => {
   const child = spawn(electron ? require('electron') : process.execPath, [file], { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-  child.stdout.on('data', data => process.stdout.write(`[${name}] ${data}`))
+  child.stdout.on('data', data => { if (name === 'Freya') freyaOutput += data; process.stdout.write(`[${name}] ${data}`) })
   child.stderr.on('data', data => process.stderr.write(`[${name}] ${data}`))
   children.push(child); return child
 }
@@ -70,11 +90,18 @@ try {
   assert.equal(new Set([core.pid, freya.pid, initialUiPid]).size, 3)
   const created = await submit('conversation.create', { title: 'Process split acceptance' })
   assert.equal(created.ok, true, JSON.stringify(created))
+  if (tools) assert.equal((await submit('model.select', { providerId: 'local', model: 'split-tools-fixture' })).ok, true)
   const conversationId = created.conversation.conversation.conversationId
   const marker = `PRIVATE_SPLIT_MARKER_${randomUUID()}`
-  const answer = await submit('conversation.turn.submit', { conversationId, text: marker })
+  const answer = await submit('conversation.turn.submit', { conversationId, text: live ? `Reply with only the following text: ${marker}` : marker })
   assert.equal(answer.conversation?.turn.outcome, 'completed', JSON.stringify(answer))
-  assert.ok(answer.conversation.turn.assistantMessage.content.includes(marker))
+  if (live) assert.ok(answer.conversation.turn.assistantMessage.content.trim().length > 0)
+  else assert.ok(answer.conversation.turn.assistantMessage.content.includes(marker))
+  if (live) {
+    assert.ok(!['fake', 'slow-echo', 'fixture-research'].includes(answer.conversation.turn.providerId))
+    assert.ok((await readFile(join(profile, 'core-events.jsonl.keyring.json'), 'utf8')).includes('attention'))
+    console.log(`PASS real configured LLM response from ${answer.conversation.turn.providerId}; OS-protected keyring and encrypted storage`)
+  }
   console.log(`PASS real renderer → Freya Mind/provider → Core encryption/admission; PIDs ${core.pid}/${freya.pid}/${initialUiPid}`)
 
   const opened = await browser({ op: 'open', url: browserUrl })
@@ -139,6 +166,15 @@ try {
   const journal = await readFile(join(profile, 'core-events.jsonl'), 'utf8')
   assert.ok(!journal.includes(marker), 'private chat content must not be journaled')
   assert.equal(journal.split('\n').filter(line => line.includes('"type":"model.request.started"')).length, 1, 'restarts must not replay inference')
+  if (tools) {
+    const chart = await submit('conversation.turn.submit', { conversationId, text: 'MAKE_SPLIT_CHART: chart A=1 and B=2', intent: { webSearch: true } })
+    assert.equal(chart.conversation?.turn.outcome, 'completed', JSON.stringify(chart))
+    const chartRecord = await submit('conversation.read', { conversationId })
+    assert.ok(chartRecord.conversation.messages.some(message => message.charts?.some(item => item.title === 'Split chart')), JSON.stringify(chartRecord))
+    assert.ok(freyaOutput.includes(`tool make_chart completed; pid=${freya.pid}`), 'the real tool body must execute in the separate Freya process')
+    assert.equal(toolExecutions, 2, 'one tool call and one synthesis; no duplicate execution')
+    console.log(`PASS real compatible-provider/tool loop: Guard in Core, chart body in Freya pid=${freya.pid}, artifact in the existing renderer contract`)
+  }
   assert.equal((await submit('security.stopAll')).ok, true)
   const stoppedBrowser = await browser({ op: 'open', url: browserUrl })
   assert.equal(stoppedBrowser.ok, false, 'STOP ALL must refuse native browser navigation')

@@ -5,6 +5,9 @@ import type { CognitionGrantSpec } from '../cognition/grants'
 import type { ConversationMessage, ConversationTurn } from '../conversation/types'
 import { CONVERSATION_LIMITS } from '../conversation/types'
 import { MIND_TOOL_LIMITS } from '../mind/tools'
+import type { MindTool } from '../mind/tools'
+import { PROCESS_TOOL_NAMES } from '../mind/process-tools'
+import { randomUUID } from 'node:crypto'
 
 /** Core owns each foreground lease; a connected engine cannot invent owner turns. */
 export class MindConnection implements MindRuntime {
@@ -23,6 +26,19 @@ export class MindConnection implements MindRuntime {
     })
   }
   get connected(): boolean { return this.peer?.connected === true }
+  tools(tools: readonly MindTool[]): readonly MindTool[] {
+    return tools.map(tool => !PROCESS_TOOL_NAMES.has(tool.name) ? tool : { ...tool, run: request => this.runTool(tool.name, request) })
+  }
+  private async runTool(name: string, request: Parameters<MindTool['run']>[0]): Promise<Awaited<ReturnType<MindTool['run']>>> {
+    const peer = this.peer
+    if (!peer?.connected) throw new Error('Freya is disconnected; the admitted tool was not executed')
+    request.signal?.throwIfAborted()
+    const id = randomUUID()
+    const cancel = () => { void peer.call('tool.cancel', { id }, 5_000).catch(() => {}) }
+    request.signal?.addEventListener('abort', cancel, { once: true })
+    try { return await peer.call('tool.run', { id, name, request: { arguments: request.arguments, context: request.context } }) }
+    finally { request.signal?.removeEventListener('abort', cancel) }
+  }
   activeTurn(conversationId: string) {
     const active = [...this.active.values()].find(value => value.input.conversationId === conversationId)
     return active ? { turnId: active.input.turnId, startedAt: active.startedAt } : null

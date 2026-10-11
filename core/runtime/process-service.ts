@@ -38,7 +38,7 @@ export class CoreProcess {
   private servers: Awaited<ReturnType<typeof listenRpc>>[] = []
   private readonly disposers: (() => void)[] = []
   private readonly owners = new Set<RpcPeer>()
-  constructor(private readonly config: ProcessRuntimeOptions, private readonly env: CapabilityEnv, private readonly developer?: 'echo' | 'slow-echo', private readonly owner?: CoreOwnerPort) {
+  constructor(private readonly config: ProcessRuntimeOptions, private readonly env: CapabilityEnv, private readonly developer?: 'echo' | 'slow-echo', private readonly owner?: CoreOwnerPort, private readonly workspaceRoot = process.cwd()) {
     const fixture = env as CapabilityEnv & { FREYA_E2E?: string; FREYA_E2E_RESEARCH?: string }
     this.providers = new ProcessProviders(developer, fixture.FREYA_E2E === '1' && fixture.FREYA_E2E_RESEARCH === 'fixtures')
   }
@@ -48,7 +48,7 @@ export class CoreProcess {
       peer.handle(async (method, value) => {
         if (method === 'freya.register') {
           this.mind.connect(peer)
-          const statuses = await peer.call<ProviderStatus[]>('provider.configure', { env: this.env, developer: this.developer })
+          const statuses = await peer.call<ProviderStatus[]>('provider.configure', { env: this.env, developer: this.developer, workspaceRoot: this.workspaceRoot })
           this.providers.connect(peer, statuses)
           void this.tick(core)
           return { instanceId: this.instanceId, pid: process.pid }

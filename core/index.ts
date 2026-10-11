@@ -1756,7 +1756,7 @@ class FreyaCore implements Core {
   private readonly missionAdvancing = new Map<string, Promise<StepOutcome | null>>()
 
   constructor(private readonly options: CoreOptions) {
-    this.processRuntime = options.processRuntime ? new CoreProcess(options.processRuntime, options.env ?? {}, options.developerProvider, options.processRuntime.owner) : null
+    this.processRuntime = options.processRuntime ? new CoreProcess(options.processRuntime, options.env ?? {}, options.developerProvider, options.processRuntime.owner, options.workspaceRoot) : null
     this.newId = options.newId ?? (() => randomUUID())
     this.workforceSource = options.workforceSource ?? null
     this.personalitySource = options.personalitySource ?? null
@@ -2460,7 +2460,7 @@ class FreyaCore implements Core {
         ]
         if (tools.length === 0) return null
         this.mindToolRegistry = new MindToolRegistry({
-          tools,
+          tools: this.processRuntime?.mind.tools(tools) ?? tools,
           guard: this.guard,
           // The owner principal. `browser.read` is the owner's alone, as
           // `CAPABILITIES` says, so a principal that does not hold it is refused the

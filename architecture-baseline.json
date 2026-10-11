@@ -636,7 +636,7 @@
       "reason": "Transitional extraction exception: must shrink to the ordinary/assembly limit before strict mode."
     },
     "core/work/engine.ts": {
-      "ceiling": 1250,
+      "ceiling": 1248,
       "limit": 600,
       "hash": "21983ef3ee280d06e27200975aadb49eab7690e35a93ddcb9ab51bbe3ff17c4c",
       "retainInStrict": true,

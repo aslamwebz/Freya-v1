@@ -20,6 +20,7 @@ import {
   type WorkProjection,
 } from './projection'
 import { validateWorkPlan, resolveWorkLimits } from './plan-validation'
+import { ApprovalDeadlineScheduler } from './approval-deadlines'
 import {
   canTransitionRun,
   canTransitionStep,
@@ -258,7 +259,7 @@ export class WorkEngine {
    */
   private readonly deadlineHit = new Map<string, number>()
   /** Pending approval expiry timers. At most maxPendingApprovals exist. */
-  private readonly approvalTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly approvalDeadlines: ApprovalDeadlineScheduler
   /** Per-Run/Step/Approval write queue, so two writers cannot read the same source status. */
   private readonly queues = new Map<string, Promise<void>>()
 
@@ -269,6 +270,12 @@ export class WorkEngine {
   constructor(private readonly options: WorkEngineOptions) {
     this.now = options.now ?? (() => new Date())
     this.newId = options.newId ?? (() => randomUUID())
+    this.approvalDeadlines = new ApprovalDeadlineScheduler({
+      now: this.now,
+      isClosed: () => this.closed,
+      isPending: (approvalId) => this.work.approvals.get(approvalId)?.status === 'pending',
+      expire: (approvalId, reason) => this.expireApproval(approvalId, reason),
+    })
   }
 
   /* ------------------------------------------------------------ lifecycle */
@@ -294,8 +301,7 @@ export class WorkEngine {
   async close(): Promise<void> {
     this.closed = true
     this.dispose()
-    for (const [, timer] of this.approvalTimers) clearTimeout(timer)
-    this.approvalTimers.clear()
+    this.approvalDeadlines.clearAll()
     // Every capability is aborted before the fabric closes, for the reason
     // `Core.stop()` drains the gateway: a capability still running when the
     // journal closes would record its own outcome into a closed store.
@@ -492,7 +498,7 @@ export class WorkEngine {
     const observationSummaries = this.observationSummaries.size
     const taskTitles = this.taskTitles.size
     const cancellationIntents = this.cancelRequested.size
-    const approvalTimers = this.approvalTimers.size
+    const approvalTimers = this.approvalDeadlines.size
     return {
       plans,
       stepLabels,
@@ -1515,31 +1521,21 @@ export class WorkEngine {
   }
 
   private armApprovalExpiry(approvalId: string): void {
-    this.clearApprovalTimer(approvalId)
-    if (this.closed) return
     const approval = this.work.approvals.get(approvalId)
-    if (!approval || approval.status !== 'pending') return
-    const elapsed = Math.max(0, this.now().getTime() - Date.parse(approval.requestedAt))
-    const remaining = Math.max(0, WORK_LIMITS.approvalTtlMs - elapsed)
-    const timer = setTimeout(async () => {
-      this.approvalTimers.delete(approvalId)
-      if (this.closed) return
-      try {
-        await this.expireApproval(approvalId, WORK_REASONS.approvalTimedOut)
-      } catch {
-        // Persistence failure is already owned by the Event Fabric; never print
-        // the thrown diagnostic here because it may contain a local path.
-        console.error('[freya.work] an approval expiry could not be persisted')
-      }
-    }, remaining)
-    ;(timer as { unref?: () => void }).unref?.()
-    this.approvalTimers.set(approvalId, timer)
+    if (!approval || approval.status !== 'pending') {
+      this.clearApprovalTimer(approvalId)
+      return
+    }
+    this.approvalDeadlines.arm(
+      approvalId,
+      approval.requestedAt,
+      WORK_LIMITS.approvalTtlMs,
+      WORK_REASONS.approvalTimedOut,
+    )
   }
 
   private clearApprovalTimer(approvalId: string): void {
-    const timer = this.approvalTimers.get(approvalId)
-    if (timer !== undefined) clearTimeout(timer)
-    this.approvalTimers.delete(approvalId)
+    this.approvalDeadlines.clear(approvalId)
   }
 
   private expireApproval(approvalId: string, reason: string): Promise<boolean> {

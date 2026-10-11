@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - feat/mind-phase8-live-integration
       # Phase 5 lives on its own branch until it is reviewed and merged. Its
       # pushes are verified here so the branch cannot rot silently while it waits.
       # This adds coverage; it removes none.
@@ -52,6 +53,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Verify architecture guardrails
+        run: |
+          npm run check:architecture
+          npm run test:architecture
 
       - name: Run headless verification
         run: npm run verify:full

@@ -35,6 +35,7 @@ export default defineConfig({
       'tests/unit/**/*.test.tsx',
       'tests/core/**/*.test.ts',
       'tests/host/**/*.test.ts',
+      'tests/architecture/**/*.test.mjs',
       'tests/red-team/**/*.test.ts',
       'tests/qualification/**/*.test.ts',
       // Network-dependent. Included so `npm run test:chat-live` can find it, but

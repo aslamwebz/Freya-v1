@@ -25,4 +25,4 @@ The existing host tick drives delivery while Freya is running. Existing Attentio
 
 Focused tests cover private draft edits, active edit/delete refusal, deletion/replay, journal-failure rollback, Goal creation failure, UI command routing/refusal, tool argument boundaries/abort, encrypted reminder restart/cancellation, recurrence beyond eight days, missed ticks, concurrent ticks, encryption-key failure, unavailable-store preservation, and pending-schedule retention.
 
-No live Core/Electron process, provider, or network was launched for these checks. Temporary test data stays under `.kilo/tmp`; existing dirty work is preserved and no changes were staged or committed.
+No live Core/Electron app, provider, or network was launched for these checks. Temporary test data stays under `.kilo/tmp`. The owner requested a frozen snapshot commit; production keyring/host wiring, MissionRecords mounting and full app-flow checks are deferred. Existing unrelated work is preserved.

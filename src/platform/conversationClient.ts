@@ -124,15 +124,23 @@ export function resetConversationMirror(): void {
  * the field. The composer emits two keys and nothing else; the wire carries
  * exactly those keys, and the rest of the system treats them as opaque
  * metadata the Mind reads alongside the text.
+ *
+ * Both `true` and `false` are carried. An explicit `false` used to be dropped
+ * here, on the reasoning that an absent value already means "not requested" —
+ * which quietly reversed an owner's decision. The owner turning Web search off
+ * sent `false`, the transport deleted it, and Core saw an absent hint, which it
+ * reads as permission to look things up. The switch on the surface was
+ * decorative: it could raise a permission but never lower one.
+ *
+ * A caller that has *no* opinion sends `undefined`, and that is still a distinct
+ * case from `false` end to end.
  */
 function normaliseIntents(
   value: TurnIntentHints | undefined,
 ): { readonly webSearch?: boolean; readonly browserUse?: boolean } | undefined {
   if (value === undefined) return undefined
-  let webSearch: boolean | undefined
-  let browserUse: boolean | undefined
-  if (value.webSearch === true) webSearch = true
-  if (value.browserUse === true) browserUse = true
+  const webSearch = typeof value.webSearch === 'boolean' ? value.webSearch : undefined
+  const browserUse = typeof value.browserUse === 'boolean' ? value.browserUse : undefined
   if (webSearch === undefined && browserUse === undefined) return undefined
   return {
     ...(webSearch === undefined ? {} : { webSearch }),

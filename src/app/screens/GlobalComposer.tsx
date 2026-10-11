@@ -14,6 +14,7 @@ import {
 } from '../chat/attachments'
 import { sharedRightWorkspaceStore } from '../chat/rightWorkspaceStore'
 import { sharedComposerDraftStore } from '../chat/composerDraftStore'
+import { useIntentToggles } from '../chat/intent-toggles'
 import { conversationMirror } from '../../platform/conversationClient'
 import { MiniChatControls } from '../chat/MiniChatControls'
 import type { TurnIntentHints } from '../../../core/mind/tool-intent'
@@ -231,8 +232,8 @@ export function GlobalComposer({
   }, [])
   const [attaching, setAttaching] = useState(false)
   const [mode, setMode] = useState<ComposerMode>(initialDraft.mode)
-  const [wantWeb, setWantWeb] = useState(initialDraft.wantWeb)
-  const [wantBrowser, setWantBrowser] = useState(initialDraft.wantBrowser)
+  const toggles = useIntentToggles(initialDraft)
+  const { wantWeb, wantBrowser, webSearchSet, browserUseSet, sentWeb, sentBrowser } = toggles
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(
     (initialDraft.thinkingLevel as ThinkingLevel) || readStoredThinkingLevel(),
   )
@@ -252,21 +253,19 @@ export function GlobalComposer({
     if (prevConvRef.current === activeConversationId) return
     // Save draft for previous conversation
     draftStore.setDraft(prevConvRef.current, {
+      ...toggles.draftFor({}),
       text,
       mode,
-      wantWeb,
-      wantBrowser,
       thinkingLevel,
     })
     // Restore draft for new conversation
     const saved = draftStore.getDraft(activeConversationId)
     setText(saved.text)
     setMode(saved.mode)
-    setWantWeb(saved.wantWeb)
-    setWantBrowser(saved.wantBrowser)
+    toggles.restore(saved)
     if (saved.thinkingLevel) setThinkingLevel(saved.thinkingLevel as ThinkingLevel)
     prevConvRef.current = activeConversationId
-  }, [activeConversationId, text, mode, wantWeb, wantBrowser, thinkingLevel, draftStore])
+  }, [activeConversationId, text, mode, wantWeb, wantBrowser, webSearchSet, browserUseSet, thinkingLevel, draftStore])
 
   const handleTextChange = useCallback(
     (value: string) => {
@@ -279,27 +278,16 @@ export function GlobalComposer({
   const handleModeChange = useCallback(
     (newMode: ComposerMode) => {
       setMode(newMode)
-      if (newMode !== 'chat') setWantWeb(true)
-      draftStore.setDraft(activeConversationId, { mode: newMode, ...(newMode !== 'chat' ? { wantWeb: true } : {}) })
+      // A research mode *is* the owner asking for lookups, so the switch counts as
+      // touched — otherwise Core reads the intent as absent and routes on the text.
+      const research = newMode !== 'chat'
+      draftStore.setDraft(activeConversationId, { mode: newMode, ...(research ? { wantWeb: true, webSearchSet: true } : {}) })
     },
     [activeConversationId, draftStore],
   )
 
-  const handleWantWebToggle = useCallback(() => {
-    setWantWeb((prev) => {
-      const next = !prev
-      draftStore.setDraft(activeConversationId, { wantWeb: next })
-      return next
-    })
-  }, [activeConversationId, draftStore])
-
-  const handleWantBrowserToggle = useCallback(() => {
-    setWantBrowser((prev) => {
-      const next = !prev
-      draftStore.setDraft(activeConversationId, { wantBrowser: next })
-      return next
-    })
-  }, [activeConversationId, draftStore])
+  const handleWantWebToggle = toggles.toggleWeb
+const handleWantBrowserToggle = toggles.toggleBrowser
 
   const handleThinkingChange = useCallback(
     (level: ThinkingLevel) => {
@@ -361,7 +349,13 @@ export function GlobalComposer({
     draftStore.setDraft(submittedConversationId, { text: '' })
     onNotice?.('')
     try {
-      const accepted = await onSend(textToSend, mode, { webSearch: wantWeb, browserUse: wantBrowser, ...(thinkingLevel !== 'auto' ? { reasoningEffort: thinkingLevel } : {}) })
+      // Untouched switches send nothing, which lets Core decide from the question;
+    // a touched one sends the decision made, an explicit `false` included.
+    const accepted = await onSend(textToSend, mode, {
+      ...(webSearchSet ? { webSearch: wantWeb } : {}),
+      ...(browserUseSet ? { browserUse: wantBrowser } : {}),
+      ...(thinkingLevel !== 'auto' ? { reasoningEffort: thinkingLevel } : {}),
+    })
       if (!accepted) {
         // Restore only when no replacement text was typed in the meantime.
         if (draftStore.getDraft(submittedConversationId).text === '') {
@@ -605,6 +599,7 @@ export function GlobalComposer({
                   : 'Web search is off. Click to turn on.'
               }
               onClick={handleWantWebToggle}
+              data-touched={webSearchSet ? 'yes' : 'no'} data-sent={sentWeb}
             >
               <span>Web search</span>
               <span className="hd-switch-track" aria-hidden="true">
@@ -626,6 +621,7 @@ export function GlobalComposer({
                   : 'Browser use is off. Click to turn on.'
               }
               onClick={handleWantBrowserToggle}
+              data-touched={browserUseSet ? 'yes' : 'no'} data-sent={sentBrowser}
             >
               <span>Browser</span>
               <span className="hd-switch-track" aria-hidden="true">

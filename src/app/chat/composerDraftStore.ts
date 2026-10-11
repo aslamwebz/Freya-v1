@@ -5,6 +5,23 @@ export interface ComposerDraft {
   readonly mode: ComposerMode
   readonly wantWeb: boolean
   readonly wantBrowser: boolean
+  /**
+   * Whether the owner has actually touched the Web search switch for this
+   * conversation.
+   *
+   * `wantWeb` alone cannot carry the decision, because its default (`false`) is
+   * indistinguishable from the owner having deliberately turned the switch off.
+   * Collapsing the two loses the permission: a turn would look like a refusal even
+   * when the owner never said anything, and — far worse — a deliberate refusal
+   * would look like silence and be ignored.
+   *
+   * So the switch has three states rather than two: untouched (this flag false,
+   * and Core decides from the question), on (`true`), and explicitly off (`false`
+   * with this flag set, which Core treats as a hard boundary).
+   */
+  readonly webSearchSet: boolean
+  /** The same three-state distinction for the Browser switch. */
+  readonly browserUseSet: boolean
   readonly thinkingLevel: string | null
 }
 
@@ -13,6 +30,8 @@ export const DEFAULT_COMPOSER_DRAFT: ComposerDraft = {
   mode: 'chat',
   wantWeb: false,
   wantBrowser: false,
+  webSearchSet: false,
+  browserUseSet: false,
   thinkingLevel: null,
 }
 
@@ -34,6 +53,8 @@ function readSessionDrafts(): Record<string, ComposerDraft> {
           mode: d.mode === 'deep-research' || d.mode === 'eye' ? d.mode : 'chat',
           wantWeb: Boolean(d.wantWeb),
           wantBrowser: Boolean(d.wantBrowser),
+          webSearchSet: Boolean(d.webSearchSet),
+          browserUseSet: Boolean(d.browserUseSet),
           thinkingLevel: typeof d.thinkingLevel === 'string' ? d.thinkingLevel : null,
         }
       }
@@ -86,6 +107,8 @@ export function createComposerDraftStore(): ComposerDraftStore {
         mode: partial.mode !== undefined ? partial.mode : current.mode,
         wantWeb: partial.wantWeb !== undefined ? partial.wantWeb : current.wantWeb,
         wantBrowser: partial.wantBrowser !== undefined ? partial.wantBrowser : current.wantBrowser,
+        webSearchSet: partial.webSearchSet !== undefined ? partial.webSearchSet : current.webSearchSet,
+        browserUseSet: partial.browserUseSet !== undefined ? partial.browserUseSet : current.browserUseSet,
         thinkingLevel: partial.thinkingLevel !== undefined ? partial.thinkingLevel : current.thinkingLevel,
       }
       drafts = { ...drafts, [key]: next }

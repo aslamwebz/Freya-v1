@@ -287,6 +287,15 @@ export function renderSemanticSnapshot(input: {
   let rendered = lines.join('\n')
   if (rendered.length > BROWSER_SERVICE_LIMITS.maxRenderedSnapshotChars) {
     rendered = `${rendered.slice(0, BROWSER_SERVICE_LIMITS.maxRenderedSnapshotChars)}…`
+    // The element list is the part a model can act on, so being cut here is a
+    // different failure from the prose being cut and has to say so. The old note
+    // claimed the element list was complete even when this truncation had just
+    // removed most of it, which is how a scrolled-to-bottom snapshot could report
+    // that a footer link did not exist when it had simply never been shown.
+    rendered +=
+      '\nnote: this snapshot was cut short and some elements are missing from the list above. ' +
+      'If what you need is not listed, take another snapshot after scrolling further, or use ' +
+      'screenshot to see the page directly. Do not conclude the element is absent from the page.'
   }
 
   return Object.freeze({

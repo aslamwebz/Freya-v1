@@ -174,13 +174,26 @@ export const BROWSER_SERVICE_LIMITS = Object.freeze({
   /** Hard ceiling on simultaneously live tabs. The multi-tab target is 10. */
   maxTabs: 16,
   /** Elements in one semantic snapshot. */
-  maxSnapshotElements: 120,
+  maxSnapshotElements: 500,
   /** Characters of element text in one snapshot line. */
   maxSnapshotLineChars: 120,
   /** Characters of page prose carried on a snapshot. */
   maxSnapshotTextChars: 4_000,
-  /** Characters of a rendered snapshot, prose and refs together. */
-  maxRenderedSnapshotChars: 8_000,
+  /**
+   * Characters of a rendered snapshot, prose and refs together.
+   *
+   * This has to cover the *element list* on a real page, because the element list
+   * is the only part a model can act on. It was 8000 against a 120-element cap,
+   * and an element line runs to roughly 70 characters — so 120 elements filled the
+   * budget on their own and the prose, and every element past the cut, vanished.
+   *
+   * That produced a specific and total failure: scroll a page to the bottom, take a
+   * snapshot, and the footer was not there. The Contact link the owner had just
+   * asked for had no ref, so there was nothing to click, and the loop reported "no
+   * clickable element" — correctly, about a page it had only been shown the top of.
+   * Scrolling was decorative.
+   */
+  maxRenderedSnapshotChars: 32_000,
   /** Characters in a tab title. */
   maxTitleChars: 200,
   /** Characters in a URL. */

@@ -120,6 +120,8 @@ export function createBrowserTabsTool(options: BrowserTabsToolOptions): MindTool
       'read a page as a list of numbered elements, and act on one by quoting its number together with the revision ' +
       'it came from. Take a screenshot when the element list cannot answer the question, and the owner needs to see ' +
       'the page itself. Use this when the owner asks for several pages at once, or to click something you just read. ' +
+      'To act on something lower down a long page, scroll to it and take a fresh snapshot — the list follows what you can see. ' +
+      'If a snapshot was cut short and something you expect is not listed, scroll and snapshot again rather than concluding it is absent. ' +
       'Every act must quote both a reference and a revision; a page that changed since you read it refuses the act ' +
       'rather than guessing. It cannot log in, solve a captcha, buy anything or upload a file.',
     capability: 'browser.read',

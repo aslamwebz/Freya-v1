@@ -12,7 +12,6 @@ import {
   type MissionRecord,
 } from '../types'
 import {
-  asksForGate,
   chargeBudget,
   mayBeginStep,
   readApprovalState,
@@ -40,6 +39,7 @@ import {
 import { isSafeToContinue, planRecovery, type RecoveryAction } from './recovery'
 import { plan as buildPlan, type PlanRequest } from './planner'
 import { proposeSteps } from './planning-selection'
+import { MissionStepExecutor } from './step-execution'
 import {
   countOpenDelegations,
   countSiblingMissions,
@@ -398,8 +398,22 @@ export class MissionAutonomyRuntime {
   private closed = false
   /** Missions with a step in flight. Guards against two concurrent steps. */
   private readonly stepping = new Set<string>()
+  private readonly stepExecutor: MissionStepExecutor
 
-  constructor(private readonly options: MissionRuntimeOptions) {}
+  constructor(private readonly options: MissionRuntimeOptions) {
+    this.stepExecutor = new MissionStepExecutor({
+      missions: {
+        transitionStep: (input) => options.missions.transitionStep(input),
+        charge: (input) => options.missions.charge(input),
+        setBlocker: (input) => options.missions.setBlocker(input),
+        recordEvidence: (input) => options.missions.recordEvidence(input),
+      },
+      execute: (input) => options.execute(input),
+      observeApproval: (missionId, step, runId, source, refusals) => this.observeApproval(missionId, step, runId, source, refusals),
+      transitionTo: (missionId, status, reason, refusals) => this.to(missionId, status, reason, refusals),
+      newId: () => this.newId(),
+    })
+  }
 
   async open(): Promise<void> {
     this.closed = false
@@ -719,7 +733,7 @@ export class MissionAutonomyRuntime {
           retries: 0,
           delegations: 1,
         })
-        const applied_ = await this.executeStep(
+        const applied_ = await this.stepExecutor.execute(
           missionId,
           mission,
           step,
@@ -761,7 +775,7 @@ export class MissionAutonomyRuntime {
    * 4. Execution. Through Work, with the Run attached to the Mission, asking Work for a
    *    gate when the step's capability is gated. **There is no Mission-level gate.**
    *    A step that needs a signature gets a Work Run, Work's Guard opens the gate inside
-   *    `drive()`, and the Mission parks on the id Work reports — see `executeStep` and
+   *    `drive()`, and the Mission parks on the id Work reports — see the step executor and
    *    `observeApproval`. A person answers once, on Work's surface.
    * 5. Approval read-back. If Work parked the Run, the Mission parks in
    *    `approval-required` pointing at that gate. If a person has since denied it or let
@@ -838,7 +852,7 @@ export class MissionAutonomyRuntime {
       delegations: 1,
     })
 
-    return this.executeStep(missionId, mission, step, delegation.workerId, delegation.assignmentId, refusals)
+    return this.stepExecutor.execute(missionId, mission, step, delegation.workerId, delegation.assignmentId, refusals)
   }
 
   /**
@@ -849,151 +863,6 @@ export class MissionAutonomyRuntime {
    * when the executor says so. There is no path here where a step reaches `verified`
    * without the executor having run it.
    */
-  private async executeStep(
-    missionId: string,
-    mission: MissionRecord,
-    step: MissionStepRecord,
-    workerId: string,
-    assignmentId: string,
-    refusals: string[],
-  ): Promise<AppliedDecision> {
-    const planId = mission.activePlan?.planId ?? ''
-    const controller = new AbortController()
-
-    // The step becomes `running` *before* the action starts, strictly. That ordering is
-    // what makes recovery able to distinguish "in flight" from "not started" — and an
-    // executor that failed after starting its action but before answering would
-    // otherwise leave no trace that anything had happened.
-    await this.options.missions.transitionStep({
-      missionId,
-      planId,
-      stepId: step.stepId,
-      to: 'running',
-      workerId,
-      attempts: step.attempts + 1,
-    })
-    await this.options.missions.charge({
-      missionId,
-      modelCalls: 0,
-      actions: 1,
-      externalRequests: step.risk === 'consequential' ? 1 : 0,
-      retries: 0,
-      delegations: 0,
-    })
-
-    const outcome = await this.options.execute({
-      missionId,
-      stepId: step.stepId,
-      capability: step.capability,
-      verifier: step.verifier,
-      risk: step.risk,
-      // The plan's request, not a decision. It becomes `requiresApproval` on the Run, and
-      // Work's Guard decides whether that becomes a gate.
-      requiresApproval: asksForGate(step),
-      signal: controller.signal,
-    })
-    void assignmentId
-
-    // **An open gate is not a failure.** This is the branch that makes the single-gate
-    // design work, and getting it wrong is the interesting mistake available here.
-    //
-    // The executor reports `awaiting_approval` because Work parked the Run at its gate:
-    // Guard evaluated the capability and wanted a signature first. Nothing ran, and
-    // nothing was disproved — so the step stays `running` (it *was* handed to Work and is
-    // genuinely in flight from Work's point of view), the Mission parks in
-    // `approval-required` pointing at Work's gate, and the reported decision becomes
-    // `request_approval`.
-    //
-    // Marking it `failed` instead would be a lie in the most expensive direction: the
-    // journal would say the step failed, the budget would have been charged for an action
-    // that never happened, and a person answering "yes" a moment later would watch a
-    // Mission that had already recorded the consequence of their own decision.
-    if (outcome.ok && outcome.awaitingApproval) {
-      return asApproval(
-        await this.observeApproval(
-          missionId,
-          step,
-          outcome.runId,
-          asksForGate(step) ? 'requested' : 'observed',
-          refusals,
-        ),
-        step.stepId,
-      )
-    }
-
-    if (!outcome.ok) {
-      refusals.push(outcome.reason)
-      await this.options.missions.transitionStep({
-        missionId,
-        planId,
-        stepId: step.stepId,
-        to: 'failed',
-        workerId,
-        attempts: step.attempts + 1,
-        reason: MISSION_REASONS.step_failed,
-      })
-      await this.options.missions.setBlocker({ missionId, code: 'step_failed', stepId: step.stepId, raised: true })
-      return applied(await this.to(missionId, 'blocked', 'step_failed', refusals))
-    }
-
-    // The Run was already attached by the executor, through the one sequence that pairs
-    // creation with admission (`attachChildRunWhileCreating`). Attaching it *again* here
-    // would be a second, redundant call — and it is deliberately not defended against
-    // silently, because the engine makes it idempotent and a redundant write is noise in a
-    // journal somebody reads as a Mission's history.
-    //
-    // So this line only records the id on the *step*, which is a different fact: the step
-    // now knows which Run executed it.
-    void outcome.runId
-
-    // Evidence first, then the step's status. If the process dies between them, recovery
-    // finds a `running` step with evidence already recorded and can reconcile from the
-    // evidence — which is truthful — rather than losing the observation.
-    for (let i = 0; i < outcome.observedResults; i += 1) {
-      await this.options.missions.recordEvidence({
-        missionId,
-        evidenceId: this.newId(),
-        stepId: step.stepId,
-        kind: 'result',
-        origin: 'observed',
-        summaryLength: outcome.summaryLength,
-        expiresAt: null,
-      })
-    }
-    for (let i = 0; i < outcome.reportedResults; i += 1) {
-      // Recorded, displayed, and **not** counted: a capability saying it found something
-      // is not a finding. This is the reported/observed split doing its job.
-      await this.options.missions.recordEvidence({
-        missionId,
-        evidenceId: this.newId(),
-        stepId: step.stepId,
-        kind: 'report',
-        origin: 'reported',
-        summaryLength: outcome.summaryLength,
-        expiresAt: null,
-      })
-    }
-
-    await this.options.missions.transitionStep({
-      missionId,
-      planId,
-      stepId: step.stepId,
-      to: outcome.verified ? 'verified' : 'failed',
-      workerId,
-      runId: outcome.runId,
-      attempts: step.attempts + 1,
-      reason: outcome.verified ? MISSION_REASONS.step_verified : MISSION_REASONS.step_failed,
-    })
-    if (outcome.verified) {
-      // The blocker this step caused is cleared, so a Mission that failed once and then
-      // succeeded does not stay blocked for ever.
-      await this.options.missions.setBlocker({ missionId, code: 'step_failed', stepId: step.stepId, raised: false })
-      return applied('active')
-    }
-    await this.options.missions.setBlocker({ missionId, code: 'step_failed', stepId: step.stepId, raised: true })
-    return applied(await this.to(missionId, 'blocked', 'step_failed', refusals))
-  }
-
   /**
    * Retry a failed step, while the ceiling allows.
    *

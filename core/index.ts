@@ -1,5 +1,6 @@
 import type { MissionRuntime } from './missions/process-contract'
 import type { ProcessGoals } from './longhorizon/process-store'
+import type { ProcessWorkforce } from './workforce/process-store'
 import { ProcessBrain } from './brain/process-store'
 import { validateModelAttachments } from './model/provider'
 import { randomUUID } from 'node:crypto'
@@ -85,7 +86,7 @@ import { UnavailableSttAdapter } from './voice/stt'
 import { UnavailableTtsAdapter } from './voice/tts'
 import { LOCAL_ENERGY_WAKE_GATE, buildLocalWakeGate } from './voice/wake'
 import type { VoiceSttAdapter, VoiceTranscriptFragment, VoiceTtsAdapter, WakeGate } from './voice/types'
-import { WorkforceEngine } from './workforce/engine'
+import { WorkforceEngine, type WorkforceEngineOptions } from './workforce/engine'
 import type { SubordinateWorkerScope, WorkforceOwnerScope } from './workforce/authority'
 import { ABSENT_WORKFORCE_PROJECTION } from './workforce/projection'
 import { isAssignableToWorker, isTerminalAssignmentStatus, workerPrincipalId } from './workforce/types'
@@ -1743,7 +1744,7 @@ class FreyaCore implements Core {
    * `unavailable` during startup rather than throwing, so a surface can render "Core is
    * not up yet" without special-casing the failure.
    */
-  private workforceEngine: WorkforceEngine | undefined
+  private workforceEngine: WorkforceEngine | ProcessWorkforce | undefined
   private mindToolRegistry: MindToolRegistry | null = null
   private workRegistry: WorkRegistry | undefined
 
@@ -2905,7 +2906,7 @@ class FreyaCore implements Core {
     this.syncContextMission()
     await this.contextPersistence.flush()
 
-    this.workforceEngine = new WorkforceEngine({
+    const workforceOptions: WorkforceEngineOptions = {
       fabric: this.fabric,
       core: {
         requestCognition: (workerId, intent) =>
@@ -2920,7 +2921,8 @@ class FreyaCore implements Core {
       // agent that could start work after the panic button is an agent the button missed.
       stopAll: () => this.state.stopAll.active,
       limits: this.options.workforceLimits,
-    })
+    }
+    this.workforceEngine = this.processRuntime?.agents(workforceOptions) ?? new WorkforceEngine(workforceOptions)
     await this.workforceEngine.open()
 
     // The autonomy runtime sits above all three: it plans Missions, delegates through the
@@ -3819,7 +3821,7 @@ class FreyaCore implements Core {
     }
   }
 
-  private requireWorkforce(): WorkforceEngine {
+  private requireWorkforce(): WorkforceEngine | ProcessWorkforce {
     if (this.workforceEngine === undefined) {
       throw new Error('the Workforce engine is not available')
     }

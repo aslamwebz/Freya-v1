@@ -40,7 +40,8 @@ export class ProcessBrain {
     const id = randomUUID(); this.active.set(id, method)
     try {
       const result = await peer.call<{ result: Awaited<ReturnType<Brain[K]>>; projection: BrainProjection }>('brain.run', { id, method, args })
-      this.cached = result.projection; return result.result
+      if (!this.cached || result.projection?.sequence >= this.cached.sequence) this.cached = result.projection
+      return result.result
     } finally { this.active.delete(id) }
   }
   writeMemory(...args: Parameters<Brain['writeMemory']>) { return this.run('writeMemory', args) }

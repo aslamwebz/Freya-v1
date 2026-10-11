@@ -19,6 +19,8 @@ import { ProcessMissionRuntime } from '../missions/process-runtime'
 import type { MissionPacket } from '../missions/process-contract'
 import { ProcessGoalRuntime } from '../longhorizon/process-runtime'
 import type { GoalPacket } from '../longhorizon/process-contract'
+import { ProcessWorkforceRuntime } from '../workforce/process-runtime'
+import type { WorkforcePacket } from '../workforce/process-contract'
 
 interface TurnPacket {
   input: MindSubmitInput
@@ -43,6 +45,7 @@ const toolCalls = new Map<string, AbortController>()
 const memory = new ProcessMemory()
 const missions = new ProcessMissionRuntime()
 const goals = new ProcessGoalRuntime()
+const workforce = new ProcessWorkforceRuntime()
 
 async function runTurn(connection: RpcPeer, packet: TurnPacket) {
   const { input, context: c } = packet
@@ -94,6 +97,7 @@ async function connect(): Promise<void> {
       memory.disconnect()
       void missions.close()
       void goals.close()
+      void workforce.close()
       for (const controller of calls.values()) controller.abort()
       for (const controller of toolCalls.values()) controller.abort()
       for (const [id, mind] of minds) mind.cancelTurn(id, 'Core disconnected; the turn will not be retried')
@@ -109,6 +113,9 @@ async function connect(): Promise<void> {
         case 'goal.configure': return goals.configure(connection, value as GoalPacket)
         case 'goal.run': return goals.run(value as Parameters<ProcessGoalRuntime['run']>[0])
         case 'goal.close': return goals.close()
+        case 'workforce.configure': return workforce.configure(connection, value as WorkforcePacket)
+        case 'workforce.run': return workforce.run(value as Parameters<ProcessWorkforceRuntime['run']>[0])
+        case 'workforce.close': return workforce.close()
         case 'provider.configure': {
           const config = value as { env: CapabilityEnv & { FREYA_E2E?: string; FREYA_E2E_RESEARCH?: string }; developer?: 'echo' | 'slow-echo'; workspaceRoot: string }
           toolBodies = processToolBodies(config.workspaceRoot)

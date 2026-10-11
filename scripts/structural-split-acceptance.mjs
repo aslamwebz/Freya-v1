@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 import { _electron } from 'playwright-core'
 import { createServer } from 'node:http'
 import { acquireAcceptanceProcesses } from './acceptance-processes.mjs'
+import { build } from 'esbuild'
 /* global window -- evaluated inside the actual renderer by Playwright */
 
 const require = createRequire(import.meta.url)
@@ -17,6 +18,9 @@ const root = resolve('.'), id = randomUUID(), token = () => randomBytes(32).toSt
 await mkdir(join(root, '.kilo'), { recursive: true })
 const processes = await acquireAcceptanceProcesses(join(root, '.kilo'), live ? 300_000 : 180_000)
 const profile = await mkdtemp(join(root, '.kilo', 'split-acceptance-'))
+const fixtureFile = join(profile, 'workforce-fixture.cjs')
+await build({ entryPoints: [join(root, 'tests/runtime/workforce-fixture.ts')], outfile: fixtureFile, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' })
+await require(fixtureFile).seedWorkforce(join(profile, 'core-events.jsonl'))
 const address = name => process.platform === 'win32' ? `\\\\.\\pipe\\freya-${name}-${id}` : join(profile, `${name}.sock`)
 const ownerToken = token(), intelligenceToken = token(), supervisorToken = token()
 const common = { ...process.env, FREYA_RUNTIME_PROFILE: profile, FREYA_E2E: '1', FREYA_RUNTIME_TEST_PROFILE: live || tools ? '0' : '1', FREYA_DEV_PROVIDER: live || tools ? '' : 'echo',
@@ -135,6 +139,9 @@ try {
   assert.equal(skills.persistence.mode, 'encrypted')
   const workforce = await page.evaluate(() => window.freyaHost.coreWorkforce())
   assert.ok(Array.isArray(workforce.workers))
+  assert.equal(workforce.workers.length, 2)
+  assert.ok(freyaOutput.includes(`Workforce recovery completed; pid=${freya.pid}`), 'the existing agent engine must reconcile interrupted assignments inside Freya')
+  assert.equal(workforce.workers.find(worker => worker.name === 'Alpha').status, 'idle')
   console.log(`PASS existing missions, encrypted skills, tool catalogue and real agent projection (${workforce.workers.length} workers)`)
 
   await kill(freya)

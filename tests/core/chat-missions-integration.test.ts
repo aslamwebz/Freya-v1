@@ -60,8 +60,8 @@ async function started(responder?: (request: ModelRequest) => string | Promise<s
     requests.push(request)
     const system = request.messages[0]?.content ?? ''
     const text = responder ? await responder(request) : system.startsWith('Propose a bounded mission plan') ? plan() : system.startsWith('Return only JSON {"findings"') ? (() => {
-      const data = JSON.parse(request.messages[1]!.content) as { sources: { sourceId: string }[] }
-      return JSON.stringify({ findings: [{ sourceId: data.sources[0]!.sourceId, category: 'pricing', quote: 'Example model costs €15 monthly.' }, { sourceId: data.sources[0]!.sourceId, category: 'limitations', quote: 'Limited context window.' }] })
+      const data = JSON.parse(request.messages[1]!.content) as { rows: { rowId: string; excerpt: string }[] }
+      return JSON.stringify({ findings: [{ rowId: data.rows[0]!.rowId, quote: 'Example model costs €15 monthly.' }, { rowId: data.rows[0]!.rowId, quote: 'Limited context window.' }] })
     })() : request.messages.filter(message => message.role === 'user' && !message.content.startsWith('Optional lookup')).at(-1)?.content === 'Hello Freya' ? 'Hello!' : proposalEnvelope()
     return { requestId: request.requestId, providerId: provider.id, model: provider.model, text, inputTokens: 100, outputTokens: 200 }
   }
@@ -119,7 +119,7 @@ it('executes an approved chat Mission through actual HTTP research, verification
   const content = await internal().missionEngine.privateContent(id, true)
   expect(content?.chatBinding?.conversationId).toBe(conversationId)
   expect(Object.values(content!.researchEvidence!).every(evidence => evidence.verified && evidence.sources[0]?.url === 'https://sources.example.org/pricing')).toBe(true)
-  expect((await core!.conversation()).messages.some(message => message.missionId === id && message.content.includes('Source comparison'))).toBe(true)
+  expect((await core!.conversation()).messages.some(message => message.missionId === id && message.content.includes('Selected findings'))).toBe(true)
   expect(requests).toHaveLength(3)
   const journal = await readFile(join(directory, 'events.jsonl'), 'utf8')
   expect(journal).not.toContain('sources.example.org')
@@ -134,8 +134,8 @@ it('replans once from actual insufficient evidence and preserves an already veri
     const system = request.messages[0]?.content ?? ''
     if (system.startsWith('Propose a bounded mission plan')) return ++plans === 1 ? plan() : plan(['recovery limitations'])
     if (system.startsWith('Return only JSON {"findings"')) {
-      const data = JSON.parse(request.messages[1]!.content)
-      return JSON.stringify({ findings: [{ sourceId: data.sources[0].sourceId, category: 'pricing', quote: 'Example model costs €15 monthly.' }] })
+      const data = JSON.parse(request.messages[1]!.content) as { rows: { rowId: string; excerpt: string }[] }
+      return JSON.stringify({ findings: [{ rowId: data.rows[0]!.rowId, quote: 'Example model costs €15 monthly.' }] })
     }
     return proposalEnvelope()
   })
@@ -256,12 +256,18 @@ it('pauses on restart and resumes pending work without repeating a verified step
   expect(internal().missionEngine.record(id)!.activePlan!.steps[0]!.runId).toBe(step.runId)
 })
 
-it('withholds fabricated quotes and citations and refuses completion without a report', async () => {
-  const { conversationId } = await started(request => request.messages[0]?.content.startsWith('Propose a bounded mission plan') ? plan() : request.messages[0]?.content.startsWith('Return only JSON {"findings"') ? '{"findings":[{"sourceId":"fake","category":"pricing","quote":"Costs €1"}]}' : proposalEnvelope())
+it('withholds fabricated quotes and citations, publishes only retained evidence, and never shows an unverified quote', async () => {
+  const { conversationId } = await started(request => request.messages[0]?.content.startsWith('Propose a bounded mission plan') ? plan() : request.messages[0]?.content.startsWith('Return only JSON {"findings"') ? '{"findings":[{"rowId":"fake","quote":"Costs €1"}]}' : proposalEnvelope())
   await decide(conversationId, await proposal(conversationId), 'approve')
-  await vi.waitFor(async () => expect((await core!.conversation()).missions?.[0]?.paused).toBe(true))
-  expect((await core!.conversation()).messages.some(message => message.content.includes('Costs €1'))).toBe(false)
+  await vi.waitFor(() => expect(core!.mission().missions[0]?.status).toBe('completed'), { timeout: 5000 })
   const id = core!.mission().missions[0]!.missionId
-  expect(await core!.handleCommand({ command: 'mission.requestCompletion', requestId: 'complete', payload: { missionId: id } })).toMatchObject({ ok: false })
-  expect(core!.mission().missions[0]?.status).not.toBe('completed')
+  const messages = (await core!.conversation()).messages
+  // The fabricated quote and its fake citation are withheld, and the structural report that
+  // replaces the model's selection says so explicitly.
+  expect(messages.some(message => message.content.includes('Costs €1'))).toBe(false)
+  const report = messages.find(message => message.missionId === id && message.content.includes('Findings for:'))!
+  expect(report).toBeDefined()
+  expect(report.content).toContain('withheld')
+  // It quotes only what the retained excerpt actually contains.
+  expect(report.content).toContain('Provider pricing')
 })

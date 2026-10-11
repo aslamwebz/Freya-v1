@@ -95,7 +95,15 @@ export interface DualBrowserActivationOptions {
   readonly autoEscalate?: boolean
   readonly now?: () => number
   readonly newId?: () => string
-  readonly limits?: { readonly maxSessions?: number; readonly handoffTtlMs?: number }
+  /**
+ * Narrowing only. `Math.min` against the code-owned ceiling means a host may lower any of
+ * these and raise none.
+ *
+ * `maxCommandMs` is the wall-clock one routed command may occupy. It is here so a host that
+ * wants a shorter deadline than the product default has a way to ask; it can never ask for a
+ * longer one, because the runtime takes the minimum of this and `BROWSER_LIMITS`.
+ */
+readonly limits?: { readonly maxSessions?: number; readonly handoffTtlMs?: number; readonly maxCommandMs?: number }
   readonly onLog?: (line: string) => void
 }
 
@@ -225,6 +233,7 @@ export function createDualBrowserActivation(options: DualBrowserActivationOption
           limits: {
             ...(options.limits.maxSessions === undefined ? {} : { maxSessions: options.limits.maxSessions }),
             ...(options.limits.handoffTtlMs === undefined ? {} : { handoffTtlMs: options.limits.handoffTtlMs }),
+            ...(options.limits.maxCommandMs === undefined ? {} : { maxCommandMs: options.limits.maxCommandMs }),
           },
         }),
   })

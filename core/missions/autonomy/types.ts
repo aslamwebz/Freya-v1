@@ -443,7 +443,36 @@ export interface MissionBudget {
 export const DEFAULT_MISSION_BUDGET: Readonly<MissionBudget> = Object.freeze({
   maxModelCalls: 32,
   maxActions: 128,
-  maxExternalRequests: 32,
+  /**
+   * External requests, raised from 32 to 512.
+   *
+   * This is the one code-owned ceiling this branch widens, and it is widened because the
+   * acceptance Mission — "visit N public sites, find each site's contact page, collect and
+   * verify the contact details" — cannot complete inside the old number. Each site costs at
+   * least: one `browser.read` (3 commands), one `browser.contact.extract` (3 commands) and a
+   * verifier re-read (3 commands), and `admit` is charged **before every command**, so ten
+   * sites is ~90 external requests before a single retry. At 32 a ten-site Mission blocked
+   * on `budget_exhausted` with its findings intact and nothing it could do with them.
+   *
+   * What this does *not* weaken:
+   *
+   * - **It is still a frozen ceiling**, applied at creation and never raised underneath a
+   *   running Mission. `missionBudget` refuses a request above it rather than clamping, so
+   *   no caller — including a planner, a worker or a page — can widen it.
+   * - **Nothing here spends money.** An external request is a public page fetch or a search
+   *   call. There is no `maxMoney` field in `MissionBudget` and no code path that could
+   *   introduce one, so a wider request ceiling cannot become a wider spending ceiling.
+   * - **Model calls stay at 32.** The planner, any revision and the report are still bounded
+   *   by the same small number, which is what actually costs money.
+   * - **It is a request *count*, not a byte count.** Each request is separately routed, gated
+   *   by Device Hands, admission-checked against the Mission's live status, and recorded.
+   *   A single request still cannot read a private host, submit a form or click: those are
+   *   refused at the browser layer regardless of how many requests remain.
+   *
+   * The ceiling remains the *maximum*: `CHAT_MISSION_POLICY` narrows it to what a given
+   * approved Mission may actually spend, and `missionBudget` still refuses anything higher.
+   */
+  maxExternalRequests: 512,
   maxDurationMs: 30 * 24 * 60 * 60_000,
   maxRetries: 8,
   maxDelegations: 64,

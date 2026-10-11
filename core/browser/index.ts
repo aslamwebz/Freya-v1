@@ -101,6 +101,7 @@ export {
 
 export {
   ELEMENT_KINDS,
+  MAX_HREF_CHARS,
   mintRef,
   describePage,
   RefTable,

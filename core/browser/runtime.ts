@@ -693,16 +693,28 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
    * audit trail harder to read. What is *not* included is any element value — a described
    * field reports its label and whether it is protected, never what is typed into it.
    */
-  function describeElements(elements: readonly PageElement[]): readonly Record<string, unknown>[] {
-    return elements.map((element) => ({
-      ref: element.ref,
-      kind: element.kind,
-      label: element.label,
-      selector: element.selector,
-      protected: element.protected,
-      disabled: element.disabled,
-    }))
-  }
+function describeElements(elements: readonly PageElement[]): readonly Record<string, unknown>[] {
+     return elements.map((element) => ({
+       ref: element.ref,
+       kind: element.kind,
+       label: element.label,
+       selector: element.selector,
+       protected: element.protected,
+       disabled: element.disabled,
+       /**
+        * Where an anchor claims to lead, and `null` for everything else.
+        *
+        * Included for the same reason the **selector** is: a caller holding a reference will
+        * get the locator when it acts anyway, while a caller that wants to *follow* this link
+        * needs the address — following is a navigation, not `act` mode.
+        *
+        * Page-supplied and unverified, echoed exactly as declared and not resolved against the
+        * page's base. Opening it still goes through routing, isolation and the Device Hands
+        * gates, which is where a `javascript:` address or a private host is refused.
+        */
+       href: element.href,
+     }))
+   }
 
   /* -------------------------------------------------------------- act: click */
 
@@ -826,7 +838,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
       const label = typeof record.label === 'string' ? record.label.toLowerCase() : ''
       if (/sign in|log in|signin|login|log in with|continue with/.test(label)) signInAffordances += 1
     }
-    const outcome: AuthNeedObservation = {
+    lastObservation = {
       status: null,
       url: requested,
       finalUrl: observation.url,
@@ -835,8 +847,7 @@ export function createDualBrowserRuntime(options: DualBrowserRuntimeOptions): Du
       signInAffordances,
       textBytes: new TextEncoder().encode(observation.text ?? '').length,
     }
-    lastObservation = outcome
-    return outcome
+    return lastObservation
   }
 
   /* ---------------------------------------------------------------- handoff */

@@ -49,7 +49,7 @@
 import type { PrincipalId } from '../../shared/contracts/identity'
 import type { WorkRisk } from '../work/types'
 import type { MissionExecutionPlan } from './execution-plan'
-import type { ChatMissionBinding, MissionResearchEvidence } from './chat-types'
+import type { ChatMissionBinding, MissionBrowserEvidence, MissionResearchEvidence } from './chat-types'
 import type {
   MissionApprovalReference,
   MissionBlockerCode,
@@ -389,6 +389,15 @@ export interface MissionContentInput {
 export interface MissionContent {
   readonly chatBinding?: ChatMissionBinding
   readonly researchEvidence?: Readonly<Record<string, MissionResearchEvidence>>
+  /**
+   * What each browser step retained, keyed by step id, for its own verifier.
+   *
+   * Separate from {@link MissionContent.researchEvidence} rather than merged into it: the
+   * two describe different external surfaces with different evidence, and a Mission that
+   * searched the web and read pages would otherwise have one list that could not say which
+   * entry came from where.
+   */
+  readonly browserEvidence?: Readonly<Record<string, MissionBrowserEvidence>>
   /** Private execution intent/inputs, under the existing encrypted store. */
   readonly executionPlan?: MissionExecutionPlan
   readonly missionId: string

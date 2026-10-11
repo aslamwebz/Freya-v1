@@ -59,6 +59,36 @@ export interface PageElement {
   /** A password, card, OTP or other protected field. Never actionable in either browser. */
   readonly protected: boolean
   readonly disabled: boolean
+  /**
+   * Where an anchor points, when the adapter reported one. Null for every other kind.
+   *
+   * ## Why this exists, and why it is not a locator
+   *
+   * `selector` is a *locator*: it says where the element is in this document, so it changes
+   * the moment the page does. An `href` is an *address*: it says where the link leads, so it
+   * survives navigation and can be handed to a later `page.navigate`. Following a link is
+   * therefore navigable without ever clicking, which is why `core/mind/browser-tool.ts`
+   * documents that it "does not follow a section by clicking a heading".
+   *
+   * The adapter has always collected this — `electron/browser/freyaWindow.ts` reads
+   * `getAttribute('href')` — and `describePage` was dropping it, which left a described page
+   * with no way to say *where its links go*. That is the gap.
+   *
+   * ## What it deliberately is not
+   *
+   * It is **not** resolved, **not** normalised against the page's base, and **not** trusted.
+   * A page fully controls its own markup, so an `href` is page-supplied data of exactly the
+   * same standing as any other text on the page: it may be absolute, relative, a `javascript:`
+   * URL, or nonsense. `isNavigableBrowserUrl` and `assertPublicBrowserUrl` are the authority
+   * on whether an address may be opened, and they are consulted at *navigate* time — so this
+   * field only ever tells a caller what the page claimed, and opening it still goes through
+   * the same routing, isolation and Device Hands gates as any other navigation.
+   *
+   * Bounded to {@link MAX_HREF_CHARS} and refused outright when it contains a control
+   * character, because a value that can carry a newline or a NUL into a later request is a
+   * value that has to be dropped rather than truncated into something that still means it.
+   */
+  readonly href: string | null
 }
 
 export interface PageSnapshot {
@@ -127,6 +157,8 @@ interface RawElement {
   readonly selector?: unknown
   readonly protected?: unknown
   readonly disabled?: unknown
+  /** Present only for anchors, and only when the page declared one. Untrusted like any text. */
+  readonly href?: unknown
 }
 
 function refuse(code: BrowserRefusalCode, reason: string): DescribeReading {
@@ -163,6 +195,37 @@ function readSelector(value: unknown): { ok: true; selector: string } | { ok: fa
     return { ok: false, reason: 'A locator may only contain letters, digits and the punctuation a selector needs; the gate that authorises a click accepts nothing else either.' }
   }
   return { ok: true, selector: value }
+}
+
+/**
+ * Characters an address never needs, and therefore may never carry.
+ *
+ * Newline, carriage return, tab, NUL and every other C0/C1 control. An `href` containing one
+ * of these is dropped rather than cleaned, because cleaning would produce an address the page
+ * did not declare — and an address that is not what the page said is exactly the kind of
+ * thing that must not be navigated to.
+ */
+// eslint-disable-next-line no-control-regex
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f]/u
+
+/** The bound on one described address. Comfortably above any real `href`. */
+export const MAX_HREF_CHARS = 400
+
+/**
+ * Read the address an anchor claimed, or `null` for "it did not claim one".
+ *
+ * A non-string, an empty string, a control character or an over-long value all read as
+ * `null` — which is the honest reading of a page that did not give a usable address, and it
+ * is what makes the field **absent** rather than empty. Nothing here resolves, escapes or
+ * repairs the value; `null` is the only refusal shape, because there is no partial href.
+ */
+function readHref(value: unknown, kind: ElementKind): string | null {
+  if (kind !== 'link') return null
+  if (typeof value !== 'string') return null
+  const href = value.trim()
+  if (href.length === 0 || href.length > MAX_HREF_CHARS) return null
+  if (UNPRINTABLE.test(href)) return null
+  return href
 }
 
 /**
@@ -228,6 +291,10 @@ export function describePage(
         selector: selector.selector,
         protected: entry.protected === true,
         disabled: entry.disabled === true,
+        // Read last and independently of the locator, because an anchor can carry a usable
+        // locator and no address (a `#fragment` is a locator target, not a destination) and
+        // the reverse. Neither failing costs the element its description.
+        href: readHref(entry.href, kind),
       }),
     )
     ordinal += 1

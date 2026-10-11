@@ -1,0 +1,409 @@
+import { describe, expect, it } from 'vitest'
+import { describePage, MAX_HREF_CHARS } from '../../../core/browser'
+import {
+  BROWSER_MISSION_CAPABILITIES,
+  isBrowserMissionCapability,
+  registerBrowserInspection,
+  type BrowserMissionPort,
+  type BrowserMissionPorts,
+} from '../../../core/work/browser-inspection'
+import { WorkRegistry } from '../../../core/work/capability'
+import type { BrowserRequest, BrowserResult } from '../../../core/browser/runtime'
+import type { MissionBrowserEvidence } from '../../../core/missions/chat-types'
+import type { WorkCapabilityRequest, WorkCapabilityContext } from '../../../core/work/capability'
+
+/**
+ * WHAT A DESCRIBED PAGE SAYS ABOUT ITS LINKS.
+ *
+ * `PageElement.href` is the only way a caller can learn where an anchor leads without
+ * clicking it, and clicking is `browser.click` — an act-mode command with its own capability
+ * and its own approval. These pin the two properties that make `href` safe to trust as
+ * *data*: it is carried faithfully, and it is refused rather than repaired when unusable.
+ */
+describe('a described page carries where its links go', () => {
+  const describeElements = (elements: readonly unknown[]) =>
+    describePage({ elements }, { pageId: 'page-1', revision: 1, url: 'https://example.org/' })
+
+  it('carries the address an anchor declared', () => {
+    const described = describeElements([{ kind: 'link', label: 'Contact us', selector: '#contact', href: '/contact' }])
+    expect(described.ok).toBe(true)
+    if (!described.ok) return
+    expect(described.elements[0]?.href).toBe('/contact')
+  })
+
+  it('carries an absolute address exactly as declared, unresolved', () => {
+    const described = describeElements([{ kind: 'link', label: 'Contact', selector: '#c', href: 'https://contact.example/x' }])
+    expect(described.ok).toBe(true)
+    if (!described.ok) return
+    // Not resolved against the page's base and not normalised: the page's words are the
+    // page's words, and whether the address may be opened is decided later, by the runtime.
+    expect(described.elements[0]?.href).toBe('https://contact.example/x')
+  })
+
+  it('gives no address to anything that is not a link', () => {
+    const described = describeElements([
+      { kind: 'button', label: 'Subscribe', selector: '#subscribe', href: '/subscribe' },
+      { kind: 'field', label: 'Email', selector: '#email', href: 'mailto:a@b.test' },
+    ])
+    expect(described.ok).toBe(true)
+    if (!described.ok) return
+    expect(described.elements.map(element => element.href)).toEqual([null, null])
+  })
+
+  it('reads a missing, empty or non-string href as absent rather than as a value', () => {
+    const described = describeElements([
+      { kind: 'link', label: 'a', selector: '#a' },
+      { kind: 'link', label: 'b', selector: '#b', href: '' },
+      { kind: 'link', label: 'c', selector: '#c', href: '   ' },
+      { kind: 'link', label: 'd', selector: '#d', href: 42 },
+      { kind: 'link', label: 'e', selector: '#e', href: null },
+    ])
+    expect(described.ok).toBe(true)
+    if (!described.ok) return
+    expect(described.elements.map(element => element.href)).toEqual([null, null, null, null, null])
+  })
+
+  it('refuses an address carrying a control character instead of cleaning it', () => {
+    // Cleaning would produce an address the page did not declare, and an address that is not
+    // what the page said is exactly what must not be navigated to.
+    const described = describeElements([
+      { kind: 'link', label: 'xss', selector: '#x', href: 'javascript:alert(1)\n/contact' },
+      { kind: 'link', label: 'nul', selector: '#n', href: '/contact\u0000/next' },
+    ])
+    expect(described.ok).toBe(true)
+    if (!described.ok) return
+    expect(described.elements.map(element => element.href)).toEqual([null, null])
+  })
+
+  it('refuses an over-long address', () => {
+    const described = describeElements([{ kind: 'link', label: 'long', selector: '#l', href: '/x'.repeat(MAX_HREF_CHARS) }])
+    expect(described.ok).toBe(true)
+    if (!described.ok) return
+    expect(described.elements[0]?.href).toBeNull()
+  })
+
+  it('carries a script-URL href as the page wrote it, so a later gate can refuse it', () => {
+    // `describePage` records what the page declared and does not judge it. The refusal of a
+    // `javascript:` address belongs to `resolveHref` in the capability and to the browser's
+    // own URL checks, not here — a description that silently dropped such a link would be
+    // hiding the fact that the page had one at all.
+    const described = describeElements([{ kind: 'link', label: 'Contact', selector: '#c', href: 'javascript:void(0)' }])
+    expect(described.ok).toBe(true)
+    if (!described.ok) return
+    expect(described.elements).toHaveLength(1)
+    expect(described.elements[0]?.href).toBe('javascript:void(0)')
+  })
+})
+
+/* ----------------------------------------------------------- the harness */
+
+interface Page {
+  readonly url: string
+  readonly title: string
+  readonly text: string
+  readonly links: readonly { label: string; href: string }[]
+}
+
+interface Harness {
+  readonly registry: WorkRegistry
+  readonly commands: string[]
+  readonly evidence: Map<string, MissionBrowserEvidence>
+  admitted: number
+  refused: boolean
+  /** Replaces the text the next `page.describe` will return, for the "page changed" case. */
+  rewrite?: (url: string) => string
+}
+
+/**
+ * A browser port that answers from a fixed table of pages.
+ *
+ * Every command is recorded, because the bounds this module claims — three commands per read,
+ * admission before *each* of them — are claims about the command list, and a test that only
+ * inspected the returned observation could not tell a bounded read from an unbounded walk.
+ */
+function harness(pages: readonly Page[], limits?: { maxCommands?: number }): Harness {
+  const state: Harness = {
+    registry: new WorkRegistry(), commands: [], evidence: new Map(), admitted: 0, refused: false,
+  }
+  let at = ''
+  const browser: BrowserMissionPort = {
+    async execute(request: BrowserRequest): Promise<BrowserResult> {
+      if (state.refused) {
+        return { ok: false, command: request.command, target: null, code: 'stop-all-latched', reason: 'STOP ALL is latched.', escalation: null }
+      }
+      state.commands.push(request.command)
+      if (request.command === 'session.open') {
+        return { ok: true, command: request.command, target: 'public', escalation: null, data: { sessionId: 'freya-0001' } }
+      }
+      if (request.command === 'session.close') {
+        return { ok: true, command: request.command, target: 'public', escalation: null, data: { sessionId: request.sessionId, alreadyClosed: false } }
+      }
+      if (request.command === 'page.navigate') {
+        at = request.url ?? ''
+        if (pages.find(page => page.url === at) === undefined) {
+          return { ok: false, command: request.command, target: 'public', code: 'url-refused', reason: 'That address is not one this browser can open.', escalation: null }
+        }
+        return { ok: true, command: request.command, target: 'public', escalation: null, data: { url: at, revision: 1 } }
+      }
+      if (request.command === 'page.describe') {
+        const page = pages.find(candidate => candidate.url === at)
+        if (page === undefined) {
+          return { ok: false, command: request.command, target: 'public', code: 'page-stale', reason: 'There is no page loaded.', escalation: null }
+        }
+        return {
+          ok: true, command: request.command, target: 'public', escalation: null,
+          data: {
+            url: page.url, title: page.title, text: state.rewrite?.(page.url) ?? page.text,
+            elements: page.links.map((link, index) => ({
+              kind: 'link', label: link.label, selector: `a[href="${link.href}"]`, href: link.href, ordinal: index,
+            })),
+          },
+        }
+      }
+      return { ok: false, command: request.command, target: null, code: 'request-malformed', reason: 'not routed here', escalation: null }
+    },
+  }
+  const ports: BrowserMissionPorts = {
+    browser,
+    admit: async () => {
+      state.admitted += 1
+      if (state.refused) throw new Error('Browser authorization unavailable.')
+    },
+    save: async (_runId, stepKey, evidence) => { state.evidence.set(stepKey, evidence) },
+    read: async (_runId, stepKey) => state.evidence.get(stepKey) ?? null,
+  }
+  registerBrowserInspection(state.registry, ports, limits)
+  return state
+}
+
+const CONTEXT: WorkCapabilityContext = { signal: new AbortController().signal, now: () => new Date('2026-01-01T00:00:00.000Z') }
+
+function step(input: Record<string, unknown>, stepId = 's1'): WorkCapabilityRequest {
+  return { runId: 'run-1', stepId, stepKey: stepId, actionId: `act-${stepId}`, attempt: 1, input, correlationId: 'corr' }
+}
+
+const SITE: Page = {
+  url: 'https://example.lk/',
+  title: 'Example Lanka',
+  text: 'Welcome. Reach us at 42 Galle Road, Colombo 03 or hello@example.lk or +94 11 234 5678.',
+  links: [
+    { label: 'About us', href: '/about' },
+    { label: 'Contact us', href: '/contact' },
+    { label: 'Careers', href: 'https://jobs.example.lk/' },
+  ],
+}
+
+/* -------------------------------------------------------- the capabilities */
+
+describe('mission browser capabilities', () => {
+  it('registers both capabilities and both verifiers', () => {
+    const { registry } = harness([SITE])
+    expect(registry.names().filter(name => name.startsWith('browser.'))).toEqual(['browser.contact.extract', 'browser.read'])
+    expect(registry.verifierNames().filter(name => name.startsWith('browser.'))).toEqual(['browser.contact.verified', 'browser.page.verified'])
+  })
+
+  it('names each capability in one closed set, so admission and planning agree', () => {
+    expect([...BROWSER_MISSION_CAPABILITIES].sort()).toEqual(['browser.contact.extract', 'browser.read'])
+    expect(isBrowserMissionCapability('browser.read')).toBe(true)
+    // A `startsWith('browser.')` rule would have admitted both of these.
+    expect(isBrowserMissionCapability('browser.click')).toBe(false)
+    expect(isBrowserMissionCapability('browser.type-text')).toBe(false)
+  })
+
+  it('declares a risk and a verifier for every capability, so a planner can bind it honestly', () => {
+    const { registry } = harness([SITE])
+    for (const name of BROWSER_MISSION_CAPABILITIES) {
+      const capability = registry.capability(name)
+      expect(capability?.verifier, `${name} declares no verifier`).toBeTypeOf('string')
+      expect(registry.verifier(capability!.verifier!), `${name}'s verifier is not registered`).toBeDefined()
+    }
+  })
+
+  it('reads a page with exactly three commands and admits before each of them', async () => {
+    const state = harness([SITE])
+    const result = await state.registry.capability('browser.read')!.execute(step({ url: SITE.url }), CONTEXT)
+    expect(state.commands).toEqual(['session.open', 'page.navigate', 'page.describe', 'session.close'])
+    // Three admissions for three commands. One-per-step would let a step spend the
+    // Mission's external-request ceiling without the ceiling being charged for it.
+    expect(state.admitted).toBe(3)
+    expect(result.observation.data['finalUrl']).toBe(SITE.url)
+  })
+
+  it('reports contact-page links with their addresses resolved against the page', async () => {
+    const state = harness([SITE])
+    await state.registry.capability('browser.read')!.execute(step({ url: SITE.url }), CONTEXT)
+    const evidence = state.evidence.get('s1')!
+    // "About us" and "Careers" are not contact-page candidates; "Contact us" is, and its
+    // relative address is resolved the way a person clicking the link would get it.
+    expect(evidence.links).toEqual([{ label: 'Contact us', href: 'https://example.lk/contact', rank: 2 }])
+  })
+
+  it('refuses a second address in a step input rather than ignoring it', async () => {
+    const state = harness([SITE])
+    await expect(state.registry.capability('browser.read')!.execute(step({ url: SITE.url, mode: 'act' }), CONTEXT)).rejects.toThrow()
+  })
+
+  it('refuses a relative or non-http address', async () => {
+    const state = harness([SITE])
+    for (const url of ['/contact', 'javascript:alert(1)', 'file:///etc/passwd', '']) {
+      await expect(state.registry.capability('browser.read')!.execute(step({ url }), CONTEXT), url).rejects.toThrow()
+    }
+    expect(state.commands).toEqual([])
+  })
+
+  it('records a refusal as evidence rather than leaving a silent gap', async () => {
+    const state = harness([SITE])
+    await expect(state.registry.capability('browser.read')!.execute(step({ url: 'https://absent.example/' }), CONTEXT)).rejects.toThrow()
+    expect(state.evidence.get('s1')?.failure).toBe('page_not_read')
+  })
+
+  it('cannot reach a click or a keystroke from any code path', async () => {
+    const state = harness([SITE])
+    await state.registry.capability('browser.read')!.execute(step({ url: SITE.url }), CONTEXT)
+    expect(state.commands.some(command => command === 'page.click' || command === 'page.type')).toBe(false)
+  })
+
+  it('extracts contact details from the page it read', async () => {
+    const state = harness([SITE])
+    await state.registry.capability('browser.contact.extract')!.execute(step({ url: SITE.url }), CONTEXT)
+    const evidence = state.evidence.get('s1')!
+    const values = evidence.contacts.map(contact => `${contact.kind}:${contact.value}`)
+    expect(values).toContain('email:hello@example.lk')
+    expect(evidence.contacts.some(contact => contact.kind === 'phone' && contact.value.includes('234 5678'))).toBe(true)
+    expect(evidence.contacts.some(contact => contact.kind === 'address' && /Galle Road/.test(contact.value))).toBe(true)
+  })
+
+  it('reports a page with no contact details as a finding, not as an error', async () => {
+    const bare: Page = { url: 'https://bare.lk/', title: 'Bare', text: 'We sell things.', links: [] }
+    const state = harness([bare])
+    await state.registry.capability('browser.contact.extract')!.execute(step({ url: bare.url }), CONTEXT)
+    // Not a failure: the page was read and it publishes nothing, which is a fact. Recording
+    // it as a failure would make the step unverifiable, so a site with no contact page could
+    // never be *established* and a report naming the gap could never be written.
+    expect(state.evidence.get('s1')).toMatchObject({ contacts: [], failure: null, verified: false })
+    const verdict = await state.registry.verifier('browser.contact.verified')!.verify({
+      runId: 'run-1', stepId: 's1', stepKey: 's1', attempt: 1, input: { url: bare.url },
+      observation: { kind: 'result', summary: '', data: {} },
+    })
+    // "This page publishes none" is a finding a re-read can confirm.
+    expect(verdict.verdict).toBe('passed')
+    expect(verdict.reason).toMatch(/still published no contact details/u)
+    expect(state.evidence.get('s1')?.verified).toBe(true)
+  })
+
+  it('fails that finding once the page starts publishing something', async () => {
+    const bare: Page = { url: 'https://bare.lk/', title: 'Bare', text: 'We sell things.', links: [] }
+    const state = harness([bare])
+    await state.registry.capability('browser.contact.extract')!.execute(step({ url: bare.url }), CONTEXT)
+    state.rewrite = () => 'Now reachable at hello@bare.lk and +94 11 222 3333.'
+    const verdict = await state.registry.verifier('browser.contact.verified')!.verify({
+      runId: 'run-1', stepId: 's1', stepKey: 's1', attempt: 1, input: { url: bare.url },
+      observation: { kind: 'result', summary: '', data: {} },
+    })
+    expect(verdict.verdict).toBe('failed')
+    expect(verdict.reason).toMatch(/did not report/u)
+  })
+
+  it('refuses to execute once admission refuses, without issuing a command', async () => {
+    const state = harness([SITE])
+    state.refused = true
+    await expect(state.registry.capability('browser.read')!.execute(step({ url: SITE.url }), CONTEXT)).rejects.toThrow('Browser authorization unavailable.')
+    expect(state.commands).toEqual([])
+  })
+})
+
+/* ------------------------------------------------------------ the verifiers */
+
+describe('mission browser verifiers', () => {
+  it('passes when an independent re-read still contains what was recorded', async () => {
+    const state = harness([SITE])
+    await state.registry.capability('browser.read')!.execute(step({ url: SITE.url }), CONTEXT)
+    const verdict = await state.registry.verifier('browser.page.verified')!.verify({
+      runId: 'run-1', stepId: 's1', stepKey: 's1', attempt: 1, input: { url: SITE.url },
+      observation: { kind: 'result', summary: '', data: {} },
+    })
+    expect(verdict.verdict).toBe('passed')
+    // The reason is what a board renders, so it must not read as a stronger claim than the check.
+    expect(verdict.reason).toMatch(/third party|not a verified fact/i)
+  })
+
+  it('charges the verification re-read against the same ceiling as execution', async () => {
+    const state = harness([SITE])
+    await state.registry.capability('browser.read')!.execute(step({ url: SITE.url }), CONTEXT)
+    const before = state.admitted
+    await state.registry.verifier('browser.page.verified')!.verify({
+      runId: 'run-1', stepId: 's1', stepKey: 's1', attempt: 1, input: { url: SITE.url },
+      observation: { kind: 'result', summary: '', data: {} },
+    })
+    // Three more admissions. A verifier that re-read for free would be a way to check ten
+    // pages past a budget of three.
+    expect(state.admitted - before).toBe(3)
+  })
+
+  it('fails when the page no longer contains what was recorded', async () => {
+    const state = harness([SITE])
+    await state.registry.capability('browser.read')!.execute(step({ url: SITE.url }), CONTEXT)
+    state.rewrite = () => 'This page has been completely rebuilt with nothing in common.'
+    const verdict = await state.registry.verifier('browser.page.verified')!.verify({
+      runId: 'run-1', stepId: 's1', stepKey: 's1', attempt: 1, input: { url: SITE.url },
+      observation: { kind: 'result', summary: '', data: {} },
+    })
+    expect(verdict.verdict).toBe('failed')
+    expect(state.evidence.get('s1')?.verified).toBe(false)
+  })
+
+  it('passes contact verification only when every reported detail is still on the page', async () => {
+    const state = harness([SITE])
+    await state.registry.capability('browser.contact.extract')!.execute(step({ url: SITE.url }), CONTEXT)
+    const verdict = await state.registry.verifier('browser.contact.verified')!.verify({
+      runId: 'run-1', stepId: 's1', stepKey: 's1', attempt: 1, input: { url: SITE.url },
+      observation: { kind: 'result', summary: '', data: {} },
+    })
+    expect(verdict.verdict).toBe('passed')
+    expect(verdict.reason).toMatch(/that the contact details work is not/i)
+  })
+
+  it('keeps the findings but refuses verification when a detail has moved', async () => {
+    const state = harness([SITE])
+    await state.registry.capability('browser.contact.extract')!.execute(step({ url: SITE.url }), CONTEXT)
+    const before = state.evidence.get('s1')!.contacts.length
+    state.rewrite = () => 'Contact us. hello@example.lk. Nothing else is listed any more.'
+    const verdict = await state.registry.verifier('browser.contact.verified')!.verify({
+      runId: 'run-1', stepId: 's1', stepKey: 's1', attempt: 1, input: { url: SITE.url },
+      observation: { kind: 'result', summary: '', data: {} },
+    })
+    expect(verdict.verdict).toBe('failed')
+    // Kept, not dropped: a report saying "three of five moved" beats one silently reporting
+    // the survivors as though all five had been verified.
+    expect(state.evidence.get('s1')).toMatchObject({ failure: 'contact_details_changed', verified: false })
+    expect(state.evidence.get('s1')!.contacts).toHaveLength(before)
+  })
+
+  it('fails when nothing was recorded, rather than passing on an absent record', async () => {
+    const state = harness([SITE])
+    for (const name of ['browser.page.verified', 'browser.contact.verified']) {
+      const verdict = await state.registry.verifier(name)!.verify({
+        runId: 'run-1', stepId: 's1', stepKey: 's1', attempt: 1, input: { url: SITE.url },
+        observation: { kind: 'result', summary: '', data: {} },
+      })
+      expect(verdict.verdict, name).toBe('failed')
+    }
+  })
+})
+
+/* ---------------------------------------------------------- the bound */
+
+describe('the per-step browser bound', () => {
+  it('refuses a build narrowed below a three-command read rather than claiming an empty page', async () => {
+    const state = harness([SITE], { maxCommands: 2 })
+    await expect(state.registry.capability('browser.read')!.execute(step({ url: SITE.url }), CONTEXT)).rejects.toThrow(/did not permit reading/i)
+    expect(state.evidence.get('s1')?.failure).toBe('page_reading_not_permitted')
+  })
+
+  it('cannot be widened by a caller asking for more', async () => {
+    const state = harness([SITE], { maxCommands: 99 })
+    await state.registry.capability('browser.read')!.execute(step({ url: SITE.url }), CONTEXT)
+    // Still three commands, because the code-owned ceiling is the minimum of the two.
+    expect(state.commands).toEqual(['session.open', 'page.navigate', 'page.describe', 'session.close'])
+  })
+})

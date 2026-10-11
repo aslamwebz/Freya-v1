@@ -18,6 +18,7 @@ import {
 import { validateWorkPlan, resolveWorkLimits } from './plan-validation'
 import { ApprovalDeadlineScheduler } from './approval-deadlines'
 import { WorkStepExecutor, type LiveCapabilityCall, type LiveWorkPlan } from './step-executor'
+import { WorkRunDriver } from './run-driver'
 export { normaliseObservation } from './step-executor'
 import {
   canTransitionRun,
@@ -178,6 +179,7 @@ export class WorkEngine {
   /** Pending approval expiry timers. At most maxPendingApprovals exist. */
   private readonly approvalDeadlines: ApprovalDeadlineScheduler
   private readonly stepExecutor: WorkStepExecutor
+  private readonly runDriver: WorkRunDriver
   /** Per-Run/Step/Approval write queue, so two writers cannot read the same source status. */
   private readonly queues = new Map<string, Promise<void>>()
 
@@ -208,6 +210,21 @@ export class WorkEngine {
         exhaustedLimit: (runId) => this.exhaustedLimit(runId),
         recordLimit: (runId, limit) => this.recordLimit(runId, limit),
         failStep: (runId, stepId, reason) => this.failStep(runId, stepId, reason),
+      },
+    })
+    this.runDriver = new WorkRunDriver({
+      state: () => this.work,
+      cancelRequested: this.cancelRequested,
+      advancing: this.advancing,
+      stopAll: options.stopAll,
+      stopAllReason: options.stopAllReason,
+      stepExecutor: this.stepExecutor,
+      settlement: {
+        finishCancelled: (runId, reason) => this.finishCancelled(runId, reason),
+        finishRun: (runId) => this.finishRun(runId),
+        moveRun: (runId, to, event, payload) => this.moveRun(runId, to, event, payload),
+        writeReadyStep: (stepId, payload) => this.writeStep(stepId, 'ready', payload),
+        skipRemaining: (runId, reason) => this.skipRemaining(runId, reason),
       },
     })
     this.now = options.now ?? (() => new Date())
@@ -585,7 +602,7 @@ export class WorkEngine {
     }
 
     await this.moveRun(runId, 'running', 'work.run.started', { runId })
-    await this.advance(runId)
+    await this.runDriver.advance(runId)
     return { operation: 'run-started', ok: true, runId, status: this.statusOf(runId) }
   }
 
@@ -621,7 +638,7 @@ export class WorkEngine {
       return { operation: 'run-resumed', ok: false, runId, reason: 'this run is being cancelled' }
     }
     await this.moveRun(runId, 'running', 'work.run.resumed', { runId, reason: null })
-    await this.advance(runId)
+    await this.runDriver.advance(runId)
     return { operation: 'run-resumed', ok: true, runId, status: this.statusOf(runId) }
   }
 
@@ -799,7 +816,7 @@ export class WorkEngine {
         reason: 'the request was approved',
       })
       this.options.onChange?.()
-      await this.advance(approval.runId)
+      await this.runDriver.advance(approval.runId)
       return {
         operation: 'approval-approved',
         ok: true,
@@ -848,135 +865,6 @@ export class WorkEngine {
 
   /* ------------------------------------------------------------- the loop */
 
-  /**
-   * Drive a Run forward until it rests.
-   *
-   * Re-entrant calls join the in-flight promise rather than starting a second
-   * loop, so an approval decision arriving while a loop is finishing cannot drive
-   * two passes over the same plan.
-   */
-  private async advance(runId: string): Promise<void> {
-    const existing = this.advancing.get(runId)
-    if (existing) {
-      await existing
-      return
-    }
-    const run = this.drive(runId)
-    this.advancing.set(runId, run)
-    try {
-      await run
-    } finally {
-      if (this.advancing.get(runId) === run) this.advancing.delete(runId)
-    }
-  }
-
-  private async drive(runId: string): Promise<void> {
-    for (;;) {
-      const run = this.work.runs.get(runId)
-      if (!run || isTerminalRunStatus(run.status)) return
-      if (run.status === 'paused' || run.status === 'awaiting_approval' || run.status === 'waiting') return
-
-      if (this.cancelRequested.has(runId)) {
-        await this.finishCancelled(runId, this.cancelRequested.get(runId) ?? WORK_REASONS.cancelled)
-        return
-      }
-      if (this.options.stopAll?.() === true) {
-        await this.finishCancelled(
-          runId,
-          this.options.stopAllReason?.() ?? 'Freya is stopped, so this run was stopped with it',
-        )
-        return
-      }
-      if (run.status === 'queued') {
-        await this.moveRun(runId, 'running', 'work.run.started', { runId })
-        continue
-      }
-
-      const selection = await this.selectStep(runId)
-      if (selection === null) return
-      if (selection === 'finish') {
-        await this.finishRun(runId)
-        return
-      }
-      if (!(await this.stepExecutor.execute(runId, selection))) return
-    }
-  }
-
-  /**
-   * Choose the next Step, or decide the Run is over.
-   *
-   * Strictly in planned order, which is what `deterministic` means and the whole
-   * reason a dependency graph is not needed yet. Two behaviours are folded in
-   * because they are bookkeeping rather than scheduling:
-   *
-   * - a `pending` step whose predecessors have all settled becomes `ready`;
-   * - a `failed` step with attempts left returns to `ready`, and one without them
-   *   means the Run cannot continue — so every later step is `skipped` and the Run
-   *   is finished, which records it as failed with the reason already written.
-   *
-   * Returns `null` when another loop owns this Run.
-   */
-  private async selectStep(runId: string): Promise<string | 'finish' | null> {
-    for (const stepId of this.work.runSteps.get(runId) ?? []) {
-      const step = this.work.steps.get(stepId)
-      if (!step) continue
-
-      if (step.status === 'verified' || step.status === 'cancelled' || step.status === 'skipped') continue
-
-      if (step.status === 'pending') {
-        await this.writeStep(stepId, 'ready', { runId, stepKey: step.key })
-        return stepId
-      }
-
-      if (step.status === 'failed') {
-        const ceiling = this.work.runs.get(runId)?.limits.maxAttemptsPerStep ?? WORK_LIMITS.maxAttemptsPerStep
-        if (step.attempts < ceiling && !this.cancelRequested.has(runId)) {
-          await this.writeStep(stepId, 'ready', { runId, stepKey: step.key })
-          return stepId
-        }
-        await this.skipRemaining(runId, `step "${step.key}" failed and will not be retried`)
-        return 'finish'
-      }
-
-      if (step.status === 'ready') return stepId
-      // running / waiting / awaiting_approval with nobody driving: another loop
-      // owns it. Standing aside is the honest answer.
-      return null
-    }
-    return 'finish'
-  }
-
-  /**
-   * Execute one Step: gate, guard, capability, observation, verification.
-   *
-   * The order is the design and is not rearranged for convenience:
-   *
-   * ```
-   *   resolve capability + verifier   (a Step with no verifier can never close)
-   *   Guard                           (a refusal ends it; nothing has run)
-   *   approval gate                   (recorded, and returned from BEFORE execute)
-   *   ceilings                        (checked before the thing they bound)
-   *   step → running, action → started
-   *   capability.execute  ─┐
-   *                       ├─ both raced against ONE run deadline
-   *   verifier.verify     ─┘
-   *   action settled → observation recorded → step verified or failed
-   * ```
-   *
-   * ## The deadline covers the whole of that, not the first line of it
-   *
-   * `maxDurationMs` bounds a Step's entire active path — capability, observation,
-   * verification — and the two phases share one deadline computed once, before the
-   * capability is called. There is no fresh budget for verification: it gets the
-   * remainder of the original window, because a per-phase budget would let one Step
-   * take the ceiling twice and a three-step Run take it three times.
-   *
-   * Both phases are *raced* against that deadline rather than awaited, so neither a
-   * capability nor a verifier can hold the Run open by ignoring its signal. The
-   * consequence worth stating plainly: on the final Step, a verifier returning
-   * `passed` after the budget was gone would complete the Run — so a late verdict is
-   * discarded, and no `work.verification.completed` is written at all.
-   */
   /**
    * Park a Run behind an approval and stop.
    *

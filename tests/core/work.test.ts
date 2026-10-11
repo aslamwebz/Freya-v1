@@ -2513,7 +2513,6 @@ describe('the public surface', () => {
     expect(methods.sort()).toEqual([
 
       'actionCount',
-      'advance',
       'armApprovalExpiry',
       'armedDeadlines',
       'bounded',
@@ -2526,7 +2525,6 @@ describe('the public surface', () => {
       'createTask',
       'decideApproval',
       'decideApprovalUnlocked',
-      'drive',
       'emit',
       'exhaustedLimit',
       'expireApproval',
@@ -2549,7 +2547,6 @@ describe('the public surface', () => {
       'resolveLimits',
       'resumeRun',
       'retainedRunIds',
-      'selectStep',
       'serialise',
       'settleDeadline',
       'skipRemaining',

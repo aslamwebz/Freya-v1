@@ -22,9 +22,9 @@ export interface MindThinkInput {
 }
 
 export interface MindTurnCognitionOptions {
-  readonly authority: OwnerAuthority
-  readonly gateway: ModelGateway
-  readonly tools: MindToolRegistry | null
+  readonly authority: Pick<OwnerAuthority, 'request'>
+  readonly gateway: Pick<ModelGateway, 'cancelRequest'>
+  readonly tools: Pick<MindToolRegistry, 'list' | 'isEmpty' | 'has' | 'invoke' | 'instructions'> | null
   readonly selectedModel: () => string | null
   readonly selectedProviderId: () => string | null
   readonly matrixSpaceIds: (conversationId: string) => readonly string[]

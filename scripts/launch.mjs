@@ -18,10 +18,8 @@
  */
 
 import { spawn } from 'node:child_process'
-import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
-const require = createRequire(import.meta.url)
 
 const DISPLAY = process.argv[2] ?? process.env.FREYA_DISPLAY ?? '1'
 if (DISPLAY !== '' && (!Number.isInteger(Number(DISPLAY)) || Number(DISPLAY) < 0)) {
@@ -29,21 +27,9 @@ if (DISPLAY !== '' && (!Number.isInteger(Number(DISPLAY)) || Number(DISPLAY) < 0
   process.exit(2)
 }
 
-let electronPath
-try {
-  // The package main is the path to the binary; asking for it is more robust
-  // than trusting a `node_modules/.bin` symlink, which Windows resolves
-  // differently and CI sometimes lacks.
-  electronPath = require('electron')
-} catch {
-  console.error('electron is not installed. Run `npm ci` first.')
-  process.exit(1)
-}
+const args = [join(process.cwd(), 'scripts', 'debug-stack.mjs'), '--no-build', ...process.argv.slice(3)]
 
-const args = [join(process.cwd(), '.'), ...process.argv.slice(3)]
-if (DISPLAY !== '') args.push(`--freya-display=${DISPLAY}`)
-
-const child = spawn(electronPath, args, {
+const child = spawn(process.execPath, args, {
   stdio: 'inherit',
   env: DISPLAY === '' ? process.env : { ...process.env, FREYA_DISPLAY: DISPLAY },
 })

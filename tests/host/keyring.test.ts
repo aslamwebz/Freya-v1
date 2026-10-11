@@ -168,6 +168,7 @@ describe('one secret per domain', () => {
       keyring.mission,
       keyring.context,
       keyring.personality,
+      keyring.skill, keyring.forge, keyring.vault, keyring.attention,
     ]
     const hexes = domains.map((domain) => Buffer.from(domain.key!).toString('hex'))
     expect(new Set(hexes).size).toBe(domains.length)
@@ -180,6 +181,7 @@ describe('one secret per domain', () => {
     expect(keyring.mission.key!.length).toBe(32)
     expect(keyring.context.key!.length).toBe(32)
     expect(keyring.personality.key!.length).toBe(32)
+    expect(keyring.attention.key!.length).toBe(32)
   })
 
   it('wraps each secret separately, not as one blob', async () => {
@@ -195,6 +197,7 @@ describe('one secret per domain', () => {
     expect(file.protection).toBe('gnome_libsecret')
     // Separate domain keys are written for every durable private store.
     expect(Object.keys(file.keys).sort()).toEqual([
+      'attention',
       'brain',
       'context',
       'conversation',
@@ -290,6 +293,7 @@ describe('the Mission domain, and the migration that introduces it', () => {
       keys: Record<string, string>
     }
     expect(Object.keys(file.keys).sort()).toEqual([
+      'attention',
       'brain',
       'context',
       'conversation',

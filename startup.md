@@ -1,105 +1,37 @@
 # Freya Startup Guide
 
-Operational runbook for launching Freya for normal use, automated testing, and external agent control.
+Development uses **FreyaDebug.cmd**. It builds the existing application and starts Core, Freya and Superapp as separate processes, with tagged output in one console. The custom Freya.exe and freyadebugging.exe launchers have been retired. Electron's runtime executable remains required.
 
-### Chat evolution feature worktree
+Run the launcher from the checkout:
 
-In `C:\Users\you\Desktop\AI\Freya-chat-evolution`, build the app first, then
-double-click `FreyaChatDebug.cmd`. It opens the feature build visibly on debugging
-port **9235** using `.kilo/chat-evolution-profile`. It uses the existing Electron
-launcher and keeps the original Freya profile and port 9234 separate. Test-profile
-settings start fresh; provider availability is reported by the application.
-
-The existing `freyadebugging.exe` uses port 9234 and the default owner profile.
-When the original Freya is already running, it cannot independently start a second
-feature copy with that same profile. This worktree also needs `dist/index.html`
-and `dist-electron/main.cjs`; a source checkout alone is not a built application.
-
----
-
-## 1. Launching Freya
-
-Freya can be launched either as a normal desktop app or with debugging/automation enabled.
-
-### A. Everyday Desktop Use (Standard Mode)
-Run standard Freya without remote debugging:
-- **Executable**: Double-click `Freya.exe` in `C:\Users\you\Desktop\AI\Freya`.
-- **Command script**: Run `Freya.cmd` in `C:\Users\you\Desktop\AI\Freya`.
-- **PowerShell**:
-  ```powershell
-  cd C:\Users\you\Desktop\AI\Freya
-  npm start
-  ```
-
-*Characteristics*:
-- Uses standard user profile in `%APPDATA%\freya`.
-- Local control pipe is active (`\\.\pipe\freya-control-<pid>`).
-- Chrome DevTools Protocol (CDP) is **not** exposed.
-
----
-
-### B. Live Automated Testing & External Control (Debugging Mode)
-When external tools, Playwright, or AI agents need to control the visible UI like a user:
-- **Executable**: Double-click **`freyadebugging.exe`** in `C:\Users\you\Desktop\AI\Freya`.
-- **Node launcher**:
-  ```powershell
-  cd C:\Users\you\Desktop\AI\Freya
-  node scripts/dev-kilo.mjs --port=9234 --no-build
-  ```
-
-*Characteristics*:
-- Opens the visible Freya Electron window on screen (Display 1).
-- Binds Chrome DevTools Protocol to `127.0.0.1:9234`.
-- Authenticated named pipe (`\\.\pipe\freya-control-<pid>`) remains fully active.
-- Playwright and external agents can directly attach to `http://127.0.0.1:9234` to click buttons, switch tabs, type in the composer, and inspect rendered DOM state.
-
----
-
-### C. Isolated Profile Testing (Multi-Instance)
-To run a second instance of Freya alongside an existing one without touching your primary profile:
 ```powershell
-cd C:\Users\you\Desktop\AI\Freya
-node scripts/dev-kilo.mjs --port=9235 --profile=.kilo/test-profile --no-build
+.\FreyaDebug.cmd
 ```
 
----
+The default isolated development profile is `.kilo/freya-debug-profile`. Existing owner data is left in place. Use `--profile=PATH` to select a profile deliberately; use `--no-build` only when the current build is already available. Core opens the existing keyring and encrypted stores with their current schemas. An unreadable key never silently becomes a replacement key.
 
-## 2. Verifying the Running Instance
+In the debug console:
 
-### Verify CDP (when running `freyadebugging.exe` or `dev-kilo.mjs`):
+- `status` checks each live process.
+- `restart freya`, `restart core`, or `restart superapp` restarts only that component.
+- `stop superapp` closes the UI and keeps both services running.
+- `start superapp` reopens the UI.
+- `stop all` explicitly shuts down the whole stack.
+
+The same commands work from another terminal using `FreyaDebug.cmd --no-build status` or `FreyaDebug.cmd --no-build restart freya`. Specify the same profile when using a custom profile. Normal window close still hides the application; UI Quit disconnects only Superapp.
+
+Core's work heartbeat runs every 30 seconds. The supervisor checks live readiness every 60 seconds and prints `HEARTBEAT HEALTH OK` only when all three components are ready. Otherwise it names the affected component and its failure. No inference or action is automatically replayed after a lost connection. Due reminders remain retained while Freya is disconnected and reconcile on reconnection.
+
+The debug UI exposes CDP only on `127.0.0.1:9234`; override with `FREYA_CDP_PORT`. The existing `dev:kilo`, `dev:desktop`, `npm start`, `Freya.cmd` and `FreyaChatDebug.cmd` commands delegate to the same supervisor. `dev:desktop` retains Vite hot reload.
+
+For CLI control with the default development profile:
+
 ```powershell
-Invoke-RestMethod http://127.0.0.1:9234/json | Select-Object title, url
-```
-Expected output:
-- `Freya` pointing to `dist/index.html`
-- `Freya Presence` pointing to `dist/presence.html`
-
-### Verify Named Pipe Control Plane:
-```powershell
+$env:FREYA_USER_DATA = Join-Path $PWD '.kilo/freya-debug-profile'
 node bin\freya.mjs status
 node bin\freya.mjs health
 ```
-Expected output:
-```text
-ready: true
-stopAllActive: false
-```
 
----
+Provider settings remain private host configuration. Live model use still requires the existing opt-in. The process acceptance harness creates its own new profile and explicitly uses the labelled developer provider; it never substitutes test keys into an existing keyring.
 
-## 3. Environment & Credentials
-
-- All provider credentials (NanoGPT, MiniMax, Brave Search, etc.) are read from `.env` in the repository root.
-- The `.env` file is loaded strictly by the Electron main process; credentials are never exposed across the preload bridge or written to renderer logs.
-- Live billing requires `FREYA_ALLOW_LIVE_MODEL=1` in `.env`.
-
----
-
-## 4. Operational Rule
-
-Freya's generated text is not the source of truth. Always verify real outcomes:
-1. Verify open browser tabs with `node bin\freya.mjs browser tabs`.
-2. Verify conversation state with `node bin\freya.mjs chats`.
-3. Verify live UI state using Playwright CDP or DOM snapshots.
-
-For full details on driving Freya via CLI, Playwright CDP, and MCP, see [`control.md`](control.md).
+Verify the compiled application with `node scripts/structural-split-acceptance.mjs`. It checks real renderer communication, protected persistence, browser admission, installed voice discovery, the independent Core clock and recovery. See [control.md](control.md) for the existing CLI and browser controls.

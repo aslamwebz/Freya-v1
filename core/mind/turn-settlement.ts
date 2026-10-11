@@ -5,7 +5,7 @@ import type { ConversationMessage, ConversationTurn, TerminalTurnOutcome } from 
 import type { MindSubmitInput, MindTurnOutcome, MindTurnResult, OwnerMessageEvent, TurnExperience } from './turn-types'
 
 export interface MindTurnSettlementOptions {
-  readonly fabric: EventFabric
+  readonly fabric: Pick<EventFabric, 'append'>
   readonly store: ConversationStore
   readonly now: () => Date
   readonly newId: () => string
@@ -34,7 +34,7 @@ export interface MindTurnSettlementDetail {
 
 /** Owns per-turn settlement, terminal records and bounded outcome metadata. */
 export class MindTurnSettlement {
-  private readonly fabric: EventFabric
+  private readonly fabric: Pick<EventFabric, 'append'>
   private readonly store: ConversationStore
   private readonly now: () => Date
   private readonly newId: () => string

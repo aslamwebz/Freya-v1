@@ -88,11 +88,11 @@ import { type MindToolRegistry } from './tools'
 
 export interface MindServiceOptions {
   matrixSpaceIds?: (conversationId: string) => readonly string[]
-  fabric: EventFabric
+  fabric: Pick<EventFabric, 'append'>
   store: ConversationStore
-  authority: OwnerAuthority
+  authority: Pick<OwnerAuthority, 'request' | 'createGrant'>
   /** The narrow door to the Model Gateway. Not a provider, not a client SDK. */
-  gateway: ModelGateway
+  gateway: Pick<ModelGateway, 'cancelRequest'>
   identity?: FreyaIdentity
   budget?: ContextBudget
   now?: () => Date
@@ -250,14 +250,17 @@ export interface MindServiceOptions {
    * Searcher, no browser, no provider and no credential; it holds a closed list of
    * names and the one method that runs one of them under Guard.
    */
-  tools?: MindToolRegistry | null
+  tools?: Pick<MindToolRegistry, 'list' | 'isEmpty' | 'has' | 'invoke' | 'instructions'> | null
 }
 
+/** The existing conversation lifecycle surface, including a process-backed Mind. */
+export type MindRuntime = Pick<MindService, 'runTurn' | 'activeTurn' | 'cancelTurn'>
+
 export class MindService {
-  private readonly fabric: EventFabric
+  private readonly fabric: Pick<EventFabric, 'append'>
   private readonly store: ConversationStore
-  private readonly authority: OwnerAuthority
-  private readonly gateway: ModelGateway
+  private readonly authority: MindServiceOptions['authority']
+  private readonly gateway: MindServiceOptions['gateway']
   private readonly identity: FreyaIdentity
   private readonly budget: ContextBudget | undefined
   private readonly now: () => Date
@@ -266,7 +269,7 @@ export class MindService {
   private readonly selectedModel: () => string | null
   private readonly selectedProviderId: () => string | null
   private readonly onTurnStateChange: () => void
-  private readonly tools: MindToolRegistry | null
+  private readonly tools: NonNullable<MindServiceOptions['tools']> | null
   private readonly turnRunner: MindTurnRunner
   private readonly matrixSpaceIds: (conversationId: string) => readonly string[]
   private readonly contextEnrichment: MindContextEnrichment

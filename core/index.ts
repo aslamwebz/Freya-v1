@@ -18,7 +18,10 @@ import type { ModelProvider } from './model/provider'
 import { FakeModelProvider, SlowFakeModelProvider } from './model/fake-provider'
 import { buildConfiguredModelProviders, modelCapabilityPreference, type CapabilityEnv } from './model/capability-runtime'
 import type { CapabilityPreferences } from './capabilities'
-import { MindService, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
+import { MindService, type MindRuntime, type MindServiceOptions, type TurnExperience, type OwnerMessageEvent } from './mind/mind'
+import type { ProcessRuntimeOptions } from '../shared/contracts/runtime'
+import { CoreProcess } from './runtime/process-service'
+import type { CoreOwnerPort } from './runtime/owner-port'
 import { proposeMissionPlan, type MissionGoalRequest, type MissionGoalOutcome } from './mind/mission-planning'
 import { registerFileInspection } from './work/file-inspection'
 import { registerResearchInspection } from './work/research-inspection'
@@ -77,7 +80,7 @@ import { CONVERSATION_LIMITS } from './conversation/types'
 import { VoiceService } from './voice/service'
 import { UnavailableSttAdapter } from './voice/stt'
 import { UnavailableTtsAdapter } from './voice/tts'
-import { LOCAL_ENERGY_WAKE_GATE } from './voice/wake'
+import { LOCAL_ENERGY_WAKE_GATE, buildLocalWakeGate } from './voice/wake'
 import type { VoiceSttAdapter, VoiceTranscriptFragment, VoiceTtsAdapter, WakeGate } from './voice/types'
 import { WorkforceEngine } from './workforce/engine'
 import type { SubordinateWorkerScope, WorkforceOwnerScope } from './workforce/authority'
@@ -493,6 +496,8 @@ export interface CoreOptions {
    * added alongside it, so a test cannot accidentally exercise a real one.
    */
   providers?: ModelProvider[]
+  /** Headless runtime: Core admits clients and owns its heartbeat. */
+  processRuntime?: ProcessRuntimeOptions & { owner?: CoreOwnerPort }
   /**
    * Developer seam: add a local echo provider to the production set.
    *
@@ -1677,7 +1682,8 @@ class FreyaCore implements Core {
    * to be readable without asking anything that could be slow.
    */
   private relayAdmissionOpen = false
-  private mind!: MindService
+  private mind!: MindRuntime
+  private processRuntime: CoreProcess | null = null
   private conversations!: ConversationService
   private voiceService!: VoiceService
   /**
@@ -1750,6 +1756,7 @@ class FreyaCore implements Core {
   private readonly missionAdvancing = new Map<string, Promise<StepOutcome | null>>()
 
   constructor(private readonly options: CoreOptions) {
+    this.processRuntime = options.processRuntime ? new CoreProcess(options.processRuntime, options.env ?? {}, options.developerProvider, options.processRuntime.owner) : null
     this.newId = options.newId ?? (() => randomUUID())
     this.workforceSource = options.workforceSource ?? null
     this.personalitySource = options.personalitySource ?? null
@@ -2331,7 +2338,7 @@ class FreyaCore implements Core {
     await this.buildPersonality()
 
     this.matrixService = await MatrixService.open({ path: `${this.options.dataPath}.matrix.enc`, key: this.options.matrixKey ?? null })
-    this.mind = new MindService({
+    const mindOptions: MindServiceOptions = {
       fabric: this.fabric,
       store: this.conversationStore,
       authority: this.service.ownerAuthority(),
@@ -2463,7 +2470,8 @@ class FreyaCore implements Core {
         })
         return this.mindToolRegistry
       })(),
-    })
+    }
+    this.mind = this.processRuntime?.mind.bind(mindOptions) ?? new MindService(mindOptions)
     this.conversations = new ConversationService({
       fabric: this.fabric,
       store: this.conversationStore,
@@ -2485,7 +2493,7 @@ class FreyaCore implements Core {
       // makes "no engine configured" a reportable state instead of a silent no-op.
       stt: this.options.voiceStt ?? new UnavailableSttAdapter(),
       tts: this.options.voiceTts ?? new UnavailableTtsAdapter(),
-      wake: this.options.voiceWake ?? LOCAL_ENERGY_WAKE_GATE,
+      wake: this.options.voiceWake ?? (this.processRuntime ? buildLocalWakeGate() : LOCAL_ENERGY_WAKE_GATE),
       captureSupported: this.options.voiceCaptureSupported ?? true,
       transcriptionTimeoutMs: this.options.voiceTranscriptionTimeoutMs,
       attentionTimeoutMs: this.options.voiceAttentionTimeoutMs,
@@ -3226,7 +3234,7 @@ class FreyaCore implements Core {
     }
     this.publishRuntime()
     this.notify()
-
+    await this.processRuntime?.open(this)
     return this.status()
   }
 
@@ -3324,6 +3332,7 @@ class FreyaCore implements Core {
       }
     } finally {
       this.disposeState()
+      await this.processRuntime?.close()
       this.disposeWorkforceSource()
       this.disposeWorkforceSource = () => {}
       this.disposePersonalitySource()
@@ -11892,6 +11901,7 @@ case 'forge.run': {
    * it never shadows a real provider when both are present.
    */
   private buildProviders(): ModelProvider[] {
+    if (this.processRuntime) return this.processRuntime.providers.all()
     if (this.options.providers) return [...this.options.providers]
     const env = this.options.env ?? {}
     const providers = buildConfiguredModelProviders(env)

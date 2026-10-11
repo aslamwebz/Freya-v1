@@ -1,12 +1,11 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /**
  * One-command desktop dev loop.
  *
- * The reason `Freya.exe` needs a rebuild is that it loads the compiled
+ * The reason `FreyaDebug.cmd` needs a rebuild is that it loads the compiled
  * `dist/index.html`. This script instead boots Vite (which serves `src/` directly,
  * with HMR) and points Electron at it via `FREYA_DEV_SERVER`, which
  * `electron/main.ts` already honours. Renderer edits then hot-reload on save.
@@ -19,7 +18,6 @@ import { fileURLToPath } from 'node:url'
  * launcher. It exists purely so the UI can be developed without a rebuild.
  */
 
-const require = createRequire(import.meta.url)
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const VITE_PORT = Number(process.env.FREYA_DEV_PORT ?? 5273)
 const DEV_SERVER = `http://127.0.0.1:${VITE_PORT}`
@@ -83,7 +81,7 @@ if (!ready) {
   shutdown(1)
 } else {
   console.log(`[dev:desktop] Vite ready at ${DEV_SERVER}. Launching Electron…`)
-  electron = spawn(require('electron'), ['.', '--dev'], {
+  electron = spawn(process.execPath, [join(ROOT, 'scripts', 'debug-stack.mjs'), '--no-build'], {
     cwd: ROOT,
     stdio: 'inherit',
     shell: false,
@@ -91,9 +89,9 @@ if (!ready) {
   })
   electron.on('exit', (code) => {
     // A non-zero here is often the single-instance guard, which happens when
-    // Freya.exe is already running. Only one profile may own the app.
+    // FreyaDebug.cmd is already running. Only one profile may own the app.
     if (code !== 0) {
-      console.error('[dev:desktop] Electron exited. If Freya.exe is already running, close it first — only one instance owns the profile.')
+      console.error('[dev:desktop] Electron exited. If FreyaDebug.cmd is already running, close it first — only one instance owns the profile.')
     }
     shutdown(code ?? 0)
   })

@@ -1,10 +1,9 @@
-// Freya.exe — double-clickable native launcher.
+// Retired native launcher source, retained for history. Development uses FreyaDebug.cmd.
 // Same contract as Freya.cmd, but it is a GUI executable: no console window
 // is ever created and no focus is stolen. Nothing is installed and nothing is
 // copied; the working copy of the repository is the application.
 //
-// Build:
-//   C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe -nologo -target:winexe -out:Freya.exe scripts\FreyaLauncher.cs
+// This source is retired and is not part of any supported build.
 
 using System;
 using System.Diagnostics;

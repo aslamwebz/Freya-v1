@@ -22,7 +22,7 @@
 
 import type { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
-import type { ElectronCoreHost } from '../coreHost'
+import type { CoreHost } from '../coreHost'
 import type { TurnIntentHints } from '../../core/mind/tool-intent'
 import type { BrowserService, SemanticBrowserRequest } from '../../core/browser/service/service'
 import type { SurfaceBounds } from '../../core/browser/service'
@@ -39,7 +39,7 @@ import {
 } from './contract'
 
 export interface ControlServiceDeps {
-  readonly coreHost: ElectronCoreHost
+  readonly coreHost: CoreHost
   readonly getBrowserService: () => BrowserService | null
   readonly getMainWindow: () => BrowserWindow | null
   readonly focusWindow: () => boolean

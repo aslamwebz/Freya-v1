@@ -42,3 +42,12 @@ export interface ComponentInstanceReference {
   readonly component: ComponentName
   readonly instanceId: string
 }
+
+/** Private local endpoints injected by the debug supervisor; never renderer data. */
+export interface ProcessRuntimeOptions {
+  readonly ownerEndpoint: string
+  readonly intelligenceEndpoint: string
+  readonly ownerToken: string
+  readonly intelligenceToken: string
+  readonly supervisorToken: string
+}

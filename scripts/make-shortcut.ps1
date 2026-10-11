@@ -1,19 +1,4 @@
-# Create Freya.lnk — the launcher with no console behind it.
-#
-# Why this exists rather than a shortcut made by hand: a shortcut straight at
-# electron.exe has no console, because electron.exe is a GUI binary and Windows
-# gives it a window and nothing else. Freya.cmd cannot promise that — it *is* a
-# batch file, so cmd.exe exists before anything in it runs. This is the same
-# launch without the flash.
-#
-# Run once, after `npm install` and `npm run build`:
-#
-#   powershell -ExecutionPolicy Bypass -File scripts\make-shortcut.ps1
-#
-# The shortcut points at this working copy, so moving or deleting the checkout
-# breaks it. That is the deliberate trade: nothing is installed and nothing is
-# copied, so there is nothing to keep in sync but the directory itself.
-
+# The development shortcut opens the visible three-process debug console.
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -30,10 +15,10 @@ if (-not (Test-Path $mainBundle)) {
 
 $shell = New-Object -ComObject WScript.Shell
 $link = $shell.CreateShortcut($shortcut)
-$link.TargetPath = $electron
+$link.TargetPath = $env:ComSpec
 # electron.exe takes the app directory as its first argument, quoted because the
 # path contains spaces.
-$link.Arguments = '"' + $root + '"'
+$link.Arguments = '/c ""' + (Join-Path $root 'FreyaDebug.cmd') + '""'
 $link.WorkingDirectory = $root
 # The Electron icon, because Freya has no .ico of its own yet. Replaced by
 # `build/icon.ico` the moment there is one.

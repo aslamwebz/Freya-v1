@@ -164,8 +164,8 @@ export type LoopOutcome =
 export interface ToolLoopDeps {
   readonly toolContext?: MindToolContext
   readonly reasoningEffort?: string
-  readonly authority: OwnerAuthority
-  readonly tools: MindToolRegistry
+  readonly authority: Pick<OwnerAuthority, 'request'>
+  readonly tools: Pick<MindToolRegistry, 'list' | 'isEmpty' | 'has' | 'invoke' | 'instructions'>
   /** The turn's grant. Named explicitly, so this loop can only spend this turn's. */
   readonly grantId: string
   /** The turn id. Doubles as the request id, so a scoped cancel is a lookup. */

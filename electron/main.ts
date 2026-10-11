@@ -1,22 +1,19 @@
 import { CapabilitySettingsStore } from './capabilitySettings'
 import { readRuntimeCapabilityRegistry } from '../core/model/capability-runtime'
 import type { CapabilityPreferences } from '../core/capabilities'
-import { app, BrowserWindow, WebContentsView, ipcMain, protocol, screen, shell, safeStorage, Notification, Tray, Menu } from 'electron'
+import { app, BrowserWindow, WebContentsView, ipcMain, protocol, screen, shell, Notification, Tray, Menu } from 'electron'
 import { join, resolve } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { WorkspaceFile, DEFAULT_MAX_BYTES } from './workspaceFile'
 import { fetchDocumentBytes, fetchThumbnail, fetchVideoPreview, attachEmbedView, detachEmbedView } from './media'
-import { ElectronCoreHost, type HostEnv, type DeviceHandsHostOptions } from './coreHost'
+import type { HostEnv } from './coreHost'
+import { ProcessCoreHost } from './processCoreHost'
+import { startSuperappHealth } from './runtime-health'
 import {
   createElectronDeviceHandsEffects,
-  denyAllAuthority,
-  openDeviceHandsJournal,
 } from './devicehands'
-import { loadKeyring } from './keyring'
 import { ProviderConfigStore } from './providerConfig'
-import { createFreyaVaultBinding } from './vaultBinding'
 import { loadLocalEnv } from './localEnv'
-import { createConnectorRuntime } from './connectors/runtime'
 import { createOwnWindowProvider, createSystemWindowProvider } from './context/windowProviders'
 import { createElectronOwnWindowSource } from './context/electronWindowSource'
 import { pickAttachments } from './attachments'
@@ -31,9 +28,8 @@ import { voiceCapabilityReadiness, effectiveVoiceSettings, gateVoiceInput, gateV
 import { LocalWhisperHost } from './localWhisper'
 import { LocalWakeHost } from './localWake'
 import { MicrophoneGate } from './microphoneGate'
-import { DEFAULT_VOICE_CONFIG, VOICE_FOLLOW_UP_WINDOW_MS, VoiceConfigStore, type VoiceConfigPatch } from './voiceConfig'
+import { VoiceConfigStore, type VoiceConfigPatch } from './voiceConfig'
 import { DEFAULT_VOICE_SETTINGS } from '../core/voice/settings'
-import { buildLocalWakeGate } from '../core/voice/wake'
 import {
   createDualBrowserActivation,
   createFreyaBrowserAdapter,
@@ -44,7 +40,6 @@ import { startControl, type ControlHandle } from './control'
 import { focusPrimaryWindow, installSingleInstanceGuard } from './startup/singleInstance'
 import type { CoreCommandEnvelope } from '../core/protocol/core-protocol'
 import type { ProviderConfigInput } from './providerConfig'
-import type { ModelProvider } from '../core/model/provider'
 import type { GrantFact } from '../core/devicehands'
 import type { BrowserResult } from '../core/browser'
 import { normaliseBrowserDockRequest, normaliseRendererBrowserRequest, type BrowserBridgeState } from './browser/rendererRequest'
@@ -52,13 +47,11 @@ import { createEmbeddedBrowserSurface } from './browser/embeddedSurface'
 import { createScreenshotResource } from './browser/screenshotResource'
 import { normaliseSemanticBrowserRequest } from './browser/semanticRequest'
 import { clampSurfaceBounds, createBrowserService, type BrowserService } from '../core/browser/service'
-import { EncryptedConversationStore } from '../core/conversation/encrypted-store'
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
 const DEV_SERVER = process.env.FREYA_DEV_SERVER
 const WORKSPACE_FILE = 'workspace.json'
-const CORE_LOG_FILE = 'core-events.jsonl'
 
 // Captured before the `.env` loader runs. A stored provider setting is applied
 // beneath this snapshot at startup, so an explicit launch always wins over both a
@@ -89,7 +82,7 @@ let providerStore: ProviderConfigStore | null = null
 let capabilityStore: CapabilitySettingsStore | null = null
 let capabilityPreferences: CapabilityPreferences = {}
 /** One Core per process. Survives renderer reloads; dies only with the app. */
-let coreHost: ElectronCoreHost | null = null
+let coreHost: ProcessCoreHost | null = null
 /**
  * Speech output, hosted.
  *
@@ -99,7 +92,6 @@ let coreHost: ElectronCoreHost | null = null
  */
 let voiceConfig: VoiceConfigStore | null = null
 const rawVoicePreferences = () => voiceConfig?.current ?? DEFAULT_VOICE_SETTINGS
-const legacyVoicePreferences = () => voiceConfig?.legacyCurrent ?? DEFAULT_VOICE_CONFIG
 const voiceReadiness = (): CapabilityReadiness => voiceCapabilityReadiness({ platformAvailable: voiceOutput.platformAvailable, localInstalled: localWhisper.installed, nanoKeyPresent: !!process.env.NANOGPT_API_KEY?.trim(), remoteAudioEnabled: rawVoicePreferences().remoteAudioEnabled })
 const selectedVoice = (): EffectiveVoiceSettings => effectiveVoiceSettings(rawVoicePreferences(), capabilityPreferences, voiceReadiness())
 const voicePreferences = (): VoiceSettings => selectedVoice().settings
@@ -174,7 +166,6 @@ let publicBrowserAdapter: ReturnType<typeof createFreyaBrowserAdapter> | null = 
  * cause a schedule to fire. The interval is deliberately coarse and does no model
  * call, no provider contact and no network access.
  */
-let attentionTimer: ReturnType<typeof setInterval> | null = null
 /** Resolves when the renderer has answered the closing-time request. */
 let pendingCollect: (() => void) | null = null
 let quitting = false
@@ -228,68 +219,6 @@ function readDeviceHandsGrants(path: string): GrantFact[] {
   }
 }
 
-function buildDeviceHandsSeam(): DeviceHandsHostOptions | undefined {
-  const localUnrestricted = localUnrestrictedMode()
-  if (!localUnrestricted && process.env.FREYA_PUBLIC_BROWSER === '0' && process.env.FREYA_DEVICE_HANDS !== '1') return undefined
-  const userData = app.getPath('userData')
-  const grants = localUnrestricted
-    ? []
-    : readDeviceHandsGrants(join(userData, 'device-hands.grants.json'))
-  const journal = openDeviceHandsJournal(join(userData, 'device-hands.jsonl'))
-  const effects = createElectronDeviceHandsEffects({
-    /**
-     * Phase 51's second door, resolved **per call** rather than at construction.
-     *
-     * This is the whole wiring. The adapter is added to the managed browser factory rather
-     * than replacing it, so:
-     *
-     *   - a read that no live window is serving still goes to the Phase 5 managed target;
-     *   - a click with no live window still resolves to `browser-action-unsupported`;
-     *   - and a click **with** one is driven by the Freya Browser, through the same runtime,
-     *     the same grant and the same ten gates as everything else.
-     */
-    inPageFactory: () => publicBrowserAdapter?.inPage ?? null,
-  })
-  const authority = denyAllAuthority({
-    enabled: () => true,
-    activeGrant: (principalId, scope) =>
-      coreHost?.ownerBrowserGrant(principalId, scope) ?? grants.find(
-        (grant) => grant.principalId === principalId && grant.scope === scope && grant.revokedAt === null,
-      ) ?? null,
-  })
-  return {
-    effects,
-    journal,
-    authority,
-    policy: localUnrestricted
-      ? {
-          localUnrestricted: true,
-          allowedRoots: [],
-          deniedRoots: [],
-          allowedHosts: [],
-          allowedCommands: [],
-          allowedEnvNames: [],
-        }
-      : {
-          ownerPublicBrowser: process.env.FREYA_PUBLIC_BROWSER !== '0',
-          allowedRoots: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ROOTS),
-          deniedRoots: [join(userData, 'vault')],
-          allowedHosts: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_HOSTS),
-          allowedCommands: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_COMMANDS),
-          // Device Hands refuses an empty allowlist — correctly, since "nothing is shared"
-          // must be a decision somebody made. A surface that genuinely shares nothing
-          // therefore has to say so with a name it will never match, rather than with an
-          // empty list the policy refuses outright. Without this, a strict build could
-          // not start the browser at all and every page read arrived as
-          // `authority-refused`, which reads like a permissions problem rather than a
-          // list nobody filled in.
-          allowedEnvNames: splitDeviceHandsList(process.env.FREYA_DEVICE_HANDS_ENV_NAMES),
-        },
-    grants,
-    enabled: true,
-    localUnrestricted,
-  }
-}
 
 /**
  * Build the Phase 51 adapter and activation, but only when both switches are on.
@@ -627,146 +556,12 @@ const COLLECT_TIMEOUT_MS = 750
  * and only as a *pair* — one domain persistent and the other ephemeral would fail
  * in a way that reads as a Brain bug. Normal application launches never read this.
  */
-function e2eKey(variable: string): Uint8Array | null {
-  if (process.env.FREYA_E2E !== '1') return null
-  const encoded = process.env[variable]
-  if (!encoded) return null
-  const bytes = Buffer.from(encoded, 'base64')
-  if (bytes.length !== 32) throw new Error(`${variable} must decode to 32 bytes`)
-  return new Uint8Array(bytes)
-}
-
-/**
- * Both test keys, or neither.
- *
- * One without the other would produce a restart-persistence E2E where the
- * conversation survives and the Brain does not — or the reverse — and the failure
- * would look like a Brain bug rather than a harness that only half injected.
- */
-function e2eKeys(): {
-  conversation: Uint8Array
-  brain: Uint8Array
-  mission: Uint8Array
-  context: Uint8Array
-  personality: Uint8Array
-  skill: Uint8Array
-  forge: Uint8Array
-  vault: Uint8Array
-} | null {
-  const conversation = e2eKey('FREYA_E2E_CONVERSATION_KEY')
-  const brain = e2eKey('FREYA_E2E_BRAIN_KEY')
-  const mission = e2eKey('FREYA_E2E_MISSION_KEY')
-  const context = e2eKey('FREYA_E2E_CONTEXT_KEY')
-  const skill = e2eKey('FREYA_E2E_SKILL_KEY')
-  const forge = e2eKey('FREYA_E2E_FORGE_KEY')
-  const personality = e2eKey('FREYA_E2E_PERSONALITY_KEY')
-  const vault = e2eKey('FREYA_E2E_VAULT_KEY')
-  // All seven or none, so a partial fixture cannot quietly run with a real keyring for
-  // the domain it forgot.
-  if (
-    conversation === null ||
-    brain === null ||
-    mission === null ||
-    context === null ||
-    personality === null ||
-    skill === null ||
-    forge === null ||
-    vault === null
-  ) {
-    return null
-  }
-  return { conversation, brain, mission, context, personality, skill, forge, vault }
-}
-
-/**
- * The offline research fixture provider, if both E2E gates are present.
- *
- * Exists so the Phase 5 end-to-end suite can exercise real research - real Guard,
- * real grants, real gateway, real sandboxed browser - without a live model. It is
- * injected as the **entire** provider set, exactly like the developer providers, so
- * a run cannot quietly reach a real one as well.
- *
- * It returns fixed structured JSON. It is not intelligence, it says so in its own
- * status text, and it is unreachable unless `FREYA_E2E=1` and
- * `FREYA_E2E_RESEARCH=fixtures` were both deliberately supplied to the process.
- *
- * The answers are deliberately keyed to the fixture pages, so an assertion can name
- * the exact text it expects rather than pattern-matching a model's prose.
- */
-function e2eResearchFixtureProvider(env: Record<string, string | undefined>): ModelProvider | null {
-  if (!(env.FREYA_E2E === '1' && env.FREYA_E2E_RESEARCH === 'fixtures')) return null
-  const plans = [
-    JSON.stringify({ queries: ['encrypted storage'], evidence: ['durability'], done: false }),
-    JSON.stringify({ queries: ['retention disagreement'], evidence: ['conflict'], done: false }),
-  ]
-  let turn = 0
-  return {
-    id: 'fixture-research',
-    kind: 'fake',
-    live: false,
-    status: () => ({
-      id: 'fixture-research',
-      kind: 'fake' as const,
-      status: 'configured' as const,
-      model: 'fixture-research-1',
-      detail:
-        'Offline E2E fixture. Returns fixed structured JSON for research planning and synthesis. Not intelligence.',
-      liveEnabled: false,
-    }),
-    complete: async (request) => {
-      // Planning turns get a fixed plan; synthesis cites the ids the coordinator
-      // actually supplied, read out of the evidence it was given.
-      //
-      // That is deliberate rather than a shortcut. Citing invented ids would be
-      // rejected by `parseSynthesis` - which is the citation-integrity property
-      // working - and would leave the E2E asserting nothing. Reading them from the
-      // prompt is what a real model does, and it keeps the assertion meaningful.
-      const stage = request.messages.some((m) => m.role === 'system' && m.content.includes('Stage: synthesizing'))
-      const sourceIds = [...request.prompt.matchAll(/"sourceId":"([^"]+)"/g)]
-        .map((match) => match[1] as string)
-        .filter((id, index, all) => all.indexOf(id) === index)
-      const text = stage
-        ? JSON.stringify({
-            findings: [
-              { text: 'FINDING_MARKER a local assistant keeps durable state encrypted.', sourceIds: sourceIds.slice(0, 1) },
-            ],
-            conflicts: [
-              { text: 'CONFLICT_MARKER the sources disagree about retention.', sourceIds: sourceIds.slice(0, 2) },
-            ],
-            uncertainties: ['UNCERTAINTY_MARKER neither fixture source is verified.'],
-          })
-        : (plans[Math.min(turn, plans.length - 1)] as string)
-      turn += 1
-      return {
-        requestId: `fixture-${turn}`,
-        providerId: 'fixture-research',
-        model: 'fixture-research-1',
-        text,
-        inputTokens: 1,
-        outputTokens: 1,
-      }
-    },
-  }
-}
-
-/**
- * The developer echo provider, if one was explicitly asked for.
- *
- * Read from the environment by name and validated against a closed set, so a
- * typo produces "no developer provider" rather than something unexpected being
- * constructed. Undefined means none, and none is the default.
- */
-function developerProvider(): 'echo' | 'slow-echo' | undefined {
-  const raw = process.env.FREYA_DEV_PROVIDER
-  return raw === 'echo' || raw === 'slow-echo' ? raw : undefined
-}
-
 function requireWorkspace(): WorkspaceFile {
   if (!workspace) throw new Error('workspace file used before the app was ready')
   return workspace
 }
 
-function requireCore(): ElectronCoreHost {
+function requireCore(): ProcessCoreHost {
   if (!coreHost) throw new Error('core used before the app was ready')
   return coreHost
 }
@@ -917,10 +712,6 @@ function shutdownCoreAndThen(finish: () => void): void {
   }
   localWhisper.stop()
   localWake.stop()
-  if (attentionTimer !== null) {
-    clearInterval(attentionTimer)
-    attentionTimer = null
-  }
   // Phase 51: close every Freya Browser window before the app goes. A window that outlived its
   // runtime would be a page nothing is gating any more.
   const seam = dualBrowser
@@ -1507,6 +1298,7 @@ function registerIpc(): void {
   ipcMain.handle('freya:capabilities:write', async (event, input: unknown) => {
     if (event.sender !== mainWindow?.webContents || !capabilityStore) throw new Error('Capability settings are unavailable.')
     capabilityPreferences = await capabilityStore.write(input)
+    if (coreHost instanceof ProcessCoreHost) await coreHost.refreshPreferences()
     // Refresh the Chat default immediately; the running Core reads the same preference closure.
     if (coreHost && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('freya:core:status', coreHost.status())
     return capabilityRegistry()
@@ -1520,6 +1312,7 @@ function registerIpc(): void {
     if (capabilityStore) capabilityPreferences = await capabilityStore.write({ ...capabilityPreferences, stt: [saved.inputProvider === 'local-whisper' ? 'local' : 'nanogpt'], tts: [saved.outputProvider === 'platform' ? 'native' : 'nanogpt'] })
     localWhisper.stop()
     localWake.stop()
+    if (coreHost instanceof ProcessCoreHost) await coreHost.refreshPreferences()
     return saved
   })
   ipcMain.handle('freya:provider:write', async (_event, input: ProviderConfigInput) => {
@@ -1900,188 +1693,22 @@ app.whenReady().then(async () => {
   capabilityPreferences = await capabilityStore.read()
   voiceConfig = new VoiceConfigStore(join(app.getPath('userData'), 'voice.json'))
   await voiceConfig.load()
-  // The keys are fetched before the Core is constructed, and they are the only
-  // secrets this process handles. A machine with no OS secure storage gets `null`
-  // for both, which makes Core fall back to ephemeral stores that label themselves —
-  // never to a plaintext file and never to a key stored beside the data.
-  //
-  // Two domains, two independent secrets. On this first run the keyring adopts any
-  // Phase 3 conversation key verbatim so existing history stays readable, and
-  // mints a separate Brain key.
-  //
-  // CI has no desktop keyring, so the explicit E2E harness injects a deterministic
-  // pair of non-secret test keys. That is not a production fallback and is
-  // unreachable unless FREYA_E2E=1 was deliberately supplied to the process.
-  const dataPath = join(app.getPath('userData'), CORE_LOG_FILE)
-  const testKeys = e2eKeys()
-  const keyResult = testKeys
-    ? Promise.resolve({
-        conversation: { key: testKeys.conversation, reason: null as string | null },
-        brain: { key: testKeys.brain, reason: null as string | null },
-        mission: { key: testKeys.mission, reason: null as string | null },
-        context: { key: testKeys.context, reason: null as string | null },
-        personality: { key: testKeys.personality, reason: null as string | null },
-        skill: { key: testKeys.skill, reason: null as string | null },
-        forge: { key: testKeys.forge, reason: null as string | null },
-        vault: { key: testKeys.vault, reason: null as string | null },
-      })
-    : loadKeyring(dataPath)
-  void keyResult.then(async (result) => {
-    // Reported per domain, because the two failures are genuinely independent: a
-    // machine can open an existing conversation key and be unable to create a Brain
-    // one. A single warning would hide which half is missing.
-    if (result.conversation.key === null) {
-      // A warning, with a reason and no value. The conversation still works for the
-      // session; it just will not survive a restart, and the UI says so.
-      console.warn(`[freya] conversation history is not being saved — ${result.conversation.reason}`)
-    }
-    if (result.brain.key === null) {
-      // Freya still answers. She just will not remember across a restart, and the
-      // surface says exactly that rather than implying a memory that is not there.
-      console.warn(`[freya] Freya will not remember across restarts — ${result.brain.reason}`)
-    }
-    if (result.mission.key === null) {
-      // Same shape as the Brain's: Missions still work for this session, and the
-      // surface reports `durable: false` rather than implying persistence it lacks.
-      console.warn(`[freya] Missions are not being saved — ${result.mission.reason}`)
-    }
-    if (result.skill.key === null) {
-      console.warn(`[freya] Skills are not being saved — ${result.skill.reason}`)
-    }
-    if (result.vault.key === null) {
-      console.warn(`[freya] encrypted Vault is unavailable — ${result.vault.reason}`)
-    }
-    if (result.personality.key === null) {
-      // The one domain whose absence changes behaviour and not only durability.
-      // Without a durable store the cue ledger cannot be trusted, so Core refuses
-      // anti-repetition memory outright and offers no expression guidance at all —
-      // which is correct: an empty ledger would re-offer the same gesture forever.
-      console.warn(
-        `[freya] what Freya records about you will not survive a restart, and she will not reuse gestures — ${result.personality.reason}`,
-      )
-    }
-    const fixtureProvider = e2eResearchFixtureProvider(process.env)
-    const vaultPath = join(app.getPath('userData'), 'vault', 'freya.db')
-    const vaultBinding = process.platform === 'win32'
-      ? createFreyaVaultBinding(join(ROOT, 'native', 'sqlcipher', 'win32-x64', 'better_sqlite3-electron44.node'))
-      : undefined
-
-    // CI runs Electron on Linux, while the repository intentionally ships a
-    // SQLCipher native binding only for the supported Windows desktop build. Keep
-    // the Vault configuration present so every other domain reports the same
-    // honest platform posture it has in production. For conversation bodies only,
-    // the explicit E2E harness injects Core's existing encrypted compatibility
-    // store so the process-relaunch test can exercise real encrypted persistence
-    // rather than ephemeral memory. Production Windows never takes this branch.
-    const e2eEncryptedConversationCompatibility =
-      process.env.FREYA_E2E === '1' && vaultBinding === undefined
-    const e2eConversationStore =
-      e2eEncryptedConversationCompatibility && result.conversation.key !== null
-        ? await EncryptedConversationStore.open({
-            path: `${dataPath}.conversations`,
-            key: result.conversation.key,
-          })
-        : undefined
-
-    const deviceHandsSeam = buildDeviceHandsSeam()
-    coreHost = new ElectronCoreHost(
-      dataPath,
-      {
-        MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
-    MINIMAX_BASE_URL: process.env.MINIMAX_BASE_URL,
-    MINIMAX_MODEL: process.env.MINIMAX_MODEL,
-    LOCAL_MODEL_BASE_URL: process.env.LOCAL_MODEL_BASE_URL,
-    LOCAL_MODEL_MODEL: process.env.LOCAL_MODEL_MODEL,
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-    OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
-    OPENAI_MODEL: process.env.OPENAI_MODEL,
-    FREYA_VISION_PROVIDERS: process.env.FREYA_VISION_PROVIDERS,
-    NANOGPT_API_KEY: process.env.NANOGPT_API_KEY,
-        NANOGPT_BASE_URL: process.env.NANOGPT_BASE_URL,
-        NANOGPT_MODEL: process.env.NANOGPT_MODEL,
-        FREYA_ALLOW_LIVE_MODEL: process.env.FREYA_ALLOW_LIVE_MODEL,
-        // Phase 5. Both are read here and nowhere else, and neither is returned by
-        // anything: the provider holds the key in a private field and Core holds a
-        // provider object it cannot inspect.
-        BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY,
-        FREYA_ALLOW_WEB_SEARCH: process.env.FREYA_ALLOW_WEB_SEARCH,
-        FREYA_SEARXNG_URL: process.env.FREYA_SEARXNG_URL,
-        // Gates for the offline research fixtures. Both are required, and they are
-        // read here in main rather than accepted from a window, so no renderer can
-        // put a production build into fixture mode.
-        FREYA_E2E: process.env.FREYA_E2E,
-        FREYA_E2E_RESEARCH: process.env.FREYA_E2E_RESEARCH,
-      },
-      {
-        conversationKey: result.conversation.key,
-        ...(e2eConversationStore ? { conversationStore: e2eConversationStore } : {}),
-        brainKey: result.brain.key,
-        missionKey: result.mission.key,
-        contextKey: result.context.key,
-        personalityKey: result.personality.key,
-        skillKey: result.skill.key,
-        forgeKey: result.forge.key,
-        vault: {
-          path: vaultPath,
-          keyProvider: { load: async () => ({ key: result.vault.key, reason: result.vault.reason }) },
-          ...(vaultBinding ? { binding: vaultBinding } : {}),
-        },
-        // Explicit host setting; own-app sees only Freya. System is honestly unsupported.
-        ...(['own-app', 'system'].includes(process.env.FREYA_CONTEXT_WINDOW_OBSERVATION ?? '') ? {
-          windowObservation: {
-            enabled: true,
-            provider: process.env.FREYA_CONTEXT_WINDOW_OBSERVATION === 'own-app'
-              ? createOwnWindowProvider(createElectronOwnWindowSource())
-              : createSystemWindowProvider(),
-            scope: { scopeKind: 'surface' as const, scopeId: 'desktop-window' },
-          },
-        } : {}),
-        // Opt-in, and named for what it is. Never inferred from a debug flag or
-        // from a missing credential: a build that answers from a canned string
-        // without saying so is the failure this guards against. The slow variant
-        // exists so the end-to-end suite has something to cancel.
-        ...(developerProvider() ? { developerProvider: developerProvider() } : {}),
-        // The *entire* provider set when the research fixtures are gated on, so an
-        // E2E run cannot fall through to a real provider.
-        ...(fixtureProvider ? { providers: [fixtureProvider] } : {}),
-        // Phase 44: the connector connection plane. Built here so the token store
-        // uses Electron's OS secure storage; with no client credentials the
-        // runtime is fail-closed and every connector reports unconfigured.
-        connectorRuntime: async () => {
-          const runtime = await createConnectorRuntime({
-            safeStorage,
-            tokenFilePath: `${dataPath}.connectors.tokens`,
-            configs: {},
-            oauthClient: {
-              async exchange() {
-                throw new Error('no connector OAuth client is configured')
-              },
-              async refresh() {
-                throw new Error('no connector OAuth client is configured')
-              },
-            },
-            fetchImpl: fetch as never,
-          })
-          return { auth: runtime.auth }
-        },
-        // Phase 42. Off unless the main process was deliberately opted in. The seam
-        // carries the real adapters, a durable journal and an owner-authored grant
-        // file; Core's own STOP ALL is composed on top of it by the host.
-        ...(deviceHandsSeam ? { deviceHands: deviceHandsSeam } : {}),
-        // Input uses the configured adapter and explicit remote-audio consent.
-        // Output uses local system speech; neither credential reaches the window.
-        capabilityPreferences: () => capabilityPreferences,
-        voiceTts: gateVoiceOutput(voiceOutput, selectedVoice),
-        voiceStt: gateVoiceInput(voiceInput, selectedVoice),
-        voiceWake: buildLocalWakeGate(),
-        voiceAttentionTimeoutMs: () => voicePreferences().attentionTimeoutMs,
-        voiceAutoSpeak: legacyVoicePreferences().autoSpeak,
-        voiceProactiveAlerts: legacyVoicePreferences().proactiveAlerts,
-        voiceMuted: legacyVoicePreferences().ttsProvider === 'off',
-        voiceFollowUpWindowMs: VOICE_FOLLOW_UP_WINDOW_MS,
-      },
-    )
+  const remoteCore = process.env.FREYA_CORE_OWNER_ENDPOINT
+  if (!remoteCore || !process.env.FREYA_OWNER_TOKEN) throw new Error('Start the three-component application with FreyaDebug.cmd')
+  const desktopEffects = createElectronDeviceHandsEffects({ inPageFactory: () => publicBrowserAdapter?.inPage ?? null })
+  coreHost = new ProcessCoreHost(remoteCore, process.env.FREYA_OWNER_TOKEN, {
+    stt: gateVoiceInput(voiceInput, selectedVoice), tts: gateVoiceOutput(voiceOutput, selectedVoice), hands: desktopEffects,
+    ...(['own-app', 'system'].includes(process.env.FREYA_CONTEXT_WINDOW_OBSERVATION ?? '') ? {
+      window: process.env.FREYA_CONTEXT_WINDOW_OBSERVATION === 'own-app' ? createOwnWindowProvider(createElectronOwnWindowSource()) : createSystemWindowProvider(),
+    } : {}),
+  })
+  await coreHost.start()
     registerIpc()
+    if (coreHost instanceof ProcessCoreHost) void startSuperappHealth(coreHost, async () => {
+      const window = mainWindow
+      return !!window && !window.isDestroyed() && !window.webContents.isDestroyed()
+        && await window.webContents.executeJavaScript('!!window.freyaHost && !!document.querySelector("#root")?.children.length') === true
+    }, () => app.quit()).catch(() => console.error('[superapp] readiness endpoint failed to start'))
 
     /**
      * Mount the browser-extension bridge, but only when Device Hands is really on.
@@ -2107,7 +1734,7 @@ app.whenReady().then(async () => {
      * `stopAllActive` comes from Core's own latch, so pressing STOP ALL refuses
      * extension actions on the same turn as everything else.
      */
-    if (deviceHandsSeam !== undefined) {
+    if (localUnrestrictedMode() || process.env.FREYA_PUBLIC_BROWSER !== '0' || process.env.FREYA_DEVICE_HANDS === '1') {
       const localUnrestricted = localUnrestrictedMode()
       const seamGrants = localUnrestricted
         ? []
@@ -2248,16 +1875,6 @@ app.whenReady().then(async () => {
     void coreHost.start().catch((error: unknown) => {
       console.error('[freya] core failed to start', error)
     })
-    // The bounded attention wake. Coarse on purpose, and the only timer that
-    // exists for attention; it makes no model call and reaches no provider.
-    if (attentionTimer === null) {
-      attentionTimer = setInterval(() => {
-        void coreHost?.attentionTick().catch((error: unknown) => {
-          console.error('[freya] attention tick failed', error)
-        })
-      }, 30_000)
-    }
-  })
 
   app.on('activate', () => {
     showDashboard()

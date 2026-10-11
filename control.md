@@ -24,7 +24,7 @@ Freya provides two complementary external control channels:
 └─────────────────┼────────────────────────────┼──────────────┘
                   │                            │
       CDP Port 9234 (HTTP / WS)     Windows Named Pipe
-   (freyadebugging.exe / dev-kilo)  (\\.\pipe\freya-control-<pid>)
+   (FreyaDebug.cmd / dev-kilo)  (\\.\pipe\freya-control-<pid>)
                   │                            │
           ┌───────┴──────┐              ┌──────┴──────┐
           │  Playwright  │              │  freya CLI  │
@@ -33,7 +33,7 @@ Freya provides two complementary external control channels:
 ```
 
 1. **Visual UI Control (CDP on port 9234)**:
-   - Enabled when launched via `freyadebugging.exe` or `scripts/dev-kilo.mjs`.
+   - Enabled when launched via `FreyaDebug.cmd` or `scripts/dev-kilo.mjs`.
    - Used by Playwright to click real UI buttons, toggle intent switches, select models, and type in the composer.
 2. **Authority & Service Control (Named Pipe)**:
    - Always enabled on any running Freya instance (`\\.\pipe\freya-control-<pid>`).
@@ -44,7 +44,7 @@ Freya provides two complementary external control channels:
 ## 1. Visual UI Control via Playwright (CDP)
 
 ### Prerequisites
-Launch Freya with **`freyadebugging.exe`** (or `node scripts/dev-kilo.mjs --port=9234 --no-build`).
+Launch Freya with **`FreyaDebug.cmd`** (or `FreyaDebug.cmd --no-build`).
 
 ### Connecting with Playwright
 ```javascript
@@ -109,7 +109,7 @@ await page.waitForSelector('button.hd-send-busy', { state: 'detached', timeout: 
 
 ## 2. Service Control via Named Pipe (`bin/freya.mjs`)
 
-The CLI client (`bin/freya.mjs`) discovers the running instance automatically using `%APPDATA%\freya\control.endpoint` and authenticates using `%APPDATA%\freya\control.token`.
+The CLI client (`bin/freya.mjs`) uses `FREYA_USER_DATA` to discover the selected profile. For the default debug profile, set it to the absolute `.kilo/freya-debug-profile` directory. Discovery and authentication use that profile's `control.endpoint` and `control.token`.
 
 ### General Commands
 ```powershell

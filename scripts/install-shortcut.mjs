@@ -76,8 +76,8 @@ function writeShortcut(path) {
   const script = [
     `$ws = New-Object -ComObject WScript.Shell`,
     `$link = $ws.CreateShortcut('${path.replace(/'/g, "''")}')`,
-    `$link.TargetPath = '${electron.replace(/'/g, "''")}'`,
-    `$link.Arguments = '"${ROOT.replace(/'/g, "''")}"'`,
+    `$link.TargetPath = '${(process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe').replace(/'/g, "''")}'`,
+    `$link.Arguments = '/c ""${join(ROOT, "FreyaDebug.cmd").replace(/'/g, "''")}""'`,
     `$link.WorkingDirectory = '${ROOT.replace(/'/g, "''")}'`,
     `$link.IconLocation = '${iconLocation.replace(/'/g, "''")}'`,
     `$link.Description = 'Freya'`,

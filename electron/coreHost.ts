@@ -581,6 +581,7 @@ export interface CoreHostOptions {
    * selects the canonical Vault-backed conversation store.
    */
   conversationStore?: CoreOptions['conversationStore']
+  processRuntime?: CoreOptions['processRuntime']
   /**
    * The Brain's own key, from the keyring.
    *
@@ -601,6 +602,7 @@ export interface CoreHostOptions {
    */
   missionKey?: Uint8Array | null
   contextKey?: Uint8Array | null
+  attentionKey?: Uint8Array | null
   /**
    * Personality's own key, from the keyring.
    *
@@ -1180,6 +1182,7 @@ export class ElectronCoreHost implements CoreHost {
       const connectors = this.options.connectors ?? (this.options.connectorRuntime ? await this.options.connectorRuntime() : undefined)
       const core = createCore({
         dataPath: this.dataPath,
+        processRuntime: this.options.processRuntime,
         env: this.env,
         capabilityPreferences: this.options.capabilityPreferences,
         ...(research ? { research } : {}),
@@ -1216,15 +1219,14 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.browserTabsPort === null ? {} : { browserTabs: this.browserTabsPort }),
         // Bytes in, and nowhere else. Core does not persist it, journal it, log it
         // or put it in a projection, so there is nothing for it to leak through.
-        ...(this.options.conversationKey
-          ? { conversationKey: this.options.conversationKey }
-          : {}),
+        ...(this.options.conversationKey ? { conversationKey: this.options.conversationKey } : {}),
         ...(this.options.conversationStore
           ? { conversationStore: this.options.conversationStore }
           : {}),
         ...(this.options.brainKey ? { brainKey: this.options.brainKey } : {}),
         ...(this.options.missionKey ? { missionKey: this.options.missionKey } : {}),
         contextKey: this.options.contextKey ?? null,
+        attentionKey: this.options.attentionKey ?? null,
         personalityKey: this.options.personalityKey ?? null,
         skillKey: this.options.skillKey ?? null,
         ...(this.options.vault ? { vault: this.options.vault } : {}),
@@ -1294,9 +1296,7 @@ export class ElectronCoreHost implements CoreHost {
         ...(this.options.voiceStt ? { voiceStt: this.options.voiceStt } : {}),
         ...(this.options.voiceWake ? { voiceWake: this.options.voiceWake } : {}),
         voiceAttentionTimeoutMs: this.options.voiceAttentionTimeoutMs,
-        ...(this.options.voiceCaptureSupported === undefined
-          ? {}
-          : { voiceCaptureSupported: this.options.voiceCaptureSupported }),
+        voiceCaptureSupported: this.options.voiceCaptureSupported,
         ...(this.options.voiceAutoSpeak === undefined
           ? {}
           : { voiceAutoSpeak: this.options.voiceAutoSpeak }),
@@ -2253,7 +2253,7 @@ const ABSENT_WORK: WorkProjection = {
 }
 
 /** A valid status for a host whose Core has not started. Nothing is guessed. */
-const NOT_READY: CoreStatus = {
+export const NOT_READY: CoreStatus = {
   lifecycle: 'booting',
   operational: false,
   eventSequence: 0,

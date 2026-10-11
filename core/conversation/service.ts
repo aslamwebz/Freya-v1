@@ -5,7 +5,7 @@ import type { TurnIntentHints } from '../mind/tool-intent'
 import { randomUUID } from 'node:crypto'
 import type { EventFabric } from '../events/fabric'
 import type { ModelGateway } from '../model/gateway'
-import type { MindService, MindTurnResult } from '../mind/mind'
+import type { MindRuntime, MindTurnResult } from '../mind/mind'
 import { ConversationStoreError, type ConversationStore } from './store'
 import { CONVERSATION_LIMITS, type Conversation, type ConversationSummary } from './types'
 import type {
@@ -42,7 +42,7 @@ export interface ConversationServiceOptions {
    * Built by Core and handed over rather than constructed here, so the Mind has
    * exactly one owner and this service cannot end up with a second one.
    */
-  mind: MindService
+  mind: MindRuntime
   gateway: ModelGateway
   now?: () => Date
   newId?: () => string
@@ -92,7 +92,7 @@ export class ConversationService {
   private readonly missionViews: ConversationServiceOptions['missionViews']
   private readonly fabric: EventFabric
   private readonly store: ConversationStore
-  private readonly mind: MindService
+  private readonly mind: MindRuntime
   private readonly gateway: ModelGateway
   private readonly now: () => Date
   private readonly newId: () => string

@@ -18,9 +18,9 @@ import { MIND_TOOL_LIMITS, renderToolFooter } from './tools'
 import { iterationsAsStepRecords } from './footerGuard'
 
 export interface MindTurnRunnerOptions {
-  readonly fabric: EventFabric
+  readonly fabric: Pick<EventFabric, 'append'>
   readonly store: ConversationStore
-  readonly authority: OwnerAuthority
+  readonly authority: Pick<OwnerAuthority, 'request' | 'createGrant'>
   readonly identity: FreyaIdentity
   readonly budget: ContextBudget | undefined
   readonly now: () => Date
@@ -35,9 +35,9 @@ export interface MindTurnRunnerOptions {
 
 /** Owns the durable workflow from an accepted message through its terminal record. */
 export class MindTurnRunner {
-  private readonly fabric: EventFabric
+  private readonly fabric: Pick<EventFabric, 'append'>
   private readonly store: ConversationStore
-  private readonly authority: OwnerAuthority
+  private readonly authority: MindTurnRunnerOptions['authority']
   private readonly identity: FreyaIdentity
   private readonly budget: ContextBudget | undefined
   private readonly now: () => Date

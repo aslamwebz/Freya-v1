@@ -59,7 +59,7 @@ import type { LearningProjection, LearningWriteOutcome } from './protocol/learni
 import { ABSENT_LEARNING_PROJECTION } from './protocol/learning'
 import { admitWorkStepOutcome } from './learning/work-admission'
 import { recallRelevantLearning } from './learning/recall'
-import { createWebSearchTool, createChartTool, createCanvasTool, MindToolRegistry } from './mind/tools'
+import { createWebSearchTool, createChartTool, createCanvasTool, createMindTaskTool, MindToolRegistry } from './mind/tools'
 import type { ToolCatalogueView } from './protocol/tool-catalogue'
 import { MatrixService } from './matrix/service'
 import { MATRIX_COMMANDS, type MatrixCommandName } from './protocol/matrix'
@@ -2543,6 +2543,12 @@ class FreyaCore implements Core {
           ...(this.browserTabs
             ? [createBrowserTabsTool({ browser: this.browserTabs })]
             : []),
+          // The decision channel. Always present, because completion after acting
+          // is a Mind behaviour rather than a Chat one: it is how a turn that has
+          // run tools declares what it still owes and whether it is actually done.
+          // It cannot execute anything and cannot grant authority — it only
+          // records and validates.
+          createMindTaskTool(),
         ]
         if (tools.length === 0) return null
         this.mindToolRegistry = new MindToolRegistry({

@@ -293,6 +293,8 @@ const submit = (h: { mind: MindService }, turnId = 't1', text = 'a question') =>
   h.mind.runTurn({ conversationId: CONVERSATION_ID, turnId, text })
 
 describe('research citation continuity', () => {
+
+
   it('enforces the owners video duration even if a model omits it from its query', async () => {
     const h = await harness({ tools: [createWebSearchTool({ now: () => T0, searchWeb: async () => [result({ metadata: { duration: '10:00' }, vertical: 'videos' }), result({ url: 'https://example.org/long', metadata: { duration: '2:31:00' }, vertical: 'videos' })] })], script: [toolCall('web_search', { query: 'physics', type: 'videos' }), 'Here is the verified long video.'] })
     const turn = await h.mind.runTurn({ conversationId: CONVERSATION_ID, turnId: 'long', text: 'I need videos over 150 minutes about physics', intents: { webSearch: true } })
@@ -614,8 +616,13 @@ describe('the iteration ceiling', () => {
     expect(outcome.reason).toMatch(/allowed for one turn/i)
     // Exactly the ceiling, never one more.
     expect(h.provider.calls).toBe(MIND_TOOL_LIMITS.maxProviderCalls)
-    expect(outcome.assistantMessage).toBeNull()
-    expect((await messages(h)).filter((m) => m.role === 'assistant')).toHaveLength(0)
+    // No answer was invented. What the turn did run is still on the record, so a
+    // ceiling-terminated turn shows its work rather than disappearing: a turn that
+    // looked things up and could not finish must not read as a turn that did nothing.
+    expect(outcome.assistantMessage?.content ?? '').not.toContain('allowed for one turn')
+    const stored = (await messages(h)).filter((m) => m.role === 'assistant')
+    expect(stored).toHaveLength(1)
+    expect(stored[0]?.content ?? '').toMatch(/did not finish|could not read the result|unfinished/i)
   })
 
   it('keeps total token reservation inside the per-turn ceiling', async () => {

@@ -9,33 +9,24 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 describe('Phase 8: Token Budget & Continuation Synthesis', () => {
-  it('gives every continuation the documented follow-up allowance while total sum equals perTurnAllowance (7,680)', () => {
+  it('gives every call a share that can actually finish on a reasoning model', () => {
     const allowance = CONVERSATION_LIMITS.maxOutputTokensPerTurn
-    expect(allowance).toBe(7_680)
+    // Measured against MiniMax-M3: a grounded answer comes back `length` at every
+    // budget below 2048, and `stop` at 2048 and above. Every schedule built on
+    // smaller numbers failed -- the turn died holding its own evidence.
+    const share = budgetFor(0, allowance)
 
-    // Iteration 0 (initial answer budget: maxOutputTokensPerAnswer = 3072)
-    expect(budgetFor(0, allowance)).toBe(CONVERSATION_LIMITS.maxOutputTokensPerAnswer)
-    expect(budgetFor(0, allowance)).toBe(3_072)
-
-    // Answer-bearing calls (0..1) and envelope calls (2..7) are weighted against
-    // each other so both can actually finish on the live endpoint: a grounded
-    // answer needs ~2048 to return `stop`, and an envelope on a model that emits
-    // its reasoning inline needs room for that reasoning plus the JSON.
-    const answerShare = budgetFor(0, allowance)
-    const envelopeShare = budgetFor(MIND_TOOL_LIMITS.answerCalls, allowance)
-    expect(answerShare).toBeGreaterThan(envelopeShare)
-    for (let i = 0; i < MIND_TOOL_LIMITS.answerCalls; i++) {
-      expect(budgetFor(i, allowance)).toBe(answerShare)
+    for (let i = 0; i < MIND_TOOL_LIMITS.maxProviderCalls; i++) {
+      expect(budgetFor(i, allowance)).toBe(share)
     }
-    for (let i = MIND_TOOL_LIMITS.answerCalls; i < MIND_TOOL_LIMITS.maxProviderCalls; i++) {
-      expect(budgetFor(i, allowance)).toBe(envelopeShare)
-    }
+    expect(share).toBeGreaterThanOrEqual(2_048)
 
-    // Sum across all calls
     let total = 0
     for (let i = 0; i < MIND_TOOL_LIMITS.maxProviderCalls; i++) {
       total += budgetFor(i, allowance)
     }
+    // The shares sum to the Governor's ceiling rather than sitting under it, so
+    // the reservation arithmetic really is the turn's bound.
     expect(total).toBeLessThanOrEqual(allowance)
     expect(total).toBeGreaterThan(allowance - MIND_TOOL_LIMITS.maxProviderCalls)
   })

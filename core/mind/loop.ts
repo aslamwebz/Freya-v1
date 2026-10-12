@@ -150,19 +150,16 @@ export interface ToolIteration {
 }
 
 import { renderMissionProposal } from './mission-proposal'
-import { deferredActionCorrection } from './deferred-action'
+import { MindExecution, classifyEvidence } from './execution-state'
 export type LoopOutcome =
   /** The model produced an answer. `text` is what it said, plus the tool footer. */
   | { readonly kind: 'answer'; readonly text: string; readonly providerId: string; readonly model: string; readonly iterations: readonly ToolIteration[] }
   /**
    * The answer was cut off by the output budget.
    *
-   * Its own outcome rather than an `answer`, because the loop must never spend a
-   * further call on a reply that is known to be incomplete: the text is partial,
-   * and in the tool case so are the tool arguments. `text` is whatever the model
-   * had produced when the ceiling landed — kept so the transcript can show what
-   * was generated alongside the sentence that says it was not finished, never as
-   * an answer.
+   * Returned when the response is partial and bounded recovery is inapplicable
+   * or exhausted. No partial tool request is executed. The transcript preserves
+   * the generated fragment with an explicit unfinished notice.
    */
   | {
       readonly kind: 'truncated'
@@ -188,6 +185,15 @@ export interface ToolLoopDeps {
   readonly grantId: string
   /** The turn id. Doubles as the request id, so a scoped cancel is a lookup. */
   readonly turnId: string
+  /**
+   * What the owner actually asked for, in their words.
+   *
+   * Carried into the execution record so that "is this done" is judged against
+   * the real objective rather than against whatever the model last said. A turn
+   * that has acted must satisfy requirements, and the requirements are only
+   * meaningful relative to what was asked.
+   */
+  readonly objective?: string
   /** The owner's model selection, read per iteration like any other request. */
   readonly selectedModel: () => string | null
   readonly selectedProviderId?: () => string | null
@@ -225,11 +231,51 @@ export async function runToolLoop(
   let messages = baseMessages
   let providerContacted = false
   let toolCallsUsed = 0
-  let deferredCorrections = 0
   let truncationRecoveries = 0
   let malformedRecoveries = 0
   let lastToolCallRequest: { tool: string; argsJson: string } | null = null
   const ledger = new SourceLedger(deps.carriedSources)
+
+  /**
+   * The turn's execution record: what was asked, what was actually observed,
+   * what is still owed, and what the model decided about each.
+   *
+   * This is the shared Mind reducer, not a Chat one. It is constructed here from
+   * the same deps Voice, Missions and Goals would pass, and it holds no principal,
+   * grants no authority and writes no memory — it only records and validates.
+   */
+  const execution = new MindExecution({
+    taskId: deps.turnId,
+    scopeId: deps.turnId,
+    objective: deps.objective ?? deps.turnId,
+    grantId: deps.grantId,
+  })
+  /** A model decision that asked to end the turn, if the decision channel asked. */
+  let decidedAnswer: string | null = null
+  let decisionError: string | null = null
+
+  /** Records one tool result in the execution record, with the kind of evidence it is. */
+  const recordObservation = (tool: string, args: Readonly<Record<string, string>>, executed: boolean, observation: ToolObservation): void => {
+    try {
+      execution.observe(tool, args, executed, observation, classifyEvidence(observation))
+    } catch (error) {
+      // The record is bounded. Hitting its ceiling must not stop the turn; the
+      // work still happened and the transcript still carries it.
+      execution.fail('incomplete', `execution record unavailable: ${describeError(error)}`)
+    }
+  }
+
+  /** Applies one `mind_task` decision. A refused decision is a failure, never a silence. */
+  const applyDecision = (decision: unknown): void => {
+    try {
+      const result = execution.decide(decision)
+      if (result.answer !== undefined) decidedAnswer = result.answer
+    } catch (error) {
+      decisionError = describeError(error)
+      execution.fail('malformed_request', decisionError)
+    }
+  }
+
   const invoke: MindToolRegistry['invoke'] = async request => {
     if (deps.blockedTools?.includes(request.name)) {
       return { executed: false, observation: { kind: 'denied', tool: request.name,
@@ -237,7 +283,35 @@ export async function runToolLoop(
         reason: deps.blockedToolReason ?? 'The owner explicitly declined this tool for the current turn.' } }
     }
     const invocation = await deps.tools.invoke({ ...request, context: deps.toolContext })
-    return { ...invocation, observation: ledger.observation(invocation.observation) }
+    const observed = ledger.observation(invocation.observation)
+    recordObservation(request.name, request.arguments, invocation.executed, observed)
+    if (observed.kind === 'ok' && observed.taskDecision !== undefined) {
+      const before = decisionError
+      applyDecision(observed.taskDecision)
+      // The model has to be told what its decision actually did. "Received for
+      // validation" is not an answer: a refused completion and an accepted one
+      // look identical to a model reading the report, and the difference is the
+      // whole point of the channel.
+      if (decisionError !== before && decisionError !== null) {
+        const refused: ToolObservation = {
+          kind: 'failed',
+          tool: 'mind_task',
+          capability: 'cognition.request',
+          reason: `The task decision was refused: ${decisionError}`,
+        }
+        iterations.push({
+          step: { index: iterations.length + 1, tool: 'mind_task', capability: 'cognition.request', outcome: 'failed', executed: true, sourceCount: 0 },
+          observation: refused,
+          report: renderObservation(refused),
+        })
+        return { executed: true, observation: ledger.observation(refused) }
+      }
+      return {
+        executed: invocation.executed,
+        observation: ledger.observation({ ...observed, summary: 'Task decision accepted.' }),
+      }
+    }
+    return { ...invocation, observation: observed }
   }
 
   // When the owner explicitly chose Freya's own browser and supplied the exact
@@ -347,29 +421,20 @@ export async function runToolLoop(
      * into a malformed-tool observation, the loop would tell the model its request
      * could not be read, and the turn would end as though Freya had merely made a
      * formatting mistake — which is the silent downgrade this rule exists to
-     * prevent. So: no tool is executed from a reply known to be cut off, and no
-     * further call is spent trying to repair it.
+     * prevent. No tool is executed from a reply known to be cut off. Recovery asks
+     * for a fresh request; it never repairs or executes the fragment itself.
      *
      * The converse is the important half. A reply that stopped to *ask* for a tool
      * reports `tool_calls` and is not truncation, so it falls through to exactly
      * the observation it always produced.
      */
     if (isTruncationSignal(outcome)) {
-      // Two different things arrive here wearing the same shape.
-      //
-      // A reply that was cut off while *opening a tool request* is recoverable: the
-      // arguments are truncated rather than wrong, and the model can be asked for a
-      // shorter one. Nothing is executed from the partial text — that ordering is
-      // the whole correctness of this branch, and it is kept. What happens instead is
-      // that the model is told its request was cut off, which is the truth, and
-      // spends one more call producing one that fits.
-      //
-      // "Unterminated" is the test, and it is deliberately narrow: the envelope
-      // opened and never closed. A reply carrying a *complete* envelope is not
-      // truncated in the part that matters — the request is whole — so it is left
-      // alone and reported as truncation, exactly as before. Recovery is for a
-      // request that cannot be read because it ran out mid-write, not for one whose
-      // finish reason is merely `length`.
+      // An unterminated request or an action-only plan can request a fresh, shorter
+      // tool call. A partial factual answer stays unfinished. Complete envelopes
+      // carrying finish=length are also left unexecuted and reported as truncated.
+      // A reply that was cut off before it asked for anything may still have been
+      // opening a request the ceiling took the rest of. Asking for a fresh, shorter
+      // one is honest; executing the fragment is not.
       const unterminatedEnvelope =
         outcome.text.includes(TOOL_CALL_OPEN) && !outcome.text.includes(TOOL_CALL_CLOSE)
       const recoveringEnvelope =
@@ -383,7 +448,7 @@ export async function runToolLoop(
           tool: 'unknown',
           capability: 'search.web',
           reason:
-            `the tool request was cut off before it finished, so nothing was run. ` +
+            'the tool request was cut off before it finished, so nothing was run. ' +
             `Reply again with exactly one ${TOOL_CALL_OPEN} envelope and nothing else, ` +
             `keeping the arguments short enough to fit.`,
         }
@@ -413,37 +478,105 @@ export async function runToolLoop(
 
     const parsed = parseToolResponse(outcome.text, (name) => deps.tools.has(name))
     if (parsed.kind === 'answer') {
-      // A reply that describes an action rather than taking it is not an answer.
-      // The tool instructions forbid it, but a model that ignores them would
-      // otherwise end the turn with a promise the transcript would then record as
-      // a reply — so the loop spends one more call making it act.
-      //
-      // Bounded twice over: `deferredActionCorrection` caps how many corrections a
-      // turn may spend, and the call check below means the correction is never
-      // attempted on the last available call. A model that keeps promising simply
-      // gets its promise stored as an answer, which is the pre-existing
-      // behaviour and is at least not a fabricated result.
-      const correction = deferredActionCorrection(outcome.text, deferredCorrections)
-      if (correction !== null && iteration < MIND_TOOL_LIMITS.maxProviderCalls - 1) {
-        deferredCorrections += 1
+      /**
+       * A turn that has acted must finish through the decision channel.
+       *
+       * The rule is not "the prose looked like a promise". It is: once a tool
+       * has actually run, prose is no longer evidence that the objective is
+       * met, so the turn ends by declaring completion against requirements, and
+       * the reducer refuses that declaration unless every requirement is backed
+       * by evidence that really executed.
+       *
+       * Before the turn has acted, an ordinary reply is still an answer. A
+       * question that needed no tool must not be made to invent obligations, and
+       * forcing it through a decision channel would cost a call to learn nothing.
+       */
+      const acted = iterations.some(iteration => iteration.step.executed)
+      const reported = execution.snapshot()
+      const outstanding = reported.requirements.filter(r => !r.satisfied)
+      const selfDeclaredWork = outstanding.length > 0 || reported.outstanding.length > 0
+      const atCeiling = iteration >= MIND_TOOL_LIMITS.maxProviderCalls - 1
+
+      // A refused decision is reported back so the model can correct it, rather
+      // than leaving it to guess why nothing happened.
+      if (decisionError !== null && !atCeiling) {
+        decisionError = null
         const observation: ToolObservation = {
           kind: 'failed',
-          tool: 'none',
-          capability: 'search.web',
-          reason: correction,
+          tool: 'mind_task',
+          capability: 'cognition.request',
+          reason: `The task decision was refused: ${decisionError}`,
         }
         const report = renderObservation(observation)
         iterations.push({
-          step: { index: iterations.length + 1, tool: 'none', capability: 'search.web', outcome: 'failed', executed: false, sourceCount: 0 },
+          step: { index: iterations.length + 1, tool: 'mind_task', capability: 'cognition.request', outcome: 'failed', executed: true, sourceCount: 0 },
           observation,
           report,
         })
-        // The model's own sentence goes back to it as the last thing it said, so
-        // the correction is answering what it actually wrote rather than a turn
-        // that never happened.
         messages = [...messages, { role: 'assistant', content: outcome.text }, report]
         continue
       }
+
+      /**
+       * When the model owes something it has not delivered, prose is not
+       * completion — it is an end to a task that is still open.
+       *
+       * The gate is narrow on purpose. It fires when the model has declared
+       * requirements or outstanding work and has not satisfied it, and when the
+       * turn is out of calls, which is precisely the case where running out can
+       * masquerade as finishing. A model that looked something up and answered
+       * plainly has committed to nothing and owes nothing, and making it spend a
+       * second call to say so would cost every simple turn to learn nothing.
+       *
+       * What it cannot do is quietly drop a requirement it set itself, or end on
+       * the last available call as though that had been the answer.
+       */
+      if (acted && decidedAnswer === null && (selfDeclaredWork || atCeiling)) {
+        if (!atCeiling) {
+          const owed = outstanding.length > 0
+            ? `Outstanding: ${outstanding.map(r => r.description).join('; ')}.`
+            : `You recorded outstanding work: ${reported.outstanding.join('; ')}.`
+          const observation: ToolObservation = {
+            kind: 'failed',
+            tool: 'mind_task',
+            capability: 'cognition.request',
+            reason:
+              `You recorded work you had not finished and then replied in prose. ${owed} ` +
+              `Reply with a mind_task decision: {"action":"complete","answer":"..."} once every ` +
+              `requirement is satisfied by evidence you actually obtained, or ` +
+              `{"action":"block","reason":"..."} if you cannot finish.`,
+          }
+          const report = renderObservation(observation)
+          iterations.push({
+            step: { index: iterations.length + 1, tool: 'mind_task', capability: 'cognition.request', outcome: 'failed', executed: true, sourceCount: 0 },
+            observation,
+            report,
+          })
+          messages = [...messages, { role: 'assistant', content: outcome.text }, report]
+          continue
+        }
+        return {
+          kind: 'failed',
+          reason: outstanding.length > 0
+            ? `Freya acted but did not finish: ${outstanding.map(r => r.description).join('; ')}.`
+            : reported.outstanding.length > 0
+              ? `Freya acted and recorded work it had not finished: ${reported.outstanding.join('; ')}.`
+              : 'Freya used tools and ran out of calls before declaring whether the task was complete.',
+          providerContacted,
+          iterations,
+        }
+      }
+
+      if (decidedAnswer !== null) {
+        return {
+          kind: 'answer',
+          text: decidedAnswer,
+          providerId: outcome.providerId,
+          model: outcome.model,
+          iterations,
+        }
+      }
+
       return {
         kind: 'answer',
         text: outcome.text,
@@ -580,6 +713,12 @@ export async function runToolLoop(
     providerContacted,
     iterations,
   }
+}
+
+/** The reason an exception names, bounded. Never the stack: this is user-facing. */
+function describeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.length > 400 ? `${message.slice(0, 400)}…` : message
 }
 
 function cancellationReason(signal: AbortSignal): string {

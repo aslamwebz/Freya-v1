@@ -219,6 +219,10 @@ export class MindTurnCognition {
           perTurnAllowance: input.perTurnAllowance,
           signal: controller.signal,
           initialToolRequest,
+          // The objective, in the owner's words. It is what "finished" is judged
+          // against once the turn has run tools, so it travels with the turn rather
+          // than being re-derived from whatever the model last said.
+          objective: input.ownerText,
           toolContext: { conversationId: input.conversationId, ownerText: input.ownerText, matrixSpaceIds: this.options.matrixSpaceIds(input.conversationId) },
           blockedTools,
           ...(unresolvedResearch ? { blockedToolReason: 'The requested stored source is not available in this turn context. A new lookup cannot substitute for that reference; ask the owner to identify it.' } : {}),

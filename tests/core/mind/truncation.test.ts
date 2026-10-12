@@ -463,6 +463,8 @@ describe('a reply cut off while emitting a tool call', () => {
     expect(result.assistantMessage?.content ?? '').toContain('here is what I found')
   })
 
+
+
   it('is reported as truncation even when the tool envelope happens to parse', async () => {
     // `length` means the budget ran out, so the arguments cannot be trusted to be
     // what the model meant to send, however complete they look. Executing a lookup

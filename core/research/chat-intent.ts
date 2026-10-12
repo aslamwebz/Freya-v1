@@ -187,89 +187,6 @@ const QUESTION =
 const EXPLANATION_FRAME =
   /^\s*(?:please\s+)?(?:can|could|would|will)\s+you\s+(?:explain|describe|teach|walk\s+me)\b|^\s*(?:explain|describe|teach|show)\b|^\s*(?:how|what|why|where)\s+(?:do|can|should|is|are|does)\b/
 
-/**
- * Turns Freya answers without going outside herself: opinion, advice, creative
- * work, rewriting, and anything about the owner's own material.
- *
- * This is the half of the lookup decision that keeps a conversation a
- * conversation. A question mark is not a request for the world — "what do you
- * think about Stripe?" is a question about Freya's judgement, and answering it
- * with a SearXNG lookup would be both slower and worse.
- */
-const CONVERSATIONAL =
-  /\b(?:what\s+do\s+you\s+think|your\s+opinion|in\s+your\s+opinion|thoughts?\s+on|should\s+i\b|would\s+you\s+(?:advise|recommend|suggest)|any\s+ideas|help\s+me\s+(?:write|draft|plan|name|decide)|write\s+(?:me\s+)?(?:a|an|some|the)|draft\s+(?:me\s+)?(?:a|an|some|the)|rewrite|rephrase|translate|brainstorm|what\s+does\s+(?:this|that|it)\s+mean|what\s+makes\s+(?:this|that|it))\b/
-
-/**
- * A concrete anchor whose value changes over time or is simply not memorisable:
- * a year, a version, a price, a percentage, a measurement, a distance, a count.
- *
- * "What changed in 4.2?" and "how much is it now?" are answerable only by looking.
- */
-const SPECIFIC_ANCHOR =
-  /\b\d{4}\b|\bv?\d+\.\d+(?:\.\d+)?\b|[$£€]\s?\d|\b\d+(?:\.\d+)?\s?%|\b\d+\s?(?:km|mi|miles|kg|lbs|gb|tb|mb|hz|mhz|ghz|ms|mah|mwh|kwh|°c|°f)\b/i
-
-/**
- * Whether this turn asks for a fact about the outside world.
- *
- * ## Why this exists
- *
- * `routeChatIntent` used to answer `direct_answer` for anything it could not
- * positively classify, so an ordinary factual question — "who won the match last
- * night", "who is the CEO of Stripe", "what's the latest on the Mars sample" —
- * was routed to conversation. That is the right default for uncertainty and the
- * wrong default for facts: a question whose answer lives outside the model is not
- * uncertain, it is *unanswerable from memory*, and answering it from memory is how
- * a chat system becomes confidently wrong.
- *
- * ## Why it is three cheap signals and not one clever one
- *
- * Each signal on its under-fires. Together they cover the two ways a factual
- * question gives itself away — it is anchored in time, or it names something
- * specific — while {@link CONVERSATIONAL} removes the class where none of that
- * applies and Freya is being asked for herself.
- *
- * The model remains the decider inside the turn. This only decides whether the
- * turn is *offered* a lookup at all; nothing here executes anything, and the
- * registry still evaluates the capability through Guard before any tool runs.
- */
-export function needsExternalFacts(text: string): boolean {
-  const value = text.trim()
-  if (value.length === 0) return false
-  const lower = value.toLowerCase().replace(/\s+/g, ' ')
-
-  // Opinion, advice and creative work are answered from Freya and the owner.
-  if (CONVERSATIONAL.test(lower)) return false
-  // It has to be a question or a request for facts at all, or it is a statement
-  // to react to.
-  if (!QUESTION.test(lower) && !RETRIEVAL_VERB.test(lower)) return false
-  // Anchored in time.
-  //
-  // This is checked *before* the explanation frame, because that frame is a
-  // sentence pattern and this is a meaning. "What is the latest on the Mars
-  // sample return?" opens exactly like an explanation request — "what is..." —
-  // and is the opposite of one: there is no explaining, only checking.
-  if (FRESHNESS.test(lower)) return true
-  // An explanation frame is a request to be taught, not to be sent somewhere.
-  if (EXPLANATION_FRAME.test(lower)) return false
-  // Anchored in a concrete, mutable value.
-  if (SPECIFIC_ANCHOR.test(lower)) return true
-  // Names a specific thing: a person, a product, a place, an organisation.
-  return namesSomethingSpecific(value)
-}
-
-/**
- * A capitalised word that is not simply the first word of the sentence.
- *
- * Sentence case is the common case, so a capital at the start is not a name. A
- * capital anywhere else is the ordinary English signal for "this refers to a
- * particular thing", which is exactly the question a model may not know the
- * answer to.
- */
-function namesSomethingSpecific(value: string): boolean {
-  const words = value.split(/\s+/).filter(Boolean)
-  return words.slice(1).some(word => /^[A-Z][a-z]/.test(word) && !/^(?:I|A|An|The)$/.test(word))
-}
-
 /** Explicit current-turn restrictions, never inferred from a passing tool mention. */
 export function retrievalRestrictions(text: string): { webSearch: boolean; browser: boolean; deepResearch: boolean } {
   const lower = text.toLowerCase().replace(/’/g, "'").replace(/\s+/g, ' ')
@@ -332,18 +249,6 @@ export function routeChatIntent(text: string, context: ChatIntentContext): ChatI
   // Rule 6 — "what's the latest…" needs facts Freya does not already hold.
   if (isFreshInformationRequest(lower)) {
     return { kind: 'web_search', reason: 'asks for information that changes over time', query: text, site, vertical: 'web' }
-  }
-
-  // Rule 6b — the answer is a fact about the world, however it was phrased.
-  //
-  // Rule 6 only fires when the owner said a time word. Most factual questions do
-  // not: "who is the CEO of Stripe" and "how much does the Model 3 cost" name a
-  // thing and a value, not a date, and they were falling through to Rule 7 and
-  // being answered from memory. This is the rule that makes an ordinary
-  // current-information question reach the web without the owner asking for it,
-  // and the one that keeps "what do you think?" in the conversation.
-  if (needsExternalFacts(value)) {
-    return { kind: 'web_search', reason: 'answer depends on a fact outside the model', query: text, site, vertical: 'web' }
   }
 
   // Rule 7 — default. Genuinely uncertain stays a conversation.

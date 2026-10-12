@@ -88,6 +88,14 @@ export type ToolObservation =
   | {
       readonly kind: 'ok'
       readonly missionProposal?: ChatMissionProposal
+      /**
+       * A structured Mind decision the model made through the decision channel.
+       *
+       * Rides on the observation rather than in prose so the loop can validate it
+       * in code. A model that *claims* completion in a paragraph is making a
+       * claim; this is the request, and the reducer decides whether it is allowed.
+       */
+      readonly taskDecision?: unknown
       readonly tool: string
       readonly capability: Capability
       readonly summary: string

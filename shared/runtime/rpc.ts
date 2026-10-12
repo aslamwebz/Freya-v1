@@ -7,6 +7,40 @@ const MAX_FRAME = 48 * 1024 * 1024
 type Handler = (method: string, value: unknown) => Promise<unknown>
 type Frame = { id?: string; method?: string; value?: unknown; result?: unknown; error?: string; auth?: string; authenticated?: boolean }
 
+/**
+ * How long a call waits before giving up on the *reply*.
+ *
+ * Three minutes is right for a command that answers in a command. It is not right
+ * for one that runs a whole Mind turn: ten provider calls against a reasoning
+ * model, each of which can spend a minute thinking, is a turn that legitimately
+ * outlives it. A live turn was cut off mid-enquiry by this ceiling, the work was
+ * thrown away, and the caller was told Core could not be reached — when Core was
+ * answering, just slowly.
+ *
+ * So the wait is not a single number but one derived from what the caller is
+ * actually asking for. {@link TURN_RPC_TIMEOUT_MS} carries a turn; everything
+ * else keeps the short ceiling that makes a hung command look hung.
+ */
+export const TURN_RPC_TIMEOUT_MS = 900_000
+
+/**
+ * A call that ran out of time, told apart from a call that never arrived.
+ *
+ * A timeout is not a disconnection, and every caller in this codebase reports a
+ * failure as "Freya Core could not be reached". That phrasing sends whoever reads
+ * it — a person or a log search — to look for a dead process while the process is
+ * still working on the question. Naming the difference is the whole fix; the
+ * class is what lets a caller say so instead of guessing.
+ */
+export class RpcTimeoutError extends Error {
+  readonly method: string
+  constructor(method: string, timeoutMs: number) {
+    super(`Freya is still working on this (${method} had not answered after ${Math.round(timeoutMs / 1000)}s). The work was not retried.`)
+    this.name = 'RpcTimeoutError'
+    this.method = method
+  }
+}
+
 /** Duplex, authenticated local RPC. Calls are never retried or replayed. */
 export class RpcPeer {
   private buffer = ''
@@ -54,7 +88,7 @@ export class RpcPeer {
     if (this.pending.size >= 128) return Promise.reject(new Error('too many outstanding runtime requests'))
     return new Promise<T>((resolve, reject) => {
       const id = randomUUID()
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`runtime ${method} timed out; operation was not retried`)) }, timeoutMs)
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new RpcTimeoutError(method, timeoutMs)) }, timeoutMs)
       this.pending.set(id, { resolve: value => resolve(value as T), reject, timer })
       try { this.send({ id, method, value }) } catch (error) {
         clearTimeout(timer); this.pending.delete(id); reject(error)

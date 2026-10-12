@@ -1,6 +1,6 @@
 import type { CoreHost, ElectronCoreHost, HostEnv } from './coreHost'
 import { NOT_READY, toContextProjection } from './coreHost'
-import { connectRpc, type RpcPeer } from '../shared/runtime/rpc'
+import { connectRpc, TURN_RPC_TIMEOUT_MS, type RpcPeer } from '../shared/runtime/rpc'
 import type { ComponentHealth } from '../shared/contracts/runtime'
 import { ProcessEffects, type DesktopEffects } from './process-effects'
 
@@ -96,11 +96,22 @@ export class ProcessCoreHost implements CoreHost {
     if (value != null) listener(value as NonNullable<Values[K]>)
     return () => set!.delete(listener as (value: never) => void)
   }
-  private request<T>(method: string, value?: unknown): Promise<T> {
+  private request<T>(method: string, value?: unknown, timeoutMs?: number): Promise<T> {
     if (!this.peer?.connected) return Promise.reject(new Error('Core is disconnected; the request was not executed'))
-    return this.peer.call<T>(method, value)
+    return this.peer.call<T>(method, value, timeoutMs)
   }
-  submit(...args: Parameters<CoreHost['submit']>): ReturnType<CoreHost['submit']> { return this.request('ui.submit', args[0]) }
+  /**
+   * A turn, not a command.
+   *
+   * `ui.submit` runs the whole bounded Mind loop: up to ten provider calls, each
+   * of which can spend a minute reasoning before it answers. The default three
+   * minute wait cut a live turn off mid-enquiry and discarded the result, so this
+   * one waits on the turn's own scale instead. The other requests keep the short
+   * ceiling, because a projection read that takes that long is a hung read.
+   */
+  submit(...args: Parameters<CoreHost['submit']>): ReturnType<CoreHost['submit']> {
+    return this.request('ui.submit', args[0], TURN_RPC_TIMEOUT_MS)
+  }
   async stop(_reason?: string): Promise<void> {
     if (this.timer) clearInterval(this.timer)
     this.timer = null; this.peer?.close(); this.peer = null; this.listeners.clear()

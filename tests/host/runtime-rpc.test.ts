@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { listenRpc, connectRpc, type RpcPeer } from '../../shared/runtime/rpc'
+import { listenRpc, connectRpc, RpcTimeoutError, type RpcPeer } from '../../shared/runtime/rpc'
 
 const cleanup: (() => Promise<void> | void)[] = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
@@ -45,5 +45,32 @@ describe('authenticated runtime communication', () => {
     cleanup.push(() => second.close())
     await new Promise(resolve => setTimeout(resolve, 120))
     expect(executions).toBe(1)
+  })
+
+  it('tells a timeout apart from a disconnection, because they need different answers', async () => {
+    // A live turn was cut off by the call ceiling and reported to the owner as
+    // "Core could not be reached" — while Core was still working on the question.
+    // The two failures need opposite responses: a dead connection is retried or
+    // escalated, a slow answer is simply still in progress.
+    const server = await listenRpc(endpoint(), 'token', peer => {
+      peer.handle(async () => { await new Promise(resolve => setTimeout(resolve, 400)); return 'late' })
+    })
+    cleanup.push(() => server.close())
+    const client = await connectRpc(server.endpoint, 'token')
+    cleanup.push(() => client.close())
+
+    const timedOut = await client.call('ui.submit', {}, 60).catch(error => error)
+    expect(timedOut).toBeInstanceOf(RpcTimeoutError)
+    // It says what actually happened, and does not claim the peer is gone.
+    expect(timedOut.message).toMatch(/still working/i)
+    expect(timedOut.message).not.toMatch(/disconnect|could not be reached/i)
+
+    const disconnected = await (async () => {
+      const pending = client.call('other', {})
+      client.close()
+      return pending.catch(error => error)
+    })()
+    expect(disconnected).not.toBeInstanceOf(RpcTimeoutError)
+    expect(disconnected.message).toMatch(/disconnected/i)
   })
 })

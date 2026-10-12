@@ -1,7 +1,7 @@
 import type { CognitionCause, CognitionOrigin } from '../shared/contracts/security'
 import type { CognitionGrant, CognitionGrantSpec } from './cognition/grants'
 import type { CognitionOutcome } from './cognition/outcome'
-import type { ModelMessage } from './model/provider'
+import type { ModelMessage, ModelToolDefinition } from './model/provider'
 
 /**
  * The authority boundary.
@@ -49,6 +49,7 @@ export type CognitionIntentKind =
 
 /** Everything a caller may say about a cognition request. */
 export interface CognitionIntent {
+  tools?: readonly ModelToolDefinition[]
   /** Trusted Core cancellation only; narrows authority and never crosses IPC. */
   signal?: AbortSignal
   kind: CognitionIntentKind

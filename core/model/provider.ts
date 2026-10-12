@@ -23,6 +23,8 @@ export {
   TRUNCATION_FINISH_REASON,
 } from '../../shared/contracts/model'
 export type {
+  ModelToolDefinition,
+  ModelToolCall,
   ModelMessageRole,
   ImageMimeType,
   FileMimeType,
@@ -354,6 +356,8 @@ export interface ModelCatalogOptions {
 }
 
 export interface ModelProvider {
+  /** Declared support only. Absence means text compatibility, never a guess. */
+  supportsNativeTools?(model: string): boolean
   readonly id: string
   readonly kind: 'fake' | 'nanogpt' | 'minimax' | 'local' | 'openai'
   /** Whether this provider would spend real money or use a network. */

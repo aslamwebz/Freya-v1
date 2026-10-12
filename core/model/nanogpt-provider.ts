@@ -1,3 +1,4 @@
+import { readNativeToolCalls, serialiseToolDefinitions, serialiseToolFields } from './tool-transport'
 import {
   throwIfAborted,
   readReasoningEfforts,
@@ -279,14 +280,14 @@ function serialiseMessage(message: ModelMessage): { role: ModelMessageRole; cont
   // The overwhelmingly common case, and the one every existing test asserts on:
   // a string, not a one-element array. Wrapping it would change every request
   // body in the suite for no benefit the endpoint offers.
-  if (attachments.length === 0) return { role: message.role, content: message.content }
+  if (attachments.length === 0) return { role: message.role, content: message.content, ...serialiseToolFields(message) }
 
   const parts: OpenAiContentPart[] = []
   // An empty string is omitted rather than sent as an empty text part, so an
   // attachment-only turn is a clean single-part array.
   if (message.content !== '') parts.push({ type: 'text', text: message.content })
   for (const attachment of attachments) parts.push(toContentPart(attachment))
-  return { role: message.role, content: parts }
+  return { role: message.role, content: parts, ...serialiseToolFields(message) }
 }
 
 /**
@@ -339,6 +340,9 @@ export class NanoGptProvider implements ModelProvider {
    * the provider would answer with an error at best and a surprise bill at worst.
    */
   private catalogue: Set<string> | null = null
+  private nativeToolModels = new Set<string>()
+
+  supportsNativeTools(model: string): boolean { return this.nativeToolModels.has(model) }
 
   constructor(options: NanoGptProviderOptions) {
     this.config = options.config
@@ -464,6 +468,7 @@ export class NanoGptProvider implements ModelProvider {
     }
     const entries: ModelCatalogEntry[] = []
     const seen = new Set<string>()
+    const nativeToolModels = new Set<string>()
     for (const raw of body.data) {
       if (typeof raw !== 'object' || raw === null) continue
       const record = raw as { id?: unknown; object?: unknown; owned_by?: unknown }
@@ -473,6 +478,9 @@ export class NanoGptProvider implements ModelProvider {
       if (!MODEL_ID_PATTERN.test(id) || seen.has(id)) continue
       seen.add(id)
       const reasoningEfforts = readReasoningEfforts(raw)
+      const capabilities = raw as { supported_parameters?: unknown; capabilities?: { tool_calling?: unknown } }
+      if ((Array.isArray(capabilities.supported_parameters) && capabilities.supported_parameters.includes('tools'))
+        || capabilities.capabilities?.tool_calling === true) nativeToolModels.add(id)
       entries.push({ id, ownedBy: typeof record.owned_by === 'string' ? record.owned_by : null, ...(reasoningEfforts ? { reasoningEfforts } : {}) })
       if (entries.length >= MAX_CATALOG_ENTRIES) {
         throw new Error('nanogpt returned more model ids than Freya will list')
@@ -481,6 +489,7 @@ export class NanoGptProvider implements ModelProvider {
     // Recorded only after the whole body parsed: a truncated or refused read
     // must not leave a half catalogue behind that `servesModel` would trust.
     this.catalogue = new Set(entries.map((entry) => entry.id))
+    this.nativeToolModels = nativeToolModels
     return entries
   }
 
@@ -583,6 +592,7 @@ export class NanoGptProvider implements ModelProvider {
           // No key is added here, and none is removed: a text-only turn produces
           // exactly the object it produced before attachments existed.
           messages: request.messages.map(serialiseMessage),
+          ...serialiseToolDefinitions(request.tools),
         }),
       })
 
@@ -608,7 +618,7 @@ export class NanoGptProvider implements ModelProvider {
 
       const body = (await response.json()) as {
         model?: string
-        choices?: { message?: { content?: string }; finish_reason?: unknown }[]
+        choices?: { message?: { content?: string; tool_calls?: unknown; reasoning_content?: string; reasoning_details?: unknown }; finish_reason?: unknown }[]
         usage?: { prompt_tokens?: number; completion_tokens?: number }
       }
 
@@ -631,6 +641,9 @@ export class NanoGptProvider implements ModelProvider {
       const choice = body.choices?.[0]
 
       return resolveFinish({
+        ...readNativeToolCalls(choice?.message?.tool_calls),
+        ...(choice?.message?.reasoning_content === undefined ? {} : { reasoningContent: choice.message.reasoning_content }),
+        ...(choice?.message?.reasoning_details === undefined ? {} : { reasoningDetails: choice.message.reasoning_details }),
         requestId: request.requestId,
         providerId: this.id,
         model: body.model ?? request.model ?? this.config.model,

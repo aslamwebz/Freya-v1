@@ -353,6 +353,7 @@ export class CognitionService {
       model: intent.requestedModel ?? null,
       requestedProviderId: intent.requestedProviderId,
       reasoningEffort: intent.reasoningEffort,
+      tools: intent.tools,
       modelCapability: intent.modelCapability,
       // Present only when a Mind compiled a packet. Absent, the request keeps
       // the single-prompt shape it has always had.
@@ -373,6 +374,10 @@ export class CognitionService {
         status: 'allowed',
         requestId,
         text: result.text,
+        toolCalls: result.toolCalls,
+        toolCallError: result.toolCallError,
+        reasoningContent: result.reasoningContent,
+        reasoningDetails: result.reasoningDetails,
         providerId: result.providerId,
         model: result.model,
         // Carried, not interpreted. The gateway has already settled both fields,

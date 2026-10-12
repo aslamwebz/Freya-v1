@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import { cleanProviderCompletion, CompatibleModelProvider } from '../../../core/model/compatible-provider'
 import type { ModelRequest } from '../../../core/model/provider'
@@ -63,6 +64,35 @@ describe('cleanProviderCompletion', () => {
 })
 
 describe('CompatibleModelProvider', () => {
+  it('lets text-only MiniMax read a PDF attachment without sending binary file parts', async () => {
+    let body = ''
+    const provider = new CompatibleModelProvider('minimax', {
+      apiKey: 'test-key', baseUrl: 'https://api.minimax.io/v1', model: 'MiniMax-M3', liveEnabled: true, vision: false,
+    }, async (_url, init) => {
+      body = String(init?.body)
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'Read the CV.' } }] }))
+    })
+    const data = pdfFixture('SQL analyst with five years of experience').toString('base64')
+    await provider.complete({ requestId: 'pdf', model: 'MiniMax-M3', prompt: 'Read my CV', maxOutputTokens: 100,
+      messages: [{ role: 'user', content: 'Read my CV', attachments: [{ type: 'file', mimeType: 'application/pdf', data, filename: 'cv.pdf' }] }],
+    }, { signal: new AbortController().signal })
+    expect(body).toContain('SQL analyst with five years of experience')
+    expect(body).toContain('cv.pdf')
+    expect(body).not.toContain(data)
+    expect(body).not.toContain('image_url')
+  })
+
+  it('reports a PDF without readable text before contacting MiniMax', async () => {
+    let contacted = false
+    const provider = new CompatibleModelProvider('minimax', {
+      apiKey: 'test-key', baseUrl: 'https://api.minimax.io/v1', model: 'MiniMax-M3', liveEnabled: true, vision: false,
+    }, async () => { contacted = true; return new Response('{}') })
+    await expect(provider.complete({ requestId: 'scan', model: 'MiniMax-M3', prompt: 'Read my CV', maxOutputTokens: 100,
+      messages: [{ role: 'user', content: 'Read my CV', attachments: [{ type: 'file', mimeType: 'application/pdf', data: pdfFixture(null).toString('base64'), filename: 'scan.pdf' }] }],
+    }, { signal: new AbortController().signal })).rejects.toThrow(/no readable text layer/i)
+    expect(contacted).toBe(false)
+  })
+
   it('throws descriptive error on corrupted repetitive responses', async () => {
     const loop = ']<]minimax[>[ya ism]'.repeat(10)
     const fetchImpl: typeof fetch = async () => ({
@@ -168,3 +198,24 @@ describe('CompatibleModelProvider', () => {
     expect(outcome.finishReason).toBe('stop')
   })
 })
+
+/** Small valid PDF with either text or a drawn rectangle, independent of private user files. */
+function pdfFixture(text: string | null): Buffer {
+  const stream = text === null ? '72 72 100 100 re f' : `BT /F1 12 Tf 72 720 Td (${text}) Tj ET`
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ]
+  let pdf = '%PDF-1.4\n'
+  const offsets = objects.map((object, index) => {
+    const offset = pdf.length
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`
+    return offset
+  })
+  const xref = pdf.length
+  pdf += `xref\n0 6\n0000000000 65535 f \n${offsets.map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  return Buffer.from(pdf, 'latin1')
+}

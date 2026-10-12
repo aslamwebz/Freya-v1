@@ -1,5 +1,5 @@
 import { isTruncationSignal } from '../model/provider'
-import type { ModelFinishReason } from '../../shared/contracts/model'
+import type { ModelFinishReason, ModelToolCall } from '../../shared/contracts/model'
 
 /**
  * The Cognition Service: the only door from the rest of Freya to a provider.
@@ -22,6 +22,10 @@ import type { ModelFinishReason } from '../../shared/contracts/model'
 export type CognitionOutcome =
   | {
       status: 'allowed'
+      toolCalls?: readonly ModelToolCall[]
+      toolCallError?: string
+      reasoningContent?: string
+      reasoningDetails?: unknown
       requestId: string
       text: string
       providerId: string

@@ -69,7 +69,20 @@ export interface ModelUsage {
  * user message; it cannot choose a role, and in particular cannot present its
  * own text as an assistant turn or as system instructions.
  */
-export type ModelMessageRole = 'system' | 'user' | 'assistant'
+export type ModelMessageRole = 'system' | 'user' | 'assistant' | 'tool'
+
+export interface ModelToolDefinition {
+  readonly name: string
+  readonly description: string
+  readonly parameters: Readonly<Record<string, unknown>>
+}
+
+/** Arguments stay raw until the Mind validates them against its registry. */
+export interface ModelToolCall {
+  readonly id: string
+  readonly name: string
+  readonly arguments: string
+}
 
 /**
  * The image MIME types a message part may declare.
@@ -193,6 +206,10 @@ export const MAX_ATTACHMENTS_PER_MESSAGE = 8
 export const MAX_MESSAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
 export interface ModelMessage {
+  readonly toolCalls?: readonly ModelToolCall[]
+  readonly toolCallId?: string
+  readonly reasoningContent?: string
+  readonly reasoningDetails?: unknown
   readonly role: ModelMessageRole
   readonly content: string
   /**
@@ -219,6 +236,7 @@ export interface ModelMessage {
 }
 
 export interface ModelRequest {
+  readonly tools?: readonly ModelToolDefinition[]
   reasoningEffort?: string
   /** Echoed back in the result so a caller can correlate without a closure. */
   requestId: string
@@ -275,6 +293,10 @@ export type ModelFinishReason =
 export const TRUNCATION_FINISH_REASON: ModelFinishReason = 'length'
 
 export interface ModelResult {
+  readonly toolCalls?: readonly ModelToolCall[]
+  readonly toolCallError?: string
+  readonly reasoningContent?: string
+  readonly reasoningDetails?: unknown
   requestId: string
   /** Which provider answered. Known only after the call. */
   providerId: string

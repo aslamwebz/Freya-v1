@@ -59,17 +59,22 @@ describe('authenticated runtime communication', () => {
     const client = await connectRpc(server.endpoint, 'token')
     cleanup.push(() => client.close())
 
-    const timedOut = await client.call('ui.submit', {}, 60).catch(error => error)
+    const failure = async (promise: Promise<unknown>): Promise<Error> => {
+      try { await promise } catch (error) {
+        return error instanceof Error ? error : new Error(String(error))
+      }
+      throw new Error('the call was expected to fail and did not')
+    }
+
+    const timedOut = await failure(client.call('ui.submit', {}, 60))
     expect(timedOut).toBeInstanceOf(RpcTimeoutError)
     // It says what actually happened, and does not claim the peer is gone.
     expect(timedOut.message).toMatch(/still working/i)
     expect(timedOut.message).not.toMatch(/disconnect|could not be reached/i)
 
-    const disconnected = await (async () => {
-      const pending = client.call('other', {})
-      client.close()
-      return pending.catch(error => error)
-    })()
+    const pending = client.call('other', {})
+    client.close()
+    const disconnected = await failure(pending)
     expect(disconnected).not.toBeInstanceOf(RpcTimeoutError)
     expect(disconnected.message).toMatch(/disconnected/i)
   })

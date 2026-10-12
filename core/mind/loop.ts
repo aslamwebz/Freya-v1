@@ -211,7 +211,17 @@ export interface ToolLoopDeps {
   readonly initialToolRequest?: InitialToolRequest | null
   /** Core-derived restrictions for this turn. Can only narrow the registry. */
   readonly blockedTools?: readonly string[]
+  /** The single reason, for callers that block everything the same way. */
   readonly blockedToolReason?: string
+  /**
+   * Why each blocked tool is unavailable, when the reasons differ.
+   *
+   * One string was not enough. "The owner declined this" is true but useless when
+   * the owner declined *web search* and the model is being refused a browser: it
+   * would then tell the owner the browser was switched off, which is the one
+   * thing they did not do. The refusal a model reads is the refusal it repeats.
+   */
+  readonly blockedToolReasons?: Readonly<Record<string, string>>
   /** Actual evidence supplied by the same conversation's compiled follow-up. */
   readonly carriedSources?: readonly ToolSource[]
 }
@@ -281,7 +291,9 @@ export async function runToolLoop(
     if (deps.blockedTools?.includes(request.name)) {
       return { executed: false, observation: { kind: 'denied', tool: request.name,
         capability: deps.tools.list().find(tool => tool.name === request.name)?.capability ?? 'search.web',
-        reason: deps.blockedToolReason ?? 'The owner explicitly declined this tool for the current turn.' } }
+        reason: deps.blockedToolReasons?.[request.name]
+          ?? deps.blockedToolReason
+          ?? 'The owner explicitly declined this tool for the current turn.' } }
     }
     const invocation = await deps.tools.invoke({ ...request, context: deps.toolContext })
     const observed = ledger.observation(invocation.observation)

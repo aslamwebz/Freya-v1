@@ -199,10 +199,47 @@ export class MindTurnCognition {
     const restrictions = retrievalRestrictions(input.ownerText)
     const unresolvedResearch = input.researchFollowUp && input.carriedSources.length === 0
       && !requestsNewLookup(input.ownerText) && input.intents.webSearch !== true && input.intents.browserUse !== true
-    const blockedTools = tools.list().filter(tool =>
-      (tool.name === 'web_search' && (input.intents.webSearch === false || ((restrictions.webSearch || unresolvedResearch) && input.intents.webSearch !== true)))
-      || (tool.capability.startsWith('browser.') && (input.intents.browserUse === false || ((restrictions.browser || unresolvedResearch) && input.intents.browserUse !== true))),
-    ).map(tool => tool.name)
+    /**
+     * A denial has to hold across every route to the same thing.
+     *
+     * A browser tool can open exactly the pages a search would have found, and it
+     * did: with Web search deliberately off, a turn opened nodejs.org in the
+     * browser and cited it. Nothing was technically wrong with that call — the
+     * browser was not switched off — and it is precisely why it was wrong. The
+     * switch the owner operated is a statement about *not going to the web*, and
+     * leaving a second door open lets a stochastic model decide the permission
+     * does not bind the tool it happened to pick.
+     *
+     * An explicit browser request still wins, because it is the more specific
+     * instruction: "open this page in your browser" is an owner asking for the
+     * browser, not declining the web.
+     */
+    const ownerDeniedWeb = input.intents.webSearch === false
+    const webDenialBlocksBrowser = ownerDeniedWeb && input.intents.browserUse !== true
+    const blockedToolReasons: Record<string, string> = {}
+    for (const tool of tools.list()) {
+      if (tool.name === 'web_search') {
+        if (input.intents.webSearch === false) {
+          blockedToolReasons[tool.name] = 'The owner turned Web search off for this turn, so nothing was looked up.'
+        } else if ((restrictions.webSearch || unresolvedResearch) && input.intents.webSearch !== true) {
+          blockedToolReasons[tool.name] = unresolvedResearch && !restrictions.webSearch
+            ? 'The requested stored source is not available in this turn context. A new lookup cannot substitute for that reference; ask the owner to identify it.'
+            : 'The owner asked not to look this up on the web for this turn.'
+        }
+        continue
+      }
+      if (!tool.capability.startsWith('browser.')) continue
+      if (input.intents.browserUse === false) {
+        blockedToolReasons[tool.name] = 'The owner turned the browser off for this turn, so no page was opened.'
+      } else if (webDenialBlocksBrowser) {
+        blockedToolReasons[tool.name] = 'The owner turned Web search off for this turn, so this page was not opened. Turning Web search off means not going to the web this turn, by any route — say that plainly rather than describing what the page would have said.'
+      } else if ((restrictions.browser || unresolvedResearch) && input.intents.browserUse !== true) {
+        blockedToolReasons[tool.name] = unresolvedResearch && !restrictions.browser
+          ? 'The requested stored source is not available in this turn context, and a new page load cannot substitute for that reference.'
+          : 'The owner asked not to open a browser for this turn.'
+      }
+    }
+    const blockedTools = Object.keys(blockedToolReasons)
     const controller = new AbortController()
     this.turnControllers.set(input.turnId, controller)
     try {
@@ -225,6 +262,7 @@ export class MindTurnCognition {
           objective: input.ownerText,
           toolContext: { conversationId: input.conversationId, ownerText: input.ownerText, matrixSpaceIds: this.options.matrixSpaceIds(input.conversationId) },
           blockedTools,
+          blockedToolReasons,
           ...(unresolvedResearch ? { blockedToolReason: 'The requested stored source is not available in this turn context. A new lookup cannot substitute for that reference; ask the owner to identify it.' } : {}),
           carriedSources: input.carriedSources,
         },
@@ -232,8 +270,8 @@ export class MindTurnCognition {
         // it made the provider see a synthetic system block as the most recent
         // turn, weakening multi-turn relevance and personality preferences.
         input.messages[0]?.role === 'system'
-          ? [input.messages[0], tools.instructions(blockedTools), ...input.messages.slice(1)]
-          : [tools.instructions(blockedTools), ...input.messages],
+          ? [input.messages[0], tools.instructions(blockedTools, blockedToolReasons), ...input.messages.slice(1)]
+          : [tools.instructions(blockedTools, blockedToolReasons), ...input.messages],
       )
       if (outcome.kind === 'denied') return { kind: 'denied', reason: outcome.reason }
       if (outcome.kind === 'cancelled') {

@@ -190,7 +190,7 @@ export class MindToolRegistry {
    * a failed lookup honest. It grants nothing, and it says so: whether a lookup
    * is permitted is decided by Guard in code, and this text cannot change it.
    */
-  instructions(blockedTools: readonly string[] = []): ModelMessage {
+  instructions(blockedTools: readonly string[] = [], blockedReasons: Readonly<Record<string, string>> = {}): ModelMessage {
     const lines: string[] = [
       'Lookup tools for this turn.',
       '',
@@ -250,6 +250,18 @@ export class MindToolRegistry {
           .join(', ')
         return `- ${tool.name}: ${tool.description} Arguments: ${args}`
       }),
+      ...(blockedTools.length === 0 ? [] : [
+        '',
+        'Tools the OWNER declined for this turn. They are installed and working — the',
+        'owner is the reason, not a fault and not a missing capability:',
+        ...blockedTools
+          .filter(name => this.byName.has(name))
+          .map(name => `- ${name}: ${blockedReasons[name] ?? 'The owner declined this tool for the current turn.'}`),
+        '',
+        'If the answer needs one of these, tell the owner it was declined and why, using the',
+        'reason above. Never report a declined tool as missing, unavailable or not',
+        'installed, and never quietly route around it with another tool.',
+      ]),
       '',
       `This turn may make at most ${MIND_TOOL_LIMITS.maxToolCalls} tool calls.`,
       '',

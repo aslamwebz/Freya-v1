@@ -255,13 +255,14 @@ export async function runToolLoop(
   let decisionError: string | null = null
 
   /** Records one tool result in the execution record, with the kind of evidence it is. */
-  const recordObservation = (tool: string, args: Readonly<Record<string, string>>, executed: boolean, observation: ToolObservation): void => {
+  const recordObservation = (tool: string, args: Readonly<Record<string, string>>, executed: boolean, observation: ToolObservation): string | undefined => {
     try {
-      execution.observe(tool, args, executed, observation, classifyEvidence(observation))
+      return execution.observe(tool, args, executed, observation, classifyEvidence(observation))
     } catch (error) {
       // The record is bounded. Hitting its ceiling must not stop the turn; the
       // work still happened and the transcript still carries it.
       execution.fail('incomplete', `execution record unavailable: ${describeError(error)}`)
+      return undefined
     }
   }
 
@@ -284,7 +285,7 @@ export async function runToolLoop(
     }
     const invocation = await deps.tools.invoke({ ...request, context: deps.toolContext })
     const observed = ledger.observation(invocation.observation)
-    recordObservation(request.name, request.arguments, invocation.executed, observed)
+    const evidenceId = recordObservation(request.name, request.arguments, invocation.executed, observed)
     if (observed.kind === 'ok' && observed.taskDecision !== undefined) {
       const before = decisionError
       applyDecision(observed.taskDecision)
@@ -309,9 +310,10 @@ export async function runToolLoop(
       return {
         executed: invocation.executed,
         observation: ledger.observation({ ...observed, summary: 'Task decision accepted.' }),
+        ...(evidenceId === undefined ? {} : { evidenceId }),
       }
     }
-    return { ...invocation, observation: observed }
+    return { ...invocation, observation: observed, ...(evidenceId === undefined ? {} : { evidenceId }) }
   }
 
   // When the owner explicitly chose Freya's own browser and supplied the exact
@@ -343,9 +345,9 @@ export async function runToolLoop(
         sourceCount: observation.kind === 'ok' ? observation.sources.length : 0,
       },
       observation,
-      report: renderObservation(observation),
+      report: renderObservation(observation, invocation.evidenceId),
     })
-    messages = [...messages, renderObservation(observation)]
+    messages = [...messages, renderObservation(observation, invocation.evidenceId)]
 
     if (deps.signal.aborted) {
       return { kind: 'cancelled', reason: cancellationReason(deps.signal), providerContacted, iterations }
@@ -409,6 +411,146 @@ export async function runToolLoop(
       }
     }
     providerContacted = true
+
+    /**
+     * Native tool calls and the text envelope are the same request.
+     *
+     * A provider that supports structured calling returns calls with ids; one that
+     * does not returns prose containing an envelope. Both arrive here and both go
+     * through the same `invoke`, the same Guard evaluation and the same execution
+     * record. There is no second executor: the difference is only how the request
+     * was spelled, and a turn must not behave differently because a provider
+     * happened to be better at one spelling.
+     *
+     * A batch that arrives malformed is refused whole. Running the valid prefix
+     * would mean acting on a request the model issued as a unit while having
+     * silently dropped part of it.
+     */
+    if (outcome.toolCallError !== undefined) {
+      const observation: ToolObservation = {
+        kind: 'failed',
+        tool: 'unknown',
+        capability: 'search.web',
+        reason: `${outcome.toolCallError} No tool ran.`,
+      }
+      const report = renderObservation(observation)
+      iterations.push({
+        step: { index: iterations.length + 1, tool: 'unknown', capability: 'search.web', outcome: 'failed', executed: false, sourceCount: 0 },
+        observation,
+        report,
+      })
+      execution.fail('malformed_request', outcome.toolCallError)
+      if (iteration >= MIND_TOOL_LIMITS.maxProviderCalls - 1) break
+      messages = [...messages, report]
+      continue
+    }
+
+    if (outcome.toolCalls !== undefined && outcome.toolCalls.length > 0) {
+      // A tool request on the last available call has nowhere left to be read.
+      if (iteration >= MIND_TOOL_LIMITS.maxProviderCalls - 1) {
+        return {
+          kind: 'failed',
+          reason:
+            `Freya asked to use a lookup tool but had already used all ` +
+            `${MIND_TOOL_LIMITS.maxProviderCalls} calls allowed for one turn, so it could not read the result`,
+          providerContacted,
+          iterations,
+        }
+      }
+      const results: ModelMessage[] = []
+      let last: Awaited<ReturnType<typeof invoke>> | null = null
+      /**
+       * A batch is validated whole before any of it runs.
+       *
+       * The model issued these calls as one request. Running the ones that happen
+       * to parse and dropping the rest means acting on part of an instruction
+       * while reporting nothing about the part that was discarded — the caller
+       * would see a lookup succeed and never learn that half the request was
+       * refused. So a single unreadable or unknown call refuses all of them, and
+       * the model is told which one was at fault.
+       *
+       * Unknown *names* are judged the same way as unreadable *arguments*: neither
+       * is a reason to run the rest, and neither is a reason to hide the rest.
+       */
+      const rejected = outcome.toolCalls.map(call => {
+        const parsedArguments = parseToolArguments(call.arguments)
+        if (parsedArguments === null) {
+          return { call, reason: 'the tool arguments were not valid JSON, so nothing ran.' }
+        }
+        if (!deps.tools.has(call.name)) {
+          return { call, reason: `"${call.name}" is not a tool Freya has, so nothing ran.` }
+        }
+        return { call, parsedArguments }
+      })
+      const faults = rejected.filter(entry => entry.parsedArguments === undefined)
+      if (faults.length > 0) {
+        for (const fault of faults) {
+          const bad: ToolObservation = {
+            kind: 'failed',
+            tool: fault.call.name,
+            capability: deps.tools.list().find(tool => tool.name === fault.call.name)?.capability ?? 'search.web',
+            reason: faults.length === 1
+              ? fault.reason
+              : `${fault.reason} The rest of the batch was not run either.`,
+          }
+          execution.fail('malformed_request', bad.reason, fault.call.name)
+          results.push({ role: 'tool', toolCallId: fault.call.id, content: renderObservation(bad).content })
+          iterations.push({
+            step: { index: iterations.length + 1, tool: fault.call.name, capability: bad.capability, outcome: 'failed', executed: false, sourceCount: 0 },
+            observation: bad,
+            report: renderObservation(bad),
+          })
+        }
+      } else {
+        for (const entry of rejected) {
+          const call = entry.call
+          const invocation = await invoke({ name: call.name, arguments: entry.parsedArguments!, signal: deps.signal })
+          if (invocation.executed) toolCallsUsed += 1
+          last = invocation
+          const observation = invocation.observation
+          const report = renderObservation(observation, invocation.evidenceId)
+          iterations.push({
+            step: {
+              index: iterations.length + 1,
+              tool: observation.tool,
+              capability: observation.capability,
+              outcome: observation.kind,
+              executed: invocation.executed,
+              sourceCount: observation.kind === 'ok' ? observation.sources.length : 0,
+            },
+            observation,
+            report,
+          })
+          results.push({ role: 'tool', toolCallId: call.id, content: report.content })
+        }
+      }
+      lastToolCallRequest = outcome.toolCalls[0]
+        ? { tool: outcome.toolCalls[0].name, argsJson: outcome.toolCalls[0].arguments }
+        : lastToolCallRequest
+      if (last?.observation.kind === 'ok' && last.observation.missionProposal) {
+        return { kind: 'answer', text: renderMissionProposal(last.observation.missionProposal), providerId: outcome.providerId, model: outcome.model, iterations }
+      }
+      /**
+       * A completion declared through the decision channel ends the turn here.
+       *
+       * The decision channel is a tool, so on the native path it arrives as a call
+       * rather than as prose — and returning to the loop regardless would spend the
+       * rest of the turn asking a question that has already been answered. The
+       * same turn would then end as a ceiling failure with the right answer already
+       * in hand: the model did its job and was told it had not finished.
+       */
+      if (decidedAnswer !== null) {
+        return { kind: 'answer', text: decidedAnswer, providerId: outcome.providerId, model: outcome.model, iterations }
+      }
+      // The calls and their results travel in provider order, so the next request
+      // sees exactly what it asked for next to what it got.
+      messages = [
+        ...messages,
+        { role: 'assistant', content: outcome.text, ...(outcome.reasoningContent === undefined ? {} : { reasoningContent: outcome.reasoningContent }), toolCalls: outcome.toolCalls },
+        ...results,
+      ]
+      continue
+    }
 
     /**
      * Truncation is decided before the tool envelope is parsed, and that ordering
@@ -677,7 +819,7 @@ export async function runToolLoop(
           sourceCount: observation.kind === 'ok' ? observation.sources.length : 0,
         },
         observation,
-        report: renderObservation(observation),
+        report: renderObservation(observation, invocation.evidenceId),
       })
     }
 
@@ -715,10 +857,38 @@ export async function runToolLoop(
   }
 }
 
-/** The reason an exception names, bounded. Never the stack: this is user-facing. */
+/**
+ * The reason an exception names, bounded. Never the stack: this is user-facing. */
 function describeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   return message.length > 400 ? `${message.slice(0, 400)}…` : message
+}
+
+/**
+ * A native call's arguments, as the flat string map the registry already speaks.
+ *
+ * Returns null for anything that is not a plain object of strings. Refusing here
+ * rather than coercing is the point: a number where a string was declared, or a
+ * nested object where a query was expected, would otherwise reach a tool as
+ * whatever String() happens to produce.
+ *
+ * The key pattern ends in an unescaped `$`. Escaped, `\$` is a literal dollar
+ * rather than the anchor, and the predicate then rejects *every* well-formed
+ * argument object — which reads as "this tool does not exist" on every native
+ * call and burns the whole turn's ceiling before anything runs.
+ */
+function parseToolArguments(raw: string): Record<string, string> | null {
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return null }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!/^[A-Za-z0-9_]{1,64}$/.test(key)) return null
+    if (typeof value === 'string') out[key] = value
+    else if (typeof value === 'number' || typeof value === 'boolean') out[key] = String(value)
+    else return null
+  }
+  return out
 }
 
 function cancellationReason(signal: AbortSignal): string {

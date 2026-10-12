@@ -113,7 +113,11 @@ const SCENARIOS = {
     block: true,
   },
   browser: {
-    question: 'Use your browser to open https://example.com and tell me what the page says.',
+    // nodejs.org rather than example.com. Both are trivial pages, but example.com
+    // does not resolve from this machine (`ENOTFOUND`), so a run against it tests
+    // DNS rather than the browser — and it fails while looking like a Freya defect.
+    // The address has to be one that actually loads here for the run to mean anything.
+    question: 'Use your browser to open https://nodejs.org/en/about and tell me what the page says.',
     expect: 'a real browser action, not a description of one',
     web: false,
     browser: true,

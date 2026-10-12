@@ -2,7 +2,8 @@ import { readFile, stat } from 'node:fs/promises'
 import { basename, extname } from 'node:path'
 import type { FileMimeType, ImageMimeType, ModelAttachment } from '../core/model/provider'
 import { validateModelAttachments } from '../core/model/provider'
-import type * as PdfjsModule from 'pdfjs-dist/legacy/build/pdf.mjs'
+import { ATTACHMENT_MAX_TEXT_CHARS, hasPdfSignature, extractPdfText } from '../shared/pdf-text'
+export { ATTACHMENT_MAX_TEXT_CHARS, PDF_MAX_PAGES, PDF_SIGNATURE_SEARCH_BYTES, hasPdfSignature, extractPdfText } from '../shared/pdf-text'
 
 /**
  * Reading a file somebody picked, for the composer.
@@ -80,33 +81,8 @@ import type * as PdfjsModule from 'pdfjs-dist/legacy/build/pdf.mjs'
 /** The largest file this will read at all. */
 export const ATTACHMENT_MAX_BYTES = 1_000_000
 
-/** How much of a text file — or of one PDF's extracted text — crosses into the renderer. */
-export const ATTACHMENT_MAX_TEXT_CHARS = 20_000
-
 /** How many files one pick may return. */
 export const ATTACHMENT_MAX_FILES = 5
-
-/**
- * How many pages of a PDF this will decode.
- *
- * An attachment is a reference, not an upload, and the failure mode of a higher
- * number is a turn that spends its whole character budget on page one's tables.
- * Twenty pages is enough for the questions people actually attach a PDF to ask
- * ("what does this contract say", "summarise this"), and a longer document is
- * reported as partly unread rather than silently cut.
- */
-export const PDF_MAX_PAGES = 20
-
-/**
- * How far into a file the `%PDF-` header may sit and still count as a PDF.
- *
- * ISO 32000 puts the header at the very start and also tells readers to tolerate
- * up to 1024 bytes of leading junk (a BOM, a mail gateway's banner). 1024 is that
- * tolerance, and it is deliberately *not* the whole file: finding the marker
- * somewhere in a megabyte of anything is not validation, it is a coincidence.
- */
-export const PDF_SIGNATURE_SEARCH_BYTES = 1024
-
 export type AttachmentKind = 'text' | 'image' | 'pdf' | 'unsupported'
 
 /** What a PDF turned out to be. Null for every other kind. */
@@ -266,22 +242,6 @@ function startsWith(bytes: Uint8Array, signature: Uint8Array, offset = 0): boole
 }
 
 /**
- * Does this file carry a PDF header?
- *
- * Exported because "an HTML error page saved as `.pdf`" is a specific, testable
- * failure and deserves a name rather than being an inline comparison inside a
- * function no test can reach.
- */
-export function hasPdfSignature(bytes: Uint8Array): boolean {
-  const needle = ASCII('%PDF-')
-  const limit = Math.min(bytes.length, PDF_SIGNATURE_SEARCH_BYTES)
-  for (let start = 0; start + needle.length <= limit; start += 1) {
-    if (startsWith(bytes, needle, start)) return true
-  }
-  return false
-}
-
-/**
  * The image type the bytes actually are, or null.
  *
  * Magic numbers, not extensions. Every entry is the format's own signature as its
@@ -308,137 +268,6 @@ function contentTypeFor(path: string): { kind: AttachmentKind; contentType: stri
   const text = TEXT_TYPES[extension]
   if (text !== undefined) return { kind: 'text', contentType: text }
   return { kind: 'unsupported', contentType: 'application/octet-stream' }
-}
-
-/**
- * pdf.js, loaded once and lazily.
- *
- * A dynamic import rather than a top-level one for two reasons: a window that
- * never opens a file should never parse a megabyte of PDF machinery at startup,
- * and a failure to load has to become a sentence inside a result rather than a
- * rejection during module evaluation, which would take the whole host down.
- */
-type PdfModule = typeof PdfjsModule
-type PdfDocument = Awaited<ReturnType<PdfModule['getDocument']>['promise']>
-
-let pdfModule: Promise<PdfModule> | null = null
-
-function loadPdfModule(): Promise<PdfModule> {
-  pdfModule ??= import('pdfjs-dist/legacy/build/pdf.mjs')
-  return pdfModule
-}
-
-interface PdfTextRun {
-  readonly str?: string
-  readonly hasEOL?: boolean
-}
-
-/**
- * One page's text runs, in reading order, as prose.
- *
- * pdf.js returns positioned runs rather than lines, and dropping the `hasEOL`
- * markers runs every paragraph into the next one — which is how extracted PDF
- * text becomes one unreadable line. Whitespace before a break and runs of blank
- * lines are collapsed, so a page does not spend the character budget on its own
- * layout.
- */
-function joinTextRuns(items: readonly unknown[]): string {
-  let text = ''
-  for (const item of items) {
-    const run = item as PdfTextRun
-    if (typeof run.str !== 'string') continue
-    text += run.str
-    if (run.hasEOL === true) text += '\n'
-  }
-  return text.replace(/[^\S\n]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
-}
-
-type PdfExtraction =
-  | {
-      readonly ok: true
-      readonly text: string
-      readonly pages: number
-      readonly pagesRead: number
-      readonly textLayer: boolean
-      readonly truncated: boolean
-    }
-  | { readonly ok: false; readonly reason: string }
-
-function reasonFrom(error: unknown): string {
-  return error instanceof Error && error.message.length > 0 ? error.message : 'the reader gave no reason'
-}
-
-/**
- * Really decode a PDF's text layer, or say honestly that there isn't one.
- *
- * Never throws. A malformed document is a refusal with a sentence in it, because
- * this runs behind a bridge where an escaping rejection reaches the window as an
- * opaque "Error invoking remote method" that names neither the file nor the fault.
- */
-export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtraction> {
-  let pdfjs: PdfModule
-  try {
-    pdfjs = await loadPdfModule()
-  } catch (error) {
-    return { ok: false, reason: `Freya could not load its PDF reader — ${reasonFrom(error)}.` }
-  }
-
-  let document: PdfDocument
-  try {
-    document = await pdfjs.getDocument({
-      // A copy: pdf.js takes ownership of the buffer it is handed, and these same
-      // bytes are still needed for the base64 file part below.
-      data: new Uint8Array(bytes),
-      isEvalSupported: false,
-      disableFontFace: true,
-      verbosity: 0,
-    }).promise
-  } catch (error) {
-    return {
-      ok: false,
-      reason: `That file has a PDF header but is not a readable PDF — ${reasonFrom(error)}.`,
-    }
-  }
-
-  const pages = document.numPages
-  const pagesRead = Math.min(pages, PDF_MAX_PAGES)
-  try {
-    const chunks: string[] = []
-    let characters = 0
-    let truncated = false
-
-    for (let pageNumber = 1; pageNumber <= pagesRead; pageNumber += 1) {
-      const page = await document.getPage(pageNumber)
-      let pageText: string
-      try {
-        const content = await page.getTextContent()
-        pageText = joinTextRuns(content.items as readonly unknown[])
-      } finally {
-        page.cleanup()
-      }
-      if (pageText.length === 0) continue
-
-      const remaining = ATTACHMENT_MAX_TEXT_CHARS - characters
-      if (remaining <= 0) {
-        truncated = true
-        break
-      }
-      if (pageText.length > remaining) {
-        truncated = true
-        pageText = pageText.slice(0, remaining)
-      }
-      chunks.push(pageText)
-      characters += pageText.length
-      if (truncated) break
-    }
-
-    const text = chunks.join('\n\n')
-    return { ok: true, text, pages, pagesRead, textLayer: text.length > 0, truncated }
-  } catch (error) {
-    return { ok: false, reason: `Freya could not read the text in that PDF — ${reasonFrom(error)}.` }
-  } finally {
-    await document.destroy().catch(() => undefined)
-  }
 }
 
 /**
@@ -768,3 +597,6 @@ export async function pickAttachments(options: AttachmentPickerOptions): Promise
  * must never be inlined into a turn's text, which is why the composed turn
  * carries a *sentence* about the picture rather than its base64.
  */
+function reasonFrom(error: unknown): string {
+  return error instanceof Error && error.message.length > 0 ? error.message : 'the reader gave no reason'
+}

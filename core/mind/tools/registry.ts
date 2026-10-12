@@ -158,6 +158,12 @@ export class MindToolRegistry {
           ...(raw.chart === undefined ? {} : { chart: boundChart(raw.chart) }),
           ...(raw.canvas === undefined ? {} : { canvas: boundCanvas(raw.canvas) }),
           ...(raw.missionProposal === undefined ? {} : { missionProposal: raw.missionProposal }),
+          // Carried, not interpreted. The registry is a boundary and a boundary
+          // that silently drops a field the caller depends on turns a live channel
+          // into dead code that still looks wired — the decision channel was in
+          // exactly that state, accepted or refused by no one. Validation belongs
+          // to the reducer; passing the value through is the registry's whole job.
+          ...(raw.taskDecision === undefined ? {} : { taskDecision: raw.taskDecision }),
         },
         executed: true,
       }
@@ -235,19 +241,6 @@ export class MindToolRegistry {
       '- A search result is a snippet, not a page you read. Say "the search results listed X"',
       '  rather than "I read X" unless you actually opened it.',
       '',
-      'FINISHING THE TASK — the most common way this goes wrong:',
-      '',
-      'When the owner asks for a number of things — ten websites, five options, three',
-      'examples — that number is the task, not a suggestion. Partly done is NOT done.',
-      '',
-      '- Count what you have against what was asked for before you write anything.',
-      '- Short of the number, make another tool call. Do not answer with a partial list,',
-      '  and do not stop to ask whether you should continue — you were told to do it.',
-      '- Only when you have the number, or you have genuinely run out of things to try,',
-      '  may you answer. If you are out of options, say exactly which you tried and what',
-      '  was missing. An honest partial result is fine as a *report*; presenting it as',
-      '  the finished task is not.',
-      '- Never end with "here is what I found so far" and stop. Keep looking.',
 
       '',
       'Tools available on this turn:',

@@ -111,7 +111,7 @@ export class MindExecution {
     this.state.blockers = [reason.slice(0, 2000)]
     this.state.outstanding = this.state.requirements.filter(r => !r.satisfied).map(r => r.description)
   }
-  observe(tool: string, args: Readonly<Record<string, string>>, executed: boolean, observation: ToolObservation, evidenceKind: EvidenceKind): void {
+  observe(tool: string, args: Readonly<Record<string, string>>, executed: boolean, observation: ToolObservation, evidenceKind: EvidenceKind): string {
     if (this.state.observations.length >= 64) throw new Error('Execution observation record limit reached.')
     // The registry bounded the observation. Large artifact bodies stay in their existing
     // artifact/transcript stores; the checkpoint keeps the receipt, not a second copy.
@@ -119,8 +119,10 @@ export class MindExecution {
       ...observation,
       ...(observation.canvas ? { canvas: { ...observation.canvas, content: '[Artifact body retained by the existing tool result store.]' } } : {}),
     } : observation
-    this.state.observations.push({ id: `o${this.state.observations.length + 1}`, tool, arguments: { ...args }, executed, evidenceKind, observation: retained })
+    const id = `o${this.state.observations.length + 1}`
+    this.state.observations.push({ id, tool, arguments: { ...args }, executed, evidenceKind, observation: retained })
     if (executed) this.state.toolCalls++
+    return id
   }
   repeatedFailures(tool: string, args: Readonly<Record<string, string>>): number {
     const fingerprint = canonicalArguments(args)

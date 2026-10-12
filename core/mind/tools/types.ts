@@ -196,6 +196,15 @@ export interface ToolInvocation {
   readonly observation: ToolObservation
   /** True only when the tool body ran. */
   readonly executed: boolean
+  /**
+   * This result's id in the turn's execution record, e.g. `o2`.
+   *
+   * Carried so the report can name it. The decision channel requires the model to
+   * cite evidence by id when it claims a requirement is met, and an id the model
+   * was never shown is one it can only guess — which would make grounded
+   * completion unreachable in practice rather than merely strict on paper.
+   */
+  readonly evidenceId?: string
 }
 
 /* -------------------------------------------------------------------- tools */
@@ -281,5 +290,13 @@ export interface MindTool {
      * carries the body.
      */
     readonly canvas?: CanvasSpec
+    /**
+     * A typed request to the Mind's execution reducer, from the decision tool.
+     *
+     * Rides on the tool's return rather than in prose so the loop can validate it
+     * in code. A model that *claims* completion in a paragraph is making a claim;
+     * this is the request, and the reducer decides whether it is allowed.
+     */
+    readonly taskDecision?: unknown
   }>
 }

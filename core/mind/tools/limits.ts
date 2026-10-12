@@ -117,8 +117,17 @@ export const MIND_TOOL_LIMITS = Object.freeze({
   /** Characters kept from a tool's own summary line. */
   maxSummaryChars: 600,
 
-  /** Characters allowed in the whole observation block handed back to the model. */
-  maxObservationChars: 2_400,
+  /**
+   * Characters allowed in the whole observation block handed back to the model.
+   *
+   * It was 2,400, which is smaller than the extract it was supposed to carry
+   * alongside a summary and five sources — so a page read could be bounded twice
+   * and cut in the outer bound after the inner bound had already said it was
+   * complete. Now it sits above the extract, the summary and the source list with
+   * room to spare, which is the only ordering in which the cut marker survives to
+   * be read.
+   */
+  maxObservationChars: 9_000,
 
   /* ---------------------------------------------------------- provenance */
 
@@ -140,11 +149,29 @@ export const MIND_TOOL_LIMITS = Object.freeze({
   /** Characters allowed in one step line. */
   maxProvenanceStepChars: 240,
 
-  /** Lines of verbatim material one observation may carry back. */
-  maxProvenanceExtractLines: 12,
+  /**
+   * Lines of verbatim material one observation may carry back.
+   *
+   * It was twelve. That is not a bound, it is a sample: a live turn read
+   * nodejs.org's release pages, got the first dozen lines of each, and reported
+   * that "the text extracts the browser returned were truncated and did not
+   * include the version strings". It then declined to state a version, which was
+   * the correct call — but it was correct *because the evidence was missing*, and
+   * the evidence was missing because the bound was smaller than a page.
+   *
+   * This costs input tokens on the following request, not the call's own output
+   * allowance, so the number that has to be respected here is context — not the
+   * per-call budget a bound this size would have quietly broken.
+   */
+  maxProvenanceExtractLines: 48,
 
-  /** Characters allowed across one observation's verbatim material. */
-  maxProvenanceExtractChars: 1_200,
+  /**
+   * Characters allowed across one observation's verbatim material.
+   *
+   * Moved with the line count for the same reason, and kept below
+   * `maxObservationChars` so the marker explaining the cut is never itself cut.
+   */
+  maxProvenanceExtractChars: 5_000,
 
   /** Characters allowed in any single tool argument, before it is checked. */
   maxArgumentChars: 200,

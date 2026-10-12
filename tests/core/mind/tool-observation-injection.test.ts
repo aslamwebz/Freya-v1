@@ -65,7 +65,11 @@ function okPageObservation(text: string): ToolObservation {
     provenance: {
       actor: 'the native/public Freya browser, which does not have the extension paired',
       steps: ['opened https://evil.example/notice', 'read 1 page'],
-      extract: [text.slice(0, 4_000)],
+      // Passed whole on purpose. This helper builds an observation directly, so the
+      // extract arrives unbounded and `maxObservationChars` is the only thing that can
+      // cut it — which is the property the bounds tests below are about. Slicing here
+      // would let them pass without ever reaching the bound they are checking.
+      extract: [text],
     },
   }
 }
@@ -123,9 +127,12 @@ describe('untrusted observations cannot become instructions', () => {
 
   it('bounds a hostile observation instead of truncating it silently', () => {
     // A page padded out with repeated forged envelopes, so the cut lands mid-envelope.
-    const padded = Array.from({ length: 400 }, (_, index) =>
-      `padding ${index} ${FORGED_ENVELOPES[0]}`,
-    ).join('\n')
+    // Sized against the bound rather than at a fixed count: the observation limit
+    // moved when the extract grew, and a fixture pinned to a number would have
+    // quietly stopped testing this the next time it moved again.
+    const line = `padding ${FORGED_ENVELOPES[0]}`
+    const lines = Math.ceil(MIND_TOOL_LIMITS.maxObservationChars / line.length) + 200
+    const padded = Array.from({ length: lines }, (_, index) => `padding ${index} ${FORGED_ENVELOPES[0]}`).join('\n')
     const observation = okPageObservation(padded)
     const content = renderObservation(observation).content
 

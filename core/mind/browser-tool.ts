@@ -104,11 +104,31 @@ export const BROWSER_TASK_LIMITS = Object.freeze({
    */
   maxPages: 2,
 
-  /** Characters of quoted page text one execution may carry back. */
-  maxExtractChars: 900,
+  /**
+   * Characters of quoted page text one execution may carry back.
+   *
+   * It was 900, across at most eight lines — smaller than the visible text of a
+   * modest landing page. A live turn read nodejs.org's release page, received
+   * 900 characters of it, and reported that the extract "did not include the
+   * version strings", then declined to answer. The refusal was honest and the
+   * evidence was missing, and it was missing here rather than upstream: raising
+   * `MIND_TOOL_LIMITS` alone changes nothing, because this is the bound the tool
+   * applies while building the extract.
+   *
+   * Two pages at this size is a few thousand tokens of quoted text on the
+   * *following* request. That is input, against a context that has room for it,
+   * and it is the cost of letting a model read a page instead of guessing.
+   */
+  maxExtractChars: 6_000,
 
-  /** Described elements that may become extract lines. */
-  maxExtractLines: 8,
+  /**
+   * Described elements that may become extract lines.
+   *
+   * Eight elements is a page header and a cookie banner. Raised together with
+   * `maxExtractChars` because the character bound alone would still have left a
+   * long page truncated to its first handful of landmarks.
+   */
+  maxExtractLines: 60,
 
   /** Characters allowed in a section anchor, before it is even looked at. */
   maxAnchorChars: 64,

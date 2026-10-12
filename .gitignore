@@ -54,3 +54,4 @@ artifacts/acceptance.env
 # Temporary inspection scripts under the local artifacts area.
 /artifacts/*.mjs
 /artifacts/*.py
+/user

@@ -259,7 +259,11 @@ export function attachEmbedView(
   electronModule: {
 WebContentsView: new (options: Record<string, unknown>) => {
       setBounds(bounds: { x: number; y: number; width: number; height: number }): void
-      webContents: { loadURL(url: string): Promise<void>; close(): void; isDestroyed(): boolean }
+      webContents: {
+        loadURL(url: string): Promise<void>; close(): void; isDestroyed(): boolean
+        setWindowOpenHandler?(handler: () => { action: 'deny' }): void
+        on?(event: 'will-navigate', listener: (event: { preventDefault(): void }, url: string) => void): void
+      }
     }
   },
   request: EmbedAttachRequest,
@@ -285,6 +289,14 @@ WebContentsView: new (options: Record<string, unknown>) => {
       nodeIntegration: false,
       webviewTag: false,
     },
+  })
+  // The player opens no windows and never leaves the site it was opened on.
+  const origin = new URL(allowed).origin
+  view.webContents.setWindowOpenHandler?.(() => ({ action: 'deny' }))
+  view.webContents.on?.('will-navigate', (event, target) => {
+    let next = ''
+    try { next = new URL(target).origin } catch { /* not a web address */ }
+    if (next !== origin) event.preventDefault()
   })
   view.setBounds({ x, y, width, height })
   window.contentView.addChildView(view)

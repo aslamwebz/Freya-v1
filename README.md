@@ -1,101 +1,105 @@
-# Freya
+<p align="center">
+  <img src="src/ui-v2/assets/freya-portrait.webp" alt="Freya" width="220" />
+</p>
 
-**A secure, voice-first personal intelligence environment, centred on one
-persistent intelligence, with transparent work surfaces.**
+<h1 align="center">Freya</h1>
 
-The README below is a deliberate archival copy of the Phase 0 launch
-notes — kept because it records what was decided at the time, and the
-audit brief asks that historical docs be marked archival rather than
-rewritten. The current state of Freya is described in `docs/ROADMAP.md`
-and the per-phase notes in `docs/PHASE-*.md`; the production surface
-at this commit (4453563) is a Mind, Brain, Learning, Missions, Work,
-LifeLoop, Workforce, encrypted Vault, EventFabric, application/chat,
-browser, voice, tray, Adult/Chibi modes, and the Guard/Governor that
-keeps each surface in its lane.
+<p align="center"><b>A local-first personal AI agent for the desktop: one persistent intelligence with memory, voice, a browser she drives herself, and a security core that every action has to pass.</b></p>
 
-Phase 0 is a real desktop shell. It runs, it persists, it is tested end to end,
-and it is honest about the fact that there is no model behind it yet.
+<p align="center">TypeScript · Electron · React · SQLite/SQLCipher · Vitest · Playwright</p>
 
-## Running it
+---
+
+## What this repository is
+
+This is **Freya v1**: the first two weeks of the project (29 Sep – 12 Oct 2026), kept public with its full history: 1,200+ commits, about 470k lines of TypeScript and 600 test files.
+
+Freya is not a chat window around an API. She is a **Core** that owns identity, memory, missions and authority, with **replaceable bodies** (a desktop dashboard, a voice presence, a small on-screen companion) that only render what the Core decides. Everything she does in the world, from opening a page to saving a file, goes through one gate with a written ledger.
+
+Development continues privately as **Freya v2** (see [What v2 does](#freya-v2-in-active-development) below).
+
+## How it was built
+
+I designed and directed Freya, and wrote her with AI coding agents. The commit history shows it plainly, with co-author lines.
+
+That is the point of this project as much as the product itself. What it shows:
+
+- **Architecture that survives agents.** Agents write code fast; the structure has to stop them doing the wrong thing. Freya's boundaries are enforced in code, not in comments: an architecture check (`npm run check:architecture`) that fails the build when a boundary is crossed, a Core with no UI imports, typed protocols between processes, and a Guard/Governor that every capability passes.
+- **Verification as the default.** 600 test files, including red-team suites that try to break the security boundaries (prompt injection through web pages, credential exfiltration, forged approvals, path traversal) and end-to-end tests that drive the real Electron app.
+- **Small, reviewable steps.** 1,200 commits in two weeks, each one a single change with a message that says what changed for the user.
+- **Cost and reliability engineering on real models**, measured rather than guessed (examples under v2).
+
+## Architecture
+
+```
+                         FREYA CORE  (no React, no DOM, no Electron)
+  Identity · Mind · Memory · Missions · Work · Workforce · Guard · Governor · Event Fabric · Model Gateway
+                                       │
+                        typed protocol │ projections
+             ┌─────────────────────────┼─────────────────────────┐
+       Desktop dashboard          Voice presence            Companion
+             └─────────────────────────┼─────────────────────────┘
+                                       │ bounded device capabilities
+                     Browser · Files · Apps · Computer (each behind Guard)
+```
+
+- **Core is Freya.** Identity, memory, missions, authority and credentials never live in a renderer.
+- **Bodies are disposable.** Closing or replacing a window never changes who she is.
+- **Hands are capabilities.** Browser, files and apps are scoped interfaces with an owner switch, never ambient access.
+- **Sealed renderer.** Context isolation, sandboxing, no Node in the UI, a narrow preload bridge, credentials only in the main process.
+- **Encrypted at rest.** SQLCipher vault and an append-only, verifiable event journal.
+
+More: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/FREYA-CONSTITUTION.md](docs/FREYA-CONSTITUTION.md) · [docs/DECISIONS.md](docs/DECISIONS.md) · [docs/RED-TEAM.md](docs/RED-TEAM.md)
+
+## What v1 includes
+
+| Area | In v1 |
+|---|---|
+| Mind | Tool-using reasoning loop with bounded calls, cancellation, and a deterministic context compiler |
+| Memory | Brain with admission rules (what may become a lasting memory), recall, learning records |
+| Missions & work | Long-running goals with plans, steps, verification and a workforce of agents |
+| Browser | A built-in browser she operates: tabs, reading, clicking, typing, with page text treated as data, never instructions |
+| Voice | Speech in and out, wake word, read-aloud |
+| Security | Guard, Governor, STOP ALL, per-capability owner switches, device-hands policy, sensitive-field protection |
+| Desktop | Dashboard, tray, companion window, presence stage (three.js) |
+| Quality | Unit, DOM, red-team and end-to-end suites; architecture boundary checks |
+
+## Freya v2: in active development
+
+v2 is private: it is where the product is going. What it does today, in plain terms:
+
+- **Her own Chrome, driven like a person.** She opens her own Chrome window, sees a page as a picture with numbered marks on what can be pressed or filled, and clicks, types, scrolls, waits, uploads and downloads. A side panel in Chrome lets you chat with her and drive her from either Chrome or the desktop app.
+- **Parallel workers.** She hands a large job to up to ten workers, each in its own browser window, each named and colour-coded on the tabs it works in, so you can see who is doing what.
+- **A plan you can watch, a hand-off when it needs you.** Longer tasks show a live checklist. When a site needs a sign-in, captcha or code, she gives you the turn ("Done" / "Not now") and carries on afterwards. Stop ends her work instantly and withdraws any approval she was waiting for.
+- **Long jobs that report back.** A goal can run across many turns while you do something else; you hear when it is done, on the desktop or on your phone.
+- **Security core.** Every outward call (web, browser, files, apps, messages) passes one gate with a ledger, and the actions that need your yes ask on whichever screen you are on: desktop, Chrome or phone.
+- **Real deliverables.** Reports, tables (CSV) and pages saved as files you open with one click, or receive on your phone.
+- **Voice that runs locally.** On-device text-to-speech and speech recognition.
+- **Sign-in and encryption.** Your data key is sealed by your password, with a recovery key, and nothing of yours leaves the machine unless you allow it.
+
+**Engineering results from v2, measured on live runs:**
+
+- **About 75% cheaper multi-agent work:** the workers in a ten-worker browser run on ten different sites went from about $0.06 to about $0.015 per run, by making each worker's prompt lean and stopping wasted steps.
+- **About 4× cheaper agent turns:** a fixed five-task benchmark went from $0.12 to $0.03, by keeping the model's prompt cache intact between calls (it was being invalidated on most calls) and trimming resent reasoning.
+- **Reliability fixes found by live testing:** a bridge that dropped large screenshots, stale extension code after updates, approvals that could outlive a Stop, and agents falling back to the wrong browser. Each was diagnosed from logs and measurements and fixed with a regression check.
+
+**Next:** a single workspace where the companion chat controls many live browser windows, a code window and other apps side by side in chosen layouts, with each agent's panes visible.
+
+## Running v1
 
 ```bash
 npm install
-npm start          # build, then launch the desktop app
+npm start
 ```
 
-Other scripts:
+Useful scripts: `npm run typecheck`, `npm run lint`, `npm test`, `npm run test:e2e`, `npm run verify` (all of them, in order).
 
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | Vite dev server in a browser (uses `localStorage` for layout) |
-| `npm run electron:dev` | build the main process and launch with dev flags |
-| `npm run typecheck` | `tsc --noEmit` for the renderer and for `electron/` |
-| `npm run lint` | ESLint |
-| `npm test` | unit and DOM tests (Vitest) |
-| `npm run test:e2e` | drives the real Electron app, including a relaunch |
-| `npm run verify` | all of the above, in order |
+To talk to a real model, copy `.env.example` to `.env` and set a provider key; nothing is spent until `FREYA_ALLOW_LIVE_MODEL=1` is set. Without it, Freya says plainly that no model is available.
 
-## Chat with a real model (`.env` setup)
+The original Phase 0 launch notes are kept in [docs/PHASE-0-README.md](docs/PHASE-0-README.md); per-phase notes are in `docs/`.
 
-Freya talks to NanoGPT through its OpenAI-compatible API only when you tell it
-to, and nothing about the configuration ever reaches the window:
+## About me
 
-1. Copy `.env.example` to `.env` (git-ignored) in the repository root.
-2. Set `NANOGPT_API_KEY` to your key, keep
-   `NANOGPT_BASE_URL=https://nano-gpt.com/api/v1`, and set `NANOGPT_MODEL` to a
-   callable text model id.
-3. Set `FREYA_ALLOW_LIVE_MODEL=1` — the separate, deliberate decision to spend.
-   Without it the provider reports `disabled` and chat refuses truthfully.
+I'm **M Aslam**, a senior full-stack engineer (Laravel, TypeScript, React) who builds AI agents and the guard-rails around them. Freya is how I work: clear architecture, AI agents doing the volume, and tests and measurements deciding what is true.
 
-`.env` is read by the Electron **main process only**. The renderer cannot see
-it, the preload bridge forwards named commands and bounded payloads instead of
-environment values, and the key appears exactly once anywhere: the
-`Authorization` header of a provider call. It is never in the event journal, a
-projection, a log line, or the chat transcript.
-
-With the provider configured, the Chat surface's model selector can list the
-text models NanoGPT reports (`GET /models` — on demand, never on boot, never
-while idle) and the model you choose becomes what the *next* turn asks the
-provider for. A selection carries no power: Guard, the Governor, per-turn
-budgets, cancellation, STOP ALL and the compiled turn context all apply exactly
-as they did without it. To check the endpoint without the app, run
-`npm run core:model-probe` with the same variables set — one small, capped
-request, through the same Gateway.
-
-## What is in here
-
-- **One command centre** — header, command bar, navigation, dashboard, dock.
-- **One presence** — a three.js stage with five interchangeable centrepieces
-  and the full design lab: background, centrepiece, brain style, extras, outer
-  rings, voice-reaction test.
-- **One surface manager** — a framework-free windowing model. Open, close,
-  focus, move, resize, minimise, maximise, pin, cycle. `SurfaceWindow` is
-  written once; every surface type gets all of it for free.
-- **Local persistence** — `workspace.json` in the OS app-data directory, written
-  atomically by the main process, size-limited before it is written, and
-  flushed synchronously when the window closes. No cloud, no account.
-- **A typed event model** — one event union, one reducer, one store.
-- **A sealed renderer** — `contextIsolation: true`, `sandbox: true`, no Node in
-  the renderer, a four-function preload bridge, and every permission request
-  denied. (The original copy repeated "a four-function preload bridge" at
-  the end of the sentence; that was a transcription error and is fixed here.)
-
-## Documentation
-
-| Document | What it answers |
-| --- | --- |
-| [docs/PRODUCT.md](docs/PRODUCT.md) | what Freya is, and what the first principles imply |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the process boundary, the four renderer seams, how future systems attach |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | the current phase and the road to the next one |
-| [docs/CORE-EVENTS.md](docs/CORE-EVENTS.md) | the durable event model every subsystem reads from |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | the stack, and every significant choice including the ones that were reversed |
-| [docs/REFERENCE-ANALYSIS.md](docs/REFERENCE-ANALYSIS.md) | the design language extracted from `References/`, and what was deliberately not copied |
-| [docs/PHASE-*.md](docs/) | per-phase work notes; the canonical record of what was built, why, and how it was tested |
-| [docs/superpowers/](docs/superpowers/) | the design and implementation plans the owner has signed off on; treated as archival, never rewritten |
-
-## Phase 0 boundaries
-
-Not implemented, and not stubbed: any model provider, agents, swarms, missions,
-search, the vault, terminals, browser automation, connectors, the cognition
-governor, or the security engine. There are no placeholder classes for them —
-only the boundaries they will connect through.
+I'm open to **senior engineering and applied-AI roles**, permanent or contract. If you would like a walkthrough of v2, get in touch: **aslam4webz@gmail.com** · [github.com/aslamwebz](https://github.com/aslamwebz)

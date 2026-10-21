@@ -8,10 +8,10 @@ This directory contains the pinned Windows x64 native bindings used by the canon
 - Test runtime binary: `better_sqlite3-node24.node`
 - Electron production binary: `better_sqlite3-electron44.node` for Electron `44.5.0`
 
-SHA-256:
+SHA-256 (of the binaries as committed; the build machine's user name in their debug path was replaced with `XX`, same length, so the code is unchanged):
 
-- `better_sqlite3-node24.node`: `F9C48C1C210F16111B5ADE188F165C92C0D54C96DC0F8E0D4AF93503D1B53D4C`
-- `better_sqlite3-electron44.node`: `90FC9DF998EFB28E16BBD6EC517349CBB885BBFB771442791CA97E2B189C7AFD`
+- `better_sqlite3-node24.node`: `AE179453A0303B7601503C5FF6389775EA8F9F6F7B92F73A964644168DC84868`
+- `better_sqlite3-electron44.node`: `7BD62F20FD0CF726A0AAEC7838FB4A987CDEA488803F840A811C8FA9F7458B7D`
 
 Both binaries were built from the same SQLCipher/OpenSSL source and independently proved to:
 

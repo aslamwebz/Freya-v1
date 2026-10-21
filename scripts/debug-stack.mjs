@@ -75,7 +75,9 @@ function start(name) {
   const binary = name === 'freya' ? process.execPath : require('electron')
   const acceptance = name === 'superapp' && base.FREYA_RUNTIME_TEST_PROFILE === '1' && base.FREYA_E2E === '1' && base.FREYA_DESKTOP_ACCEPTANCE === '1'
   const argv = name === 'core' ? [join(root, 'dist-electron/core.cjs')] : name === 'freya' ? [join(root, 'dist-electron/freya.cjs')]
-    : [...(acceptance ? [`--inspect=127.0.0.1:${Number(base.FREYA_ACCEPTANCE_INSPECT_PORT)}`, join(root, 'dist-electron/acceptance-control-center.cjs')] : [root]), '--dev', ...(acceptance ? ['--freya-no-focus'] : []), `--remote-debugging-port=${process.env.FREYA_CDP_PORT ?? '9234'}`, '--remote-debugging-address=127.0.0.1']
+    : [...(acceptance ? [`--inspect=127.0.0.1:${Number(base.FREYA_ACCEPTANCE_INSPECT_PORT)}`, join(root, 'dist-electron/acceptance-control-center.cjs')] : [root]), '--dev', ...(acceptance ? ['--freya-no-focus'] : []),
+      // Remote debugging only when asked for (FREYA_CDP_PORT): an open port lets any local program drive the window.
+      ...(process.env.FREYA_CDP_PORT ? [`--remote-debugging-port=${process.env.FREYA_CDP_PORT}`, '--remote-debugging-address=127.0.0.1'] : [])]
   const child = spawn(binary, argv, { cwd: root, env: envs[name], stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   children.set(name, child); output(child.stdout, name); output(child.stderr, name)
   child.on('error', error => console.error(`[${name}] launch failed: ${error.message}`))

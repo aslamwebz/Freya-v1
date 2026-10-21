@@ -14,13 +14,12 @@ function splitDeviceHandsList(value: string | undefined): string[] {
 }
 
 /**
- * Local development is permissive by default so capability testing exercises Freya
- * rather than approval plumbing. Packaged builds stay strict. Set
- * FREYA_LOCAL_UNRESTRICTED=0 to test the strict path locally.
+ * Strict unless asked: approvals, path roots and command rules stay on for every run,
+ * packaged or from source. A developer who wants them off for capability testing sets
+ * FREYA_LOCAL_UNRESTRICTED=1 on an unpackaged build; a packaged build is always strict.
  */
 function localUnrestrictedMode(): boolean {
-  if (process.env.FREYA_LOCAL_UNRESTRICTED === '0') return false
-  return process.env.FREYA_LOCAL_UNRESTRICTED === '1' || !app.isPackaged
+  return process.env.FREYA_LOCAL_UNRESTRICTED === '1' && !app.isPackaged
 }
 
 function readDeviceHandsGrants(path: string): GrantFact[] {
